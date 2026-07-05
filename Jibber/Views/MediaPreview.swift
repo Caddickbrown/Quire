@@ -44,7 +44,7 @@ struct MediaPreview: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 20) {
                 ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
                     switch seg {
                     case .text(let t):
@@ -58,10 +58,11 @@ struct MediaPreview: View {
                         }
                     case .image(let path):
                         mediaView(path)
+                            .padding(.vertical, 4)
                     }
                 }
             }
-            .padding(16)
+            .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -73,9 +74,9 @@ struct MediaPreview: View {
         case .video:
             if let url {
                 VideoPlayer(player: AVPlayer(url: url))
-                    .frame(height: 260)
+                    .frame(height: 300)
                     .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
             } else { missing(path) }
         case .audio:
             if let url { AudioPlayerView(url: url) } else { missing(path) }
@@ -83,7 +84,8 @@ struct MediaPreview: View {
             if let image = loadImage(url) {
                 image.resizable().scaledToFit()
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .frame(maxHeight: 520)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
             } else { missing(path) }
         }
     }

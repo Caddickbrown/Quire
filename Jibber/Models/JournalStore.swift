@@ -29,6 +29,9 @@ final class JournalStore: ObservableObject {
         let date: String     // "YYYY-MM-DD"
         let count: Int
         let preview: String
+        var hasPhoto = false
+        var hasVideo = false
+        var hasAudio = false
         var id: String { date }
         var year: String { String(date.prefix(4)) }
     }
@@ -226,9 +229,17 @@ final class JournalStore: ObservableObject {
         for u in urls {
             let content = (try? String(contentsOf: u, encoding: .utf8)) ?? ""
             let entries = JournalParser.parseEntries(content)
-            idx.days.append(ArchiveDay(date: staticFileToDate(u),
-                                       count: entries.count,
-                                       preview: entries.first?.preview ?? ""))
+            var day = ArchiveDay(date: staticFileToDate(u),
+                                 count: entries.count,
+                                 preview: entries.first?.preview ?? "")
+            for path in mediaPaths(in: content) {
+                switch MediaKind(path: path) {
+                case .image: day.hasPhoto = true
+                case .video: day.hasVideo = true
+                case .audio: day.hasAudio = true
+                }
+            }
+            idx.days.append(day)
             for t in JournalParser.splitTags(content) { tagMap[t, default: 0] += 1 }
         }
 
@@ -246,6 +257,15 @@ final class JournalStore: ObservableObject {
 
         idx.tags = tagMap.map { (tag: $0.key, count: $0.value) }
         return idx
+    }
+
+    private static let mediaLinkRegex = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\(([^)]+)\)"#)
+
+    /// Extract the paths from markdown media links in some content.
+    nonisolated static func mediaPaths(in content: String) -> [String] {
+        let ns = content as NSString
+        return mediaLinkRegex.matches(in: content, range: NSRange(location: 0, length: ns.length))
+            .map { ns.substring(with: $0.range(at: 1)) }
     }
 
     nonisolated static func staticFileToDate(_ url: URL) -> String {

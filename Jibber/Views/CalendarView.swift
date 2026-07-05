@@ -18,8 +18,8 @@ struct CalendarView: View {
         f.locale = Locale(identifier: "en_US_POSIX"); return f
     }()
 
-    private var entryDays: [String: Int] {
-        Dictionary(uniqueKeysWithValues: store.archiveDays.map { ($0.date, $0.count) })
+    private var daysByDate: [String: JournalStore.ArchiveDay] {
+        Dictionary(uniqueKeysWithValues: store.archiveDays.map { ($0.date, $0) })
     }
 
     var body: some View {
@@ -79,36 +79,48 @@ struct CalendarView: View {
     @ViewBuilder
     private func dayCell(_ date: Date) -> some View {
         let key = Self.ymd.string(from: date)
-        let count = entryDays[key]
+        let day = daysByDate[key]
         let isToday = cal.isDateInToday(date)
 
-        if let count, count > 0 {
+        if let day {
             NavigationLink(value: Route.day(key)) {
-                cellContent(date, filled: true, isToday: isToday, count: count)
+                cellContent(date, day: day, isToday: isToday)
             }
             .buttonStyle(.plain)
         } else {
-            cellContent(date, filled: false, isToday: isToday, count: nil)
+            cellContent(date, day: nil, isToday: isToday)
         }
     }
 
-    private func cellContent(_ date: Date, filled: Bool, isToday: Bool, count: Int?) -> some View {
-        VStack(spacing: 2) {
+    private func cellContent(_ date: Date, day: JournalStore.ArchiveDay?, isToday: Bool) -> some View {
+        let filled = day != nil
+        return VStack(spacing: 3) {
             Text("\(cal.component(.day, from: date))")
                 .font(.callout)
                 .foregroundStyle(filled ? .primary : .secondary)
-            Circle()
-                .fill(filled ? Color.accentColor : Color.clear)
-                .frame(width: 5, height: 5)
+            HStack(spacing: 3) {
+                if let day {
+                    if day.hasPhoto { dot(.blue) }
+                    if day.hasVideo { dot(.purple) }
+                    if day.hasAudio { dot(.green) }
+                    if !day.hasPhoto && !day.hasVideo && !day.hasAudio { dot(.accentColor) }
+                } else {
+                    Circle().fill(.clear).frame(width: 5, height: 5)
+                }
+            }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 40)
+        .frame(height: 42)
         .background(filled ? Color.accentColor.opacity(0.12) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(isToday ? Color.accentColor : Color.clear, lineWidth: 1.5)
         )
+    }
+
+    private func dot(_ color: Color) -> some View {
+        Circle().fill(color).frame(width: 5, height: 5)
     }
 
     // MARK: Date helpers
