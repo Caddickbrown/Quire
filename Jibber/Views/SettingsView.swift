@@ -127,7 +127,14 @@ struct SettingsView: View {
             }
 
             Section {
-                LabeledContent("Backup folder", value: store.backupFolderName ?? "Not set")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Backup folder").foregroundStyle(.secondary)
+                    Text(store.backupFolderPath ?? "Not set")
+                        .font(.callout.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Button {
                     showingBackupPicker = true
                 } label: {

@@ -172,6 +172,8 @@ final class JournalStore: ObservableObject {
 
     /// Display name of the chosen backup folder, or nil if none.
     var backupFolderName: String? { resolveBackupURL()?.lastPathComponent }
+    /// Full path of the chosen backup folder, or nil if none.
+    var backupFolderPath: String? { resolveBackupURL()?.path }
 
     func setBackupFolder(_ url: URL) {
         let ok = url.startAccessingSecurityScopedResource()
