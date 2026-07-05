@@ -450,6 +450,25 @@ final class JournalStore: ObservableObject {
 
     func deleteAsset(_ url: URL) { try? fm.removeItem(at: url) }
 
+    /// Entries that reference an asset by file name (for "go to file").
+    func usages(ofAsset fileName: String) -> [(entry: Entry, source: EntrySource)] {
+        let needle = "assets/\(fileName)"
+        var result: [(Entry, EntrySource)] = []
+        for e in inboxDrafts where e.raw.contains(needle) { result.append((e, .inbox)) }
+        for url in allJournalFiles() {
+            let date = fileToDate(url)
+            for e in JournalParser.parseEntries(readString(url)) where e.raw.contains(needle) {
+                result.append((e, .archive(date: date)))
+            }
+        }
+        for sj in splitJournals {
+            for e in entries(inJournal: sj.name) where e.raw.contains(needle) {
+                result.append((e, .journal(name: sj.name)))
+            }
+        }
+        return result
+    }
+
     #if os(macOS)
     func revealAsset(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
     #endif

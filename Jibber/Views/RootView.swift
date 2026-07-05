@@ -83,6 +83,17 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     func requestNewEntry() { section = .write; path = NavigationPath(); newEntrySignal += 1 }
     /// Pop one level (mouse Back button / ⌘[).
     func goBack() { if !path.isEmpty { path.removeLast() } }
+
+    /// Programmatically open an entry: switch section, then push it (after the
+    /// section-change path reset has run).
+    func open(_ entry: Entry, source: EntrySource) {
+        switch source {
+        case .inbox:   section = .inbox
+        case .archive: section = .archive
+        case .journal: section = .splitJournals
+        }
+        Task { @MainActor in path.append(Route.entry(entry, source)) }
+    }
 }
 
 struct RootView: View {
