@@ -81,9 +81,10 @@ struct InboxView: View {
             )
         } else {
             #if os(macOS)
-            HSplitView {
+            HStack(spacing: 0) {
                 draftList
-                    .frame(minWidth: 260, idealWidth: 320, maxWidth: 460)
+                    .frame(width: 320)
+                Divider()
                 Group {
                     if let ts = selectedTS, let draft = drafts.first(where: { $0.ts == ts }) {
                         EntryDetailView(entry: draft, source: .inbox).id(ts)

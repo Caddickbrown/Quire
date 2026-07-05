@@ -178,6 +178,79 @@ struct EntryPreviewRow: View {
     }
 }
 
+/// Reusable email-style list+detail for a set of entries (macOS); iOS pushes.
+/// Same look as the Inbox: fixed-width list on the left, open entry on the right.
+struct EntryTwoPane: View {
+    @EnvironmentObject private var store: JournalStore
+    @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
+    let entries: [Entry]
+    let sourceFor: (Entry) -> EntrySource
+    var showTime = false     // just HH:mm (single-day contexts)
+    var fullDate = false     // date + time (multi-day contexts like split journals)
+    @State private var selectedTS: String?
+
+    var body: some View {
+        #if os(macOS)
+        HStack(spacing: 0) {
+            list.frame(width: 320)
+            Divider()
+            Group {
+                if let ts = selectedTS, let e = entries.first(where: { $0.ts == ts }) {
+                    EntryDetailView(entry: e, source: sourceFor(e)).id(ts)
+                } else {
+                    ContentUnavailableView("Select an entry", systemImage: "book.closed")
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        #else
+        list
+        #endif
+    }
+
+    private var list: some View {
+        List(selection: selectionBinding) {
+            ForEach(entries) { entry in
+                rowLabel(entry)
+                    .tag(entry.ts)
+                    .contextMenu {
+                        Button(role: .destructive) { delete(entry) } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func rowLabel(_ entry: Entry) -> some View {
+        let row = EntryPreviewRow(entry: entry,
+                                  dateStyleRaw: fullDate ? dateStyleRaw : nil,
+                                  showTime: !fullDate && showTime)
+        #if os(macOS)
+        row
+        #else
+        NavigationLink(value: Route.entry(entry, sourceFor(entry))) { row }
+        #endif
+    }
+
+    private var selectionBinding: Binding<String?> {
+        #if os(macOS)
+        $selectedTS
+        #else
+        .constant(nil)
+        #endif
+    }
+
+    private func delete(_ entry: Entry) {
+        switch sourceFor(entry) {
+        case .inbox:            store.deleteDraft(entry)
+        case .archive(let d):   store.deleteFiledEntry(date: d, entry: entry)
+        case .journal(let n):   store.deleteJournalEntry(name: n, entry: entry)
+        }
+    }
+}
+
 /// One day's filed entries.
 struct DayView: View {
     @EnvironmentObject private var store: JournalStore
@@ -185,24 +258,13 @@ struct DayView: View {
     let date: String
 
     var body: some View {
-        List {
-            ForEach(store.entries(for: date)) { entry in
-                NavigationLink(value: Route.entry(entry, .archive(date: date))) {
-                    EntryPreviewRow(entry: entry, showTime: true)
-                }
-                .contextMenu {
-                    Button(role: .destructive) {
-                        store.deleteFiledEntry(date: date, entry: entry)
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
-            }
-        }
-        .navigationTitle(Theme.displayDate(date, style: dateStyleRaw))
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
+        EntryTwoPane(entries: store.entries(for: date),
+                     sourceFor: { _ in .archive(date: date) },
+                     showTime: true)
+            .navigationTitle(Theme.displayDate(date, style: dateStyleRaw))
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
     }
 }
 
@@ -249,24 +311,13 @@ struct JournalFileView: View {
     let name: String
 
     var body: some View {
-        List {
-            ForEach(store.entries(inJournal: name)) { entry in
-                NavigationLink(value: Route.entry(entry, .journal(name: name))) {
-                    EntryPreviewRow(entry: entry, dateStyleRaw: dateStyleRaw)
-                }
-                .contextMenu {
-                    Button(role: .destructive) {
-                        store.deleteJournalEntry(name: name, entry: entry)
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
-            }
-        }
-        .navigationTitle("@\(name)")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
+        EntryTwoPane(entries: store.entries(inJournal: name),
+                     sourceFor: { _ in .journal(name: name) },
+                     fullDate: true)
+            .navigationTitle("@\(name)")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
     }
 }
 
