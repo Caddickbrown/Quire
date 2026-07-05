@@ -20,8 +20,9 @@ struct VideoRecorderView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
         picker.sourceType = .camera
-        picker.cameraCaptureMode = .video
+        // Order matters: mediaTypes must include movie BEFORE setting .video mode.
         picker.mediaTypes = [UTType.movie.identifier]
+        picker.cameraCaptureMode = .video
         picker.videoQuality = .typeHigh
         picker.delegate = context.coordinator
         return picker

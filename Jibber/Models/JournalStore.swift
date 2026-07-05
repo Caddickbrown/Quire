@@ -820,15 +820,18 @@ final class JournalStore: ObservableObject {
             let rebuilt = JournalParser.renderEntries(preamble: preamble, entries: deduped)
             if rebuilt != orig { try? writeFile(url, rebuilt) }
         }
-        // Inbox: drop exact duplicates too.
+        // Inbox: reorder by timestamp and drop exact duplicates too.
         if let inboxURL {
             let content = readString(inboxURL)
             let preamble = JournalParser.leadingPreamble(content)
             let entries = JournalParser.parseEntries(content)
-            let deduped = dedupe(entries)
-            if deduped.count != entries.count {
-                res.deduped += (entries.count - deduped.count)
-                try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: deduped))
+            let sorted = JournalParser.sortedByTimestamp(entries)
+            if entries.map(\.ts) != sorted.map(\.ts) { res.reordered += 1 }
+            let deduped = dedupe(sorted)
+            res.deduped += (sorted.count - deduped.count)
+            let rebuilt = JournalParser.renderEntries(preamble: preamble, entries: deduped)
+            if rebuilt != content {
+                try? writeFile(inboxURL, rebuilt)
             }
         }
         reload()

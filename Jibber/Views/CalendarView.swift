@@ -160,22 +160,30 @@ struct CalendarView: View {
     }
 }
 
-/// A compact month calendar for the sidebar. Tapping a day opens it.
+/// A compact month calendar for the sidebar. Fixed 6-week height so the layout
+/// never shifts; weekday header, swipe to change month, optional week numbers,
+/// configurable first day of week. Tapping a day opens it.
 struct MiniCalendarView: View {
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
+    @AppStorage("firstWeekday") private var firstWeekday = 1        // 1=Sun … 7=Sat
+    @AppStorage("showWeekNumbers") private var showWeekNumbers = false
     @State private var month = MiniCalendarView.startOfMonth(Date())
 
-    private let cal = Calendar.current
     private static let ymd: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
         f.locale = Locale(identifier: "en_US_POSIX"); return f
     }()
 
+    private var cal: Calendar {
+        var c = Calendar.current
+        c.firstWeekday = min(max(firstWeekday, 1), 7)
+        return c
+    }
     private var days: Set<String> { Set(store.archiveDays.map(\.date)) }
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 5) {
             HStack(spacing: 2) {
                 Text(Self.title(month)).font(.caption.weight(.semibold))
                 Spacer()
@@ -184,30 +192,58 @@ struct MiniCalendarView: View {
                     .help("Today")
                 calButton("chevron.right") { shift(1) }
             }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 7), spacing: 2) {
-                ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
-                    if let date = cell { dayCell(date) } else { Color.clear.frame(height: 22) }
+            weekdayHeader
+            ForEach(0..<6, id: \.self) { row in
+                HStack(spacing: 2) {
+                    if showWeekNumbers { weekNumber(row) }
+                    ForEach(0..<7, id: \.self) { col in
+                        dayCell(grid[row * 7 + col])
+                    }
                 }
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+        .contentShape(Rectangle())
+        .gesture(DragGesture(minimumDistance: 24).onEnded { v in
+            if v.translation.width > 40 { shift(-1) }
+            else if v.translation.width < -40 { shift(1) }
+        })
+    }
+
+    private var weekdayHeader: some View {
+        HStack(spacing: 2) {
+            if showWeekNumbers { Text("").frame(width: 18) }
+            ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, s in
+                Text(s).font(.system(size: 9)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    private func weekNumber(_ row: Int) -> some View {
+        Text("\(cal.component(.weekOfYear, from: grid[row * 7]))")
+            .font(.system(size: 9).monospacedDigit())
+            .foregroundStyle(.tertiary)
+            .frame(width: 18)
     }
 
     @ViewBuilder
     private func dayCell(_ date: Date) -> some View {
         let key = Self.ymd.string(from: date)
         let has = days.contains(key)
+        let inMonth = cal.isDate(date, equalTo: month, toGranularity: .month)
         let isToday = cal.isDateInToday(date)
         Button {
             if has { nav.openDay(key) }
         } label: {
             Text("\(cal.component(.day, from: date))")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(has ? .primary : .secondary)
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(inMonth ? (has ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                                         : AnyShapeStyle(.quaternary))
                 .frame(maxWidth: .infinity)
                 .frame(height: 22)
-                .background(has ? Color.accentColor.opacity(0.18) : Color.clear,
+                .background(has ? Color.accentColor.opacity(inMonth ? 0.18 : 0.08) : Color.clear,
                            in: RoundedRectangle(cornerRadius: 5))
                 .overlay(RoundedRectangle(cornerRadius: 5)
                     .strokeBorder(isToday ? Color.accentColor : .clear, lineWidth: 1))
@@ -228,17 +264,24 @@ struct MiniCalendarView: View {
     }
 
     private func shift(_ m: Int) {
-        if let d = cal.date(byAdding: .month, value: m, to: month) { month = Self.startOfMonth(d) }
+        if let d = cal.date(byAdding: .month, value: m, to: month) {
+            withAnimation(.easeInOut(duration: 0.15)) { month = Self.startOfMonth(d) }
+        }
     }
 
-    private var cells: [Date?] {
+    private var weekdaySymbols: [String] {
+        let syms = cal.veryShortWeekdaySymbols
+        let start = cal.firstWeekday - 1
+        return Array(syms[start...] + syms[..<start])
+    }
+
+    /// 42 consecutive dates (6 weeks) filling the grid, including adjacent months.
+    private var grid: [Date] {
         let comps = cal.dateComponents([.year, .month], from: month)
-        guard let first = cal.date(from: comps),
-              let range = cal.range(of: .day, in: .month, for: first) else { return [] }
+        guard let first = cal.date(from: comps) else { return [] }
         let leading = (cal.component(.weekday, from: first) - cal.firstWeekday + 7) % 7
-        var out: [Date?] = Array(repeating: nil, count: leading)
-        for day in range { out.append(cal.date(byAdding: .day, value: day - 1, to: first)) }
-        return out
+        guard let start = cal.date(byAdding: .day, value: -leading, to: first) else { return [] }
+        return (0..<42).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
     }
 
     private static func startOfMonth(_ d: Date) -> Date {

@@ -16,6 +16,8 @@ struct SettingsView: View {
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
     @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
     @AppStorage("highlightTags") private var highlightTags = true
+    @AppStorage("firstWeekday") private var firstWeekday = 1
+    @AppStorage("showWeekNumbers") private var showWeekNumbers = false
     @AppStorage("splitTags") private var splitTagsRaw: String = ""
 
     static let shortcuts: [(action: String, keys: String)] = [
@@ -60,6 +62,12 @@ struct SettingsView: View {
                     ForEach(DateStyle.allCases) { Text($0.displayName).tag($0.rawValue) }
                 }
                 Toggle("Highlight @tags", isOn: $highlightTags)
+                Picker("Start week on", selection: $firstWeekday) {
+                    Text("Sunday").tag(1)
+                    Text("Monday").tag(2)
+                    Text("Saturday").tag(7)
+                }
+                Toggle("Show week numbers", isOn: $showWeekNumbers)
             }
 
             Section {
