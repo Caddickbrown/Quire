@@ -72,6 +72,7 @@ struct SettingsView: View {
                 Toggle("Show week numbers", isOn: $showWeekNumbers)
             }
 
+            #if os(iOS)
             Section {
                 Picker("Swipe left", selection: $swipeLeftRaw) {
                     ForEach(SwipeAction.allCases) { Text($0.label).tag($0.rawValue) }
@@ -81,6 +82,15 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("Inbox swipe")
+            }
+            #endif
+
+            Section {
+                SplitTagsEditor(raw: $splitTagsRaw)
+            } header: {
+                Text("Split tags")
+            } footer: {
+                Text("Entries containing these @tags file into <folder>/<tag>.md instead of the date journal (jnl JNL_SPLIT_TAGS). Space or comma separated.")
             }
 
             Section {
@@ -116,14 +126,6 @@ struct SettingsView: View {
                 Text("Journal folder")
             } footer: {
                 Text("Jibber stores inbox.md and journal/YYYY/MM/DD.md here. Point this at an existing jnl folder to share files with the jnl CLI.")
-            }
-
-            Section {
-                SplitTagsEditor(raw: $splitTagsRaw)
-            } header: {
-                Text("Split tags")
-            } footer: {
-                Text("Entries containing these @tags file into <folder>/<tag>.md instead of the date journal (jnl JNL_SPLIT_TAGS). Space or comma separated.")
             }
 
             Section {
