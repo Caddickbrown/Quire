@@ -411,6 +411,29 @@ final class JournalStore: ObservableObject {
         baseURL?.appendingPathComponent(path)
     }
 
+    struct AssetItem: Identifiable, Hashable {
+        let url: URL
+        var id: String { url.path }
+        var name: String { url.lastPathComponent }
+    }
+
+    /// All files in the assets folder (for the Assets browser).
+    func allAssets() -> [AssetItem] {
+        guard let dir = assetsDirURL,
+              let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        else { return [] }
+        return items
+            .filter { !$0.hasDirectoryPath }
+            .map { AssetItem(url: $0) }
+            .sorted { $0.name < $1.name }
+    }
+
+    func deleteAsset(_ url: URL) { try? fm.removeItem(at: url) }
+
+    #if os(macOS)
+    func revealAsset(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+    #endif
+
     /// Save image data into the journal's assets folder and return the relative
     /// markdown-friendly path ("assets/<uuid>.<ext>"), or nil on failure.
     func saveAsset(_ data: Data, ext: String) -> String? {

@@ -47,6 +47,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case calendar = "Calendar"
     case splitJournals = "Split Journals"
     case tags = "Tags"
+    case assets = "Assets"
     case stats = "Stats"
     case settings = "Settings"
 
@@ -59,13 +60,14 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .calendar:      return "calendar"
         case .splitJournals: return "bookmark"
         case .tags:          return "number"
+        case .assets:        return "photo.on.rectangle"
         case .stats:         return "chart.bar"
         case .settings:      return "gearshape"
         }
     }
 
     /// The journal sections shown in the main sidebar list (Settings sits apart).
-    static let primary: [AppSection] = [.write, .inbox, .archive, .calendar, .splitJournals, .tags]
+    static let primary: [AppSection] = [.write, .inbox, .archive, .calendar, .splitJournals, .tags, .assets]
 }
 
 /// Shared navigation state so keyboard-shortcut commands (defined at the App
@@ -145,6 +147,7 @@ struct RootView: View {
         case .calendar:      CalendarView()
         case .splitJournals: SplitJournalsView()
         case .tags:          TagsView()
+        case .assets:        AssetsView()
         case .stats:         StatsView()
         case .settings:      SettingsView()
         }
