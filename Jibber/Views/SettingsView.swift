@@ -106,10 +106,12 @@ struct SettingsView: View {
          """),
         ("Maintenance",
          """
-         Clean Up normalises punctuation, reorders entries by time, and removes exact \
-         duplicates (inbox + journal). Clear Orphan Media deletes asset files no entry \
-         references any more. Export combines all filed entries into one markdown file \
-         (drafts still in the Inbox aren't included until you file them).
+         Clean Up normalises punctuation (… and straight quotes), reorders entries by \
+         time, removes exact duplicates, and retroactively moves any entry matching a \
+         split tag into its <tag>.md file — so adding a split tag later pulls matching \
+         history out too. Clear Orphan Media deletes asset files no entry references any \
+         more. Export combines all filed entries into one markdown file (drafts still in \
+         the Inbox aren't included until you file them).
          """),
         ("Storage, iCloud & jnl",
          """
@@ -381,7 +383,7 @@ struct SettingsView: View {
     private var cleanUpButton: some View {
         Button {
             let r = store.cleanup()
-            cleanupMessage = "Formatted \(r.formatted), reordered \(r.reordered), removed \(r.deduped) duplicate(s)."
+            cleanupMessage = "Formatted \(r.formatted), reordered \(r.reordered), removed \(r.deduped) duplicate(s), extracted \(r.extracted) to split journals."
             showingCleanup = true
         } label: {
             Label("Clean Up", systemImage: "wand.and.sparkles")

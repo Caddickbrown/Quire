@@ -965,7 +965,7 @@ final class JournalStore: ObservableObject {
 
     // MARK: Cleanup (jnl cmdCleanup)
 
-    struct CleanupResult { var formatted = 0; var reordered = 0; var deduped = 0 }
+    struct CleanupResult { var formatted = 0; var reordered = 0; var deduped = 0; var extracted = 0 }
 
     /// Remove exact-duplicate entries (identical raw text), keeping the first.
     private func dedupe(_ entries: [Entry]) -> [Entry] {
@@ -974,7 +974,8 @@ final class JournalStore: ObservableObject {
         return out
     }
 
-    /// Standardise punctuation (… and straight quotes), reorder each day's entries
+    /// Standardise punctuation (… and straight quotes), retroactively route entries
+    /// matching a configured split tag into their <tag>.md file, reorder each day
     /// by timestamp, and drop exact-duplicate entries. Returns what changed.
     @discardableResult
     func cleanup() -> CleanupResult {
@@ -990,8 +991,20 @@ final class JournalStore: ObservableObject {
 
             let preamble = JournalParser.leadingPreamble(fixed)
             let entries = JournalParser.parseEntries(fixed)
-            let sorted = JournalParser.sortedByTimestamp(entries)
-            if entries.map(\.ts) != sorted.map(\.ts) { res.reordered += 1 }
+
+            // Retroactive split-tag extraction (jnl cmdCleanup): move any entry
+            // now matching a configured split tag out into its <tag>.md file.
+            var kept: [Entry] = []
+            for e in entries {
+                if splitTagTarget(e.raw) != nil, (try? fileEntry(e)) != nil {
+                    res.extracted += 1
+                } else {
+                    kept.append(e)
+                }
+            }
+
+            let sorted = JournalParser.sortedByTimestamp(kept)
+            if kept.map(\.ts) != sorted.map(\.ts) { res.reordered += 1 }
             let deduped = dedupe(sorted)
             res.deduped += (sorted.count - deduped.count)
             let rebuilt = JournalParser.renderEntries(preamble: preamble, entries: deduped)
