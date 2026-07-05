@@ -2,9 +2,9 @@
 //  InboxView.swift
 //  Jibber
 //
-//  The inbox: unfiled drafts. Mirrors jnl's `review` flow reduced to list rows —
-//  each draft can be Filed (into its day's archive), Edited, or Deleted. Search,
-//  sort, and "File All" (jnl `transfer`) live in the toolbar.
+//  The inbox: unfiled drafts. On macOS it's an email-style two-pane (list +
+//  selected draft); on iOS the list pushes to the editor. Each draft can be
+//  Filed, Edited, or Deleted. Search / sort / File All live in the toolbar.
 //
 
 import SwiftUI
@@ -28,6 +28,7 @@ struct InboxView: View {
     @AppStorage("inboxSort") private var sortRaw: String = InboxSort.newest.rawValue
     @State private var searchText = ""
     @State private var randomDraft: Entry?
+    @State private var selectedTS: String?
 
     private var drafts: [Entry] {
         var d = store.inboxDrafts
@@ -43,54 +44,88 @@ struct InboxView: View {
     }
 
     var body: some View {
-        Group {
-            if store.inboxDrafts.isEmpty {
-                ContentUnavailableView(
-                    "Inbox is empty",
-                    systemImage: "tray",
-                    description: Text("Drafts you write appear here until you file them.")
-                )
-            } else {
-                List {
-                    ForEach(drafts) { draft in
-                        NavigationLink(value: Route.entry(draft, .inbox)) {
-                            DraftRow(draft: draft, dateStyleRaw: dateStyleRaw)
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button {
-                                store.fileDraft(draft)
-                            } label: {
-                                Label("File", systemImage: "archivebox")
-                            }
-                            .tint(.green)
-                            Button(role: .destructive) {
-                                store.deleteDraft(draft)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                        .contextMenu {
-                            Button {
-                                store.fileDraft(draft)
-                            } label: {
-                                Label("Archive", systemImage: "archivebox")
-                            }
-                            Button(role: .destructive) {
-                                store.deleteDraft(draft)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
+        content
+            .searchable(text: $searchText, prompt: "Search drafts")
+            .navigationTitle("Inbox")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar { toolbarItems }
+            .sheet(item: $randomDraft) { draft in
+                NavigationStack { EntryDetailView(entry: draft, source: .inbox) }
+                    .environmentObject(store)
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if store.inboxDrafts.isEmpty {
+            ContentUnavailableView(
+                "Inbox is empty",
+                systemImage: "tray",
+                description: Text("Drafts you write appear here until you file them.")
+            )
+        } else {
+            #if os(macOS)
+            HSplitView {
+                draftList
+                    .frame(minWidth: 260, idealWidth: 320, maxWidth: 460)
+                Group {
+                    if let ts = selectedTS, let draft = drafts.first(where: { $0.ts == ts }) {
+                        EntryDetailView(entry: draft, source: .inbox).id(ts)
+                    } else {
+                        ContentUnavailableView("Select a draft", systemImage: "tray")
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            #else
+            draftList
+            #endif
+        }
+    }
+
+    private var draftList: some View {
+        List(selection: selectionBinding) {
+            ForEach(drafts) { draft in
+                row(for: draft)
+                    .tag(draft.ts)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button { store.fileDraft(draft) } label: { Label("File", systemImage: "archivebox") }
+                            .tint(.green)
+                        Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
+                    }
+                    .contextMenu {
+                        Button { store.fileDraft(draft) } label: { Label("Archive", systemImage: "archivebox") }
+                        Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
+                    }
             }
         }
-        .searchable(text: $searchText, prompt: "Search drafts")
-        .navigationTitle("Inbox")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// On macOS the list drives the side pane; on iOS rows push via NavigationLink.
+    @ViewBuilder
+    private func row(for draft: Entry) -> some View {
+        #if os(macOS)
+        DraftRow(draft: draft, dateStyleRaw: dateStyleRaw)
+        #else
+        NavigationLink(value: Route.entry(draft, .inbox)) {
+            DraftRow(draft: draft, dateStyleRaw: dateStyleRaw)
+        }
         #endif
-        .toolbar {
+    }
+
+    private var selectionBinding: Binding<String?> {
+        #if os(macOS)
+        return $selectedTS
+        #else
+        return .constant(nil)
+        #endif
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarItems: some ToolbarContent {
+        ToolbarItemGroup {
             Menu {
                 Picker("Sort", selection: $sortRaw) {
                     ForEach(InboxSort.allCases) { Text($0.label).tag($0.rawValue) }
@@ -106,26 +141,12 @@ struct InboxView: View {
             }
             .disabled(store.inboxDrafts.isEmpty)
             Menu {
-                Button {
-                    store.fileAllDrafts()
-                } label: {
-                    Label("File All", systemImage: "archivebox")
-                }
-                .disabled(store.inboxDrafts.isEmpty)
-                Button {
-                    store.sortInbox()
-                } label: {
-                    Label("Sort file by date", systemImage: "calendar")
-                }
+                Button { store.fileAllDrafts() } label: { Label("File All", systemImage: "archivebox") }
+                    .disabled(store.inboxDrafts.isEmpty)
+                Button { store.sortInbox() } label: { Label("Sort file by date", systemImage: "calendar") }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
-        }
-        .sheet(item: $randomDraft) { draft in
-            NavigationStack {
-                EntryDetailView(entry: draft, source: .inbox)
-            }
-            .environmentObject(store)
         }
     }
 }
