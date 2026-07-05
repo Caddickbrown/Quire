@@ -83,7 +83,6 @@ struct WritingView: View {
         #endif
         .toolbar {
             ToolbarItemGroup {
-                fontSizeButton
                 Button {
                     saveNow()
                 } label: {
@@ -91,13 +90,21 @@ struct WritingView: View {
                 }
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(!hasText)
+                .help("Save to inbox (⌘S)")
                 Button {
                     newEntry()
                 } label: {
                     Label("New", systemImage: "square.and.pencil")
                 }
                 .disabled(!hasText)
+                .help("Start a new entry")
                 Menu {
+                    Button {
+                        promoteFirstLine()
+                    } label: {
+                        Label("Promote first line to title", systemImage: "arrow.up.to.line")
+                    }
+                    .disabled(!hasFirstBodyLine)
                     Button {
                         importEntries()
                     } label: {
@@ -127,16 +134,19 @@ struct WritingView: View {
         }
     }
 
-    private var fontSizeButton: some View {
-        Button("\(Int(fontSize))px") {
-            let sizes = Theme.fontSizes
-            if let i = sizes.firstIndex(of: size) {
-                fontSize = Double(sizes[(i + 1) % sizes.count])
-            } else {
-                fontSize = Double(Theme.defaultFontSize)
-            }
-        }
-        .monospacedDigit()
+    private var hasFirstBodyLine: Bool {
+        text.split(separator: "\n", omittingEmptySubsequences: true).first != nil
+    }
+
+    /// Move the first non-empty body line into the title field.
+    private func promoteFirstLine() {
+        var lines = text.components(separatedBy: "\n")
+        guard let idx = lines.firstIndex(where: {
+            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+        }) else { return }
+        title = lines[idx].trimmingCharacters(in: .whitespaces)
+        lines.remove(at: idx)
+        text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: Autosave

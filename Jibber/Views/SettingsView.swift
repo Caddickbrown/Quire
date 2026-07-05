@@ -14,6 +14,7 @@ struct SettingsView: View {
     @AppStorage("colorScheme") private var colorSchemeRaw: String = AppColorScheme.auto.rawValue
     @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
+    @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
     @AppStorage("splitTags") private var splitTagsRaw: String = ""
 
     static let shortcuts: [(action: String, keys: String)] = [
@@ -46,6 +47,11 @@ struct SettingsView: View {
 
                 Picker("Writing font", selection: $writingFontRaw) {
                     ForEach(WritingFont.allCases) { Text($0.displayName).tag($0.rawValue) }
+                }
+                Picker("Text size", selection: $fontSize) {
+                    ForEach(Theme.fontSizes, id: \.self) { s in
+                        Text("\(Int(s)) px").tag(Double(s))
+                    }
                 }
                 Picker("Date format", selection: $dateStyleRaw) {
                     ForEach(DateStyle.allCases) { Text($0.displayName).tag($0.rawValue) }
