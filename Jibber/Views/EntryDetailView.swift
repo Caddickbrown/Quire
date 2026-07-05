@@ -36,6 +36,7 @@ struct EntryDetailView: View {
     @State private var baselineRaw: String
     @State private var mode: EntryViewMode = .edit
     @State private var showingImagePicker = false
+    @State private var showingVideoRecorder = false
     @State private var saveTask: Task<Void, Never>?
     @StateObject private var recorder = AudioRecorder()
 
@@ -103,6 +104,14 @@ struct EntryDetailView: View {
             for url in urls { attachFile(url) }
             return !urls.isEmpty
         }
+        .sheet(isPresented: $showingVideoRecorder) {
+            VideoRecorderView { url in
+                if let rel = store.importAsset(from: url) {
+                    let md = "![](\(rel))"
+                    text = text.isEmpty ? md : text + "\n\n" + md
+                }
+            }
+        }
         .onChange(of: title) { _, _ in scheduleSave() }
         .onChange(of: text) { _, _ in scheduleSave() }
         .onChange(of: date) { _, _ in scheduleSave() }
@@ -131,6 +140,7 @@ struct EntryDetailView: View {
 
             Menu {
                 Button { showingImagePicker = true } label: { Label("Attach Media", systemImage: "paperclip") }
+                Button { showingVideoRecorder = true } label: { Label("Record Video", systemImage: "video") }
                 Button { promoteFirstLine() } label: { Label("Promote first line to title", systemImage: "arrow.up.to.line") }
                     .disabled(!hasFirstBodyLine)
             } label: {

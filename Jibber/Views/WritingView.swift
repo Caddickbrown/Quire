@@ -27,6 +27,7 @@ struct WritingView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var toast: String?
     @State private var showingImagePicker = false
+    @State private var showingVideoRecorder = false
     @StateObject private var recorder = AudioRecorder()
     @FocusState private var bodyFocused: Bool
 
@@ -117,6 +118,11 @@ struct WritingView: View {
                         Label("Attach Media", systemImage: "paperclip")
                     }
                     Button {
+                        showingVideoRecorder = true
+                    } label: {
+                        Label("Record Video", systemImage: "video")
+                    }
+                    Button {
                         promoteFirstLine()
                     } label: {
                         Label("Promote first line to title", systemImage: "arrow.up.to.line")
@@ -141,6 +147,14 @@ struct WritingView: View {
         .dropDestination(for: URL.self) { urls, _ in
             for url in urls { attachImage(url) }
             return !urls.isEmpty
+        }
+        .sheet(isPresented: $showingVideoRecorder) {
+            VideoRecorderView { url in
+                if let rel = store.importAsset(from: url) {
+                    let md = "![](\(rel))"
+                    text = text.isEmpty ? md : text + "\n\n" + md
+                }
+            }
         }
         .onChange(of: title) { _, _ in scheduleSave() }
         .onChange(of: text) { _, _ in scheduleSave() }

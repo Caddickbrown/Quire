@@ -473,6 +473,19 @@ final class JournalStore: ObservableObject {
     func revealAsset(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
     #endif
 
+    /// Copy an existing file (e.g. a recorded video) into assets/ and return the
+    /// relative path. Better than loading large media into memory.
+    func importAsset(from url: URL) -> String? {
+        guard let dir = assetsDirURL else { return nil }
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let ext = url.pathExtension.isEmpty ? "mov" : url.pathExtension.lowercased()
+        let dest = dir.appendingPathComponent("\(UUID().uuidString).\(ext)")
+        let ok = url.startAccessingSecurityScopedResource()
+        defer { if ok { url.stopAccessingSecurityScopedResource() } }
+        do { try fm.copyItem(at: url, to: dest); return "assets/\(dest.lastPathComponent)" }
+        catch { return nil }
+    }
+
     /// Save image data into the journal's assets folder and return the relative
     /// markdown-friendly path ("assets/<uuid>.<ext>"), or nil on failure.
     func saveAsset(_ data: Data, ext: String) -> String? {
