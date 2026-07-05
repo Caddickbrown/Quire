@@ -2,49 +2,73 @@
 //  WritingView.swift
 //  Jibber
 //
-//  The distraction-free composer (freewrite's heart). You write, then send the
-//  text to the inbox as a new draft. Font size cycles like freewrite; the
-//  macOS-only key monitors (backspace-lock, scroll-to-set-timer) are intentionally
-//  left out of this foundation pass.
+//  The composer. A title field + date/time picker sit above the body; everything
+//  autosaves continuously into one inbox draft in the jnl format
+//  ([timestamp] title / body). Paste multi-entry text and "Import" splits it into
+//  separate drafts.
 //
 
 import SwiftUI
 
 struct WritingView: View {
     @EnvironmentObject private var store: JournalStore
+    @EnvironmentObject private var nav: NavigationModel
     @Environment(\.colorScheme) private var colorScheme
 
-    @State private var text = ""
     @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
-    @State private var placeholder = Theme.placeholderPrompts.first ?? "Begin writing"
-    @State private var justSaved = false
-    @FocusState private var editorFocused: Bool
+    @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
+
+    @State private var title = ""
+    @State private var date = Date()
+    @State private var text = ""
+    @State private var activeTS: String?
+    @State private var saveTask: Task<Void, Never>?
+    @State private var toast: String?
+    @FocusState private var bodyFocused: Bool
 
     private var size: CGFloat { CGFloat(fontSize) }
+    private var font: Font { Theme.font(writingFontRaw, size: size) }
+    private var hasText: Bool {
+        !(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                TextField("Title", text: $title)
+                    .font(font.weight(.semibold))
+                    .textFieldStyle(.plain)
+                DatePicker("", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                    .labelsHidden()
+                    .fixedSize()
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            Divider()
+
             TextEditor(text: $text)
-                .font(.custom(Theme.writingFont, size: size))
+                .font(font)
                 .foregroundStyle(Theme.bodyText(colorScheme))
                 .lineSpacing(Theme.lineSpacing(for: size))
                 .scrollContentBackground(.hidden)
-                .padding(.horizontal, 8)
-                .focused($editorFocused)
-
-            if text.isEmpty {
-                // Align the placeholder's left edge with the caret (the editor's
-                // text region starts at its own 8pt inset).
-                Text(placeholder)
-                    .font(.custom(Theme.writingFont, size: size))
-                    .foregroundStyle(Theme.placeholder(colorScheme))
-                    .padding(.horizontal, 8)
-                    .padding(.top, 8)
-                    .allowsHitTesting(false)
-            }
+                .focused($bodyFocused)
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text("Begin writing")
+                            .font(font)
+                            .foregroundStyle(Theme.placeholder(colorScheme))
+                            .padding(.leading, 5)
+                            .padding(.top, 8)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
         }
-        .padding()
-        .frame(maxWidth: 700)
+        .frame(maxWidth: 760)
         .frame(maxWidth: .infinity)
         .navigationTitle("Write")
         #if os(iOS)
@@ -54,20 +78,32 @@ struct WritingView: View {
             ToolbarItemGroup {
                 fontSizeButton
                 Button {
-                    saveDraft()
+                    newEntry()
                 } label: {
-                    Label("Save to Inbox", systemImage: "tray.and.arrow.down")
+                    Label("New", systemImage: "square.and.pencil")
                 }
-                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!hasText)
+                Menu {
+                    Button {
+                        importEntries()
+                    } label: {
+                        Label("Import as separate entries", systemImage: "square.and.arrow.down.on.square")
+                    }
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
             }
         }
-        .onAppear {
-            placeholder = Theme.placeholderPrompts.randomElement() ?? placeholder
-            editorFocused = true
-        }
+        .onChange(of: title) { _, _ in scheduleSave() }
+        .onChange(of: text) { _, _ in scheduleSave() }
+        .onChange(of: date) { _, _ in scheduleSave() }
+        .onChange(of: nav.newEntrySignal) { _, _ in newEntry() }
+        .onAppear { bodyFocused = true }
+        .onDisappear { flush() }
         .overlay(alignment: .bottom) {
-            if justSaved {
-                Text("Saved to inbox")
+            if let toast {
+                Text(toast)
                     .font(.callout)
                     .padding(.horizontal, 14).padding(.vertical, 8)
                     .background(.thinMaterial, in: Capsule())
@@ -89,15 +125,58 @@ struct WritingView: View {
         .monospacedDigit()
     }
 
-    private func saveDraft() {
-        store.addDraft(title: "", body: text)
+    // MARK: Autosave
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            commit()
+        }
+    }
+
+    private func commit() {
+        guard hasText else {
+            if let ts = activeTS { store.removeDraft(timestamp: ts); activeTS = nil }
+            return
+        }
+        let ts = JournalStore.ts(from: date)
+        store.upsertDraft(previous: activeTS, timestamp: ts, title: title, body: text)
+        activeTS = ts
+    }
+
+    private func flush() {
+        saveTask?.cancel()
+        commit()
+    }
+
+    private func newEntry() {
+        flush()
+        reset()
+        bodyFocused = true
+    }
+
+    private func importEntries() {
+        // Drop the single working draft, then split the pasted text into drafts.
+        if let ts = activeTS { store.removeDraft(timestamp: ts); activeTS = nil }
+        let n = store.importDrafts(from: text)
+        reset()
+        showToast(n == 1 ? "Imported 1 entry" : "Imported \(n) entries")
+    }
+
+    private func reset() {
+        activeTS = nil
+        title = ""
         text = ""
-        placeholder = Theme.placeholderPrompts.randomElement() ?? placeholder
-        editorFocused = true
-        withAnimation { justSaved = true }
+        date = Date()
+    }
+
+    private func showToast(_ message: String) {
+        withAnimation { toast = message }
         Task {
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            withAnimation { justSaved = false }
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            withAnimation { toast = nil }
         }
     }
 }

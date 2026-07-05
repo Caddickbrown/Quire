@@ -13,14 +13,25 @@
 
 import Foundation
 import Combine
+#if canImport(AppKit)
+import AppKit
+#endif
 
 @MainActor
 final class JournalStore: ObservableObject {
 
     // MARK: Published state
     @Published private(set) var inboxDrafts: [Entry] = []
-    /// Filed days, newest first (e.g. "2026-05-10").
-    @Published private(set) var archiveDates: [String] = []
+    /// Filed days with a lightweight summary, newest first.
+    @Published private(set) var archiveDays: [ArchiveDay] = []
+
+    struct ArchiveDay: Identifiable, Hashable {
+        let date: String     // "YYYY-MM-DD"
+        let count: Int
+        let preview: String
+        var id: String { date }
+        var year: String { String(date.prefix(4)) }
+    }
     /// Where data actually lives once resolved; nil while still resolving.
     @Published private(set) var baseURL: URL?
     /// Where journal data currently lives.
@@ -39,8 +50,12 @@ final class JournalStore: ObservableObject {
 
     // MARK: Config
     /// Tags routed to their own `<base>/<tag>.md` file (jnl JNL_SPLIT_TAGS).
-    /// Empty for now — no config UI yet (deferred).
-    var splitTags: [String] = []
+    /// Read live from the "splitTags" preference (space/comma separated).
+    var splitTags: [String] {
+        let raw = UserDefaults.standard.string(forKey: "splitTags") ?? ""
+        return raw.split(whereSeparator: { $0 == " " || $0 == "," })
+            .map { let s = String($0); return s.hasPrefix("@") ? s : "@" + s }
+    }
 
     private let fm = FileManager.default
 
@@ -145,7 +160,7 @@ final class JournalStore: ObservableObject {
 
     func reload() {
         loadInbox()
-        loadArchiveDates()
+        loadArchive()
     }
 
     private func loadInbox() {
@@ -156,8 +171,16 @@ final class JournalStore: ObservableObject {
         inboxDrafts = JournalParser.parseEntries(content)
     }
 
-    private func loadArchiveDates() {
-        archiveDates = allJournalFiles().map(fileToDate).sorted(by: >)
+    /// Build the archive index once per reload: each day's entry count + a short
+    /// preview, newest day first (so the Archive list needs no per-render file reads).
+    private func loadArchive() {
+        let files = allJournalFiles().sorted { fileToDate($0) > fileToDate($1) }
+        archiveDays = files.map { url in
+            let entries = JournalParser.parseEntries(readString(url))
+            return ArchiveDay(date: fileToDate(url),
+                              count: entries.count,
+                              preview: entries.first?.preview ?? "")
+        }
     }
 
     /// All journal day-file URLs (recursive walk of journal/).
@@ -186,26 +209,115 @@ final class JournalStore: ObservableObject {
         return JournalParser.parseEntries(content)
     }
 
-    // MARK: Draft creation (jnl cmdNew)
+    // MARK: Tags (jnl cmdTags / cmdTag)
 
-    /// Append a new draft to the inbox. `title` becomes the header suffix; empty
-    /// title is fine. No-op if both title and body are blank.
-    func addDraft(title: String, body: String) {
-        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !(trimmedTitle.isEmpty && trimmedBody.isEmpty), let inboxURL else { return }
-
-        var header = "[\(Self.nowTS())]"
-        if !trimmedTitle.isEmpty { header += " " + trimmedTitle }
-        let raw = JournalParser.trimRightNewlines(header + "\n" + trimmedBody)
-        var normalised = raw + "\n"
-
-        let existing = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
-        if !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            normalised = JournalParser.trimRightNewlines(existing) + "\n\n" + normalised
+    /// All `@tags` across the archive + inbox with usage counts, sorted by count
+    /// (desc) then name. Mirrors jnl `tags`.
+    func tagCounts() -> [(tag: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for url in allJournalFiles() {
+            for t in JournalParser.splitTags(readString(url)) { counts[t, default: 0] += 1 }
         }
-        try? writeFile(inboxURL, normalised)
+        if let inboxURL { for t in JournalParser.splitTags(readString(inboxURL)) { counts[t, default: 0] += 1 } }
+        return counts
+            .map { (tag: $0.key, count: $0.value) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.tag < $1.tag }
+    }
+
+    /// Filed entries containing a tag, newest day first. Mirrors jnl `tag <name>`.
+    func entries(taggedWith name: String) -> [(date: String, entry: Entry)] {
+        let tag = name.hasPrefix("@") ? name : "@" + name
+        var result: [(String, Entry)] = []
+        for url in allJournalFiles().sorted(by: { fileToDate($0) > fileToDate($1) }) {
+            let date = fileToDate(url)
+            for e in JournalParser.parseEntries(readString(url)) where e.raw.contains(tag) {
+                result.append((date, e))
+            }
+        }
+        return result
+    }
+
+    private func readString(_ url: URL) -> String {
+        (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
+    // MARK: Composer autosave (jnl cmdNew)
+
+    /// Build an Entry from title + timestamp + body in the jnl header format:
+    /// title lands on the header line (`[ts] title`), body on the lines below.
+    static func makeEntry(timestamp: String, title: String, body: String) -> Entry {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let b = JournalParser.trimRightNewlines(body)
+        let raw: String
+        if !t.isEmpty && !b.isEmpty { raw = "[\(timestamp)] \(t)\n\(b)" }
+        else if !t.isEmpty         { raw = "[\(timestamp)] \(t)" }
+        else                       { raw = "[\(timestamp)]\n\(b)" }
+        return Entry(date: String(timestamp.prefix(10)), ts: timestamp, suffix: t,
+                     body: b.trimmingCharacters(in: .whitespacesAndNewlines), raw: raw)
+    }
+
+    /// Create or update the composer's working draft. `previous` is the last
+    /// timestamp this draft was saved under (so changing the date picker moves the
+    /// same draft rather than orphaning it). Empty title+body removes the draft.
+    func upsertDraft(previous: String?, timestamp: String, title: String, body: String) {
+        guard let inboxURL else { return }
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let b = JournalParser.trimRightNewlines(body).trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty && b.isEmpty {
+            if let previous { removeDraft(timestamp: previous) }
+            return
+        }
+        let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
+        let preamble = JournalParser.leadingPreamble(content)
+        var drafts = JournalParser.parseEntries(content)
+        if let previous, previous != timestamp { drafts.removeAll { $0.ts == previous } }
+        let entry = Self.makeEntry(timestamp: timestamp, title: title, body: body)
+        if let idx = drafts.firstIndex(where: { $0.ts == timestamp }) {
+            drafts[idx] = entry
+        } else {
+            drafts.append(entry)
+        }
+        try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
         loadInbox()
+    }
+
+    func removeDraft(timestamp: String) {
+        guard let inboxURL else { return }
+        let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
+        let preamble = JournalParser.leadingPreamble(content)
+        var drafts = JournalParser.parseEntries(content)
+        let before = drafts.count
+        drafts.removeAll { $0.ts == timestamp }
+        guard drafts.count != before else { return }
+        try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
+        loadInbox()
+    }
+
+    /// Import pasted text as separate inbox drafts (jnl `transfer` parsing): if it
+    /// contains `[timestamp]` headers each becomes its own draft; otherwise each
+    /// blank-line-separated paragraph becomes a draft stamped with the current time.
+    /// Returns how many drafts were added.
+    @discardableResult
+    func importDrafts(from text: String) -> Int {
+        guard let inboxURL else { return 0 }
+        let imported = parseImport(text)
+        guard !imported.isEmpty else { return 0 }
+        let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
+        let preamble = JournalParser.leadingPreamble(content)
+        var drafts = JournalParser.parseEntries(content)
+        drafts.append(contentsOf: imported)
+        try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
+        loadInbox()
+        return imported.count
+    }
+
+    private func parseImport(_ text: String) -> [Entry] {
+        let parsed = JournalParser.parseEntries(text)
+        if !parsed.isEmpty { return parsed }
+        return text.components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { Self.makeEntry(timestamp: Self.nowTS(), title: "", body: $0) }
     }
 
     // MARK: Review actions (jnl cmdReview)
@@ -217,7 +329,7 @@ final class JournalStore: ObservableObject {
         guard let label = try? fileEntry(entry) else { return nil }
         removeFromInbox(entry)
         loadInbox()
-        loadArchiveDates()
+        loadArchive()
         return label
     }
 
@@ -266,7 +378,7 @@ final class JournalStore: ObservableObject {
         guard let idx = entries.firstIndex(where: { $0.raw == original.raw }) else { return }
         entries.replaceSubrange(idx...idx, with: JournalParser.parseEntries(newText))
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
-        loadArchiveDates()
+        loadArchive()
     }
 
     /// Delete a filed entry from its day file (removes the file if now empty).
@@ -277,7 +389,7 @@ final class JournalStore: ObservableObject {
         var entries = JournalParser.parseEntries(content)
         entries.removeAll { $0.raw == entry.raw }
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
-        loadArchiveDates()
+        loadArchive()
     }
 
     // MARK: Filing internals (jnl fileDraft / splitTagTarget)
@@ -343,6 +455,130 @@ final class JournalStore: ObservableObject {
         try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
     }
 
+    // MARK: Search (jnl cmdSearch)
+
+    /// Filed entries whose text contains `query` (case-insensitive), newest first.
+    func search(_ query: String) -> [(date: String, entry: Entry)] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return [] }
+        var result: [(String, Entry)] = []
+        for url in allJournalFiles().sorted(by: { fileToDate($0) > fileToDate($1) }) {
+            let date = fileToDate(url)
+            for e in JournalParser.parseEntries(readString(url)) where e.raw.lowercased().contains(q) {
+                result.append((date, e))
+            }
+        }
+        return result
+    }
+
+    // MARK: Bulk filing (jnl transfer)
+
+    /// File every inbox draft into the archive. Returns how many were filed.
+    @discardableResult
+    func fileAllDrafts() -> Int {
+        var filed = 0
+        for draft in inboxDrafts where (try? fileEntry(draft)) != nil { filed += 1 }
+        // Clear the inbox (all filed).
+        if let inboxURL { try? writeFile(inboxURL, "") }
+        reload()
+        return filed
+    }
+
+    // MARK: Random (jnl cmdRandom)
+
+    func randomEntry() -> (date: String, entry: Entry)? {
+        var all: [(String, Entry)] = []
+        for url in allJournalFiles() {
+            let date = fileToDate(url)
+            for e in JournalParser.parseEntries(readString(url)) { all.append((date, e)) }
+        }
+        return all.randomElement()
+    }
+
+    // MARK: Export (jnl cmdExport)
+
+    /// All filed entries combined into one markdown string, oldest day first.
+    func exportMarkdown() -> String {
+        let files = allJournalFiles().sorted { fileToDate($0) < fileToDate($1) }
+        let parts = files.map { JournalParser.trimRightNewlines(readString($0)) }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? "" : parts.joined(separator: "\n\n") + "\n"
+    }
+
+    // MARK: Cleanup (jnl cmdCleanup)
+
+    struct CleanupResult { var formatted = 0; var reordered = 0 }
+
+    /// Standardise punctuation (… and straight quotes) and reorder each day's
+    /// entries by timestamp. Returns how many files changed.
+    @discardableResult
+    func cleanup() -> CleanupResult {
+        var res = CleanupResult()
+        for url in allJournalFiles() {
+            let orig = readString(url)
+            var fixed = orig
+                .replacingOccurrences(of: "...", with: "\u{2026}")
+                .replacingOccurrences(of: "\u{2019}", with: "'")
+                .replacingOccurrences(of: "\u{201C}", with: "\"")
+                .replacingOccurrences(of: "\u{201D}", with: "\"")
+            if fixed != orig { res.formatted += 1 }
+
+            let preamble = JournalParser.leadingPreamble(fixed)
+            let entries = JournalParser.parseEntries(fixed)
+            let sorted = JournalParser.sortedByTimestamp(entries)
+            if entries.map(\.ts) != sorted.map(\.ts) { res.reordered += 1 }
+            let rebuilt = JournalParser.renderEntries(preamble: preamble, entries: sorted)
+            if rebuilt != orig { try? writeFile(url, rebuilt) }
+        }
+        loadArchive()
+        return res
+    }
+
+    // MARK: Stats (jnl cmdStats)
+
+    struct Stats {
+        var days = 0, entries = 0, words = 0
+        var currentStreak = 0, bestStreak = 0
+        var longestDay = "", longestDayWords = 0
+    }
+
+    func stats() -> Stats {
+        var s = Stats()
+        var dates: [Date] = []
+        for url in allJournalFiles() {
+            let content = readString(url)
+            let es = JournalParser.parseEntries(content)
+            let w = content.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
+            s.days += 1; s.entries += es.count; s.words += w
+            if w > s.longestDayWords { s.longestDayWords = w; s.longestDay = fileToDate(url) }
+            if let d = Self.dateFormatter.date(from: fileToDate(url)) { dates.append(d) }
+        }
+        dates.sort()
+        // best streak
+        var run = 0
+        for (i, d) in dates.enumerated() {
+            if i > 0, let prev = Calendar.current.date(byAdding: .day, value: 1, to: dates[i-1]),
+               Calendar.current.isDate(prev, inSameDayAs: d) { run += 1 } else { run = 1 }
+            s.bestStreak = max(s.bestStreak, run)
+        }
+        // current streak (back from today)
+        let today = Calendar.current.startOfDay(for: Date())
+        var cur = 0
+        for i in stride(from: dates.count - 1, through: 0, by: -1) {
+            let expected = Calendar.current.date(byAdding: .day, value: -cur, to: today)!
+            if Calendar.current.isDate(dates[i], inSameDayAs: expected) { cur += 1 } else { break }
+        }
+        s.currentStreak = cur
+        return s
+    }
+
+    #if os(macOS)
+    /// Reveal the journal folder in Finder (jnl open).
+    func revealInFinder() {
+        if let baseURL { NSWorkspace.shared.activateFileViewerSelecting([baseURL]) }
+    }
+    #endif
+
     // MARK: Atomic write (jnl writeFile)
 
     /// Write via temp-file + rename so an interrupted write never truncates the
@@ -376,6 +612,10 @@ final class JournalStore: ObservableObject {
     }()
     static func nowTS() -> String { tsFormatter.string(from: Date()) }
     static func nowDate() -> String { dateFormatter.string(from: Date()) }
+    /// Convert a Date (from the composer's date picker) to a jnl timestamp.
+    static func ts(from date: Date) -> String { tsFormatter.string(from: date) }
+    /// Parse a jnl timestamp back into a Date (for the composer's date picker).
+    static func date(from ts: String) -> Date? { tsFormatter.date(from: ts) }
 
     enum JournalError: Error { case nothingToFile, badPath }
 }

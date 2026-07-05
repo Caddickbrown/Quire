@@ -14,8 +14,10 @@ enum Theme {
     static let fontSizes: [CGFloat] = [16, 18, 20, 22, 24, 26]
     static let defaultFontSize: CGFloat = 18
 
-    /// The bundled writing font. Falls back to the system font if unavailable.
-    static let writingFont = "Lato-Regular"
+    /// Resolve the user's chosen writing font at a size.
+    static func font(_ raw: String, size: CGFloat) -> Font {
+        (WritingFont(rawValue: raw) ?? .lato).font(size)
+    }
 
     /// Body text colour — dark gray in light mode, off-white in dark mode.
     static func bodyText(_ scheme: ColorScheme) -> Color {
@@ -42,4 +44,73 @@ enum Theme {
         "What's on your mind?",
         "Just say it",
     ]
+}
+
+/// How dates are shown throughout the app (chosen in Settings).
+enum DateStyle: String, CaseIterable, Identifiable {
+    case weekday   // Mon, 10 May
+    case medium    // 10 May 2026
+    case long      // Monday, 10 May 2026
+    case iso       // 2026-05-10
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .weekday: return "Mon, 10 May"
+        case .medium:  return "10 May 2026"
+        case .long:    return "Monday, 10 May 2026"
+        case .iso:     return "2026-05-10"
+        }
+    }
+
+    var format: String {
+        switch self {
+        case .weekday: return "EEE, d MMM"
+        case .medium:  return "d MMM yyyy"
+        case .long:    return "EEEE, d MMMM yyyy"
+        case .iso:     return "yyyy-MM-dd"
+        }
+    }
+}
+
+extension Theme {
+    private static let isoParser: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX"); return f
+    }()
+    private static let displayFormatter = DateFormatter()
+
+    /// Format an ISO "YYYY-MM-DD" date string in the user's chosen style.
+    static func displayDate(_ isoDate: String, style raw: String) -> String {
+        let style = DateStyle(rawValue: raw) ?? .weekday
+        guard let d = isoParser.date(from: isoDate) else { return isoDate }
+        displayFormatter.locale = .current
+        displayFormatter.dateFormat = style.format
+        return displayFormatter.string(from: d)
+    }
+}
+
+/// The writing font the user can choose in Settings. Serif/Mono use SwiftUI's
+/// system designs so they resolve identically on iOS and macOS; Lato is bundled.
+enum WritingFont: String, CaseIterable, Identifiable {
+    case lato, system, serif, mono
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .lato:   return "Lato"
+        case .system: return "System"
+        case .serif:  return "Serif"
+        case .mono:   return "Mono"
+        }
+    }
+
+    func font(_ size: CGFloat) -> Font {
+        switch self {
+        case .lato:   return .custom("Lato-Regular", size: size)
+        case .system: return .system(size: size)
+        case .serif:  return .system(size: size, design: .serif)
+        case .mono:   return .system(size: size, design: .monospaced)
+        }
+    }
 }

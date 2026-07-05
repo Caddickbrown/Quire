@@ -64,12 +64,15 @@ Jibber/
     JournalParser.swift  PURE port of jnl parse/render/sort/tags (no I/O; unit-tested)
     JournalStore.swift   @MainActor ObservableObject: iCloud base dir, load/file/sort, atomic writes
   Views/
-    RootView.swift       NavigationSplitView shell: Write / Inbox / Archive
-    WritingView.swift     distraction-free composer → addDraft() to inbox
-    InboxView.swift       drafts list; swipe to File / Delete; Sort
-    ArchiveView.swift     browse days grouped by year → DayView → entry
-    EntryDetailView.swift view/edit a draft or filed entry, save back
-    SettingsView.swift    choose the journal folder (custom / iCloud / local)
+    RootView.swift       NavigationSplitView: Write/Inbox/Archive/Tags + floating Settings cog;
+                         NavigationModel drives selection for keyboard-shortcut commands
+    WritingView.swift     composer: title field + date picker + body; continuous autosave to an
+                          inbox draft (jnl format); "Import" splits pasted multi-entry text
+    InboxView.swift       drafts list; swipe File/Delete; search; sort menu; File All / Sort file
+    ArchiveView.swift     days grouped by year with previews; search; sort; Stats + Random sheets
+    EntryDetailView.swift view/edit a draft or filed entry; title bar = date · title
+    TagsView.swift        tag explorer (searchable) → entries per tag
+    SettingsView.swift    appearance, writing font, date format, split tags, folder, cleanup/export
   iOS/Info.plist  macOS/Info.plist  Jibber.entitlements  Assets.xcassets  fonts/
 gen_pbxproj.py   tools/make_icon.swift   Tests/ParserChecks.swift   Makefile
 _parked/video/   ← freewrite's video views, excluded from the build
@@ -103,11 +106,18 @@ The custom-folder picker relies on the sandbox entitlements
 `com.apple.security.files.user-selected.read-write` and
 `com.apple.security.files.bookmarks.app-scope` (both in `Jibber.entitlements`).
 
+## jnl feature parity
+
+Every jnl command has a jibber equivalent: new→composer, review→Inbox actions,
+browse/list→Archive, inbox→Inbox, sort→Inbox "Sort file", log/yesterday→Archive
+day, stats→Stats sheet, search→`.searchable`, tags/tag→Tags, random→Random,
+cleanup→Settings, export→Settings, transfer→Inbox "File All" + composer "Import",
+open→Settings "Show in Finder", config→Settings (incl. JNL_SPLIT_TAGS).
+
 ## Deferred (explicit follow-ups)
 
-Video journaling; jnl `cleanup`/`export`/`transfer`/`random`/`stats`; split-tag
-config UI; PDF export; AI-chat; live `NSMetadataQuery` sync refresh; an XCTest
-target wired into the project (parser is currently verified via `make check`).
+Video journaling; PDF export; AI-chat; live `NSMetadataQuery` sync refresh; an
+XCTest target wired into the project (parser is currently verified via `make check`).
 
 ## Conventions
 

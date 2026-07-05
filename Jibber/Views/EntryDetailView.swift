@@ -23,6 +23,8 @@ struct EntryDetailView: View {
 
     @State private var draftText: String
     @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
+    @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
+    @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
 
     init(entry: Entry, source: EntrySource) {
         self.entry = entry
@@ -32,17 +34,21 @@ struct EntryDetailView: View {
 
     private var size: CGFloat { CGFloat(fontSize) }
     private var isDirty: Bool { draftText != entry.raw }
+    private var navTitle: String {
+        let d = Theme.displayDate(entry.date, style: dateStyleRaw)
+        return entry.suffix.isEmpty ? d : "\(d) · \(entry.suffix)"
+    }
 
     var body: some View {
         TextEditor(text: $draftText)
-            .font(.custom(Theme.writingFont, size: size))
+            .font(Theme.font(writingFontRaw, size: size))
             .foregroundStyle(Theme.bodyText(colorScheme))
             .lineSpacing(Theme.lineSpacing(for: size))
             .scrollContentBackground(.hidden)
             .padding()
             .frame(maxWidth: 700)
             .frame(maxWidth: .infinity)
-            .navigationTitle(entry.ts)
+            .navigationTitle(navTitle)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif

@@ -26,6 +26,7 @@ swift_files = [
     ('InboxView',       'Views/InboxView.swift',        'Views'),
     ('ArchiveView',     'Views/ArchiveView.swift',      'Views'),
     ('EntryDetailView', 'Views/EntryDetailView.swift',  'Views'),
+    ('TagsView',        'Views/TagsView.swift',         'Views'),
     ('SettingsView',    'Views/SettingsView.swift',     'Views'),
 ]
 

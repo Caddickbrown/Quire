@@ -38,6 +38,7 @@ enum AppColorScheme: String, CaseIterable, Identifiable {
 @main
 struct JibberApp: App {
     @StateObject private var store = JournalStore()
+    @StateObject private var nav = NavigationModel()
     @AppStorage("colorScheme") private var colorSchemeRaw: String = AppColorScheme.auto.rawValue
 
     init() { Self.registerBundledFonts() }
@@ -46,6 +47,7 @@ struct JibberApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(store)
+                .environmentObject(nav)
                 .preferredColorScheme(
                     AppColorScheme(rawValue: colorSchemeRaw)?.resolved
                 )
@@ -53,14 +55,7 @@ struct JibberApp: App {
         #if os(macOS)
         .defaultSize(width: 1100, height: 680)
         #endif
-
-        #if os(macOS)
-        Settings {
-            SettingsView()
-                .environmentObject(store)
-                .preferredColorScheme(AppColorScheme(rawValue: colorSchemeRaw)?.resolved)
-        }
-        #endif
+        .commands { AppCommands(nav: nav) }
     }
 
     /// Register every bundled Lato face at launch so `.custom("Lato-Regular", …)`
@@ -71,6 +66,26 @@ struct JibberApp: App {
         else { return }
         for url in urls {
             CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
+    }
+}
+
+/// Menu commands + keyboard shortcuts (macOS menu bar; hardware keyboards on iPad).
+struct AppCommands: Commands {
+    @ObservedObject var nav: NavigationModel
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("New Entry") { nav.requestNewEntry() }
+                .keyboardShortcut("n", modifiers: .command)
+        }
+        CommandMenu("Go") {
+            Button("Write")    { nav.section = .write }.keyboardShortcut("1", modifiers: .command)
+            Button("Inbox")    { nav.section = .inbox }.keyboardShortcut("2", modifiers: .command)
+            Button("Archive")  { nav.section = .archive }.keyboardShortcut("3", modifiers: .command)
+            Button("Tags")     { nav.section = .tags }.keyboardShortcut("4", modifiers: .command)
+            Divider()
+            Button("Settings") { nav.section = .settings }.keyboardShortcut(",", modifiers: .command)
         }
     }
 }
