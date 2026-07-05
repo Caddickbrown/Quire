@@ -10,6 +10,9 @@
 import SwiftUI
 
 private let tagRegex = try! NSRegularExpression(pattern: #"@[a-zA-Z][a-zA-Z0-9_-]*"#)
+/// `__text__` → italicised while editing (slant applied via .obliqueness so it
+/// works for fonts like Lato that ship without a separate italic face).
+private let emphasisRegex = try! NSRegularExpression(pattern: #"__(.+?)__"#)
 
 #if os(macOS)
 import AppKit
@@ -76,6 +79,9 @@ struct WritingTextEditor: NSViewRepresentable {
             for m in tagRegex.matches(in: tv.string, range: full) {
                 tv.textStorage?.addAttribute(.foregroundColor, value: tagColor, range: m.range)
             }
+        }
+        for m in emphasisRegex.matches(in: tv.string, range: full) {
+            tv.textStorage?.addAttribute(.obliqueness, value: 0.2, range: m.range)
         }
     }
 
@@ -147,6 +153,9 @@ struct WritingTextEditor: UIViewRepresentable {
             for m in tagRegex.matches(in: tv.text, range: full) {
                 tv.textStorage.addAttribute(.foregroundColor, value: UIColor.tintColor, range: m.range)
             }
+        }
+        for m in emphasisRegex.matches(in: tv.text, range: full) {
+            tv.textStorage.addAttribute(.obliqueness, value: 0.2, range: m.range)
         }
     }
 
