@@ -224,9 +224,19 @@ struct EntryTwoPane: View {
 
     @ViewBuilder
     private func rowLabel(_ entry: Entry) -> some View {
-        let row = EntryPreviewRow(entry: entry,
-                                  dateStyleRaw: fullDate ? dateStyleRaw : nil,
-                                  showTime: !fullDate && showTime)
+        let isInbox: Bool = { if case .inbox = sourceFor(entry) { return true }; return false }()
+        let row = HStack(spacing: 8) {
+            EntryPreviewRow(entry: entry,
+                            dateStyleRaw: fullDate ? dateStyleRaw : nil,
+                            showTime: !fullDate && showTime)
+            if isInbox {
+                Text("Inbox")
+                    .font(.caption2)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.18), in: Capsule())
+                    .foregroundStyle(.secondary)
+            }
+        }
         #if os(macOS)
         row
         #else

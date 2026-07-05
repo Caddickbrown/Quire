@@ -71,17 +71,27 @@ struct TagsView: View {
     @ViewBuilder
     private var entriesPane: some View {
         if let tag = selectedTag {
-            let hits = store.entries(taggedWith: tag)
-            let dateByTS = Dictionary(hits.map { ($0.entry.ts, $0.date) }, uniquingKeysWith: { a, _ in a })
+            let data = tagged(tag)
             EntryTwoPane(
-                entries: hits.map(\.entry),
-                sourceFor: { .archive(date: dateByTS[$0.ts] ?? "") },
+                entries: data.entries,
+                sourceFor: { data.sources[$0.ts] ?? .archive(date: "") },
                 fullDate: true
             )
             .id(tag)
         } else {
             ContentUnavailableView("Select a tag", systemImage: "number")
         }
+    }
+
+    /// Entries carrying a tag — inbox drafts first, then filed entries — with a
+    /// per-entry source so the two-pane can open each correctly.
+    private func tagged(_ tag: String) -> (entries: [Entry], sources: [String: EntrySource]) {
+        let inboxHits = store.inboxDrafts.filter { $0.tags.contains(tag) }
+        let journalHits = store.entries(taggedWith: tag)
+        var sources: [String: EntrySource] = [:]
+        for hit in journalHits { sources[hit.entry.ts] = .archive(date: hit.date) }
+        for draft in inboxHits { sources[draft.ts] = .inbox }
+        return (inboxHits + journalHits.map(\.entry), sources)
     }
 
     private func chip(_ item: (tag: String, count: Int), selected: Bool) -> some View {
