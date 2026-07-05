@@ -11,6 +11,9 @@ import SwiftUI
 struct TagsView: View {
     @EnvironmentObject private var store: JournalStore
     @State private var searchText = ""
+    @State private var randomTag: RandomTag?
+
+    struct RandomTag: Identifiable { let id = UUID(); let tag: String }
 
     var body: some View {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -47,27 +50,54 @@ struct TagsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            Button {
+                if let t = store.tagCounts().randomElement() {
+                    randomTag = RandomTag(tag: t.tag)
+                }
+            } label: {
+                Label("Random", systemImage: "dice")
+            }
+            .disabled(tags.isEmpty)
+        }
+        .sheet(item: $randomTag) { r in
+            NavigationStack { TagDetailView(tag: r.tag) }
+                .environmentObject(store)
+        }
     }
 
-    /// A tag bubble: name + count, tinted more strongly the more it's used.
+    /// A palette so the tag cloud isn't a sea of one colour. Each tag gets a
+    /// stable colour from its name; frequency sets how strong the fill is.
+    static let palette: [Color] = [
+        .blue, .teal, .green, .orange, .pink, .purple, .red, .indigo, .mint, .cyan, .brown,
+    ]
+
+    static func color(for tag: String) -> Color {
+        let hash = tag.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+        return palette[hash % palette.count]
+    }
+
+    /// A tag bubble: name + count, coloured per tag and filled by frequency.
     private func bubble(_ item: (tag: String, count: Int), maxCount: Int) -> some View {
-        let intensity = 0.12 + 0.35 * (Double(item.count) / Double(maxCount))
+        let color = Self.color(for: item.tag)
+        let intensity = 0.16 + 0.34 * (Double(item.count) / Double(maxCount))
         return HStack(spacing: 6) {
             Text(item.tag)
                 .fontWeight(.medium)
-                .foregroundStyle(.tint)
+                .foregroundStyle(color)
             Text("\(item.count)")
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(color.opacity(0.85))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
-                .background(Color.secondary.opacity(0.18), in: Capsule())
+                .background(color.opacity(0.18), in: Capsule())
         }
         .font(.callout)
         .padding(.leading, 12)
         .padding(.trailing, 8)
         .padding(.vertical, 8)
-        .background(Color.accentColor.opacity(intensity), in: Capsule())
+        .background(color.opacity(intensity), in: Capsule())
+        .overlay(Capsule().strokeBorder(color.opacity(0.35), lineWidth: 1))
     }
 }
 

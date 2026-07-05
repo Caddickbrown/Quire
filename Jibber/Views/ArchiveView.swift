@@ -50,33 +50,15 @@ struct ArchiveView: View {
 
     var body: some View {
         Group {
-            if store.archiveDays.isEmpty && store.splitJournals().isEmpty {
+            if store.archiveDays.isEmpty {
                 ContentUnavailableView(
                     "No entries yet",
-                    systemImage: "archivebox",
+                    systemImage: "book.closed",
                     description: Text("File drafts from your inbox and they'll show up here.")
                 )
             } else {
                 List {
                     if searchText.isEmpty {
-                        let journals = store.splitJournals()
-                        if !journals.isEmpty {
-                            Section("Split journals") {
-                                ForEach(journals) { j in
-                                    NavigationLink {
-                                        JournalFileView(name: j.name)
-                                    } label: {
-                                        HStack {
-                                            Label("@\(j.name)", systemImage: "bookmark")
-                                            Spacer()
-                                            Text("\(j.count)")
-                                                .font(.caption.monospacedDigit())
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                }
-                            }
-                        }
                         ForEach(years, id: \.self) { year in
                             Section(year) {
                                 ForEach(days(in: year)) { day in
@@ -114,7 +96,7 @@ struct ArchiveView: View {
             }
         }
         .searchable(text: $searchText, prompt: "Search entries")
-        .navigationTitle("Archive")
+        .navigationTitle("Journal")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -205,6 +187,44 @@ struct DayView: View {
             }
         }
         .navigationTitle(Theme.displayDate(date, style: dateStyleRaw))
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+    }
+}
+
+/// Sidebar section listing all tag-routed split journals.
+struct SplitJournalsView: View {
+    @EnvironmentObject private var store: JournalStore
+
+    var body: some View {
+        let journals = store.splitJournals()
+        Group {
+            if journals.isEmpty {
+                ContentUnavailableView(
+                    "No split journals",
+                    systemImage: "bookmark",
+                    description: Text("Add tags in Settings → Split tags. Filed entries with those @tags land in their own journal here.")
+                )
+            } else {
+                List {
+                    ForEach(journals) { j in
+                        NavigationLink {
+                            JournalFileView(name: j.name)
+                        } label: {
+                            HStack {
+                                Label("@\(j.name)", systemImage: "bookmark")
+                                Spacer()
+                                Text("\(j.count)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Split Journals")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

@@ -12,7 +12,8 @@ import SwiftUI
 enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case write = "Write"
     case inbox = "Inbox"
-    case archive = "Archive"
+    case archive = "Journal"
+    case splitJournals = "Split Journals"
     case tags = "Tags"
     case stats = "Stats"
     case settings = "Settings"
@@ -20,17 +21,18 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     var id: String { rawValue }
     var systemImage: String {
         switch self {
-        case .write:    return "square.and.pencil"
-        case .inbox:    return "tray"
-        case .archive:  return "archivebox"
-        case .tags:     return "number"
-        case .stats:    return "chart.bar"
-        case .settings: return "gearshape"
+        case .write:         return "square.and.pencil"
+        case .inbox:         return "tray"
+        case .archive:       return "book.closed"
+        case .splitJournals: return "bookmark"
+        case .tags:          return "number"
+        case .stats:         return "chart.bar"
+        case .settings:      return "gearshape"
         }
     }
 
     /// The journal sections shown in the main sidebar list (Settings sits apart).
-    static let primary: [AppSection] = [.write, .inbox, .archive, .tags]
+    static let primary: [AppSection] = [.write, .inbox, .archive, .splitJournals, .tags]
 }
 
 /// Shared navigation state so keyboard-shortcut commands (defined at the App
@@ -72,12 +74,13 @@ struct RootView: View {
         } detail: {
             NavigationStack {
                 switch nav.section ?? .write {
-                case .write:    WritingView()
-                case .inbox:    InboxView()
-                case .archive:  ArchiveView()
-                case .tags:     TagsView()
-                case .stats:    StatsView()
-                case .settings: SettingsView()
+                case .write:         WritingView()
+                case .inbox:         InboxView()
+                case .archive:       ArchiveView()
+                case .splitJournals: SplitJournalsView()
+                case .tags:          TagsView()
+                case .stats:         StatsView()
+                case .settings:      SettingsView()
                 }
             }
         }
