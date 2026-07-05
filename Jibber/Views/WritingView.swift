@@ -28,6 +28,15 @@ struct WritingView: View {
 
     private var size: CGFloat { CGFloat(fontSize) }
     private var font: Font { Theme.font(writingFontRaw, size: size) }
+    // The text view's built-in left inset differs by platform; match it so the
+    // placeholder's left edge lands exactly on the caret.
+    private var placeholderLeading: CGFloat {
+        #if os(macOS)
+        return 0
+        #else
+        return 5
+        #endif
+    }
     private var hasText: Bool {
         !(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
           && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -41,11 +50,15 @@ struct WritingView: View {
                     .textFieldStyle(.plain)
                 DatePicker("", selection: $date, displayedComponents: [.date, .hourAndMinute])
                     .labelsHidden()
-                    .fixedSize()
+                    #if os(macOS)
+                    .datePickerStyle(.field)
+                    #else
+                    .datePickerStyle(.compact)
+                    #endif
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
             .padding(.top, 12)
-            .padding(.bottom, 8)
+            .padding(.bottom, 10)
 
             Divider()
 
@@ -60,12 +73,12 @@ struct WritingView: View {
                         Text("Begin writing")
                             .font(font)
                             .foregroundStyle(Theme.placeholder(colorScheme))
-                            .padding(.leading, 5)
+                            .padding(.leading, placeholderLeading)
                             .padding(.top, 8)
                             .allowsHitTesting(false)
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 16)
                 .padding(.top, 4)
         }
         .frame(maxWidth: 760)

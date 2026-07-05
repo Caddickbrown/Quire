@@ -570,7 +570,7 @@ final class JournalStore: ObservableObject {
         var res = CleanupResult()
         for url in allJournalFiles() {
             let orig = readString(url)
-            var fixed = orig
+            let fixed = orig
                 .replacingOccurrences(of: "...", with: "\u{2026}")
                 .replacingOccurrences(of: "\u{2019}", with: "'")
                 .replacingOccurrences(of: "\u{201C}", with: "\"")

@@ -85,7 +85,7 @@ struct AppCommands: Commands {
             Button("Archive")  { nav.section = .archive }.keyboardShortcut("3", modifiers: .command)
             Button("Tags")     { nav.section = .tags }.keyboardShortcut("4", modifiers: .command)
             Divider()
-            Button("Settings") { nav.section = .settings }.keyboardShortcut(",", modifiers: .command)
+            Button("Setting") { nav.section = .settings }.keyboardShortcut(",", modifiers: .command)
         }
     }
 }
