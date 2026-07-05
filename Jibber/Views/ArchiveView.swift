@@ -21,7 +21,6 @@ struct ArchiveView: View {
     @AppStorage("archiveSort") private var sortRaw: String = ArchiveSort.newest.rawValue
 
     @State private var searchText = ""
-    @State private var showingStats = false
     @State private var randomHit: Hit?
 
     struct Hit: Identifiable { let id = UUID(); let date: String; let entry: Entry }
@@ -135,14 +134,6 @@ struct ArchiveView: View {
             }
             .keyboardShortcut("r", modifiers: .command)
             .disabled(store.archiveDays.isEmpty)
-            Button {
-                showingStats = true
-            } label: {
-                Label("Stats", systemImage: "chart.bar")
-            }
-        }
-        .sheet(isPresented: $showingStats) {
-            StatsView(stats: store.stats()).environmentObject(store)
         }
         .sheet(item: $randomHit) { hit in
             NavigationStack {
@@ -249,45 +240,47 @@ struct JournalFileView: View {
     }
 }
 
-/// Writing stats (jnl `stats`).
+/// Journal stats (jnl `stats`), shown as a sidebar pane. Covers the archive,
+/// inbox, tags, and split journals.
 struct StatsView: View {
-    @Environment(\.dismiss) private var dismiss
-    let stats: JournalStore.Stats
+    @EnvironmentObject private var store: JournalStore
+    @State private var stats = JournalStore.Stats()
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section("Totals") {
-                    LabeledContent("Days written", value: "\(stats.days)")
-                    LabeledContent("Entries", value: "\(stats.entries)")
-                    LabeledContent("Words", value: "\(stats.words)")
-                    if stats.entries > 0 {
-                        LabeledContent("Avg per entry", value: "\(stats.words / stats.entries) words")
-                    }
-                    LabeledContent("Journal size",
-                                   value: ByteCountFormatter.string(fromByteCount: Int64(stats.bytes),
-                                                                    countStyle: .file))
+        Form {
+            Section("Overview") {
+                LabeledContent("Inbox drafts", value: "\(stats.inboxDrafts)")
+                LabeledContent("Tags", value: "\(stats.tags)")
+                if stats.splitJournals > 0 {
+                    LabeledContent("Split journals", value: "\(stats.splitJournals)")
                 }
-                Section("Streaks") {
-                    LabeledContent("Current", value: "\(stats.currentStreak) day\(stats.currentStreak == 1 ? "" : "s")")
-                    LabeledContent("Best", value: "\(stats.bestStreak) day\(stats.bestStreak == 1 ? "" : "s")")
-                }
-                if !stats.longestDay.isEmpty {
-                    Section("Highlights") {
-                        LabeledContent("Longest day", value: "\(stats.longestDay) · \(stats.longestDayWords) words")
-                    }
+                LabeledContent("Journal size",
+                               value: ByteCountFormatter.string(fromByteCount: Int64(stats.bytes),
+                                                                countStyle: .file))
+            }
+            Section("Archive") {
+                LabeledContent("Days written", value: "\(stats.days)")
+                LabeledContent("Entries", value: "\(stats.entries)")
+                LabeledContent("Words", value: "\(stats.words)")
+                if stats.entries > 0 {
+                    LabeledContent("Avg per entry", value: "\(stats.words / stats.entries) words")
                 }
             }
-            .formStyle(.grouped)
-            .navigationTitle("Stats")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+            Section("Streaks") {
+                LabeledContent("Current", value: "\(stats.currentStreak) day\(stats.currentStreak == 1 ? "" : "s")")
+                LabeledContent("Best", value: "\(stats.bestStreak) day\(stats.bestStreak == 1 ? "" : "s")")
+            }
+            if !stats.longestDay.isEmpty {
+                Section("Highlights") {
+                    LabeledContent("Longest day", value: "\(stats.longestDay) · \(stats.longestDayWords) words")
                 }
             }
         }
+        .formStyle(.grouped)
+        .navigationTitle("Stats")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .task { stats = store.stats() }
     }
 }

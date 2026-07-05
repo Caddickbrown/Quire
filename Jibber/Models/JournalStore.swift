@@ -644,6 +644,7 @@ final class JournalStore: ObservableObject {
         var currentStreak = 0, bestStreak = 0
         var longestDay = "", longestDayWords = 0
         var bytes = 0
+        var inboxDrafts = 0, tags = 0, splitJournals = 0
     }
 
     /// Total size on disk of all markdown journal files (date journals, split
@@ -687,6 +688,9 @@ final class JournalStore: ObservableObject {
         }
         s.currentStreak = cur
         s.bytes = journalBytes()
+        s.inboxDrafts = inboxDrafts.count
+        s.tags = tagCounts().count
+        s.splitJournals = splitJournals().count
         return s
     }
 

@@ -14,6 +14,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case inbox = "Inbox"
     case archive = "Archive"
     case tags = "Tags"
+    case stats = "Stats"
     case settings = "Settings"
 
     var id: String { rawValue }
@@ -23,6 +24,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .inbox:    return "tray"
         case .archive:  return "archivebox"
         case .tags:     return "number"
+        case .stats:    return "chart.bar"
         case .settings: return "gearshape"
         }
     }
@@ -62,8 +64,8 @@ struct RootView: View {
                     }
                 }
             }
-            .navigationTitle("Jibber")
-            .overlay(alignment: .bottomLeading) { settingsCog }
+            .navigationTitle("jibber")
+            .overlay(alignment: .bottomLeading) { bottomBar }
             #if os(macOS)
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
             #endif
@@ -74,26 +76,34 @@ struct RootView: View {
                 case .inbox:    InboxView()
                 case .archive:  ArchiveView()
                 case .tags:     TagsView()
+                case .stats:    StatsView()
                 case .settings: SettingsView()
                 }
             }
         }
     }
 
-    /// Floating settings cog, bottom-left of the sidebar.
-    private var settingsCog: some View {
+    /// Floating Stats + Settings icons, bottom-left of the sidebar.
+    private var bottomBar: some View {
+        HStack(spacing: 2) {
+            iconButton(.stats)
+            iconButton(.settings)
+        }
+        .padding(.leading, 8)
+        .padding(.bottom, 10)
+    }
+
+    private func iconButton(_ section: AppSection) -> some View {
         Button {
-            nav.section = .settings
+            nav.section = section
         } label: {
-            Image(systemName: "gearshape")
+            Image(systemName: section.systemImage)
                 .font(.title3)
-                .foregroundStyle(nav.section == .settings ? Color.accentColor : Color.secondary)
+                .foregroundStyle(nav.section == section ? Color.accentColor : Color.secondary)
                 .padding(8)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Settings")
-        .padding(.leading, 10)
-        .padding(.bottom, 10)
+        .help(section.rawValue)
     }
 }
