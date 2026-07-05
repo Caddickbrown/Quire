@@ -36,12 +36,12 @@ enum SwipeAction: String, CaseIterable, Identifiable {
 
 struct InboxView: View {
     @EnvironmentObject private var store: JournalStore
+    @EnvironmentObject private var nav: NavigationModel
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
     @AppStorage("inboxSort") private var sortRaw: String = InboxSort.newest.rawValue
     @AppStorage("inboxSwipeLeft") private var swipeLeftRaw = SwipeAction.file.rawValue
     @AppStorage("inboxSwipeRight") private var swipeRightRaw = SwipeAction.delete.rawValue
     @State private var searchText = ""
-    @State private var randomDraft: Entry?
     @State private var selectedTS: String?
 
     private var drafts: [Entry] {
@@ -65,17 +65,15 @@ struct InboxView: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar { toolbarItems }
-            .sheet(item: $randomDraft) { draft in
-                NavigationStack {
-                    EntryDetailView(entry: draft, source: .inbox)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Save") { randomDraft = nil }
-                            }
-                        }
-                }
-                .environmentObject(store)
-            }
+    }
+
+    private func selectRandom() {
+        guard let draft = store.inboxDrafts.randomElement() else { return }
+        #if os(macOS)
+        selectedTS = draft.ts
+        #else
+        nav.path.append(Route.entry(draft, .inbox))
+        #endif
     }
 
     @ViewBuilder
@@ -183,7 +181,7 @@ struct InboxView: View {
     private var toolbarItems: some ToolbarContent {
         ToolbarItemGroup {
             Button {
-                randomDraft = store.inboxDrafts.randomElement()
+                selectRandom()
             } label: {
                 Label("Random", systemImage: "dice")
             }
