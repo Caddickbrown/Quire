@@ -19,7 +19,9 @@ struct SettingsView: View {
     @State private var showingImporter = false
     @State private var showingExporter = false
     @State private var exportDoc = ExportDocument(text: "")
-    @State private var cleanupMessage: String?
+    @State private var showingCleanup = false
+    @State private var cleanupMessage = ""
+    @State private var showingNothingToExport = false
 
     var body: some View {
         Form {
@@ -86,19 +88,29 @@ struct SettingsView: View {
                 Text("Entries containing these @tags file into <folder>/<tag>.md instead of the date journal (jnl JNL_SPLIT_TAGS). Space or comma separated.")
             }
 
-            Section("Maintenance") {
+            Section {
                 Button {
                     let r = store.cleanup()
                     cleanupMessage = "Formatted \(r.formatted) file(s), reordered \(r.reordered)."
+                    showingCleanup = true
                 } label: {
                     Label("Clean Up", systemImage: "wand.and.sparkles")
                 }
                 Button {
-                    exportDoc = ExportDocument(text: store.exportMarkdown())
-                    showingExporter = true
+                    let md = store.exportMarkdown()
+                    if md.isEmpty {
+                        showingNothingToExport = true
+                    } else {
+                        exportDoc = ExportDocument(text: md)
+                        showingExporter = true
+                    }
                 } label: {
                     Label("Export…", systemImage: "square.and.arrow.up")
                 }
+            } header: {
+                Text("Maintenance")
+            } footer: {
+                Text("Export combines all filed entries into one markdown file. Drafts still in the Inbox aren't included until you file them.")
             }
         }
         .formStyle(.grouped)
@@ -117,10 +129,15 @@ struct SettingsView: View {
                       document: exportDoc,
                       contentType: .plainText,
                       defaultFilename: "jibber-export.md") { _ in }
-        .alert("Cleanup complete", isPresented: .constant(cleanupMessage != nil)) {
-            Button("OK") { cleanupMessage = nil }
+        .alert("Cleanup complete", isPresented: $showingCleanup) {
+            Button("OK") { }
         } message: {
-            Text(cleanupMessage ?? "")
+            Text(cleanupMessage)
+        }
+        .alert("Nothing to export", isPresented: $showingNothingToExport) {
+            Button("OK") { }
+        } message: {
+            Text("Export only includes filed entries. File some drafts from the Inbox first.")
         }
     }
 }

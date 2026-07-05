@@ -11,6 +11,7 @@ import SwiftUI
 enum EntrySource: Hashable {
     case inbox
     case archive(date: String)
+    case journal(name: String)   // a tag-routed split journal (<base>/<name>.md)
 }
 
 struct EntryDetailView: View {
@@ -84,6 +85,8 @@ struct EntryDetailView: View {
             store.updateDraft(entry, newText: draftText)
         case .archive(let date):
             store.updateFiledEntry(date: date, original: entry, newText: draftText)
+        case .journal(let name):
+            store.updateJournalEntry(name: name, original: entry, newText: draftText)
         }
     }
 
@@ -93,6 +96,8 @@ struct EntryDetailView: View {
             store.deleteDraft(entry)
         case .archive(let date):
             store.deleteFiledEntry(date: date, entry: entry)
+        case .journal(let name):
+            store.deleteJournalEntry(name: name, entry: entry)
         }
     }
 }

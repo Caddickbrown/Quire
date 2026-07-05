@@ -241,6 +241,60 @@ final class JournalStore: ObservableObject {
         (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
+    // MARK: Split journals (JNL_SPLIT_TAGS files: <base>/<tag>.md)
+
+    struct SplitJournal: Identifiable, Hashable {
+        let name: String
+        let count: Int
+        var id: String { name }
+    }
+
+    private let reservedFiles: Set<String> = ["inbox.md", "transfer.md", "export.md", "jibber-export.md"]
+
+    /// Top-level `<base>/<name>.md` files (i.e. tag-routed split journals), each
+    /// with its entry count. The date journal (journal/) and reserved files are excluded.
+    func splitJournals() -> [SplitJournal] {
+        guard let base = baseURL,
+              let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)
+        else { return [] }
+        return items
+            .filter { $0.pathExtension == "md" && !reservedFiles.contains($0.lastPathComponent) }
+            .map { SplitJournal(name: $0.deletingPathExtension().lastPathComponent,
+                                count: JournalParser.parseEntries(readString($0)).count) }
+            .filter { $0.count > 0 }
+            .sorted { $0.name < $1.name }
+    }
+
+    private func splitJournalURL(_ name: String) -> URL? {
+        baseURL?.appendingPathComponent("\(name).md")
+    }
+
+    func entries(inJournal name: String) -> [Entry] {
+        guard let url = splitJournalURL(name) else { return [] }
+        return JournalParser.parseEntries(readString(url))
+    }
+
+    func updateJournalEntry(name: String, original: Entry, newText: String) {
+        guard let url = splitJournalURL(name) else { return }
+        let content = readString(url)
+        let preamble = JournalParser.leadingPreamble(content)
+        var entries = JournalParser.parseEntries(content)
+        guard let idx = entries.firstIndex(where: { $0.raw == original.raw }) else { return }
+        entries.replaceSubrange(idx...idx, with: JournalParser.parseEntries(newText))
+        try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
+        loadArchive()
+    }
+
+    func deleteJournalEntry(name: String, entry: Entry) {
+        guard let url = splitJournalURL(name) else { return }
+        let content = readString(url)
+        let preamble = JournalParser.leadingPreamble(content)
+        var entries = JournalParser.parseEntries(content)
+        entries.removeAll { $0.raw == entry.raw }
+        try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
+        loadArchive()
+    }
+
     // MARK: Composer autosave (jnl cmdNew)
 
     /// Build an Entry from title + timestamp + body in the jnl header format:

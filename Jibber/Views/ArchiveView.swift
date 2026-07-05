@@ -51,7 +51,7 @@ struct ArchiveView: View {
 
     var body: some View {
         Group {
-            if store.archiveDays.isEmpty {
+            if store.archiveDays.isEmpty && store.splitJournals().isEmpty {
                 ContentUnavailableView(
                     "No entries yet",
                     systemImage: "archivebox",
@@ -60,6 +60,24 @@ struct ArchiveView: View {
             } else {
                 List {
                     if searchText.isEmpty {
+                        let journals = store.splitJournals()
+                        if !journals.isEmpty {
+                            Section("Split journals") {
+                                ForEach(journals) { j in
+                                    NavigationLink {
+                                        JournalFileView(name: j.name)
+                                    } label: {
+                                        HStack {
+                                            Label("@\(j.name)", systemImage: "bookmark")
+                                            Spacer()
+                                            Text("\(j.count)")
+                                                .font(.caption.monospacedDigit())
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         ForEach(years, id: \.self) { year in
                             Section(year) {
                                 ForEach(days(in: year)) { day in
@@ -180,6 +198,28 @@ struct DayView: View {
             }
         }
         .navigationTitle(Theme.displayDate(date, style: dateStyleRaw))
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+    }
+}
+
+/// A tag-routed split journal (<base>/<name>.md), e.g. work.md.
+struct JournalFileView: View {
+    @EnvironmentObject private var store: JournalStore
+    let name: String
+
+    var body: some View {
+        List {
+            ForEach(store.entries(inJournal: name)) { entry in
+                NavigationLink {
+                    EntryDetailView(entry: entry, source: .journal(name: name))
+                } label: {
+                    EntryPreviewRow(entry: entry)
+                }
+            }
+        }
+        .navigationTitle("@\(name)")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
