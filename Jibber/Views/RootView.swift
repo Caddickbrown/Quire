@@ -65,7 +65,7 @@ struct RootView: View {
                 }
             }
             .navigationTitle("jibber")
-            .overlay(alignment: .bottomLeading) { bottomBar }
+            .overlay(alignment: .bottomTrailing) { bottomBar }
             #if os(macOS)
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
             #endif
@@ -89,7 +89,7 @@ struct RootView: View {
             iconButton(.stats)
             iconButton(.settings)
         }
-        .padding(.leading, 8)
+        .padding(.trailing, 8)
         .padding(.bottom, 10)
     }
 
