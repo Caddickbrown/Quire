@@ -75,6 +75,8 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     @Published var path = NavigationPath()
     @Published var newEntrySignal = 0
     @Published var focusMode = false
+    @Published var timerRemaining = 15 * 60
+    @Published var timerRunning = false
     var backMonitorInstalled = false
     func requestNewEntry() { section = .write; path = NavigationPath(); newEntrySignal += 1 }
     /// Pop one level (mouse Back button / ⌘[).
@@ -123,10 +125,16 @@ struct RootView: View {
             }
         }
         .onChange(of: nav.section) { _, _ in nav.path = NavigationPath() }
+        .onReceive(ticker) { _ in
+            guard nav.timerRunning else { return }
+            if nav.timerRemaining > 0 { nav.timerRemaining -= 1 } else { nav.timerRunning = false }
+        }
         #if os(macOS)
         .onAppear(perform: installBackButtonMonitor)
         #endif
     }
+
+    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     @ViewBuilder
     private var detailRoot: some View {
@@ -156,14 +164,43 @@ struct RootView: View {
     }
     #endif
 
-    /// Floating Stats + Settings icons, bottom-left of the sidebar.
+    /// Floating timer + Stats + Settings icons, bottom-right of the sidebar.
     private var bottomBar: some View {
         HStack(spacing: 2) {
+            timerControl
             iconButton(.stats)
             iconButton(.settings)
         }
         .padding(.trailing, 8)
         .padding(.bottom, 10)
+    }
+
+    @AppStorage("timerMinutes") private var timerMinutes: Int = 15
+
+    private var timerControl: some View {
+        Menu {
+            Button(nav.timerRunning ? "Pause" : "Start") { nav.timerRunning.toggle() }
+            Button("Reset") { nav.timerRunning = false; nav.timerRemaining = timerMinutes * 60 }
+            Divider()
+            Picker("Duration", selection: $timerMinutes) {
+                ForEach([5, 10, 15, 20, 25, 30], id: \.self) { Text("\($0) min").tag($0) }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            if nav.timerRunning {
+                Text(String(format: "%d:%02d", nav.timerRemaining / 60, nav.timerRemaining % 60))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(nav.timerRemaining == 0 ? Color.red : Color.accentColor)
+            } else {
+                Image(systemName: "timer")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .onChange(of: timerMinutes) { _, m in if !nav.timerRunning { nav.timerRemaining = m * 60 } }
+        .help("Writing timer")
     }
 
     private func iconButton(_ section: AppSection) -> some View {

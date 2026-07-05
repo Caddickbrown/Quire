@@ -18,11 +18,6 @@ struct WritingView: View {
 
     @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
     @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
-    @AppStorage("timerMinutes") private var timerMinutes: Int = 15
-
-    @State private var timerRemaining = 15 * 60
-    @State private var timerRunning = false
-    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     @State private var title = ""
     @State private var date = Date()
@@ -90,7 +85,6 @@ struct WritingView: View {
         #endif
         .toolbar {
             ToolbarItemGroup {
-                timerMenu
                 Button {
                     saveNow()
                 } label: {
@@ -138,15 +132,7 @@ struct WritingView: View {
         .onChange(of: text) { _, _ in scheduleSave() }
         .onChange(of: date) { _, _ in scheduleSave() }
         .onChange(of: nav.newEntrySignal) { _, _ in newEntry() }
-        .onChange(of: timerMinutes) { _, m in if !timerRunning { timerRemaining = m * 60 } }
-        .onReceive(ticker) { _ in
-            guard timerRunning else { return }
-            if timerRemaining > 0 { timerRemaining -= 1 } else { timerRunning = false }
-        }
-        .onAppear {
-            if !timerRunning { timerRemaining = timerMinutes * 60 }
-            bodyFocused = true
-        }
+        .onAppear { bodyFocused = true }
         .onDisappear { flush() }
         .overlay(alignment: .bottom) {
             if let toast {
@@ -158,26 +144,6 @@ struct WritingView: View {
                     .transition(.opacity)
             }
         }
-    }
-
-    private var timerString: String {
-        String(format: "%d:%02d", timerRemaining / 60, timerRemaining % 60)
-    }
-
-    private var timerMenu: some View {
-        Menu {
-            Button(timerRunning ? "Pause" : "Start") { timerRunning.toggle() }
-            Button("Reset") { timerRunning = false; timerRemaining = timerMinutes * 60 }
-            Divider()
-            Picker("Duration", selection: $timerMinutes) {
-                ForEach([5, 10, 15, 20, 25, 30], id: \.self) { Text("\($0) min").tag($0) }
-            }
-            .pickerStyle(.inline)
-        } label: {
-            Label(timerString, systemImage: "timer")
-                .monospacedDigit()
-        }
-        .help("Writing timer")
     }
 
     private var hasFirstBodyLine: Bool {
