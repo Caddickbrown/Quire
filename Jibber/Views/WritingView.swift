@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct WritingView: View {
     @EnvironmentObject private var store: JournalStore
@@ -29,6 +30,7 @@ struct WritingView: View {
     @State private var activeTS: String?
     @State private var saveTask: Task<Void, Never>?
     @State private var toast: String?
+    @State private var showingImagePicker = false
     @FocusState private var bodyFocused: Bool
 
     private var size: CGFloat { CGFloat(fontSize) }
@@ -106,6 +108,11 @@ struct WritingView: View {
                 .help("Start a new entry")
                 Menu {
                     Button {
+                        showingImagePicker = true
+                    } label: {
+                        Label("Attach Image", systemImage: "photo")
+                    }
+                    Button {
                         promoteFirstLine()
                     } label: {
                         Label("Promote first line to title", systemImage: "arrow.up.to.line")
@@ -121,6 +128,11 @@ struct WritingView: View {
                     Image(systemName: "ellipsis.circle")
                 }
             }
+        }
+        .fileImporter(isPresented: $showingImagePicker,
+                      allowedContentTypes: [.image],
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first { attachImage(url) }
         }
         .onChange(of: title) { _, _ in scheduleSave() }
         .onChange(of: text) { _, _ in scheduleSave() }
@@ -227,6 +239,16 @@ struct WritingView: View {
         let n = store.importDrafts(from: text)
         reset()
         showToast(n == 1 ? "Imported 1 entry" : "Imported \(n) entries")
+    }
+
+    private func attachImage(_ url: URL) {
+        let ok = url.startAccessingSecurityScopedResource()
+        defer { if ok { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else { return }
+        let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
+        guard let rel = store.saveAsset(data, ext: ext) else { return }
+        let md = "![](\(rel))"
+        text = text.isEmpty ? md : text + "\n\n" + md
     }
 
     private func reset() {

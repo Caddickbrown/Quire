@@ -402,6 +402,29 @@ final class JournalStore: ObservableObject {
         return imported.count
     }
 
+    // MARK: Media assets (Obsidian-style: <base>/assets/<file>, markdown links)
+
+    private var assetsDirURL: URL? { baseURL?.appendingPathComponent("assets", isDirectory: true) }
+
+    /// Absolute URL for a relative asset path like "assets/foo.png".
+    func assetURL(forRelative path: String) -> URL? {
+        baseURL?.appendingPathComponent(path)
+    }
+
+    /// Save image data into the journal's assets folder and return the relative
+    /// markdown-friendly path ("assets/<uuid>.<ext>"), or nil on failure.
+    func saveAsset(_ data: Data, ext: String) -> String? {
+        guard let dir = assetsDirURL else { return nil }
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let name = "\(UUID().uuidString).\(ext.lowercased())"
+        do {
+            try data.write(to: dir.appendingPathComponent(name), options: .atomic)
+            return "assets/\(name)"
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: Headless add (App Intents)
 
     /// Append a draft to the inbox from outside the UI (Shortcuts/Siri/Spotlight).

@@ -8,6 +8,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum EntrySource: Hashable {
     case inbox
@@ -31,6 +32,8 @@ struct EntryDetailView: View {
     @State private var date: Date
     @State private var text: String
     @State private var baselineRaw: String
+    @State private var previewing = false
+    @State private var showingImagePicker = false
 
     init(entry: Entry, source: EntrySource) {
         self.entry = entry
@@ -79,22 +82,27 @@ struct EntryDetailView: View {
 
             Divider()
 
-            WritingTextEditor(text: $text,
-                              fontRaw: writingFontRaw,
-                              size: size,
-                              textColor: Theme.bodyText(colorScheme),
-                              lineSpacing: Theme.lineSpacing(for: size))
-                .overlay(alignment: .topLeading) {
-                    if text.isEmpty {
-                        Text("Begin writing")
-                            .font(font)
-                            .foregroundStyle(Theme.placeholder(colorScheme))
-                            .allowsHitTesting(false)
+            if previewing {
+                MediaPreview(text: text, font: font, textColor: Theme.bodyText(colorScheme))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                WritingTextEditor(text: $text,
+                                  fontRaw: writingFontRaw,
+                                  size: size,
+                                  textColor: Theme.bodyText(colorScheme),
+                                  lineSpacing: Theme.lineSpacing(for: size))
+                    .overlay(alignment: .topLeading) {
+                        if text.isEmpty {
+                            Text("Begin writing")
+                                .font(font)
+                                .foregroundStyle(Theme.placeholder(colorScheme))
+                                .allowsHitTesting(false)
+                        }
                     }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .frame(maxWidth: 1520)
         .frame(maxWidth: .infinity)
@@ -103,8 +111,25 @@ struct EntryDetailView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .fileImporter(isPresented: $showingImagePicker,
+                      allowedContentTypes: [.image],
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first { attachImage(url) }
+        }
         .toolbar {
             ToolbarItemGroup {
+                Button {
+                    previewing.toggle()
+                } label: {
+                    Label("Preview", systemImage: previewing ? "eye.fill" : "eye")
+                }
+                .help("Toggle image preview")
+                Button {
+                    showingImagePicker = true
+                } label: {
+                    Label("Attach Image", systemImage: "photo")
+                }
+                .help("Attach an image")
                 Button {
                     save()
                 } label: {
@@ -144,6 +169,16 @@ struct EntryDetailView: View {
             store.updateJournalEntry(name: name, original: entry, newText: composedRaw)
         }
         baselineRaw = composedRaw
+    }
+
+    private func attachImage(_ url: URL) {
+        let ok = url.startAccessingSecurityScopedResource()
+        defer { if ok { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else { return }
+        let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
+        guard let rel = store.saveAsset(data, ext: ext) else { return }
+        let md = "![](\(rel))"
+        text = text.isEmpty ? md : text + "\n\n" + md
     }
 
     private func delete() {
