@@ -117,6 +117,7 @@ struct ArchiveView: View {
                 Picker("Sort", selection: $sortRaw) {
                     ForEach(ArchiveSort.allCases) { Text($0.label).tag($0.rawValue) }
                 }
+                .pickerStyle(.inline)
             } label: {
                 Label("Sort", systemImage: "arrow.up.arrow.down")
             }
