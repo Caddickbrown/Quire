@@ -33,6 +33,93 @@ struct SettingsView: View {
         ("Settings", "⌘,"),
     ]
 
+    static let howTos: [(title: String, body: String)] = [
+        ("Writing & autosave",
+         """
+         Write in the composer — a title line (optional) and the body. Everything \
+         autosaves continuously into an inbox draft, so you never press Save. Start a \
+         fresh entry with ⌘N. The ⋯ menu can "Promote first line to title" or "Discard" \
+         a draft you don't want to keep.
+         """),
+        ("The Inbox — filing drafts",
+         """
+         Drafts live in the Inbox until you file them into the dated journal. File from \
+         the ⋯/context menu, or (on iPhone/iPad) swipe a row — swipe directions are \
+         configurable in Settings → Inbox swipe. "File All" files every draft at once; \
+         "Sort file by date" reorders inbox.md. Drafts are grouped by date.
+         """),
+        ("The Journal — browsing",
+         """
+         The Journal lists every filed entry grouped under date headers; pick one to open \
+         it beside the list (macOS) or push to it (iOS). Search filters entries, the Sort \
+         menu flips newest/oldest, and Random (⌘R) jumps to a surprise entry. The mini \
+         calendar in the sidebar jumps to a specific day.
+         """),
+        ("Tags & Tag Review",
+         """
+         The Tags section is a rail of coloured chips — tap one to see its entries \
+         (inbox drafts show an "Inbox" badge). Search filters the rail; Random picks a \
+         tag. Settings → Tag Review finds tags that differ only by case (@tags/@Tags) or \
+         a single letter, and merges the ones you choose in one pass.
+         """),
+        ("Photos, video & audio",
+         """
+         Attach media from the ⋯ menu or by dragging files onto the editor. Record a voice \
+         memo with the mic button (a Stop banner appears while recording), or "Record \
+         Video" from the ⋯ menu. Files are copied into an assets/ folder and stored as \
+         ![](assets/…) links — switch to Preview to see them inline. Rows show a small \
+         photo/mic/film/paperclip badge for what they contain; browse everything under \
+         Assets.
+         """),
+        ("Formatting & copying",
+         """
+         Wrap text in __double underscores__ to italicise it while editing. Preview mode \
+         renders markdown (bold, italics, links, lists) with your media inline. An entry's \
+         ⋯ menu has "Copy text" to put its title + body on the clipboard.
+         """),
+        ("Calendar, timer & focus",
+         """
+         The sidebar calendar marks days that have entries; swipe or use the arrows to \
+         change month, and "Today" jumps back. The timer (bottom of the sidebar) counts \
+         down a writing session — set its length in its menu. Focus mode (⌘⌥F) hides the \
+         sidebar so it's just you and the page.
+         """),
+        ("Split journals (tag routing)",
+         """
+         Add tag names to "Split tags" above (e.g. work private). When you file a draft \
+         containing that @tag, it's written to <folder>/<tag>.md instead of the dated \
+         journal and appears under "Split Journals". Routing happens at filing time, so \
+         tag the draft first, then file it.
+         """),
+        ("Import as separate entries",
+         """
+         In Write, the ⋯ menu has "Import as separate entries". Paste text containing \
+         multiple entries to split them into individual inbox drafts. Text with \
+         [YYYY-MM-DD HH:MM:SS] headers splits per header (paste a whole inbox.md and it \
+         separates cleanly); headerless text becomes a single draft.
+         """),
+        ("Backup",
+         """
+         Choose a backup folder above, then "Back Up Now" copies your whole journal \
+         (inbox, journal, split journals, assets) into a timestamped folder there. \
+         Everything is plain files, so a backup is a full, openable copy.
+         """),
+        ("Maintenance",
+         """
+         Clean Up normalises punctuation, reorders entries by time, and removes exact \
+         duplicates (inbox + journal). Clear Orphan Media deletes asset files no entry \
+         references any more. Export combines all filed entries into one markdown file \
+         (drafts still in the Inbox aren't included until you file them).
+         """),
+        ("Storage, iCloud & jnl",
+         """
+         By default your journal lives in iCloud so it syncs across devices, with a local \
+         fallback when iCloud is off. Point "Journal folder" at any folder — including an \
+         existing jnl notes folder — to share the same inbox.md and journal/YYYY/MM/DD.md \
+         files with the jnl CLI. The Stats sheet breaks size into text vs media.
+         """),
+    ]
+
     @State private var showingImporter = false
     @State private var showingExporter = false
     @State private var exportDoc = ExportDocument(text: "")
@@ -108,25 +195,13 @@ struct SettingsView: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Button {
-                    showingImporter = true
-                } label: {
-                    Label("Choose Folder…", systemImage: "folder")
+                buttonRow {
+                    chooseFolderButton
+                    if store.storageMode == .custom { useDefaultButton }
+                    #if os(macOS)
+                    showInFinderButton
+                    #endif
                 }
-                if store.storageMode == .custom {
-                    Button(role: .destructive) {
-                        store.useDefaultFolder()
-                    } label: {
-                        Label("Use iCloud / Default", systemImage: "arrow.uturn.backward")
-                    }
-                }
-                #if os(macOS)
-                Button {
-                    store.revealInFinder()
-                } label: {
-                    Label("Show in Finder", systemImage: "magnifyingglass")
-                }
-                #endif
             } header: {
                 Text("Journal folder")
             } footer: {
@@ -142,17 +217,13 @@ struct SettingsView: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Button {
-                    showingBackupPicker = true
-                } label: {
-                    Label("Choose Backup Folder…", systemImage: "folder")
+                buttonRow {
+                    chooseBackupButton
+                    backupNowButton
+                    #if os(macOS)
+                    showBackupInFinderButton
+                    #endif
                 }
-                Button {
-                    backupMessage = store.backupNow().message
-                } label: {
-                    Label("Back Up Now", systemImage: "externaldrive.badge.timemachine")
-                }
-                .disabled(store.backupFolderName == nil)
             } header: {
                 Text("Backup")
             } footer: {
@@ -160,34 +231,11 @@ struct SettingsView: View {
             }
 
             Section {
-                Button {
-                    let r = store.cleanup()
-                    cleanupMessage = "Formatted \(r.formatted), reordered \(r.reordered), removed \(r.deduped) duplicate(s)."
-                    showingCleanup = true
-                } label: {
-                    Label("Clean Up", systemImage: "wand.and.sparkles")
-                }
-                Button {
-                    showingTagReview = true
-                } label: {
-                    Label("Tag Review", systemImage: "checkmark.seal")
-                }
-                Button {
-                    orphanCount = store.orphanAssets().count
-                    if orphanCount == 0 { showingNoOrphans = true } else { showingOrphanConfirm = true }
-                } label: {
-                    Label("Clear Orphan Media", systemImage: "photo.badge.exclamationmark")
-                }
-                Button {
-                    let md = store.exportMarkdown()
-                    if md.isEmpty {
-                        showingNothingToExport = true
-                    } else {
-                        exportDoc = ExportDocument(text: md)
-                        showingExporter = true
-                    }
-                } label: {
-                    Label("Export…", systemImage: "square.and.arrow.up")
+                buttonRow {
+                    cleanUpButton
+                    tagReviewButton
+                    clearOrphanButton
+                    exportButton
                 }
             } header: {
                 Text("Maintenance")
@@ -208,50 +256,12 @@ struct SettingsView: View {
             }
 
             Section("How to") {
-                DisclosureGroup("Import as separate entries") {
-                    Text("""
-                    In Write, the ⋯ menu has "Import as separate entries". Paste text \
-                    containing multiple entries, then choose it to split them into individual \
-                    inbox drafts.
-
-                    • If the text has [YYYY-MM-DD HH:MM:SS] headers, each header + its lines \
-                    becomes its own draft (paste a whole inbox.md and it splits cleanly).
-                    • If there are no headers, the whole text stays a single draft.
-
-                    The drafts land in the Inbox; file them from there.
-                    """)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                }
-                DisclosureGroup("Split journals (tag routing)") {
-                    Text("""
-                    Add tag names to "Split tags" above (e.g. work private). When you file a \
-                    draft that contains that @tag, it's written to <folder>/<tag>.md instead of \
-                    the dated journal, and shows up under "Split journals" at the top of Archive. \
-                    Routing happens when you file, so tag the draft first, then file it.
-                    """)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                }
-                DisclosureGroup("Photos, video & audio") {
-                    Text("""
-                    Attach media from the ⋯ menu (or drag files onto the editor). Record a voice \
-                    memo with the mic button, or "Record Video" from the ⋯ menu. Files are copied \
-                    into an assets/ folder next to your journal and stored as markdown \
-                    ![](assets/…) links — switch an entry to Preview to see them inline. Browse or \
-                    delete everything under the Assets section.
-                    """)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                }
-                DisclosureGroup("Backup") {
-                    Text("""
-                    Choose a backup folder above, then "Back Up Now" copies your whole journal \
-                    (inbox, journal, split journals, assets) into a timestamped folder there. \
-                    Everything is plain files, so a backup is a full, openable copy.
-                    """)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                ForEach(Self.howTos, id: \.title) { item in
+                    DisclosureGroup(item.title) {
+                        Text(item.body)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -321,6 +331,78 @@ struct SettingsView: View {
             Text("Export only includes filed entries. File some drafts from the Inbox first.")
         }
     }
+
+    /// A group of action buttons: laid out horizontally (wrapping) on macOS to
+    /// save vertical space; stacked as full-width rows on iOS.
+    @ViewBuilder
+    private func buttonRow<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        #if os(macOS)
+        FlowLayout(spacing: 8) { content() }
+            .buttonStyle(.bordered)
+        #else
+        content()
+        #endif
+    }
+
+    private var chooseFolderButton: some View {
+        Button { showingImporter = true } label: { Label("Choose Folder…", systemImage: "folder") }
+    }
+    private var useDefaultButton: some View {
+        Button(role: .destructive) { store.useDefaultFolder() } label: {
+            Label("Use iCloud / Default", systemImage: "arrow.uturn.backward")
+        }
+    }
+    private var chooseBackupButton: some View {
+        Button { showingBackupPicker = true } label: { Label("Choose Backup Folder…", systemImage: "folder") }
+    }
+    private var backupNowButton: some View {
+        Button { backupMessage = store.backupNow().message } label: {
+            Label("Back Up Now", systemImage: "externaldrive.badge.timemachine")
+        }
+        .disabled(store.backupFolderName == nil)
+    }
+    private var cleanUpButton: some View {
+        Button {
+            let r = store.cleanup()
+            cleanupMessage = "Formatted \(r.formatted), reordered \(r.reordered), removed \(r.deduped) duplicate(s)."
+            showingCleanup = true
+        } label: {
+            Label("Clean Up", systemImage: "wand.and.sparkles")
+        }
+    }
+    private var tagReviewButton: some View {
+        Button { showingTagReview = true } label: { Label("Tag Review", systemImage: "checkmark.seal") }
+    }
+    private var clearOrphanButton: some View {
+        Button {
+            orphanCount = store.orphanAssets().count
+            if orphanCount == 0 { showingNoOrphans = true } else { showingOrphanConfirm = true }
+        } label: {
+            Label("Clear Orphan Media", systemImage: "photo.badge.exclamationmark")
+        }
+    }
+    private var exportButton: some View {
+        Button {
+            let md = store.exportMarkdown()
+            if md.isEmpty {
+                showingNothingToExport = true
+            } else {
+                exportDoc = ExportDocument(text: md)
+                showingExporter = true
+            }
+        } label: {
+            Label("Export…", systemImage: "square.and.arrow.up")
+        }
+    }
+    #if os(macOS)
+    private var showInFinderButton: some View {
+        Button { store.revealInFinder() } label: { Label("Show in Finder", systemImage: "magnifyingglass") }
+    }
+    private var showBackupInFinderButton: some View {
+        Button { store.revealBackupFolder() } label: { Label("Show in Finder", systemImage: "magnifyingglass") }
+            .disabled(store.backupFolderName == nil)
+    }
+    #endif
 }
 
 /// A minimal plain-text document for exporting the combined journal.

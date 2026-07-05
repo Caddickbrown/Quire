@@ -1083,6 +1083,13 @@ final class JournalStore: ObservableObject {
     func revealInFinder() {
         if let baseURL { NSWorkspace.shared.activateFileViewerSelecting([baseURL]) }
     }
+
+    func revealBackupFolder() {
+        guard let url = resolveBackupURL() else { return }
+        let ok = url.startAccessingSecurityScopedResource()
+        defer { if ok { url.stopAccessingSecurityScopedResource() } }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
     #endif
 
     // MARK: Atomic write (jnl writeFile)
