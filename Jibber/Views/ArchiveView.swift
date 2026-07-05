@@ -246,17 +246,20 @@ struct StatsView: View {
     @EnvironmentObject private var store: JournalStore
     @State private var stats = JournalStore.Stats()
 
+    private static func size(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
     var body: some View {
         Form {
             Section("Overview") {
                 LabeledContent("Inbox drafts", value: "\(stats.inboxDrafts)")
+                LabeledContent("Inbox size", value: Self.size(stats.inboxBytes))
                 LabeledContent("Tags", value: "\(stats.tags)")
                 if stats.splitJournals > 0 {
                     LabeledContent("Split journals", value: "\(stats.splitJournals)")
                 }
-                LabeledContent("Journal size",
-                               value: ByteCountFormatter.string(fromByteCount: Int64(stats.bytes),
-                                                                countStyle: .file))
+                LabeledContent("Journal size", value: Self.size(stats.bytes))
             }
             Section("Archive") {
                 LabeledContent("Days written", value: "\(stats.days)")
@@ -265,6 +268,7 @@ struct StatsView: View {
                 if stats.entries > 0 {
                     LabeledContent("Avg per entry", value: "\(stats.words / stats.entries) words")
                 }
+                LabeledContent("Archive size", value: Self.size(stats.archiveBytes))
             }
             Section("Streaks") {
                 LabeledContent("Current", value: "\(stats.currentStreak) day\(stats.currentStreak == 1 ? "" : "s")")

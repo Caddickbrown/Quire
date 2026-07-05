@@ -644,17 +644,28 @@ final class JournalStore: ObservableObject {
         var currentStreak = 0, bestStreak = 0
         var longestDay = "", longestDayWords = 0
         var bytes = 0
+        var inboxBytes = 0, archiveBytes = 0
         var inboxDrafts = 0, tags = 0, splitJournals = 0
     }
 
+    private func fileBytes(_ url: URL?) -> Int {
+        guard let url else { return 0 }
+        return (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+    }
+
+    /// Non-journal markdown files that live in the folder but aren't journal data
+    /// (jnl's transfer scratch file and export outputs). Excluded from size totals.
+    private let nonJournalFiles: Set<String> = ["transfer.md", "export.md", "jibber-export.md"]
+
     /// Total size on disk of all markdown journal files (date journals, split
-    /// journals, and the inbox) under the base folder.
+    /// journals, and the inbox) under the base folder. Skips transfer/export files.
     func journalBytes() -> Int {
         guard let base = baseURL,
               let en = fm.enumerator(at: base, includingPropertiesForKeys: [.fileSizeKey])
         else { return 0 }
         var total = 0
-        for case let url as URL in en where url.pathExtension == "md" {
+        for case let url as URL in en
+        where url.pathExtension == "md" && !nonJournalFiles.contains(url.lastPathComponent) {
             total += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         }
         return total
@@ -688,6 +699,8 @@ final class JournalStore: ObservableObject {
         }
         s.currentStreak = cur
         s.bytes = journalBytes()
+        s.inboxBytes = fileBytes(inboxURL)
+        s.archiveBytes = max(0, s.bytes - s.inboxBytes)
         s.inboxDrafts = inboxDrafts.count
         s.tags = tagCounts().count
         s.splitJournals = splitJournals().count
