@@ -62,23 +62,14 @@ struct TagDetailView: View {
                 NavigationLink {
                     EntryDetailView(entry: hit.entry, source: .archive(date: hit.date))
                 } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(hit.entry.preview.isEmpty ? "(empty)" : hit.entry.preview)
-                                .lineLimit(1)
-                            Spacer()
-                            Text(hit.date)
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        if !hit.entry.body.isEmpty {
-                            Text(hit.entry.body)
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                        }
+                    tagRow(hit)
+                }
+                .contextMenu {
+                    Button(role: .destructive) {
+                        store.deleteFiledEntry(date: hit.date, entry: hit.entry)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
                     }
-                    .padding(.vertical, 2)
                 }
             }
         }
@@ -86,5 +77,26 @@ struct TagDetailView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+    }
+
+    @ViewBuilder
+    private func tagRow(_ hit: (date: String, entry: Entry)) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(hit.entry.preview.isEmpty ? "(empty)" : hit.entry.preview)
+                    .lineLimit(1)
+                Spacer()
+                Text(hit.date)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            if !hit.entry.body.isEmpty {
+                Text(hit.entry.body)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }

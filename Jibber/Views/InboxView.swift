@@ -71,6 +71,18 @@ struct InboxView: View {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
+                        .contextMenu {
+                            Button {
+                                store.fileDraft(draft)
+                            } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }
+                            Button(role: .destructive) {
+                                store.deleteDraft(draft)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                     }
                 }
             }

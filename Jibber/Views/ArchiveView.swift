@@ -100,6 +100,13 @@ struct ArchiveView: View {
                                     } label: {
                                         EntryPreviewRow(entry: entry)
                                     }
+                                    .contextMenu {
+                                        Button(role: .destructive) {
+                                            store.deleteFiledEntry(date: group.date, entry: entry)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -197,6 +204,13 @@ struct DayView: View {
                 } label: {
                     EntryPreviewRow(entry: entry)
                 }
+                .contextMenu {
+                    Button(role: .destructive) {
+                        store.deleteFiledEntry(date: date, entry: entry)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
         }
         .navigationTitle(Theme.displayDate(date, style: dateStyleRaw))
@@ -218,6 +232,13 @@ struct JournalFileView: View {
                     EntryDetailView(entry: entry, source: .journal(name: name))
                 } label: {
                     EntryPreviewRow(entry: entry)
+                }
+                .contextMenu {
+                    Button(role: .destructive) {
+                        store.deleteJournalEntry(name: name, entry: entry)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
                 }
             }
         }
@@ -243,6 +264,9 @@ struct StatsView: View {
                     if stats.entries > 0 {
                         LabeledContent("Avg per entry", value: "\(stats.words / stats.entries) words")
                     }
+                    LabeledContent("Journal size",
+                                   value: ByteCountFormatter.string(fromByteCount: Int64(stats.bytes),
+                                                                    countStyle: .file))
                 }
                 Section("Streaks") {
                     LabeledContent("Current", value: "\(stats.currentStreak) day\(stats.currentStreak == 1 ? "" : "s")")

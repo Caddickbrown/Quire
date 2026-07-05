@@ -594,6 +594,20 @@ final class JournalStore: ObservableObject {
         var days = 0, entries = 0, words = 0
         var currentStreak = 0, bestStreak = 0
         var longestDay = "", longestDayWords = 0
+        var bytes = 0
+    }
+
+    /// Total size on disk of all markdown journal files (date journals, split
+    /// journals, and the inbox) under the base folder.
+    func journalBytes() -> Int {
+        guard let base = baseURL,
+              let en = fm.enumerator(at: base, includingPropertiesForKeys: [.fileSizeKey])
+        else { return 0 }
+        var total = 0
+        for case let url as URL in en where url.pathExtension == "md" {
+            total += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        }
+        return total
     }
 
     func stats() -> Stats {
@@ -623,6 +637,7 @@ final class JournalStore: ObservableObject {
             if Calendar.current.isDate(dates[i], inSameDayAs: expected) { cur += 1 } else { break }
         }
         s.currentStreak = cur
+        s.bytes = journalBytes()
         return s
     }
 
