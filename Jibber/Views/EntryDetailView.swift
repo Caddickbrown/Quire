@@ -94,9 +94,11 @@ struct EntryDetailView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: 1520)
         .frame(maxWidth: .infinity)
+        .frame(minHeight: 360)
         .navigationTitle(navTitle)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
