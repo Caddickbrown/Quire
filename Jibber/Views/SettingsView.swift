@@ -41,6 +41,7 @@ struct SettingsView: View {
     @State private var showingNothingToExport = false
     @State private var showingBackupPicker = false
     @State private var backupMessage: String?
+    @State private var showingTagReview = false
 
     var body: some View {
         Form {
@@ -163,6 +164,11 @@ struct SettingsView: View {
                     Label("Clean Up", systemImage: "wand.and.sparkles")
                 }
                 Button {
+                    showingTagReview = true
+                } label: {
+                    Label("Tag Review", systemImage: "checkmark.seal")
+                }
+                Button {
                     let md = store.exportMarkdown()
                     if md.isEmpty {
                         showingNothingToExport = true
@@ -269,6 +275,9 @@ struct SettingsView: View {
             Button("OK") { }
         } message: {
             Text(backupMessage ?? "")
+        }
+        .sheet(isPresented: $showingTagReview) {
+            TagReviewView().environmentObject(store)
         }
         .alert("Cleanup complete", isPresented: $showingCleanup) {
             Button("OK") { }

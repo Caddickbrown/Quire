@@ -365,6 +365,76 @@ final class JournalStore: ObservableObject {
         (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
+    // MARK: Tag review (find near-duplicate tags, merge/rename)
+
+    /// Groups of similar tags (same ignoring case, or within one edit of each
+    /// other). Each group has ≥2 members, largest first within the group.
+    func similarTagGroups() -> [[(tag: String, count: Int)]] {
+        let all = tagCounts
+        var used = Set<Int>()
+        var groups: [[(tag: String, count: Int)]] = []
+        for i in all.indices where !used.contains(i) {
+            var group = [all[i]]
+            used.insert(i)
+            for j in all.indices where j > i && !used.contains(j) {
+                if Self.tagsSimilar(all[i].tag, all[j].tag) {
+                    group.append(all[j]); used.insert(j)
+                }
+            }
+            if group.count > 1 {
+                groups.append(group.sorted { $0.count > $1.count })
+            }
+        }
+        return groups
+    }
+
+    private static func tagsSimilar(_ a: String, _ b: String) -> Bool {
+        let na = a.dropFirst().lowercased(), nb = b.dropFirst().lowercased()
+        if na == nb { return true }                              // only case differs
+        if min(na.count, nb.count) >= 4 && levenshtein(na, nb) <= 1 { return true }
+        return false
+    }
+
+    private static func levenshtein(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        var d = Array(0...b.count)
+        for i in 1...max(a.count, 1) where !a.isEmpty {
+            var prev = d[0]; d[0] = i
+            for j in 1...b.count {
+                let temp = d[j]
+                d[j] = a[i-1] == b[j-1] ? prev : min(prev, d[j], d[j-1]) + 1
+                prev = temp
+            }
+        }
+        return a.isEmpty ? b.count : d[b.count]
+    }
+
+    /// Rename all occurrences of one @tag to another across inbox, journal, and
+    /// split-journal files. Whole-token match, so @tag doesn't touch @tags.
+    @discardableResult
+    func renameTag(from old: String, to new: String) -> Int {
+        let oldName = old.hasPrefix("@") ? String(old.dropFirst()) : old
+        let newTok = new.hasPrefix("@") ? new : "@" + new
+        guard let regex = try? NSRegularExpression(
+            pattern: "@" + NSRegularExpression.escapedPattern(for: oldName) + "(?![A-Za-z0-9_-])"
+        ) else { return 0 }
+        let template = NSRegularExpression.escapedTemplate(for: newTok)
+
+        var changed = 0
+        func fix(_ url: URL?) {
+            guard let url else { return }
+            let s = readString(url)
+            let r = regex.stringByReplacingMatches(
+                in: s, range: NSRange(s.startIndex..., in: s), withTemplate: template)
+            if r != s { try? writeFile(url, r); changed += 1 }
+        }
+        fix(inboxURL)
+        for url in allJournalFiles() { fix(url) }
+        for sj in splitJournals { fix(splitJournalURL(sj.name)) }
+        reload()
+        return changed
+    }
+
     // MARK: Split journals (JNL_SPLIT_TAGS files: <base>/<tag>.md)
 
     private func splitJournalURL(_ name: String) -> URL? {
