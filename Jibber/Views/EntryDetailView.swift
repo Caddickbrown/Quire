@@ -32,8 +32,13 @@ struct EntryDetailView: View {
     @State private var date: Date
     @State private var text: String
     @State private var baselineRaw: String
-    @State private var previewing = false
+    @State private var mode: EntryViewMode = .edit
     @State private var showingImagePicker = false
+
+    enum EntryViewMode: String, CaseIterable, Identifiable {
+        case edit = "Edit", preview = "Preview", raw = "Raw"
+        var id: String { rawValue }
+    }
 
     init(entry: Entry, source: EntrySource) {
         self.entry = entry
@@ -59,33 +64,46 @@ struct EntryDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                TextField("Title", text: $title)
-                    .font(font.weight(.semibold))
-                    .textFieldStyle(.plain)
-                HStack(spacing: 6) {
-                    Image(systemName: "calendar")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    DatePicker("", selection: $date, displayedComponents: [.date, .hourAndMinute])
-                        .labelsHidden()
-                        #if os(macOS)
-                        .datePickerStyle(.field)
-                        #else
-                        .datePickerStyle(.compact)
-                        #endif
+            if mode == .edit {
+                HStack(spacing: 12) {
+                    TextField("Title", text: $title)
+                        .font(font.weight(.semibold))
+                        .textFieldStyle(.plain)
+                    HStack(spacing: 6) {
+                        Image(systemName: "calendar")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        DatePicker("", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                            .labelsHidden()
+                            #if os(macOS)
+                            .datePickerStyle(.field)
+                            #else
+                            .datePickerStyle(.compact)
+                            #endif
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 10)
+
+                Divider()
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 10)
 
-            Divider()
-
-            if previewing {
+            switch mode {
+            case .preview:
                 MediaPreview(text: text, font: font, textColor: Theme.bodyText(colorScheme))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            case .raw:
+                ScrollView {
+                    Text(composedRaw)
+                        .font(.system(size: size, design: .monospaced))
+                        .foregroundStyle(Theme.bodyText(colorScheme))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .edit:
                 WritingTextEditor(text: $text,
                                   fontRaw: writingFontRaw,
                                   size: size,
@@ -112,24 +130,23 @@ struct EntryDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .fileImporter(isPresented: $showingImagePicker,
-                      allowedContentTypes: [.image],
+                      allowedContentTypes: [.image, .movie, .audio],
                       allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first { attachImage(url) }
         }
         .toolbar {
             ToolbarItemGroup {
-                Button {
-                    previewing.toggle()
-                } label: {
-                    Label("Preview", systemImage: previewing ? "eye.fill" : "eye")
+                Picker("Mode", selection: $mode) {
+                    ForEach(EntryViewMode.allCases) { Text($0.rawValue).tag($0) }
                 }
-                .help("Toggle image preview")
+                .pickerStyle(.segmented)
+                .fixedSize()
                 Button {
                     showingImagePicker = true
                 } label: {
-                    Label("Attach Image", systemImage: "photo")
+                    Label("Attach Media", systemImage: "paperclip")
                 }
-                .help("Attach an image")
+                .help("Attach an image, video, or audio file")
                 Button {
                     save()
                 } label: {

@@ -104,7 +104,7 @@ struct WritingView: View {
                     Button {
                         showingImagePicker = true
                     } label: {
-                        Label("Attach Image", systemImage: "photo")
+                        Label("Attach Media", systemImage: "paperclip")
                     }
                     Button {
                         promoteFirstLine()
@@ -124,7 +124,7 @@ struct WritingView: View {
             }
         }
         .fileImporter(isPresented: $showingImagePicker,
-                      allowedContentTypes: [.image],
+                      allowedContentTypes: [.image, .movie, .audio],
                       allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first { attachImage(url) }
         }
