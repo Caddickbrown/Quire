@@ -27,6 +27,7 @@ struct InboxView: View {
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
     @AppStorage("inboxSort") private var sortRaw: String = InboxSort.newest.rawValue
     @State private var searchText = ""
+    @State private var randomDraft: Entry?
 
     private var drafts: [Entry] {
         var d = store.inboxDrafts
@@ -87,6 +88,12 @@ struct InboxView: View {
             } label: {
                 Label("Sort", systemImage: "arrow.up.arrow.down")
             }
+            Button {
+                randomDraft = store.inboxDrafts.randomElement()
+            } label: {
+                Label("Random", systemImage: "dice")
+            }
+            .disabled(store.inboxDrafts.isEmpty)
             Menu {
                 Button {
                     store.fileAllDrafts()
@@ -102,6 +109,12 @@ struct InboxView: View {
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
+        }
+        .sheet(item: $randomDraft) { draft in
+            NavigationStack {
+                EntryDetailView(entry: draft, source: .inbox)
+            }
+            .environmentObject(store)
         }
     }
 }

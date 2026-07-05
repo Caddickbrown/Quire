@@ -46,6 +46,7 @@ struct EntryDetailView: View {
             .foregroundStyle(Theme.bodyText(colorScheme))
             .lineSpacing(Theme.lineSpacing(for: size))
             .scrollContentBackground(.hidden)
+            .scrollIndicators(.hidden)
             .padding()
             .frame(maxWidth: 700)
             .frame(maxWidth: .infinity)

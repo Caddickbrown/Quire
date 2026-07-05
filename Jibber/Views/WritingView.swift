@@ -67,6 +67,7 @@ struct WritingView: View {
                 .foregroundStyle(Theme.bodyText(colorScheme))
                 .lineSpacing(Theme.lineSpacing(for: size))
                 .scrollContentBackground(.hidden)
+                .scrollIndicators(.hidden)
                 .focused($bodyFocused)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
@@ -81,7 +82,7 @@ struct WritingView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
         }
-        .frame(maxWidth: 760)
+        .frame(maxWidth: 1520)
         .frame(maxWidth: .infinity)
         .navigationTitle("Write")
         #if os(iOS)
