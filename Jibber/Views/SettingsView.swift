@@ -129,6 +129,7 @@ struct SettingsView: View {
     @State private var showingBackupPicker = false
     @State private var backupMessage: String?
     @State private var showingTagReview = false
+    @State private var expandedHowTos: Set<String> = []
     @State private var orphanCount = 0
     @State private var showingOrphanConfirm = false
     @State private var showingNoOrphans = false
@@ -257,10 +258,26 @@ struct SettingsView: View {
 
             Section("How to") {
                 ForEach(Self.howTos, id: \.title) { item in
-                    DisclosureGroup(item.title) {
+                    DisclosureGroup(isExpanded: Binding(
+                        get: { expandedHowTos.contains(item.title) },
+                        set: { open in
+                            if open { expandedHowTos.insert(item.title) }
+                            else { expandedHowTos.remove(item.title) }
+                        }
+                    )) {
                         Text(item.body)
                             .font(.callout)
                             .foregroundStyle(.secondary)
+                    } label: {
+                        Text(item.title)
+                        #if os(macOS)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if expandedHowTos.contains(item.title) { expandedHowTos.remove(item.title) }
+                                else { expandedHowTos.insert(item.title) }
+                            }
+                        #endif
                     }
                 }
             }
