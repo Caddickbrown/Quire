@@ -159,3 +159,82 @@ struct CalendarView: View {
         let f = DateFormatter(); f.dateFormat = "MMMM yyyy"; return f.string(from: d)
     }
 }
+
+/// A compact month calendar for the sidebar. Tapping a day opens it.
+struct MiniCalendarView: View {
+    @EnvironmentObject private var store: JournalStore
+    @EnvironmentObject private var nav: NavigationModel
+    @State private var month = MiniCalendarView.startOfMonth(Date())
+
+    private let cal = Calendar.current
+    private static let ymd: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX"); return f
+    }()
+
+    private var days: Set<String> { Set(store.archiveDays.map(\.date)) }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text(Self.title(month)).font(.caption.weight(.semibold))
+                Spacer()
+                Button { shift(-1) } label: { Image(systemName: "chevron.left") }
+                    .buttonStyle(.plain).font(.caption2).foregroundStyle(.secondary)
+                Button { shift(1) } label: { Image(systemName: "chevron.right") }
+                    .buttonStyle(.plain).font(.caption2).foregroundStyle(.secondary)
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 7), spacing: 2) {
+                ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                    if let date = cell { dayCell(date) } else { Color.clear.frame(height: 22) }
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func dayCell(_ date: Date) -> some View {
+        let key = Self.ymd.string(from: date)
+        let has = days.contains(key)
+        let isToday = cal.isDateInToday(date)
+        Button {
+            if has { nav.openDay(key) }
+        } label: {
+            Text("\(cal.component(.day, from: date))")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(has ? .primary : .secondary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 22)
+                .background(has ? Color.accentColor.opacity(0.18) : Color.clear,
+                           in: RoundedRectangle(cornerRadius: 5))
+                .overlay(RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(isToday ? Color.accentColor : .clear, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(!has)
+    }
+
+    private func shift(_ m: Int) {
+        if let d = cal.date(byAdding: .month, value: m, to: month) { month = Self.startOfMonth(d) }
+    }
+
+    private var cells: [Date?] {
+        let comps = cal.dateComponents([.year, .month], from: month)
+        guard let first = cal.date(from: comps),
+              let range = cal.range(of: .day, in: .month, for: first) else { return [] }
+        let leading = (cal.component(.weekday, from: first) - cal.firstWeekday + 7) % 7
+        var out: [Date?] = Array(repeating: nil, count: leading)
+        for day in range { out.append(cal.date(byAdding: .day, value: day - 1, to: first)) }
+        return out
+    }
+
+    private static func startOfMonth(_ d: Date) -> Date {
+        let cal = Calendar.current
+        return cal.date(from: cal.dateComponents([.year, .month], from: d)) ?? d
+    }
+    private static func title(_ d: Date) -> String {
+        let f = DateFormatter(); f.dateFormat = "MMM yyyy"; return f.string(from: d)
+    }
+}

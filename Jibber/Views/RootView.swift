@@ -44,7 +44,6 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case write = "Write"
     case inbox = "Inbox"
     case archive = "Journal"
-    case calendar = "Calendar"
     case splitJournals = "Split Journals"
     case tags = "Tags"
     case assets = "Assets"
@@ -57,7 +56,6 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .write:         return "square.and.pencil"
         case .inbox:         return "tray"
         case .archive:       return "book.closed"
-        case .calendar:      return "calendar"
         case .splitJournals: return "bookmark"
         case .tags:          return "number"
         case .assets:        return "photo.on.rectangle"
@@ -67,7 +65,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     }
 
     /// The journal sections shown in the main sidebar list (Settings sits apart).
-    static let primary: [AppSection] = [.write, .inbox, .archive, .calendar, .splitJournals, .tags, .assets]
+    static let primary: [AppSection] = [.write, .inbox, .archive, .splitJournals, .tags, .assets]
 }
 
 /// Shared navigation state so keyboard-shortcut commands (defined at the App
@@ -93,6 +91,11 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .journal: section = .splitJournals
         }
         Task { @MainActor in path.append(Route.entry(entry, source)) }
+    }
+
+    func openDay(_ date: String) {
+        section = .archive
+        Task { @MainActor in path.append(Route.day(date)) }
     }
 }
 
@@ -127,9 +130,9 @@ struct RootView: View {
                 }
             }
             .navigationTitle("jibber")
-            .overlay(alignment: .bottomTrailing) { bottomBar }
+            .safeAreaInset(edge: .bottom) { sidebarFooter }
             #if os(macOS)
-            .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
+            .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
             #endif
         } detail: {
             NavigationStack(path: $nav.path) {
@@ -155,7 +158,6 @@ struct RootView: View {
         case .write:         WritingView()
         case .inbox:         InboxView()
         case .archive:       ArchiveView()
-        case .calendar:      CalendarView()
         case .splitJournals: SplitJournalsView()
         case .tags:          TagsView()
         case .assets:        AssetsView()
@@ -178,15 +180,22 @@ struct RootView: View {
     }
     #endif
 
-    /// Floating timer + Stats + Settings icons, bottom-right of the sidebar.
-    private var bottomBar: some View {
-        HStack(spacing: 2) {
-            timerControl
-            iconButton(.stats)
-            iconButton(.settings)
+    /// Sidebar footer: mini calendar + timer/Stats/Settings row.
+    private var sidebarFooter: some View {
+        VStack(spacing: 0) {
+            Divider()
+            MiniCalendarView()
+            Divider()
+            HStack(spacing: 2) {
+                Spacer()
+                timerControl
+                iconButton(.stats)
+                iconButton(.settings)
+            }
+            .padding(.trailing, 8)
+            .padding(.vertical, 6)
         }
-        .padding(.trailing, 8)
-        .padding(.bottom, 10)
+        .background(.bar)
     }
 
     @AppStorage("timerMinutes") private var timerMinutes: Int = 15
