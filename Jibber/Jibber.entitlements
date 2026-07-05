@@ -10,6 +10,9 @@
 	<!-- Persist access to a user-chosen journal folder across launches -->
 	<key>com.apple.security.files.bookmarks.app-scope</key>
 	<true/>
+	<!-- Voice memo recording -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
 
 	<!-- iCloud Documents: journal files live in the app's ubiquity container.
 	     The container must be provisioned via Xcode → Signing & Capabilities → iCloud. -->

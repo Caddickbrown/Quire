@@ -149,6 +149,7 @@ struct EntryDetailView: View {
                     } label: {
                         Label("Attach Media", systemImage: "paperclip")
                     }
+                    RecordButton { data in attachAudioData(data) }
                     Button {
                         promoteFirstLine()
                     } label: {
@@ -218,6 +219,12 @@ struct EntryDetailView: View {
         defer { if ok { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url) else { return }
         let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
+        insertMedia(data, ext: ext)
+    }
+
+    private func attachAudioData(_ data: Data) { insertMedia(data, ext: "m4a") }
+
+    private func insertMedia(_ data: Data, ext: String) {
         guard let rel = store.saveAsset(data, ext: ext) else { return }
         let md = "![](\(rel))"
         text = text.isEmpty ? md : text + "\n\n" + md

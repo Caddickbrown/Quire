@@ -33,6 +33,7 @@ swift_files = [
     ('CalendarView',    'Views/CalendarView.swift',     'Views'),
     ('MediaPreview',    'Views/MediaPreview.swift',      'Views'),
     ('AssetsView',      'Views/AssetsView.swift',       'Views'),
+    ('AudioRecorder',   'Views/AudioRecorder.swift',    'Views'),
     ('SettingsView',    'Views/SettingsView.swift',     'Views'),
 ]
 
@@ -309,6 +310,7 @@ def pbxproj():
         a('\t\t\t\t"INFOPLIST_FILE[sdk=iphonesimulator*]" = Jibber/iOS/Info.plist;')
         a('\t\t\t\t"INFOPLIST_FILE[sdk=macosx*]" = Jibber/macOS/Info.plist;')
         a('\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = Jibber;')
+        a('\t\t\t\tINFOPLIST_KEY_NSMicrophoneUsageDescription = "Jibber records voice memos to attach to your journal entries.";')
         a('\t\t\t\tINFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;')
         a('\t\t\t\tINFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;')
         a('\t\t\t\tINFOPLIST_KEY_UILaunchScreen_Generation = YES;')
