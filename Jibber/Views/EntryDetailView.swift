@@ -3,8 +3,9 @@
 //  Jibber
 //
 //  Edit a single entry — an inbox draft, a filed archive entry, or a split-journal
-//  entry. Uses the same title + date-picker + body layout as the composer, and
-//  writes back through the JournalStore to the correct file.
+//  entry. Same title + date-picker + body layout as the composer, autosaving
+//  continuously. Edit / Preview modes; controls are inline (not in the window
+//  toolbar) so they don't shift the layout when shown in a split pane.
 //
 
 import SwiftUI
@@ -35,9 +36,10 @@ struct EntryDetailView: View {
     @State private var baselineRaw: String
     @State private var mode: EntryViewMode = .edit
     @State private var showingImagePicker = false
+    @State private var saveTask: Task<Void, Never>?
 
     enum EntryViewMode: String, CaseIterable, Identifiable {
-        case edit = "Edit", preview = "Preview", raw = "Raw"
+        case edit = "Edit", preview = "Preview"
         var id: String { rawValue }
     }
 
@@ -57,148 +59,153 @@ struct EntryDetailView: View {
     }
     private var composedRaw: String { currentEntry.raw }
     private var isDirty: Bool { composedRaw != baselineRaw }
-    private var navTitle: String {
-        let d = Theme.displayDate(String(JournalStore.ts(from: date).prefix(10)), style: dateStyleRaw)
-        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? d : "\(d) · \(t)"
-    }
 
     var body: some View {
         VStack(spacing: 0) {
-            if mode == .edit {
-                HStack(spacing: 12) {
-                    TextField("Title", text: $title)
-                        .font(font.weight(.semibold))
-                        .textFieldStyle(.plain)
-                    HStack(spacing: 6) {
-                        Image(systemName: "calendar")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        DatePicker("", selection: $date, displayedComponents: [.date, .hourAndMinute])
-                            .labelsHidden()
-                            #if os(macOS)
-                            .datePickerStyle(.field)
-                            #else
-                            .datePickerStyle(.compact)
-                            #endif
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 10)
+            controlBar
+            Divider()
 
-                Divider()
-            }
-
-            switch mode {
-            case .preview:
+            if mode == .preview {
                 MediaPreview(text: text, font: font, textColor: Theme.bodyText(colorScheme))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .raw:
-                ScrollView {
-                    Text(composedRaw)
-                        .font(.system(size: size, design: .monospaced))
-                        .foregroundStyle(Theme.bodyText(colorScheme))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .edit:
-                WritingTextEditor(text: $text,
-                                  fontRaw: writingFontRaw,
-                                  size: size,
-                                  textColor: Theme.bodyText(colorScheme),
-                                  lineSpacing: Theme.lineSpacing(for: size),
-                                  highlightTags: highlightTags)
-                    .overlay(alignment: .topLeading) {
-                        if text.isEmpty {
-                            Text("Begin writing")
-                                .font(font)
-                                .foregroundStyle(Theme.placeholder(colorScheme))
-                                .allowsHitTesting(false)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                editArea
             }
         }
         .frame(maxWidth: 1520)
         .frame(maxWidth: .infinity)
         .frame(minHeight: 360)
-        .navigationTitle(navTitle)
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
         .fileImporter(isPresented: $showingImagePicker,
                       allowedContentTypes: [.image, .movie, .audio],
                       allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first { attachImage(url) }
+            if case .success(let urls) = result, let url = urls.first { attachFile(url) }
         }
-        .toolbar {
-            ToolbarItemGroup {
-                Picker("Mode", selection: $mode) {
-                    ForEach(EntryViewMode.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
-                Menu {
-                    Button {
-                        showingImagePicker = true
-                    } label: {
-                        Label("Attach Media", systemImage: "paperclip")
-                    }
-                    RecordButton { data in attachAudioData(data) }
-                    Button {
-                        promoteFirstLine()
-                    } label: {
-                        Label("Promote first line to title", systemImage: "arrow.up.to.line")
-                    }
+        .dropDestination(for: URL.self) { urls, _ in
+            for url in urls { attachFile(url) }
+            return !urls.isEmpty
+        }
+        .onChange(of: title) { _, _ in scheduleSave() }
+        .onChange(of: text) { _, _ in scheduleSave() }
+        .onChange(of: date) { _, _ in scheduleSave() }
+        .onDisappear { flush() }
+    }
+
+    // MARK: Controls (inline, so they don't reshuffle the window toolbar)
+
+    private var controlBar: some View {
+        HStack(spacing: 12) {
+            Picker("Mode", selection: $mode) {
+                ForEach(EntryViewMode.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+
+            Spacer()
+
+            RecordButton { data in insertMedia(data, ext: "m4a") }
+                .labelStyle(.iconOnly)
+
+            Menu {
+                Button { showingImagePicker = true } label: { Label("Attach Media", systemImage: "paperclip") }
+                Button { promoteFirstLine() } label: { Label("Promote first line to title", systemImage: "arrow.up.to.line") }
                     .disabled(!hasFirstBodyLine)
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .fixedSize()
+
+            if case .inbox = source {
                 Button {
-                    save()
-                } label: {
-                    Label("Save", systemImage: "checkmark")
-                }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(!isDirty)
-                .help("Save (⌘S)")
-                if case .inbox = source {
-                    Button {
-                        save()
-                        store.fileDraft(currentEntry)
-                        dismiss()
-                    } label: {
-                        Label("File", systemImage: "archivebox")
-                    }
-                    .help("File into the archive")
-                }
-                Button(role: .destructive) {
-                    delete()
+                    flush()
+                    store.fileDraft(currentEntry)
                     dismiss()
                 } label: {
-                    Label("Delete", systemImage: "trash")
+                    Label("File", systemImage: "archivebox").labelStyle(.iconOnly)
+                }
+                .help("File into the archive")
+            }
+            Button(role: .destructive) {
+                delete()
+                dismiss()
+            } label: {
+                Label("Delete", systemImage: "trash").labelStyle(.iconOnly)
+            }
+            .help("Delete")
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private var editArea: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                TextField("Title", text: $title)
+                    .font(font.weight(.semibold))
+                    .textFieldStyle(.plain)
+                HStack(spacing: 6) {
+                    Image(systemName: "calendar").font(.caption).foregroundStyle(.secondary)
+                    DatePicker("", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                        .labelsHidden()
+                        #if os(macOS)
+                        .datePickerStyle(.field)
+                        #else
+                        .datePickerStyle(.compact)
+                        #endif
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            WritingTextEditor(text: $text,
+                              fontRaw: writingFontRaw,
+                              size: size,
+                              textColor: Theme.bodyText(colorScheme),
+                              lineSpacing: Theme.lineSpacing(for: size),
+                              highlightTags: highlightTags)
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text("Begin writing")
+                            .font(font)
+                            .foregroundStyle(Theme.placeholder(colorScheme))
+                            .allowsHitTesting(false)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private func save() {
+    // MARK: Autosave
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            commit()
+        }
+    }
+
+    private func commit() {
         guard isDirty else { return }
         switch source {
-        case .inbox:
-            store.updateDraft(entry, newText: composedRaw)
-        case .archive(let date):
-            store.updateFiledEntry(date: date, original: entry, newText: composedRaw)
-        case .journal(let name):
-            store.updateJournalEntry(name: name, original: entry, newText: composedRaw)
+        case .inbox:            store.updateDraft(entry, newText: composedRaw)
+        case .archive(let d):   store.updateFiledEntry(date: d, original: entry, newText: composedRaw)
+        case .journal(let n):   store.updateJournalEntry(name: n, original: entry, newText: composedRaw)
         }
         baselineRaw = composedRaw
     }
+
+    private func flush() {
+        saveTask?.cancel()
+        commit()
+    }
+
+    // MARK: Media / helpers
 
     private var hasFirstBodyLine: Bool {
         text.split(separator: "\n", omittingEmptySubsequences: true).first != nil
@@ -206,23 +213,19 @@ struct EntryDetailView: View {
 
     private func promoteFirstLine() {
         var lines = text.components(separatedBy: "\n")
-        guard let idx = lines.firstIndex(where: {
-            !$0.trimmingCharacters(in: .whitespaces).isEmpty
-        }) else { return }
+        guard let idx = lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else { return }
         title = lines[idx].trimmingCharacters(in: .whitespaces)
         lines.remove(at: idx)
         text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func attachImage(_ url: URL) {
+    private func attachFile(_ url: URL) {
         let ok = url.startAccessingSecurityScopedResource()
         defer { if ok { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url) else { return }
         let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
         insertMedia(data, ext: ext)
     }
-
-    private func attachAudioData(_ data: Data) { insertMedia(data, ext: "m4a") }
 
     private func insertMedia(_ data: Data, ext: String) {
         guard let rel = store.saveAsset(data, ext: ext) else { return }
@@ -232,12 +235,9 @@ struct EntryDetailView: View {
 
     private func delete() {
         switch source {
-        case .inbox:
-            store.deleteDraft(entry)
-        case .archive(let date):
-            store.deleteFiledEntry(date: date, entry: entry)
-        case .journal(let name):
-            store.deleteJournalEntry(name: name, entry: entry)
+        case .inbox:            store.deleteDraft(entry)
+        case .archive(let d):   store.deleteFiledEntry(date: d, entry: entry)
+        case .journal(let n):   store.deleteJournalEntry(name: n, entry: entry)
         }
     }
 }

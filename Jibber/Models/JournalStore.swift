@@ -212,7 +212,7 @@ final class JournalStore: ObservableObject {
         }
     }
 
-    private static let reservedFiles: Set<String> = ["inbox.md", "transfer.md", "export.md", "jibber-export.md"]
+    nonisolated private static let reservedFiles: Set<String> = ["inbox.md", "transfer.md", "export.md", "jibber-export.md"]
 
     nonisolated static func buildIndex(base: URL) -> BuiltIndex {
         let fm = FileManager.default
@@ -259,7 +259,7 @@ final class JournalStore: ObservableObject {
         return idx
     }
 
-    private static let mediaLinkRegex = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\(([^)]+)\)"#)
+    nonisolated private static let mediaLinkRegex = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\(([^)]+)\)"#)
 
     /// Extract the paths from markdown media links in some content.
     nonisolated static func mediaPaths(in content: String) -> [String] {
@@ -336,7 +336,7 @@ final class JournalStore: ObservableObject {
         let content = readString(url)
         let preamble = JournalParser.leadingPreamble(content)
         var entries = JournalParser.parseEntries(content)
-        guard let idx = entries.firstIndex(where: { $0.raw == original.raw }) else { return }
+        guard let idx = entries.firstIndex(where: { $0.ts == original.ts }) ?? entries.firstIndex(where: { $0.raw == original.raw }) else { return }
         entries.replaceSubrange(idx...idx, with: JournalParser.parseEntries(newText))
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
         rebuildIndex()
@@ -347,7 +347,7 @@ final class JournalStore: ObservableObject {
         let content = readString(url)
         let preamble = JournalParser.leadingPreamble(content)
         var entries = JournalParser.parseEntries(content)
-        entries.removeAll { $0.raw == entry.raw }
+        entries.removeAll { $0.ts == entry.ts || $0.raw == entry.raw }
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
         rebuildIndex()
     }
@@ -550,7 +550,7 @@ final class JournalStore: ObservableObject {
         let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
         let preamble = JournalParser.leadingPreamble(content)
         var drafts = JournalParser.parseEntries(content)
-        guard let idx = drafts.firstIndex(where: { $0.id == entry.id })
+        guard let idx = drafts.firstIndex(where: { $0.ts == entry.ts })
                 ?? drafts.firstIndex(where: { $0.raw == entry.raw }) else { return }
         // Re-parse the edited text; it may yield 0..n entries.
         let parsed = JournalParser.parseEntries(newText)
@@ -581,7 +581,7 @@ final class JournalStore: ObservableObject {
         let content = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         let preamble = JournalParser.leadingPreamble(content)
         var entries = JournalParser.parseEntries(content)
-        guard let idx = entries.firstIndex(where: { $0.raw == original.raw }) else { return }
+        guard let idx = entries.firstIndex(where: { $0.ts == original.ts }) ?? entries.firstIndex(where: { $0.raw == original.raw }) else { return }
         entries.replaceSubrange(idx...idx, with: JournalParser.parseEntries(newText))
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
         rebuildIndex()
@@ -593,7 +593,7 @@ final class JournalStore: ObservableObject {
         let content = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         let preamble = JournalParser.leadingPreamble(content)
         var entries = JournalParser.parseEntries(content)
-        entries.removeAll { $0.raw == entry.raw }
+        entries.removeAll { $0.ts == entry.ts || $0.raw == entry.raw }
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
         rebuildIndex()
     }
@@ -654,7 +654,7 @@ final class JournalStore: ObservableObject {
         let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
         let preamble = JournalParser.leadingPreamble(content)
         var drafts = JournalParser.parseEntries(content)
-        if let idx = drafts.firstIndex(where: { $0.id == entry.id })
+        if let idx = drafts.firstIndex(where: { $0.ts == entry.ts })
             ?? drafts.firstIndex(where: { $0.raw == entry.raw }) {
             drafts.remove(at: idx)
         }
