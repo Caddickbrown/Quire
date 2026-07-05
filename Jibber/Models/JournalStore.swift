@@ -365,6 +365,55 @@ final class JournalStore: ObservableObject {
         return imported.count
     }
 
+    // MARK: Headless add (App Intents)
+
+    /// Append a draft to the inbox from outside the UI (Shortcuts/Siri/Spotlight).
+    /// Resolves the journal folder exactly as the app does. Returns false if both
+    /// title and body are empty.
+    static func quickAddDraft(title: String, body: String) throws -> Bool {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let b = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !(t.isEmpty && b.isEmpty) else { return false }
+
+        let resolved = resolveBase(bookmark: UserDefaults.standard.data(forKey: "customFolderBookmark"),
+                                   containerID: nil)
+        let base = resolved.url
+        let started = resolved.scoped && base.startAccessingSecurityScopedResource()
+        defer { if started { base.stopAccessingSecurityScopedResource() } }
+
+        let inbox = base.appendingPathComponent("inbox.md")
+        let entry = makeEntry(timestamp: nowTS(), title: t, body: b)
+        var out = JournalParser.trimRightNewlines(entry.raw) + "\n"
+        let existing = (try? String(contentsOf: inbox, encoding: .utf8)) ?? ""
+        if !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            out = JournalParser.trimRightNewlines(existing) + "\n\n" + out
+        }
+        try atomicWrite(inbox, out)
+        return true
+    }
+
+    /// Number of drafts currently in the inbox (headless — for App Intents).
+    static func inboxDraftCount() -> Int {
+        let resolved = resolveBase(bookmark: UserDefaults.standard.data(forKey: "customFolderBookmark"),
+                                   containerID: nil)
+        let base = resolved.url
+        let started = resolved.scoped && base.startAccessingSecurityScopedResource()
+        defer { if started { base.stopAccessingSecurityScopedResource() } }
+        let inbox = base.appendingPathComponent("inbox.md")
+        let content = (try? String(contentsOf: inbox, encoding: .utf8)) ?? ""
+        return JournalParser.parseEntries(content).count
+    }
+
+    /// Atomic write usable off the main actor (temp-file + rename).
+    nonisolated static func atomicWrite(_ url: URL, _ content: String) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let tmp = url.deletingLastPathComponent().appendingPathComponent(".jibber-\(UUID().uuidString).tmp")
+        try Data(content.utf8).write(to: tmp, options: .atomic)
+        if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
+        try fm.moveItem(at: tmp, to: url)
+    }
+
     private func parseImport(_ text: String) -> [Entry] {
         let parsed = JournalParser.parseEntries(text)
         if !parsed.isEmpty { return parsed }

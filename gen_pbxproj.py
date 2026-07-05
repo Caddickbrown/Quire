@@ -17,6 +17,7 @@ def new_id():
 # (key, path relative to Jibber/, containing group)
 swift_files = [
     ('JibberApp',       'JibberApp.swift',              'Jibber'),
+    ('JibberIntents',   'JibberIntents.swift',          'Jibber'),
     ('Theme',           'Theme.swift',                  'Jibber'),
     ('Entry',           'Models/Entry.swift',           'Models'),
     ('JournalParser',   'Models/JournalParser.swift',   'Models'),
