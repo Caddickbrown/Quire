@@ -139,6 +139,7 @@ struct EntryTwoPane: View {
     var groupByDate = false  // section the list by date (headers), entries under each
     var oldestFirst = false  // date-section order when grouping
     @State private var selectedTS: String?
+    @State private var openEntry: Entry?
 
     var body: some View {
         #if os(macOS)
@@ -146,13 +147,19 @@ struct EntryTwoPane: View {
             list.frame(width: 320)
             Divider()
             Group {
-                if let ts = selectedTS, let e = entries.first(where: { $0.ts == ts }) {
-                    EntryDetailView(entry: e, source: sourceFor(e)).id(ts)
+                // Render the retained selection, so filtering it out of the list
+                // (e.g. editing out a search term) doesn't kick you out mid-edit.
+                if let e = openEntry, e.ts == selectedTS {
+                    EntryDetailView(entry: e, source: sourceFor(e)).id(e.ts)
                 } else {
                     ContentUnavailableView("Select an entry", systemImage: "book.closed")
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .onChange(of: selectedTS) { _, ts in
+            if let ts, let e = entries.first(where: { $0.ts == ts }) { openEntry = e }
+            else if ts == nil { openEntry = nil }
         }
         #else
         list

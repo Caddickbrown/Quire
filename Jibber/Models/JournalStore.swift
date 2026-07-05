@@ -510,7 +510,7 @@ final class JournalStore: ObservableObject {
         return JournalParser.parseEntries(readString(url))
     }
 
-    func updateJournalEntry(name: String, original: Entry, newText: String) {
+    func updateJournalEntry(name: String, original: Entry, newText: String, reindex: Bool = true) {
         guard let url = splitJournalURL(name) else { return }
         let content = readString(url)
         let preamble = JournalParser.leadingPreamble(content)
@@ -518,7 +518,7 @@ final class JournalStore: ObservableObject {
         guard let idx = entries.firstIndex(where: { $0.ts == original.ts }) ?? entries.firstIndex(where: { $0.raw == original.raw }) else { return }
         entries.replaceSubrange(idx...idx, with: JournalParser.parseEntries(newText))
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
-        rebuildIndex()
+        if reindex { rebuildIndex() }
     }
 
     func deleteJournalEntry(name: String, entry: Entry) {
@@ -549,7 +549,7 @@ final class JournalStore: ObservableObject {
     /// Create or update the composer's working draft. `previous` is the last
     /// timestamp this draft was saved under (so changing the date picker moves the
     /// same draft rather than orphaning it). Empty title+body removes the draft.
-    func upsertDraft(previous: String?, timestamp: String, title: String, body: String) {
+    func upsertDraft(previous: String?, timestamp: String, title: String, body: String, reindex: Bool = true) {
         guard let inboxURL else { return }
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let b = JournalParser.trimRightNewlines(body).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -568,7 +568,7 @@ final class JournalStore: ObservableObject {
             drafts.append(entry)
         }
         try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
-        loadInbox()
+        if reindex { loadInbox() }
     }
 
     func removeDraft(timestamp: String) {
@@ -788,7 +788,7 @@ final class JournalStore: ObservableObject {
     }
 
     /// Replace a draft's text (from the editor) and persist the inbox.
-    func updateDraft(_ entry: Entry, newText: String) {
+    func updateDraft(_ entry: Entry, newText: String, reindex: Bool = true) {
         guard let inboxURL else { return }
         let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
         let preamble = JournalParser.leadingPreamble(content)
@@ -799,7 +799,7 @@ final class JournalStore: ObservableObject {
         let parsed = JournalParser.parseEntries(newText)
         drafts.replaceSubrange(idx...idx, with: parsed)
         try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
-        loadInbox()
+        if reindex { loadInbox() }
     }
 
     /// Sort the inbox into date order in place (jnl cmdSort).
@@ -819,7 +819,7 @@ final class JournalStore: ObservableObject {
     /// Replace a filed entry within its day file. Matches the original entry by
     /// its raw text. Re-parses `newText` (0..n entries) in its place. Removes the
     /// day file if it ends up empty.
-    func updateFiledEntry(date: String, original: Entry, newText: String) {
+    func updateFiledEntry(date: String, original: Entry, newText: String, reindex: Bool = true) {
         guard let url = journalFileURL(for: date) else { return }
         let content = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         let preamble = JournalParser.leadingPreamble(content)
@@ -827,7 +827,7 @@ final class JournalStore: ObservableObject {
         guard let idx = entries.firstIndex(where: { $0.ts == original.ts }) ?? entries.firstIndex(where: { $0.raw == original.raw }) else { return }
         entries.replaceSubrange(idx...idx, with: JournalParser.parseEntries(newText))
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
-        rebuildIndex()
+        if reindex { rebuildIndex() }
     }
 
     /// Delete a filed entry from its day file (removes the file if now empty).

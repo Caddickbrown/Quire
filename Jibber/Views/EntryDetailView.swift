@@ -44,6 +44,7 @@ struct EntryDetailView: View {
     @State private var showingVideoRecorder = false
     @State private var saveTask: Task<Void, Never>?
     @StateObject private var recorder = AudioRecorder()
+    @FocusState private var bodyFocused: Bool
 
     enum EntryViewMode: String, CaseIterable, Identifiable {
         case edit = "Edit", preview = "Preview"
@@ -186,6 +187,7 @@ struct EntryDetailView: View {
                 TextField("Title", text: $title)
                     .font(font.weight(.semibold))
                     .textFieldStyle(.plain)
+                    .onSubmit { bodyFocused = true }
                 HStack(spacing: 6) {
                     Image(systemName: "calendar").font(.caption).foregroundStyle(.secondary)
                     DatePicker("", selection: $date, displayedComponents: [.date, .hourAndMinute])
@@ -208,6 +210,7 @@ struct EntryDetailView: View {
                               textColor: Theme.bodyText(colorScheme),
                               lineSpacing: Theme.lineSpacing(for: size),
                               highlightTags: highlightTags)
+                .focused($bodyFocused)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
                         Text("Begin writing")
@@ -233,19 +236,22 @@ struct EntryDetailView: View {
         }
     }
 
-    private func commit() {
+    /// `reindex: false` (the debounced path) writes the file without rebuilding
+    /// the whole index — so typing doesn't trigger a folder-wide re-render. The
+    /// final flush reindexes so lists refresh once you leave.
+    private func commit(reindex: Bool = false) {
         guard isDirty else { return }
         switch source {
-        case .inbox:            store.updateDraft(entry, newText: composedRaw)
-        case .archive(let d):   store.updateFiledEntry(date: d, original: entry, newText: composedRaw)
-        case .journal(let n):   store.updateJournalEntry(name: n, original: entry, newText: composedRaw)
+        case .inbox:            store.updateDraft(entry, newText: composedRaw, reindex: reindex)
+        case .archive(let d):   store.updateFiledEntry(date: d, original: entry, newText: composedRaw, reindex: reindex)
+        case .journal(let n):   store.updateJournalEntry(name: n, original: entry, newText: composedRaw, reindex: reindex)
         }
         baselineRaw = composedRaw
     }
 
     private func flush() {
         saveTask?.cancel()
-        commit()
+        commit(reindex: true)
     }
 
     // MARK: Media / helpers

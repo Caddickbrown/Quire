@@ -10,9 +10,10 @@
 import SwiftUI
 
 private let tagRegex = try! NSRegularExpression(pattern: #"@[a-zA-Z][a-zA-Z0-9_-]*"#)
-/// `__text__` → italicised while editing (slant applied via .obliqueness so it
-/// works for fonts like Lato that ship without a separate italic face).
-private let emphasisRegex = try! NSRegularExpression(pattern: #"__(.+?)__"#)
+/// `_text_` or `__text__` → italicised while editing (slant applied via
+/// .obliqueness so it works for fonts like Lato with no separate italic face).
+/// The backreference makes the closing run of underscores match the opening.
+private let emphasisRegex = try! NSRegularExpression(pattern: #"(_{1,2})(.+?)\1"#)
 
 #if os(macOS)
 import AppKit

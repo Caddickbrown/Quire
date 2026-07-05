@@ -66,8 +66,15 @@ struct InboxView: View {
             #endif
             .toolbar { toolbarItems }
             .sheet(item: $randomDraft) { draft in
-                NavigationStack { EntryDetailView(entry: draft, source: .inbox) }
-                    .environmentObject(store)
+                NavigationStack {
+                    EntryDetailView(entry: draft, source: .inbox)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Save") { randomDraft = nil }
+                            }
+                        }
+                }
+                .environmentObject(store)
             }
     }
 
@@ -86,7 +93,9 @@ struct InboxView: View {
                     .frame(width: 320)
                 Divider()
                 Group {
-                    if let ts = selectedTS, let draft = drafts.first(where: { $0.ts == ts }) {
+                    // Look the draft up in the full inbox (not the search-filtered
+                    // list) so editing out the search term doesn't kick you out.
+                    if let ts = selectedTS, let draft = store.inboxDrafts.first(where: { $0.ts == ts }) {
                         EntryDetailView(entry: draft, source: .inbox).id(ts)
                     } else {
                         ContentUnavailableView("Select a draft", systemImage: "tray")

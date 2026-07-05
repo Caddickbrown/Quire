@@ -44,6 +44,7 @@ struct WritingView: View {
                 TextField("Title", text: $title)
                     .font(font.weight(.semibold))
                     .textFieldStyle(.plain)
+                    .onSubmit { bodyFocused = true }
                 HStack(spacing: 6) {
                     Image(systemName: "calendar")
                         .font(.caption)
@@ -220,19 +221,19 @@ struct WritingView: View {
         }
     }
 
-    private func commit() {
+    private func commit(reindex: Bool = false) {
         guard hasText else {
             if let ts = activeTS { store.removeDraft(timestamp: ts); activeTS = nil }
             return
         }
         let ts = JournalStore.ts(from: date)
-        store.upsertDraft(previous: activeTS, timestamp: ts, title: title, body: text)
+        store.upsertDraft(previous: activeTS, timestamp: ts, title: title, body: text, reindex: reindex)
         activeTS = ts
     }
 
     private func flush() {
         saveTask?.cancel()
-        commit()
+        commit(reindex: true)
     }
 
     /// Explicit save (⌘S): commit immediately and confirm.
