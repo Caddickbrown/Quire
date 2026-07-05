@@ -63,27 +63,24 @@ final class AudioRecorder: ObservableObject {
     }
 }
 
-/// Toolbar button that records audio and returns the data when stopped.
-struct RecordButton: View {
-    @StateObject private var recorder = AudioRecorder()
-    let onFinish: (Data) -> Void
+/// A prominent "Recording… [Stop]" banner shown while recording.
+struct RecordingBanner: View {
+    let elapsed: String
+    let onStop: () -> Void
 
     var body: some View {
-        Button {
-            if recorder.isRecording {
-                if let data = recorder.stop() { onFinish(data) }
-            } else {
-                Task { await recorder.start() }
-            }
-        } label: {
-            if recorder.isRecording {
-                Label(recorder.elapsedString, systemImage: "stop.circle.fill")
-                    .foregroundStyle(.red)
-                    .monospacedDigit()
-            } else {
-                Label("Record Audio", systemImage: "mic")
-            }
+        HStack(spacing: 10) {
+            Circle().fill(.red).frame(width: 9, height: 9)
+            Text("Recording \(elapsed)").font(.callout.monospacedDigit())
+            Button("Stop", action: onStop)
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(.small)
         }
-        .help(recorder.isRecording ? "Stop recording" : "Record audio")
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.thinMaterial, in: Capsule())
+        .padding(.bottom, 16)
+        .transition(.opacity)
     }
 }

@@ -176,13 +176,13 @@ struct MiniCalendarView: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            HStack {
+            HStack(spacing: 2) {
                 Text(Self.title(month)).font(.caption.weight(.semibold))
                 Spacer()
-                Button { shift(-1) } label: { Image(systemName: "chevron.left") }
-                    .buttonStyle(.plain).font(.caption2).foregroundStyle(.secondary)
-                Button { shift(1) } label: { Image(systemName: "chevron.right") }
-                    .buttonStyle(.plain).font(.caption2).foregroundStyle(.secondary)
+                calButton("chevron.left") { shift(-1) }
+                calButton("smallcircle.filled.circle") { month = Self.startOfMonth(Date()) }
+                    .help("Today")
+                calButton("chevron.right") { shift(1) }
             }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 7), spacing: 2) {
                 ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
@@ -214,6 +214,17 @@ struct MiniCalendarView: View {
         }
         .buttonStyle(.plain)
         .disabled(!has)
+    }
+
+    private func calButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func shift(_ m: Int) {

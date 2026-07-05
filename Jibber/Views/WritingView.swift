@@ -27,6 +27,7 @@ struct WritingView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var toast: String?
     @State private var showingImagePicker = false
+    @StateObject private var recorder = AudioRecorder()
     @FocusState private var bodyFocused: Bool
 
     private var size: CGFloat { CGFloat(fontSize) }
@@ -102,12 +103,13 @@ struct WritingView: View {
                 }
                 .disabled(!hasText)
                 .help("Start a new entry")
-                RecordButton { data in
-                    guard let rel = store.saveAsset(data, ext: "m4a") else { return }
-                    let md = "![](\(rel))"
-                    text = text.isEmpty ? md : text + "\n\n" + md
+                Button {
+                    toggleRecord()
+                } label: {
+                    Image(systemName: recorder.isRecording ? "stop.circle.fill" : "mic")
+                        .foregroundStyle(recorder.isRecording ? Color.red : Color.primary)
                 }
-                .labelStyle(.iconOnly)
+                .help(recorder.isRecording ? "Stop recording" : "Record audio")
                 Menu {
                     Button {
                         showingImagePicker = true
@@ -147,7 +149,9 @@ struct WritingView: View {
         .onAppear { bodyFocused = true }
         .onDisappear { flush() }
         .overlay(alignment: .bottom) {
-            if let toast {
+            if recorder.isRecording {
+                RecordingBanner(elapsed: recorder.elapsedString) { toggleRecord() }
+            } else if let toast {
                 Text(toast)
                     .font(.callout)
                     .padding(.horizontal, 14).padding(.vertical, 8)
@@ -155,6 +159,17 @@ struct WritingView: View {
                     .padding(.bottom, 16)
                     .transition(.opacity)
             }
+        }
+    }
+
+    private func toggleRecord() {
+        if recorder.isRecording {
+            if let data = recorder.stop(), let rel = store.saveAsset(data, ext: "m4a") {
+                let md = "![](\(rel))"
+                text = text.isEmpty ? md : text + "\n\n" + md
+            }
+        } else {
+            Task { await recorder.start() }
         }
     }
 

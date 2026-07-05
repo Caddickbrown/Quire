@@ -37,6 +37,7 @@ struct EntryDetailView: View {
     @State private var mode: EntryViewMode = .edit
     @State private var showingImagePicker = false
     @State private var saveTask: Task<Void, Never>?
+    @StateObject private var recorder = AudioRecorder()
 
     enum EntryViewMode: String, CaseIterable, Identifiable {
         case edit = "Edit", preview = "Preview"
@@ -66,10 +67,28 @@ struct EntryDetailView: View {
             Divider()
 
             if mode == .preview {
-                MediaPreview(text: text, font: font, textColor: Theme.bodyText(colorScheme))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(alignment: .leading, spacing: 0) {
+                    if !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        HStack {
+                            Text(title).font(font.weight(.bold))
+                            Spacer()
+                            Text(Theme.displayDate(String(JournalStore.ts(from: date).prefix(10)), style: dateStyleRaw))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 24)
+                        .padding(.top, 16)
+                        .padding(.bottom, 2)
+                    }
+                    MediaPreview(text: text, font: font, textColor: Theme.bodyText(colorScheme))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 editArea
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if recorder.isRecording {
+                RecordingBanner(elapsed: recorder.elapsedString) { toggleRecord() }
             }
         }
         .frame(maxWidth: 1520)
@@ -93,7 +112,7 @@ struct EntryDetailView: View {
     // MARK: Controls (inline, so they don't reshuffle the window toolbar)
 
     private var controlBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 18) {
             Picker("Mode", selection: $mode) {
                 ForEach(EntryViewMode.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -102,8 +121,13 @@ struct EntryDetailView: View {
 
             Spacer()
 
-            RecordButton { data in insertMedia(data, ext: "m4a") }
-                .labelStyle(.iconOnly)
+            Button {
+                toggleRecord()
+            } label: {
+                Image(systemName: recorder.isRecording ? "stop.circle.fill" : "mic")
+                    .foregroundStyle(recorder.isRecording ? Color.red : Color.primary)
+            }
+            .help(recorder.isRecording ? "Stop recording" : "Record audio")
 
             Menu {
                 Button { showingImagePicker = true } label: { Label("Attach Media", systemImage: "paperclip") }
@@ -133,8 +157,11 @@ struct EntryDetailView: View {
             .help("Delete")
         }
         .buttonStyle(.borderless)
+        #if os(iOS)
+        .imageScale(.large)
+        #endif
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
     }
 
     private var editArea: some View {
@@ -231,6 +258,14 @@ struct EntryDetailView: View {
         guard let rel = store.saveAsset(data, ext: ext) else { return }
         let md = "![](\(rel))"
         text = text.isEmpty ? md : text + "\n\n" + md
+    }
+
+    private func toggleRecord() {
+        if recorder.isRecording {
+            if let data = recorder.stop() { insertMedia(data, ext: "m4a") }
+        } else {
+            Task { await recorder.start() }
+        }
     }
 
     private func delete() {
