@@ -379,38 +379,64 @@ final class JournalStore: ObservableObject {
 
     // MARK: Tag review (find near-duplicate tags, merge/rename)
 
-    /// Groups of similar tags (same ignoring case, or within one edit of each
-    /// other). Each group has ≥2 members, largest first within the group.
-    func similarTagGroups() -> [[(tag: String, count: Int)]] {
-        let all = tagCounts
-        var used = Set<Int>()
-        var groups: [[(tag: String, count: Int)]] = []
-        for i in all.indices where !used.contains(i) {
-            var group = [all[i]]
-            used.insert(i)
-            for j in all.indices where j > i && !used.contains(j) {
-                if Self.tagsSimilar(all[i].tag, all[j].tag) {
-                    group.append(all[j]); used.insert(j)
+    struct TagGroup: Identifiable {
+        let variants: [(tag: String, count: Int)]
+        let caseOnly: Bool     // true = identical apart from case; false = 1-char apart
+        /// Stable key so an "ignore" choice sticks regardless of ordering.
+        var id: String { variants.map(\.tag).sorted().joined(separator: "|") }
+    }
+
+    private let ignoredTagGroupsKey = "ignoredTagGroups"
+
+    func ignoreTagGroup(_ group: TagGroup) {
+        var ignored = UserDefaults.standard.stringArray(forKey: ignoredTagGroupsKey) ?? []
+        if !ignored.contains(group.id) { ignored.append(group.id) }
+        UserDefaults.standard.set(ignored, forKey: ignoredTagGroupsKey)
+    }
+
+    /// Two tiers of possibly-duplicate tags: case-only variants (@tags/@Tags),
+    /// then one-character-apart lookalikes (journaling/journalling — but also
+    /// false friends like food/mood, which the user can ignore). Case-only first.
+    func similarTagGroups() -> [TagGroup] {
+        let ignored = Set(UserDefaults.standard.stringArray(forKey: ignoredTagGroupsKey) ?? [])
+        var order: [String] = [], buckets: [String: [(tag: String, count: Int)]] = [:]
+        for item in tagCounts {
+            let key = item.tag.dropFirst().lowercased()
+            if buckets[key] == nil { order.append(key) }
+            buckets[key, default: []].append(item)
+        }
+
+        var groups: [TagGroup] = []
+        // Tier 1: keys that cover more than one actual tag → only case differs.
+        for key in order where (buckets[key]?.count ?? 0) > 1 {
+            let variants = (buckets[key] ?? []).sorted { $0.count > $1.count }
+            let g = TagGroup(variants: variants, caseOnly: true)
+            if !ignored.contains(g.id) { groups.append(g) }
+        }
+        // Tier 2: distinct keys within one edit of each other.
+        var used = Set<String>()
+        for i in order.indices where !used.contains(order[i]) {
+            var cluster = [order[i]]
+            for j in order.indices where j > i && !used.contains(order[j]) {
+                if min(order[i].count, order[j].count) >= 4,
+                   Self.levenshtein(order[i], order[j]) == 1 {
+                    cluster.append(order[j])
                 }
             }
-            if group.count > 1 {
-                groups.append(group.sorted { $0.count > $1.count })
-            }
+            guard cluster.count > 1 else { continue }
+            cluster.forEach { used.insert($0) }
+            let variants = cluster.flatMap { buckets[$0] ?? [] }.sorted { $0.count > $1.count }
+            let g = TagGroup(variants: variants, caseOnly: false)
+            if !ignored.contains(g.id) { groups.append(g) }
         }
         return groups
     }
 
-    private static func tagsSimilar(_ a: String, _ b: String) -> Bool {
-        let na = a.dropFirst().lowercased(), nb = b.dropFirst().lowercased()
-        if na == nb { return true }                              // only case differs
-        if min(na.count, nb.count) >= 4 && levenshtein(na, nb) <= 1 { return true }
-        return false
-    }
-
     private static func levenshtein(_ a: String, _ b: String) -> Int {
         let a = Array(a), b = Array(b)
+        if a.isEmpty { return b.count }
         var d = Array(0...b.count)
-        for i in 1...max(a.count, 1) where !a.isEmpty {
+        for i in 1...a.count {
             var prev = d[0]; d[0] = i
             for j in 1...b.count {
                 let temp = d[j]
@@ -418,7 +444,33 @@ final class JournalStore: ObservableObject {
                 prev = temp
             }
         }
-        return a.isEmpty ? b.count : d[b.count]
+        return d[b.count]
+    }
+
+    /// Apply several tag renames in one pass over each file, reloading once.
+    func mergeTags(_ merges: [(from: String, to: String)]) {
+        let rules: [(NSRegularExpression, String)] = merges.compactMap { m in
+            let oldName = m.from.hasPrefix("@") ? String(m.from.dropFirst()) : m.from
+            let newTok = m.to.hasPrefix("@") ? m.to : "@" + m.to
+            guard let re = try? NSRegularExpression(
+                pattern: "@" + NSRegularExpression.escapedPattern(for: oldName) + "(?![A-Za-z0-9_-])"
+            ) else { return nil }
+            return (re, NSRegularExpression.escapedTemplate(for: newTok))
+        }
+        guard !rules.isEmpty else { return }
+        func fix(_ url: URL?) {
+            guard let url else { return }
+            var s = readString(url)
+            let orig = s
+            for (re, tpl) in rules {
+                s = re.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: tpl)
+            }
+            if s != orig { try? writeFile(url, s) }
+        }
+        fix(inboxURL)
+        for url in allJournalFiles() { fix(url) }
+        for sj in splitJournals { fix(splitJournalURL(sj.name)) }
+        reload()
     }
 
     /// Rename all occurrences of one @tag to another across inbox, journal, and

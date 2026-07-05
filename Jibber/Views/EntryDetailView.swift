@@ -10,6 +10,11 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+#if canImport(AppKit)
+import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 
 enum EntrySource: Hashable {
     case inbox
@@ -141,6 +146,7 @@ struct EntryDetailView: View {
             Menu {
                 Button { showingImagePicker = true } label: { Label("Attach Media", systemImage: "paperclip") }
                 Button { showingVideoRecorder = true } label: { Label("Record Video", systemImage: "video") }
+                Button { copyText() } label: { Label("Copy text", systemImage: "doc.on.doc") }
                 Button { promoteFirstLine() } label: { Label("Promote first line to title", systemImage: "arrow.up.to.line") }
                     .disabled(!hasFirstBodyLine)
             } label: {
@@ -268,6 +274,19 @@ struct EntryDetailView: View {
         guard let rel = store.saveAsset(data, ext: ext) else { return }
         let md = "![](\(rel))"
         text = text.isEmpty ? md : text + "\n\n" + md
+    }
+
+    /// Copy the entry's title + body to the clipboard.
+    private func copyText() {
+        let combined = [title.trimmingCharacters(in: .whitespacesAndNewlines), text]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        #if canImport(AppKit)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(combined, forType: .string)
+        #elseif canImport(UIKit)
+        UIPasteboard.general.string = combined
+        #endif
     }
 
     private func toggleRecord() {

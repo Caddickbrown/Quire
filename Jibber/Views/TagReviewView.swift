@@ -11,8 +11,15 @@ import SwiftUI
 struct TagReviewView: View {
     @EnvironmentObject private var store: JournalStore
     @Environment(\.dismiss) private var dismiss
-    @State private var groups: [[(tag: String, count: Int)]] = []
-    @State private var lastMerge: String?
+    @State private var groups: [JournalStore.TagGroup] = []
+    @State private var choices: [String: String] = [:]   // group.id → tag to keep
+
+    private var pendingMerges: Int {
+        groups.reduce(0) { total, g in
+            guard let keep = choices[g.id] else { return total }
+            return total + g.variants.filter { $0.tag != keep }.count
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -25,25 +32,43 @@ struct TagReviewView: View {
                     )
                 } else {
                     List {
-                        ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
+                        Section {
+                            Text("Pick the tag to keep in each group, then Apply — the rest merge into it. Groups you leave untouched are unchanged.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        ForEach(groups) { group in
                             Section {
-                                ForEach(group, id: \.tag) { variant in
+                                ForEach(group.variants, id: \.tag) { variant in
                                     Button {
-                                        merge(group, into: variant.tag)
+                                        if choices[group.id] == variant.tag { choices[group.id] = nil }
+                                        else { choices[group.id] = variant.tag }
                                     } label: {
                                         HStack {
-                                            Text(variant.tag).foregroundStyle(.tint)
+                                            Image(systemName: choices[group.id] == variant.tag
+                                                  ? "checkmark.circle.fill" : "circle")
+                                                .foregroundStyle(choices[group.id] == variant.tag
+                                                                 ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                                            Text(variant.tag)
                                             Spacer()
                                             Text("\(variant.count)")
                                                 .font(.caption.monospacedDigit())
                                                 .foregroundStyle(.secondary)
-                                            Image(systemName: "arrow.down.circle")
-                                                .foregroundStyle(.secondary)
                                         }
                                     }
+                                    .buttonStyle(.plain)
+                                }
+                                Button {
+                                    choices[group.id] = nil
+                                    store.ignoreTagGroup(group)
+                                    groups = store.similarTagGroups()
+                                } label: {
+                                    Label("Not a match — ignore", systemImage: "xmark.circle")
+                                        .foregroundStyle(.secondary)
                                 }
                             } header: {
-                                Text("Keep one — the others merge into it")
+                                Text(group.caseOnly
+                                     ? "Different case"
+                                     : "Similar spelling — merge only if they mean the same")
                             }
                         }
                     }
@@ -54,34 +79,27 @@ struct TagReviewView: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
                 }
-            }
-            .overlay(alignment: .bottom) {
-                if let lastMerge {
-                    Text(lastMerge)
-                        .font(.callout)
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        .background(.thinMaterial, in: Capsule())
-                        .padding(.bottom, 16)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(pendingMerges > 0 ? "Apply (\(pendingMerges))" : "Done") { apply() }
                 }
             }
             .onAppear { groups = store.similarTagGroups() }
         }
-        .frame(minWidth: 380, minHeight: 420)
+        .frame(minWidth: 400, minHeight: 460)
     }
 
-    private func merge(_ group: [(tag: String, count: Int)], into canonical: String) {
-        var renamed = 0
-        for variant in group where variant.tag != canonical {
-            renamed += store.renameTag(from: variant.tag, to: canonical)
+    /// Collect every chosen merge and process them in one background pass.
+    private func apply() {
+        let merges: [(from: String, to: String)] = groups.flatMap { g -> [(from: String, to: String)] in
+            guard let keep = choices[g.id] else { return [] }
+            return g.variants.filter { $0.tag != keep }.map { (from: $0.tag, to: keep) }
         }
-        groups = store.similarTagGroups()
-        withAnimation { lastMerge = "Merged into \(canonical)" }
-        Task {
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            withAnimation { lastMerge = nil }
+        dismiss()
+        if !merges.isEmpty {
+            Task { store.mergeTags(merges) }
         }
     }
 }
