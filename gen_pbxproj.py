@@ -29,6 +29,7 @@ swift_files = [
     ('ArchiveView',     'Views/ArchiveView.swift',      'Views'),
     ('EntryDetailView', 'Views/EntryDetailView.swift',  'Views'),
     ('TagsView',        'Views/TagsView.swift',         'Views'),
+    ('TagField',        'Views/TagField.swift',         'Views'),
     ('SettingsView',    'Views/SettingsView.swift',     'Views'),
 ]
 

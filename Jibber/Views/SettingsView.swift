@@ -94,11 +94,7 @@ struct SettingsView: View {
             }
 
             Section {
-                TextField("e.g. work private", text: $splitTagsRaw)
-                    .autocorrectionDisabled()
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    #endif
+                SplitTagsEditor(raw: $splitTagsRaw)
             } header: {
                 Text("Split tags")
             } footer: {
