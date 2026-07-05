@@ -1,17 +1,40 @@
-# hi, this is freewrite
+# Jibber
 
-a simple, open-source mac app to freewrite.
+A native **iOS + macOS** journaling app built with SwiftUI. Write freely into a
+distraction-free composer; drafts collect in an **inbox**, then you **file** them
+into a date-organised **archive**. Everything is plain markdown in an **iCloud
+Documents** container, so it syncs across your devices and stays readable by hand.
 
-download latest version [here](https://www.freewrite.io/)
+Jibber grew out of [freewrite](https://www.freewrite.io/) (the writing feel) and
+the [`jnl`](../jnl) CLI (the inbox → archive model). Its on-disk format is
+byte-compatible with `jnl` — point `JNL_DIR` at Jibber's folder and use both.
 
-![img](https://i.imgur.com/2ucbtff.gif)
+## Build
 
-if you wanna make an addition + pr,
-or just wanna remix the app for yourself go for it.
+```sh
+make project     # generate Jibber.xcodeproj from gen_pbxproj.py
+make build       # xcodebuild for macOS + iOS Simulator (unsigned)
+make check       # verify the parser matches jnl semantics
+open Jibber.xcodeproj
+```
 
-- clone repo.
-- open in xcode.
-- click build.
-- done -- you're up and running.
+The Xcode project is **generated** — never hand-edit `project.pbxproj`; edit
+`gen_pbxproj.py` and run `make project`.
 
-make changes on a pr and i'll run on my end and then build a new version :).
+## iCloud
+
+Data lives in the app's iCloud ubiquity container (`Documents/`), falling back to
+local `~/Documents/Jibber` when iCloud is unavailable. To ship a signed build,
+enable **iCloud → iCloud Documents** on the target in Xcode and select the
+`iCloud.com.caddickbrown.jibber` container.
+
+## Layout
+
+```
+inbox.md                 unfiled drafts
+journal/YYYY/MM/DD.md     filed entries, one file per day
+```
+
+Each entry: `[YYYY-MM-DD HH:MM:SS] optional title` + body, with `@tags`.
+
+See [CLAUDE.md](CLAUDE.md) for the full architecture.
