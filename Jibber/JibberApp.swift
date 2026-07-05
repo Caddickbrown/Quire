@@ -79,12 +79,18 @@ struct AppCommands: Commands {
             Button("New Entry") { nav.requestNewEntry() }
                 .keyboardShortcut("n", modifiers: .command)
         }
+        CommandGroup(after: .sidebar) {
+            Button(nav.focusMode ? "Exit Focus Mode" : "Focus Mode") { nav.focusMode.toggle() }
+                .keyboardShortcut("f", modifiers: [.command, .option])
+        }
         CommandMenu("Go") {
             Button("Write")    { nav.section = .write }.keyboardShortcut("1", modifiers: .command)
             Button("Inbox")    { nav.section = .inbox }.keyboardShortcut("2", modifiers: .command)
-            Button("Archive")  { nav.section = .archive }.keyboardShortcut("3", modifiers: .command)
+            Button("Journal")  { nav.section = .archive }.keyboardShortcut("3", modifiers: .command)
+            Button("Calendar") { nav.section = .calendar }
             Button("Tags")     { nav.section = .tags }.keyboardShortcut("4", modifiers: .command)
             Divider()
+            Button("Stats")    { nav.section = .stats }
             Button("Settings") { nav.section = .settings }.keyboardShortcut(",", modifiers: .command)
         }
     }

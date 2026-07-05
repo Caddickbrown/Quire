@@ -74,6 +74,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     @Published var section: AppSection? = .write
     @Published var path = NavigationPath()
     @Published var newEntrySignal = 0
+    @Published var focusMode = false
     var backMonitorInstalled = false
     func requestNewEntry() { section = .write; path = NavigationPath(); newEntrySignal += 1 }
     /// Pop one level (mouse Back button / ⌘[).
@@ -84,8 +85,15 @@ struct RootView: View {
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
 
+    private var columnVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { nav.focusMode ? .detailOnly : .all },
+            set: { nav.focusMode = ($0 == .detailOnly) }
+        )
+    }
+
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: columnVisibility) {
             List(AppSection.primary, selection: $nav.section) { section in
                 NavigationLink(value: section) {
                     Label {
