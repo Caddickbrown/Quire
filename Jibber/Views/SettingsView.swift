@@ -145,8 +145,7 @@ struct SettingsView: View {
 
                     • If the text has [YYYY-MM-DD HH:MM:SS] headers, each header + its lines \
                     becomes its own draft (paste a whole inbox.md and it splits cleanly).
-                    • If there are no headers, each blank-line-separated paragraph becomes a \
-                    draft stamped with the current time.
+                    • If there are no headers, the whole text stays a single draft.
 
                     The drafts land in the Inbox; file them from there.
                     """)

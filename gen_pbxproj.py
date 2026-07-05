@@ -23,6 +23,7 @@ swift_files = [
     ('JournalStore',    'Models/JournalStore.swift',    'Models'),
     ('RootView',        'Views/RootView.swift',         'Views'),
     ('WritingView',     'Views/WritingView.swift',      'Views'),
+    ('WritingTextEditor','Views/WritingTextEditor.swift','Views'),
     ('InboxView',       'Views/InboxView.swift',        'Views'),
     ('ArchiveView',     'Views/ArchiveView.swift',      'Views'),
     ('EntryDetailView', 'Views/EntryDetailView.swift',  'Views'),

@@ -368,10 +368,10 @@ final class JournalStore: ObservableObject {
     private func parseImport(_ text: String) -> [Entry] {
         let parsed = JournalParser.parseEntries(text)
         if !parsed.isEmpty { return parsed }
-        return text.components(separatedBy: "\n\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .map { Self.makeEntry(timestamp: Self.nowTS(), title: "", body: $0) }
+        // No [timestamp] headers → there's nothing to split; treat the whole
+        // thing (paragraphs and all) as a single draft.
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? [] : [Self.makeEntry(timestamp: Self.nowTS(), title: "", body: trimmed)]
     }
 
     // MARK: Review actions (jnl cmdReview)
