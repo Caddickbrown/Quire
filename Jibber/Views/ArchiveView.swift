@@ -126,6 +126,7 @@ struct ArchiveView: View {
             } label: {
                 Label("Random", systemImage: "dice")
             }
+            .keyboardShortcut("r", modifiers: .command)
             .disabled(store.archiveDays.isEmpty)
             Button {
                 showingStats = true

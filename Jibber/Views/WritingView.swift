@@ -92,6 +92,13 @@ struct WritingView: View {
             ToolbarItemGroup {
                 fontSizeButton
                 Button {
+                    saveNow()
+                } label: {
+                    Label("Save", systemImage: "checkmark")
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(!hasText)
+                Button {
                     newEntry()
                 } label: {
                     Label("New", systemImage: "square.and.pencil")
@@ -163,6 +170,12 @@ struct WritingView: View {
     private func flush() {
         saveTask?.cancel()
         commit()
+    }
+
+    /// Explicit save (⌘S): commit immediately and confirm.
+    private func saveNow() {
+        flush()
+        showToast("Saved to inbox")
     }
 
     private func newEntry() {

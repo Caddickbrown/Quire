@@ -16,6 +16,17 @@ struct SettingsView: View {
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
     @AppStorage("splitTags") private var splitTagsRaw: String = ""
 
+    static let shortcuts: [(action: String, keys: String)] = [
+        ("New entry", "⌘N"),
+        ("Save", "⌘S"),
+        ("Write", "⌘1"),
+        ("Inbox", "⌘2"),
+        ("Archive", "⌘3"),
+        ("Tags", "⌘4"),
+        ("Random entry (Archive)", "⌘R"),
+        ("Settings", "⌘,"),
+    ]
+
     @State private var showingImporter = false
     @State private var showingExporter = false
     @State private var exportDoc = ExportDocument(text: "")
@@ -111,6 +122,47 @@ struct SettingsView: View {
                 Text("Maintenance")
             } footer: {
                 Text("Export combines all filed entries into one markdown file. Drafts still in the Inbox aren't included until you file them.")
+            }
+
+            Section("Keyboard shortcuts") {
+                ForEach(Self.shortcuts, id: \.action) { s in
+                    HStack {
+                        Text(s.action)
+                        Spacer()
+                        Text(s.keys)
+                            .font(.callout.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Section("How to") {
+                DisclosureGroup("Import as separate entries") {
+                    Text("""
+                    In Write, the ⋯ menu has "Import as separate entries". Paste text \
+                    containing multiple entries, then choose it to split them into individual \
+                    inbox drafts.
+
+                    • If the text has [YYYY-MM-DD HH:MM:SS] headers, each header + its lines \
+                    becomes its own draft (paste a whole inbox.md and it splits cleanly).
+                    • If there are no headers, each blank-line-separated paragraph becomes a \
+                    draft stamped with the current time.
+
+                    The drafts land in the Inbox; file them from there.
+                    """)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+                DisclosureGroup("Split journals (tag routing)") {
+                    Text("""
+                    Add tag names to "Split tags" above (e.g. work private). When you file a \
+                    draft that contains that @tag, it's written to <folder>/<tag>.md instead of \
+                    the dated journal, and shows up under "Split journals" at the top of Archive. \
+                    Routing happens when you file, so tag the draft first, then file it.
+                    """)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
