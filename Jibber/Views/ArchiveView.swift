@@ -98,14 +98,22 @@ struct EntryPreviewRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack {
+            HStack(spacing: 6) {
                 Text(entry.preview.isEmpty ? "(empty)" : entry.preview)
                     .lineLimit(1)
-                if let trailing {
-                    Spacer()
-                    Text(trailing)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                let badges = entry.mediaBadges
+                if !badges.isEmpty || trailing != nil {
+                    Spacer(minLength: 6)
+                    ForEach(badges, id: \.self) { symbol in
+                        Image(systemName: symbol)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let trailing {
+                        Text(trailing)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             if !entry.body.isEmpty {

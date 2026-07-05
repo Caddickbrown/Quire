@@ -209,6 +209,9 @@ private struct DraftRow: View {
                 Text(time)
                 Text("·")
                 Text("\(draft.wordCount) words")
+                ForEach(draft.mediaBadges, id: \.self) { symbol in
+                    Image(systemName: symbol)
+                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)

@@ -41,4 +41,31 @@ struct Entry: Identifiable, Hashable {
     var wordCount: Int {
         body.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
     }
+
+    /// SF Symbol names for the kinds of media this entry links — image (photo),
+    /// audio (mic), video (film) — plus a paperclip for any other attachment.
+    /// Deduped and ordered; empty when the entry has no media.
+    var mediaBadges: [String] {
+        let paths = JournalStore.mediaPaths(in: raw)
+        guard !paths.isEmpty else { return [] }
+        var image = false, audio = false, video = false, other = false
+        for p in paths {
+            switch (p as NSString).pathExtension.lowercased() {
+            case "mov", "mp4", "m4v":
+                video = true
+            case "m4a", "mp3", "wav", "aac", "aiff", "caf":
+                audio = true
+            case "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tiff", "tif", "bmp":
+                image = true
+            default:
+                other = true
+            }
+        }
+        var out: [String] = []
+        if image { out.append("photo") }
+        if audio { out.append("mic") }
+        if video { out.append("film") }
+        if other { out.append("paperclip") }
+        return out
+    }
 }
