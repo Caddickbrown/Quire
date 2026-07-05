@@ -62,9 +62,7 @@ struct ArchiveView: View {
                         ForEach(years, id: \.self) { year in
                             Section(year) {
                                 ForEach(days(in: year)) { day in
-                                    NavigationLink {
-                                        DayView(date: day.date)
-                                    } label: {
+                                    NavigationLink(value: Route.day(day.date)) {
                                         dayRow(day)
                                     }
                                 }
@@ -76,9 +74,7 @@ struct ArchiveView: View {
                         ForEach(searchGroups, id: \.date) { group in
                             Section(Theme.displayDate(group.date, style: dateStyleRaw)) {
                                 ForEach(group.entries) { entry in
-                                    NavigationLink {
-                                        EntryDetailView(entry: entry, source: .archive(date: group.date))
-                                    } label: {
+                                    NavigationLink(value: Route.entry(entry, .archive(date: group.date))) {
                                         EntryPreviewRow(entry: entry)
                                     }
                                     .contextMenu {
@@ -145,13 +141,26 @@ struct ArchiveView: View {
     }
 }
 
-/// A compact entry preview row (title/first line + body snippet).
+/// A compact entry preview row (title/first line + body snippet). When
+/// `dateStyleRaw` is set, the entry's date + time is shown on the trailing side.
 struct EntryPreviewRow: View {
     let entry: Entry
+    var dateStyleRaw: String? = nil
+
+    private var time: String { String(entry.ts.suffix(8).prefix(5)) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(entry.preview.isEmpty ? "(empty)" : entry.preview)
-                .lineLimit(1)
+            HStack {
+                Text(entry.preview.isEmpty ? "(empty)" : entry.preview)
+                    .lineLimit(1)
+                if let ds = dateStyleRaw {
+                    Spacer()
+                    Text("\(Theme.displayDate(entry.date, style: ds)) · \(time)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
             if !entry.body.isEmpty {
                 Text(entry.body)
                     .font(.callout)
@@ -172,9 +181,7 @@ struct DayView: View {
     var body: some View {
         List {
             ForEach(store.entries(for: date)) { entry in
-                NavigationLink {
-                    EntryDetailView(entry: entry, source: .archive(date: date))
-                } label: {
+                NavigationLink(value: Route.entry(entry, .archive(date: date))) {
                     EntryPreviewRow(entry: entry)
                 }
                 .contextMenu {
@@ -198,7 +205,7 @@ struct SplitJournalsView: View {
     @EnvironmentObject private var store: JournalStore
 
     var body: some View {
-        let journals = store.splitJournals()
+        let journals = store.splitJournals
         Group {
             if journals.isEmpty {
                 ContentUnavailableView(
@@ -209,9 +216,7 @@ struct SplitJournalsView: View {
             } else {
                 List {
                     ForEach(journals) { j in
-                        NavigationLink {
-                            JournalFileView(name: j.name)
-                        } label: {
+                        NavigationLink(value: Route.journalFile(j.name)) {
                             HStack {
                                 Label("@\(j.name)", systemImage: "bookmark")
                                 Spacer()
@@ -234,15 +239,14 @@ struct SplitJournalsView: View {
 /// A tag-routed split journal (<base>/<name>.md), e.g. work.md.
 struct JournalFileView: View {
     @EnvironmentObject private var store: JournalStore
+    @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
     let name: String
 
     var body: some View {
         List {
             ForEach(store.entries(inJournal: name)) { entry in
-                NavigationLink {
-                    EntryDetailView(entry: entry, source: .journal(name: name))
-                } label: {
-                    EntryPreviewRow(entry: entry)
+                NavigationLink(value: Route.entry(entry, .journal(name: name))) {
+                    EntryPreviewRow(entry: entry, dateStyleRaw: dateStyleRaw)
                 }
                 .contextMenu {
                     Button(role: .destructive) {

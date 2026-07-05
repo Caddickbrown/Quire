@@ -32,6 +32,17 @@ final class JournalStore: ObservableObject {
         var id: String { date }
         var year: String { String(date.prefix(4)) }
     }
+
+    struct SplitJournal: Identifiable, Hashable {
+        let name: String
+        let count: Int
+        var id: String { name }
+    }
+
+    /// All `@tags` (archive + inbox) with counts, cached — built off-main on reload.
+    @Published private(set) var tagCounts: [(tag: String, count: Int)] = []
+    /// Tag-routed split journals, cached — built off-main on reload.
+    @Published private(set) var splitJournals: [SplitJournal] = []
     /// Where data actually lives once resolved; nil while still resolving.
     @Published private(set) var baseURL: URL?
     /// Where journal data currently lives.
@@ -160,7 +171,7 @@ final class JournalStore: ObservableObject {
 
     func reload() {
         loadInbox()
-        loadArchive()
+        rebuildIndex()
     }
 
     private func loadInbox() {
@@ -171,16 +182,77 @@ final class JournalStore: ObservableObject {
         inboxDrafts = JournalParser.parseEntries(content)
     }
 
-    /// Build the archive index once per reload: each day's entry count + a short
-    /// preview, newest day first (so the Archive list needs no per-render file reads).
-    private func loadArchive() {
-        let files = allJournalFiles().sorted { fileToDate($0) > fileToDate($1) }
-        archiveDays = files.map { url in
-            let entries = JournalParser.parseEntries(readString(url))
-            return ArchiveDay(date: fileToDate(url),
-                              count: entries.count,
-                              preview: entries.first?.preview ?? "")
+    struct BuiltIndex {
+        var days: [ArchiveDay] = []
+        var tags: [(tag: String, count: Int)] = []
+        var splits: [SplitJournal] = []
+    }
+
+    /// Rebuild the archive/tags/split-journal index off the main thread and
+    /// publish the results, so no view body ever does directory-wide file reads.
+    private func rebuildIndex() {
+        guard let base = baseURL else {
+            archiveDays = []; tagCounts = []; splitJournals = []
+            return
         }
+        let inboxTags = inboxDrafts.flatMap { $0.tags }
+        Task.detached(priority: .userInitiated) {
+            let idx = Self.buildIndex(base: base)
+            await MainActor.run {
+                self.archiveDays = idx.days
+                var map = Dictionary(uniqueKeysWithValues: idx.tags.map { ($0.tag, $0.count) })
+                for t in inboxTags { map[t, default: 0] += 1 }
+                self.tagCounts = map.map { (tag: $0.key, count: $0.value) }
+                    .sorted { $0.count != $1.count ? $0.count > $1.count : $0.tag < $1.tag }
+                self.splitJournals = idx.splits
+            }
+        }
+    }
+
+    private static let reservedFiles: Set<String> = ["inbox.md", "transfer.md", "export.md", "jibber-export.md"]
+
+    nonisolated static func buildIndex(base: URL) -> BuiltIndex {
+        let fm = FileManager.default
+        var idx = BuiltIndex()
+
+        // Date journals under journal/.
+        var urls: [URL] = []
+        let journalDir = base.appendingPathComponent("journal", isDirectory: true)
+        if let en = fm.enumerator(at: journalDir, includingPropertiesForKeys: nil) {
+            for case let u as URL in en where u.pathExtension == "md" { urls.append(u) }
+        }
+        urls.sort { staticFileToDate($0) > staticFileToDate($1) }
+        var tagMap: [String: Int] = [:]
+        for u in urls {
+            let content = (try? String(contentsOf: u, encoding: .utf8)) ?? ""
+            let entries = JournalParser.parseEntries(content)
+            idx.days.append(ArchiveDay(date: staticFileToDate(u),
+                                       count: entries.count,
+                                       preview: entries.first?.preview ?? ""))
+            for t in JournalParser.splitTags(content) { tagMap[t, default: 0] += 1 }
+        }
+
+        // Split-tag journals (top-level <base>/<name>.md).
+        if let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) {
+            for u in items where u.pathExtension == "md" && !reservedFiles.contains(u.lastPathComponent) {
+                let entries = JournalParser.parseEntries((try? String(contentsOf: u, encoding: .utf8)) ?? "")
+                if !entries.isEmpty {
+                    idx.splits.append(SplitJournal(name: u.deletingPathExtension().lastPathComponent,
+                                                   count: entries.count))
+                }
+            }
+            idx.splits.sort { $0.name < $1.name }
+        }
+
+        idx.tags = tagMap.map { (tag: $0.key, count: $0.value) }
+        return idx
+    }
+
+    nonisolated static func staticFileToDate(_ url: URL) -> String {
+        let day = url.deletingPathExtension().lastPathComponent
+        let month = url.deletingLastPathComponent().lastPathComponent
+        let year = url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
+        return "\(year)-\(month)-\(day)"
     }
 
     /// All journal day-file URLs (recursive walk of journal/).
@@ -211,19 +283,6 @@ final class JournalStore: ObservableObject {
 
     // MARK: Tags (jnl cmdTags / cmdTag)
 
-    /// All `@tags` across the archive + inbox with usage counts, sorted by count
-    /// (desc) then name. Mirrors jnl `tags`.
-    func tagCounts() -> [(tag: String, count: Int)] {
-        var counts: [String: Int] = [:]
-        for url in allJournalFiles() {
-            for t in JournalParser.splitTags(readString(url)) { counts[t, default: 0] += 1 }
-        }
-        if let inboxURL { for t in JournalParser.splitTags(readString(inboxURL)) { counts[t, default: 0] += 1 } }
-        return counts
-            .map { (tag: $0.key, count: $0.value) }
-            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.tag < $1.tag }
-    }
-
     /// Filed entries containing a tag, newest day first. Mirrors jnl `tag <name>`.
     func entries(taggedWith name: String) -> [(date: String, entry: Entry)] {
         let tag = name.hasPrefix("@") ? name : "@" + name
@@ -243,28 +302,6 @@ final class JournalStore: ObservableObject {
 
     // MARK: Split journals (JNL_SPLIT_TAGS files: <base>/<tag>.md)
 
-    struct SplitJournal: Identifiable, Hashable {
-        let name: String
-        let count: Int
-        var id: String { name }
-    }
-
-    private let reservedFiles: Set<String> = ["inbox.md", "transfer.md", "export.md", "jibber-export.md"]
-
-    /// Top-level `<base>/<name>.md` files (i.e. tag-routed split journals), each
-    /// with its entry count. The date journal (journal/) and reserved files are excluded.
-    func splitJournals() -> [SplitJournal] {
-        guard let base = baseURL,
-              let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)
-        else { return [] }
-        return items
-            .filter { $0.pathExtension == "md" && !reservedFiles.contains($0.lastPathComponent) }
-            .map { SplitJournal(name: $0.deletingPathExtension().lastPathComponent,
-                                count: JournalParser.parseEntries(readString($0)).count) }
-            .filter { $0.count > 0 }
-            .sorted { $0.name < $1.name }
-    }
-
     private func splitJournalURL(_ name: String) -> URL? {
         baseURL?.appendingPathComponent("\(name).md")
     }
@@ -282,7 +319,7 @@ final class JournalStore: ObservableObject {
         guard let idx = entries.firstIndex(where: { $0.raw == original.raw }) else { return }
         entries.replaceSubrange(idx...idx, with: JournalParser.parseEntries(newText))
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
-        loadArchive()
+        rebuildIndex()
     }
 
     func deleteJournalEntry(name: String, entry: Entry) {
@@ -292,7 +329,7 @@ final class JournalStore: ObservableObject {
         var entries = JournalParser.parseEntries(content)
         entries.removeAll { $0.raw == entry.raw }
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
-        loadArchive()
+        rebuildIndex()
     }
 
     // MARK: Composer autosave (jnl cmdNew)
@@ -432,7 +469,7 @@ final class JournalStore: ObservableObject {
         guard let label = try? fileEntry(entry) else { return nil }
         removeFromInbox(entry)
         loadInbox()
-        loadArchive()
+        rebuildIndex()
         return label
     }
 
@@ -481,7 +518,7 @@ final class JournalStore: ObservableObject {
         guard let idx = entries.firstIndex(where: { $0.raw == original.raw }) else { return }
         entries.replaceSubrange(idx...idx, with: JournalParser.parseEntries(newText))
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
-        loadArchive()
+        rebuildIndex()
     }
 
     /// Delete a filed entry from its day file (removes the file if now empty).
@@ -492,7 +529,7 @@ final class JournalStore: ObservableObject {
         var entries = JournalParser.parseEntries(content)
         entries.removeAll { $0.raw == entry.raw }
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
-        loadArchive()
+        rebuildIndex()
     }
 
     // MARK: Filing internals (jnl fileDraft / splitTagTarget)
@@ -633,7 +670,7 @@ final class JournalStore: ObservableObject {
             let rebuilt = JournalParser.renderEntries(preamble: preamble, entries: sorted)
             if rebuilt != orig { try? writeFile(url, rebuilt) }
         }
-        loadArchive()
+        rebuildIndex()
         return res
     }
 
@@ -702,8 +739,8 @@ final class JournalStore: ObservableObject {
         s.inboxBytes = fileBytes(inboxURL)
         s.archiveBytes = max(0, s.bytes - s.inboxBytes)
         s.inboxDrafts = inboxDrafts.count
-        s.tags = tagCounts().count
-        s.splitJournals = splitJournals().count
+        s.tags = tagCounts.count
+        s.splitJournals = splitJournals.count
         return s
     }
 

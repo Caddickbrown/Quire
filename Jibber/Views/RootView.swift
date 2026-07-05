@@ -8,6 +8,37 @@
 //
 
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
+
+/// A pushable detail destination, so navigation is programmatic (enables the
+/// mouse Back button and ⌘[ to pop the stack).
+enum Route: Hashable {
+    case entry(Entry, EntrySource)
+    case day(String)
+    case tag(String)
+    case journalFile(String)
+}
+
+struct RouteDestination: View {
+    let route: Route
+    var body: some View {
+        switch route {
+        case .entry(let e, let s): EntryDetailView(entry: e, source: s)
+        case .day(let d):          DayView(date: d)
+        case .tag(let t):          TagDetailView(tag: t)
+        case .journalFile(let n):  JournalFileView(name: n)
+        }
+    }
+}
+
+extension View {
+    /// Register the shared pushable destinations on a NavigationStack.
+    func jibberRoutes() -> some View {
+        navigationDestination(for: Route.self) { RouteDestination(route: $0) }
+    }
+}
 
 enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case write = "Write"
@@ -39,8 +70,12 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
 /// scene level) can drive the sidebar selection and trigger a new entry.
 @MainActor final class NavigationModel: ObservableObject {
     @Published var section: AppSection? = .write
+    @Published var path = NavigationPath()
     @Published var newEntrySignal = 0
-    func requestNewEntry() { section = .write; newEntrySignal += 1 }
+    var backMonitorInstalled = false
+    func requestNewEntry() { section = .write; path = NavigationPath(); newEntrySignal += 1 }
+    /// Pop one level (mouse Back button / ⌘[).
+    func goBack() { if !path.isEmpty { path.removeLast() } }
 }
 
 struct RootView: View {
@@ -72,19 +107,43 @@ struct RootView: View {
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
             #endif
         } detail: {
-            NavigationStack {
-                switch nav.section ?? .write {
-                case .write:         WritingView()
-                case .inbox:         InboxView()
-                case .archive:       ArchiveView()
-                case .splitJournals: SplitJournalsView()
-                case .tags:          TagsView()
-                case .stats:         StatsView()
-                case .settings:      SettingsView()
-                }
+            NavigationStack(path: $nav.path) {
+                detailRoot
+                    .jibberRoutes()
+            }
+        }
+        .onChange(of: nav.section) { _, _ in nav.path = NavigationPath() }
+        #if os(macOS)
+        .onAppear(perform: installBackButtonMonitor)
+        #endif
+    }
+
+    @ViewBuilder
+    private var detailRoot: some View {
+        switch nav.section ?? .write {
+        case .write:         WritingView()
+        case .inbox:         InboxView()
+        case .archive:       ArchiveView()
+        case .splitJournals: SplitJournalsView()
+        case .tags:          TagsView()
+        case .stats:         StatsView()
+        case .settings:      SettingsView()
+        }
+    }
+
+    #if os(macOS)
+    /// Route the mouse "Back"/"Forward" side buttons to stack navigation.
+    private func installBackButtonMonitor() {
+        guard !nav.backMonitorInstalled else { return }
+        nav.backMonitorInstalled = true
+        NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { event in
+            switch event.buttonNumber {
+            case 3: nav.goBack(); return nil   // Back
+            default: return event
             }
         }
     }
+    #endif
 
     /// Floating Stats + Settings icons, bottom-left of the sidebar.
     private var bottomBar: some View {

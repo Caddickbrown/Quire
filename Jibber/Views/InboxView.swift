@@ -53,9 +53,7 @@ struct InboxView: View {
             } else {
                 List {
                     ForEach(drafts) { draft in
-                        NavigationLink {
-                            EntryDetailView(entry: draft, source: .inbox)
-                        } label: {
+                        NavigationLink(value: Route.entry(draft, .inbox)) {
                             DraftRow(draft: draft, dateStyleRaw: dateStyleRaw)
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {

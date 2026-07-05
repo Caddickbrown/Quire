@@ -18,8 +18,8 @@ struct TagsView: View {
     var body: some View {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let tags = q.isEmpty
-            ? store.tagCounts()
-            : store.tagCounts().filter { $0.tag.lowercased().contains(q) }
+            ? store.tagCounts
+            : store.tagCounts.filter { $0.tag.lowercased().contains(q) }
         let maxCount = max(tags.map(\.count).max() ?? 1, 1)
         Group {
             if tags.isEmpty {
@@ -32,9 +32,7 @@ struct TagsView: View {
                 ScrollView {
                     FlowLayout(spacing: 8) {
                         ForEach(tags, id: \.tag) { item in
-                            NavigationLink {
-                                TagDetailView(tag: item.tag)
-                            } label: {
+                            NavigationLink(value: Route.tag(item.tag)) {
                                 bubble(item, maxCount: maxCount)
                             }
                             .buttonStyle(.plain)
@@ -52,7 +50,7 @@ struct TagsView: View {
         #endif
         .toolbar {
             Button {
-                if let t = store.tagCounts().randomElement() {
+                if let t = store.tagCounts.randomElement() {
                     randomTag = RandomTag(tag: t.tag)
                 }
             } label: {
@@ -61,8 +59,10 @@ struct TagsView: View {
             .disabled(tags.isEmpty)
         }
         .sheet(item: $randomTag) { r in
-            NavigationStack { TagDetailView(tag: r.tag) }
-                .environmentObject(store)
+            NavigationStack {
+                TagDetailView(tag: r.tag).jibberRoutes()
+            }
+            .environmentObject(store)
         }
     }
 
@@ -110,9 +110,7 @@ struct TagDetailView: View {
         let hits = store.entries(taggedWith: tag)
         List {
             ForEach(hits, id: \.entry.id) { hit in
-                NavigationLink {
-                    EntryDetailView(entry: hit.entry, source: .archive(date: hit.date))
-                } label: {
+                NavigationLink(value: Route.entry(hit.entry, .archive(date: hit.date))) {
                     tagRow(hit)
                 }
                 .contextMenu {
