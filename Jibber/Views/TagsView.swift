@@ -17,6 +17,7 @@ struct TagsView: View {
         let tags = q.isEmpty
             ? store.tagCounts()
             : store.tagCounts().filter { $0.tag.lowercased().contains(q) }
+        let maxCount = max(tags.map(\.count).max() ?? 1, 1)
         Group {
             if tags.isEmpty {
                 ContentUnavailableView(
@@ -25,20 +26,19 @@ struct TagsView: View {
                     description: Text("Write @tags in your entries and they'll show up here.")
                 )
             } else {
-                List {
-                    ForEach(tags, id: \.tag) { item in
-                        NavigationLink {
-                            TagDetailView(tag: item.tag)
-                        } label: {
-                            HStack {
-                                Text(item.tag).foregroundStyle(.tint)
-                                Spacer()
-                                Text("\(item.count)")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
+                ScrollView {
+                    FlowLayout(spacing: 8) {
+                        ForEach(tags, id: \.tag) { item in
+                            NavigationLink {
+                                TagDetailView(tag: item.tag)
+                            } label: {
+                                bubble(item, maxCount: maxCount)
                             }
+                            .buttonStyle(.plain)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
                 }
             }
         }
@@ -47,6 +47,27 @@ struct TagsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+    }
+
+    /// A tag bubble: name + count, tinted more strongly the more it's used.
+    private func bubble(_ item: (tag: String, count: Int), maxCount: Int) -> some View {
+        let intensity = 0.12 + 0.35 * (Double(item.count) / Double(maxCount))
+        return HStack(spacing: 6) {
+            Text(item.tag)
+                .fontWeight(.medium)
+                .foregroundStyle(.tint)
+            Text("\(item.count)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(Color.secondary.opacity(0.18), in: Capsule())
+        }
+        .font(.callout)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(intensity), in: Capsule())
     }
 }
 
