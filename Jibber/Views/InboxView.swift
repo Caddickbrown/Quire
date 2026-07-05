@@ -100,21 +100,39 @@ struct InboxView: View {
         }
     }
 
+    /// Drafts grouped into date sections (order follows the current sort).
+    private var draftSections: [(date: String, entries: [Entry])] {
+        var order: [String] = [], map: [String: [Entry]] = [:]
+        for d in drafts {
+            if map[d.date] == nil { order.append(d.date) }
+            map[d.date, default: []].append(d)
+        }
+        switch InboxSort(rawValue: sortRaw) ?? .newest {
+        case .longest, .shortest: order.sort { $0 > $1 }   // dates newest-first
+        default: break                                     // already in ts order
+        }
+        return order.map { (date: $0, entries: map[$0] ?? []) }
+    }
+
     private var draftList: some View {
         List(selection: selectionBinding) {
-            ForEach(drafts) { draft in
-                row(for: draft)
-                    .tag(draft.ts)
-                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        swipeButton(SwipeAction(rawValue: swipeRightRaw) ?? .delete, draft)
+            ForEach(draftSections, id: \.date) { section in
+                Section(Theme.displayDate(section.date, style: dateStyleRaw)) {
+                    ForEach(section.entries) { draft in
+                        row(for: draft)
+                            .tag(draft.ts)
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                swipeButton(SwipeAction(rawValue: swipeRightRaw) ?? .delete, draft)
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                swipeButton(SwipeAction(rawValue: swipeLeftRaw) ?? .file, draft)
+                            }
+                            .contextMenu {
+                                Button { store.fileDraft(draft) } label: { Label("Archive", systemImage: "archivebox") }
+                                Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
+                            }
                     }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        swipeButton(SwipeAction(rawValue: swipeLeftRaw) ?? .file, draft)
-                    }
-                    .contextMenu {
-                        Button { store.fileDraft(draft) } label: { Label("Archive", systemImage: "archivebox") }
-                        Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
-                    }
+                }
             }
         }
     }
@@ -136,10 +154,10 @@ struct InboxView: View {
     @ViewBuilder
     private func row(for draft: Entry) -> some View {
         #if os(macOS)
-        DraftRow(draft: draft, dateStyleRaw: dateStyleRaw)
+        DraftRow(draft: draft)
         #else
         NavigationLink(value: Route.entry(draft, .inbox)) {
-            DraftRow(draft: draft, dateStyleRaw: dateStyleRaw)
+            DraftRow(draft: draft)
         }
         #endif
     }
@@ -179,7 +197,6 @@ struct InboxView: View {
 
 private struct DraftRow: View {
     let draft: Entry
-    let dateStyleRaw: String
 
     private var time: String { String(draft.ts.suffix(8).prefix(5)) }
 
@@ -189,8 +206,6 @@ private struct DraftRow: View {
                 .lineLimit(1)
                 .font(.body)
             HStack(spacing: 8) {
-                Text(Theme.displayDate(draft.date, style: dateStyleRaw))
-                Text("·")
                 Text(time)
                 Text("·")
                 Text("\(draft.wordCount) words")

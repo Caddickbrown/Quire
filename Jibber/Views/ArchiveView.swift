@@ -17,78 +17,37 @@ enum ArchiveSort: String, CaseIterable, Identifiable {
 
 struct ArchiveView: View {
     @EnvironmentObject private var store: JournalStore
-    @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
     @AppStorage("archiveSort") private var sortRaw: String = ArchiveSort.newest.rawValue
 
     @State private var searchText = ""
     @State private var randomHit: Hit?
+    @State private var loaded: [Entry] = []
 
     struct Hit: Identifiable { let id = UUID(); let date: String; let entry: Entry }
 
     private var oldestFirst: Bool { ArchiveSort(rawValue: sortRaw) == .oldest }
 
-    private var years: [String] {
-        var seen = Set<String>(), out: [String] = []
-        for d in store.archiveDays where !seen.contains(d.year) { seen.insert(d.year); out.append(d.year) }
-        return oldestFirst ? out.reversed() : out
-    }
-
-    private func days(in year: String) -> [JournalStore.ArchiveDay] {
-        let d = store.archiveDays.filter { $0.year == year }
-        return oldestFirst ? d.reversed() : d
-    }
-
-    private var searchGroups: [(date: String, entries: [Entry])] {
-        var order: [String] = [], map: [String: [Entry]] = [:]
-        for hit in store.search(searchText) {
-            if map[hit.date] == nil { order.append(hit.date) }
-            map[hit.date, default: []].append(hit.entry)
-        }
-        let groups = order.map { ($0, map[$0] ?? []) }
-        return oldestFirst ? groups.reversed() : groups
+    private var filtered: [Entry] {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return q.isEmpty ? loaded : loaded.filter { $0.raw.lowercased().contains(q) }
     }
 
     var body: some View {
         Group {
-            if store.archiveDays.isEmpty {
+            if loaded.isEmpty {
                 ContentUnavailableView(
                     "No entries yet",
                     systemImage: "book.closed",
                     description: Text("File drafts from your inbox and they'll show up here.")
                 )
             } else {
-                List {
-                    if searchText.isEmpty {
-                        ForEach(years, id: \.self) { year in
-                            Section(year) {
-                                ForEach(days(in: year)) { day in
-                                    NavigationLink(value: Route.day(day.date)) {
-                                        dayRow(day)
-                                    }
-                                }
-                            }
-                        }
-                    } else if searchGroups.isEmpty {
-                        Text("No matches").foregroundStyle(.secondary)
-                    } else {
-                        ForEach(searchGroups, id: \.date) { group in
-                            Section(Theme.displayDate(group.date, style: dateStyleRaw)) {
-                                ForEach(group.entries) { entry in
-                                    NavigationLink(value: Route.entry(entry, .archive(date: group.date))) {
-                                        EntryPreviewRow(entry: entry)
-                                    }
-                                    .contextMenu {
-                                        Button(role: .destructive) {
-                                            store.deleteFiledEntry(date: group.date, entry: entry)
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                EntryTwoPane(
+                    entries: filtered,
+                    sourceFor: { .archive(date: $0.date) },
+                    showTime: true,
+                    groupByDate: true,
+                    oldestFirst: oldestFirst
+                )
             }
         }
         .searchable(text: $searchText, prompt: "Search entries")
@@ -111,33 +70,15 @@ struct ArchiveView: View {
                 Label("Random", systemImage: "dice")
             }
             .keyboardShortcut("r", modifiers: .command)
-            .disabled(store.archiveDays.isEmpty)
+            .disabled(loaded.isEmpty)
         }
+        .task(id: store.revision) { loaded = store.allEntriesByDay().flatMap(\.entries) }
         .sheet(item: $randomHit) { hit in
             NavigationStack {
                 EntryDetailView(entry: hit.entry, source: .archive(date: hit.date))
             }
             .environmentObject(store)
         }
-    }
-
-    private func dayRow(_ day: JournalStore.ArchiveDay) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack {
-                Text(Theme.displayDate(day.date, style: dateStyleRaw)).fontWeight(.medium)
-                Spacer()
-                Text("\(day.count)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            if !day.preview.isEmpty {
-                Text(day.preview)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-        }
-        .padding(.vertical, 2)
     }
 }
 
@@ -186,7 +127,9 @@ struct EntryTwoPane: View {
     let entries: [Entry]
     let sourceFor: (Entry) -> EntrySource
     var showTime = false     // just HH:mm (single-day contexts)
-    var fullDate = false     // date + time (multi-day contexts like split journals)
+    var fullDate = false     // date + time (flat, multi-day contexts)
+    var groupByDate = false  // section the list by date (headers), entries under each
+    var oldestFirst = false  // date-section order when grouping
     @State private var selectedTS: String?
 
     var body: some View {
@@ -208,18 +151,40 @@ struct EntryTwoPane: View {
         #endif
     }
 
+    /// Entries grouped by their date, section order by newest/oldest.
+    private var sections: [(date: String, entries: [Entry])] {
+        let sorted = entries.sorted { oldestFirst ? $0.ts < $1.ts : $0.ts > $1.ts }
+        var order: [String] = [], map: [String: [Entry]] = [:]
+        for e in sorted {
+            if map[e.date] == nil { order.append(e.date) }
+            map[e.date, default: []].append(e)
+        }
+        return order.map { (date: $0, entries: map[$0] ?? []) }
+    }
+
+    @ViewBuilder
     private var list: some View {
         List(selection: selectionBinding) {
-            ForEach(entries) { entry in
-                rowLabel(entry)
-                    .tag(entry.ts)
-                    .contextMenu {
-                        Button(role: .destructive) { delete(entry) } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+            if groupByDate {
+                ForEach(sections, id: \.date) { section in
+                    Section(Theme.displayDate(section.date, style: dateStyleRaw)) {
+                        ForEach(section.entries) { entryRow($0) }
                     }
+                }
+            } else {
+                ForEach(entries) { entryRow($0) }
             }
         }
+    }
+
+    private func entryRow(_ entry: Entry) -> some View {
+        rowLabel(entry)
+            .tag(entry.ts)
+            .contextMenu {
+                Button(role: .destructive) { delete(entry) } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
     }
 
     @ViewBuilder
@@ -323,7 +288,8 @@ struct JournalFileView: View {
     var body: some View {
         EntryTwoPane(entries: store.entries(inJournal: name),
                      sourceFor: { _ in .journal(name: name) },
-                     fullDate: true)
+                     showTime: true,
+                     groupByDate: true)
             .navigationTitle("@\(name)")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

@@ -23,6 +23,8 @@ final class JournalStore: ObservableObject {
     // MARK: Published state
     @Published private(set) var inboxDrafts: [Entry] = []
     /// Filed days with a lightweight summary, newest first.
+    /// Bumped on every reload so views can cheaply observe "data changed".
+    @Published private(set) var revision = 0
     @Published private(set) var archiveDays: [ArchiveDay] = []
 
     struct ArchiveDay: Identifiable, Hashable {
@@ -218,6 +220,7 @@ final class JournalStore: ObservableObject {
     // MARK: Loading
 
     func reload() {
+        revision &+= 1
         loadInbox()
         rebuildIndex()
     }
@@ -337,6 +340,15 @@ final class JournalStore: ObservableObject {
         let month = url.deletingLastPathComponent().lastPathComponent
         let year = url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
         return "\(year)-\(month)-\(day)"
+    }
+
+    /// All filed entries grouped by day, newest day first (each day chronological).
+    func allEntriesByDay() -> [(date: String, entries: [Entry])] {
+        allJournalFiles()
+            .sorted { fileToDate($0) > fileToDate($1) }
+            .map { (fileToDate($0), JournalParser.parseEntries(readString($0))) }
+            .filter { !$0.1.isEmpty }
+            .map { (date: $0.0, entries: $0.1) }
     }
 
     /// Entries filed on a given day, chronological.
