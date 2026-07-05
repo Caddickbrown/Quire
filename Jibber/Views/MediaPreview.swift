@@ -50,7 +50,7 @@ struct MediaPreview: View {
                     case .text(let t):
                         let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
-                            Text(trimmed)
+                            Text(markdown(trimmed))
                                 .font(font)
                                 .foregroundStyle(textColor)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -65,6 +65,14 @@ struct MediaPreview: View {
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// Render inline markdown (bold/italic/links/code), preserving line breaks.
+    private func markdown(_ s: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: s,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(s)
     }
 
     @ViewBuilder

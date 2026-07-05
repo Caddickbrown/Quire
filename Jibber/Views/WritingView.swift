@@ -102,16 +102,17 @@ struct WritingView: View {
                 }
                 .disabled(!hasText)
                 .help("Start a new entry")
+                RecordButton { data in
+                    guard let rel = store.saveAsset(data, ext: "m4a") else { return }
+                    let md = "![](\(rel))"
+                    text = text.isEmpty ? md : text + "\n\n" + md
+                }
+                .labelStyle(.iconOnly)
                 Menu {
                     Button {
                         showingImagePicker = true
                     } label: {
                         Label("Attach Media", systemImage: "paperclip")
-                    }
-                    RecordButton { data in
-                        guard let rel = store.saveAsset(data, ext: "m4a") else { return }
-                        let md = "![](\(rel))"
-                        text = text.isEmpty ? md : text + "\n\n" + md
                     }
                     Button {
                         promoteFirstLine()

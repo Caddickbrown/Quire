@@ -126,14 +126,6 @@ struct InboxView: View {
     @ToolbarContentBuilder
     private var toolbarItems: some ToolbarContent {
         ToolbarItemGroup {
-            Menu {
-                Picker("Sort", selection: $sortRaw) {
-                    ForEach(InboxSort.allCases) { Text($0.label).tag($0.rawValue) }
-                }
-                .pickerStyle(.inline)
-            } label: {
-                Label("Sort", systemImage: "arrow.up.arrow.down")
-            }
             Button {
                 randomDraft = store.inboxDrafts.randomElement()
             } label: {
@@ -141,11 +133,16 @@ struct InboxView: View {
             }
             .disabled(store.inboxDrafts.isEmpty)
             Menu {
+                Picker("Sort", selection: $sortRaw) {
+                    ForEach(InboxSort.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.inline)
+                Divider()
                 Button { store.fileAllDrafts() } label: { Label("File All", systemImage: "archivebox") }
                     .disabled(store.inboxDrafts.isEmpty)
                 Button { store.sortInbox() } label: { Label("Sort file by date", systemImage: "calendar") }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Label("Options", systemImage: "ellipsis.circle")
             }
         }
     }
