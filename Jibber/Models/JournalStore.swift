@@ -157,6 +157,49 @@ final class JournalStore: ObservableObject {
         resolveBaseAndReload()
     }
 
+    // MARK: Backup
+
+    private let backupBookmarkKey = "backupFolderBookmark"
+    private static let stampFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd-HH-mm-ss"
+        f.locale = Locale(identifier: "en_US_POSIX"); return f
+    }()
+
+    private func resolveBackupURL() -> URL? {
+        guard let data = UserDefaults.standard.data(forKey: backupBookmarkKey) else { return nil }
+        return FolderAccess.resolve(data)
+    }
+
+    /// Display name of the chosen backup folder, or nil if none.
+    var backupFolderName: String? { resolveBackupURL()?.lastPathComponent }
+
+    func setBackupFolder(_ url: URL) {
+        let ok = url.startAccessingSecurityScopedResource()
+        defer { if ok { url.stopAccessingSecurityScopedResource() } }
+        if let data = FolderAccess.makeBookmark(url) {
+            UserDefaults.standard.set(data, forKey: backupBookmarkKey)
+        }
+    }
+
+    /// Copy the whole journal folder into a timestamped subfolder of the backup
+    /// location. Returns a user-facing result message.
+    func backupNow() -> (ok: Bool, message: String) {
+        guard let base = baseURL else { return (false, "No journal folder to back up.") }
+        guard let backupBase = resolveBackupURL() else {
+            return (false, "Choose a backup folder first.")
+        }
+        let ok = backupBase.startAccessingSecurityScopedResource()
+        defer { if ok { backupBase.stopAccessingSecurityScopedResource() } }
+        let name = "Jibber-Backup-\(Self.stampFormatter.string(from: Date()))"
+        let dest = backupBase.appendingPathComponent(name)
+        do {
+            try fm.copyItem(at: base, to: dest)
+            return (true, "Backed up to \(name).")
+        } catch {
+            return (false, "Backup failed: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: Paths
     private var inboxURL: URL? { baseURL?.appendingPathComponent("inbox.md") }
     private var journalDirURL: URL? { baseURL?.appendingPathComponent("journal", isDirectory: true) }

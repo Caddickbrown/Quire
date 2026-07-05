@@ -35,6 +35,8 @@ struct SettingsView: View {
     @State private var showingCleanup = false
     @State private var cleanupMessage = ""
     @State private var showingNothingToExport = false
+    @State private var showingBackupPicker = false
+    @State private var backupMessage: String?
 
     var body: some View {
         Form {
@@ -104,9 +106,28 @@ struct SettingsView: View {
             }
 
             Section {
+                LabeledContent("Backup folder", value: store.backupFolderName ?? "Not set")
+                Button {
+                    showingBackupPicker = true
+                } label: {
+                    Label("Choose Backup Folder…", systemImage: "folder")
+                }
+                Button {
+                    backupMessage = store.backupNow().message
+                } label: {
+                    Label("Back Up Now", systemImage: "externaldrive.badge.timemachine")
+                }
+                .disabled(store.backupFolderName == nil)
+            } header: {
+                Text("Backup")
+            } footer: {
+                Text("Copies everything (inbox, journal, split journals, and assets) into a timestamped folder in the backup location.")
+            }
+
+            Section {
                 Button {
                     let r = store.cleanup()
-                    cleanupMessage = "Formatted \(r.formatted) file(s), reordered \(r.reordered)."
+                    cleanupMessage = "Formatted \(r.formatted), reordered \(r.reordered), removed \(r.deduped) duplicate(s)."
                     showingCleanup = true
                 } label: {
                     Label("Clean Up", systemImage: "wand.and.sparkles")
@@ -166,6 +187,26 @@ struct SettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 }
+                DisclosureGroup("Photos, video & audio") {
+                    Text("""
+                    Attach media from the ⋯ menu (or drag files onto the editor). Record a voice \
+                    memo with the mic button, or "Record Video" from the ⋯ menu. Files are copied \
+                    into an assets/ folder next to your journal and stored as markdown \
+                    ![](assets/…) links — switch an entry to Preview to see them inline. Browse or \
+                    delete everything under the Assets section.
+                    """)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+                DisclosureGroup("Backup") {
+                    Text("""
+                    Choose a backup folder above, then "Back Up Now" copies your whole journal \
+                    (inbox, journal, split journals, assets) into a timestamped folder there. \
+                    Everything is plain files, so a backup is a full, openable copy.
+                    """)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
@@ -180,10 +221,25 @@ struct SettingsView: View {
                 store.setCustomFolder(url)
             }
         }
+        .fileImporter(isPresented: $showingBackupPicker,
+                      allowedContentTypes: [.folder],
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                store.setBackupFolder(url)
+            }
+        }
         .fileExporter(isPresented: $showingExporter,
                       document: exportDoc,
                       contentType: .plainText,
                       defaultFilename: "jibber-export.md") { _ in }
+        .alert("Backup", isPresented: Binding(
+            get: { backupMessage != nil },
+            set: { if !$0 { backupMessage = nil } }
+        )) {
+            Button("OK") { }
+        } message: {
+            Text(backupMessage ?? "")
+        }
         .alert("Cleanup complete", isPresented: $showingCleanup) {
             Button("OK") { }
         } message: {
