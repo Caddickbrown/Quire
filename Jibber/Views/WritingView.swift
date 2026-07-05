@@ -136,6 +136,10 @@ struct WritingView: View {
                       allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first { attachImage(url) }
         }
+        .dropDestination(for: URL.self) { urls, _ in
+            for url in urls { attachImage(url) }
+            return !urls.isEmpty
+        }
         .onChange(of: title) { _, _ in scheduleSave() }
         .onChange(of: text) { _, _ in scheduleSave() }
         .onChange(of: date) { _, _ in scheduleSave() }

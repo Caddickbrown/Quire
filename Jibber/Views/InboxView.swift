@@ -165,13 +165,15 @@ private struct DraftRow: View {
                 Text(time)
                 Text("·")
                 Text("\(draft.wordCount) words")
-                if !draft.tags.isEmpty {
-                    Text("·")
-                    Text(draft.tags.joined(separator: " ")).foregroundStyle(.tint)
-                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            if !draft.tags.isEmpty {
+                Text(draft.tags.joined(separator: " "))
+                    .font(.caption)
+                    .foregroundStyle(.tint)
+                    .lineLimit(1)
+            }
         }
         .padding(.vertical, 2)
     }

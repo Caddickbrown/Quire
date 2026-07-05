@@ -732,10 +732,17 @@ final class JournalStore: ObservableObject {
 
     // MARK: Cleanup (jnl cmdCleanup)
 
-    struct CleanupResult { var formatted = 0; var reordered = 0 }
+    struct CleanupResult { var formatted = 0; var reordered = 0; var deduped = 0 }
 
-    /// Standardise punctuation (… and straight quotes) and reorder each day's
-    /// entries by timestamp. Returns how many files changed.
+    /// Remove exact-duplicate entries (identical raw text), keeping the first.
+    private func dedupe(_ entries: [Entry]) -> [Entry] {
+        var seen = Set<String>(), out: [Entry] = []
+        for e in entries where seen.insert(e.raw).inserted { out.append(e) }
+        return out
+    }
+
+    /// Standardise punctuation (… and straight quotes), reorder each day's entries
+    /// by timestamp, and drop exact-duplicate entries. Returns what changed.
     @discardableResult
     func cleanup() -> CleanupResult {
         var res = CleanupResult()
@@ -752,10 +759,23 @@ final class JournalStore: ObservableObject {
             let entries = JournalParser.parseEntries(fixed)
             let sorted = JournalParser.sortedByTimestamp(entries)
             if entries.map(\.ts) != sorted.map(\.ts) { res.reordered += 1 }
-            let rebuilt = JournalParser.renderEntries(preamble: preamble, entries: sorted)
+            let deduped = dedupe(sorted)
+            res.deduped += (sorted.count - deduped.count)
+            let rebuilt = JournalParser.renderEntries(preamble: preamble, entries: deduped)
             if rebuilt != orig { try? writeFile(url, rebuilt) }
         }
-        rebuildIndex()
+        // Inbox: drop exact duplicates too.
+        if let inboxURL {
+            let content = readString(inboxURL)
+            let preamble = JournalParser.leadingPreamble(content)
+            let entries = JournalParser.parseEntries(content)
+            let deduped = dedupe(entries)
+            if deduped.count != entries.count {
+                res.deduped += (entries.count - deduped.count)
+                try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: deduped))
+            }
+        }
+        reload()
         return res
     }
 
