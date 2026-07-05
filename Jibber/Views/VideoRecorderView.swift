@@ -23,6 +23,9 @@ struct VideoRecorderView: UIViewControllerRepresentable {
         // Order matters: mediaTypes must include movie BEFORE setting .video mode.
         picker.mediaTypes = [UTType.movie.identifier]
         picker.cameraCaptureMode = .video
+        if UIImagePickerController.isCameraDeviceAvailable(.front) {
+            picker.cameraDevice = .front
+        }
         picker.videoQuality = .typeHigh
         picker.delegate = context.coordinator
         return picker
@@ -113,8 +116,10 @@ final class CameraController: NSObject, ObservableObject, AVCaptureFileOutputRec
 
         session.beginConfiguration()
         session.sessionPreset = .high
-        if let cam = AVCaptureDevice.default(for: .video),
-           let input = try? AVCaptureDeviceInput(device: cam), session.canAddInput(input) {
+        let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
+            ?? AVCaptureDevice.default(for: .video)
+        if let camera,
+           let input = try? AVCaptureDeviceInput(device: camera), session.canAddInput(input) {
             session.addInput(input)
         }
         if let mic = AVCaptureDevice.default(for: .audio),
