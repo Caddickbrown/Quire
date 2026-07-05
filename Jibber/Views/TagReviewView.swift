@@ -13,6 +13,7 @@ struct TagReviewView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var groups: [JournalStore.TagGroup] = []
     @State private var choices: [String: String] = [:]   // group.id → tag to keep
+    @State private var loading = true
 
     private var pendingMerges: Int {
         groups.reduce(0) { total, g in
@@ -27,7 +28,10 @@ struct TagReviewView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if groups.isEmpty {
+                if loading {
+                    ProgressView("Scanning tags…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if groups.isEmpty {
                     ContentUnavailableView(
                         "No similar tags",
                         systemImage: "checkmark.seal",
@@ -64,9 +68,11 @@ struct TagReviewView: View {
                                     .buttonStyle(.plain)
                                 }
                                 Button {
+                                    // Persist the choice and drop it locally — no
+                                    // rescan, so it's instant.
                                     choices[group.id] = nil
                                     store.ignoreTagGroup(group)
-                                    groups = store.similarTagGroups()
+                                    withAnimation { groups.removeAll { $0.id == group.id } }
                                 } label: {
                                     Label("Not a match — ignore", systemImage: "xmark.circle")
                                         .foregroundStyle(.secondary)
@@ -92,7 +98,10 @@ struct TagReviewView: View {
                     Button(pendingMerges > 0 ? "Apply (\(pendingMerges))" : "Done") { apply() }
                 }
             }
-            .onAppear { groups = store.similarTagGroups() }
+            .task {
+                groups = await store.similarTagGroupsAsync()
+                loading = false
+            }
         }
         .frame(minWidth: 400, minHeight: 460)
     }

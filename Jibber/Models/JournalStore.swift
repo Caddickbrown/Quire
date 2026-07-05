@@ -379,11 +379,13 @@ final class JournalStore: ObservableObject {
 
     // MARK: Tag review (find near-duplicate tags, merge/rename)
 
-    struct TagGroup: Identifiable {
-        let variants: [(tag: String, count: Int)]
+    struct TagGroup: Identifiable, Sendable {
+        let variants: [Variant]
         let caseOnly: Bool     // true = identical apart from case; false = 1-char apart
         /// Stable key so an "ignore" choice sticks regardless of ordering.
         var id: String { variants.map(\.tag).sorted().joined(separator: "|") }
+
+        struct Variant: Sendable { let tag: String; let count: Int }
     }
 
     private let ignoredTagGroupsKey = "ignoredTagGroups"
@@ -394,13 +396,20 @@ final class JournalStore: ObservableObject {
         UserDefaults.standard.set(ignored, forKey: ignoredTagGroupsKey)
     }
 
+    /// Compute the tag groups off the main thread (levenshtein clustering can be
+    /// O(n²) over the tag set). Snapshot the inputs on the main actor first.
+    func similarTagGroupsAsync() async -> [TagGroup] {
+        let counts = tagCounts.map { TagGroup.Variant(tag: $0.tag, count: $0.count) }
+        let ignored = Set(UserDefaults.standard.stringArray(forKey: ignoredTagGroupsKey) ?? [])
+        return await Task.detached { Self.computeTagGroups(counts, ignored: ignored) }.value
+    }
+
     /// Two tiers of possibly-duplicate tags: case-only variants (@tags/@Tags),
     /// then one-character-apart lookalikes (journaling/journalling — but also
     /// false friends like food/mood, which the user can ignore). Case-only first.
-    func similarTagGroups() -> [TagGroup] {
-        let ignored = Set(UserDefaults.standard.stringArray(forKey: ignoredTagGroupsKey) ?? [])
-        var order: [String] = [], buckets: [String: [(tag: String, count: Int)]] = [:]
-        for item in tagCounts {
+    nonisolated static func computeTagGroups(_ counts: [TagGroup.Variant], ignored: Set<String>) -> [TagGroup] {
+        var order: [String] = [], buckets: [String: [TagGroup.Variant]] = [:]
+        for item in counts {
             let key = item.tag.dropFirst().lowercased()
             if buckets[key] == nil { order.append(key) }
             buckets[key, default: []].append(item)
@@ -419,7 +428,7 @@ final class JournalStore: ObservableObject {
             var cluster = [order[i]]
             for j in order.indices where j > i && !used.contains(order[j]) {
                 if min(order[i].count, order[j].count) >= 4,
-                   Self.levenshtein(order[i], order[j]) == 1 {
+                   levenshtein(order[i], order[j]) == 1 {
                     cluster.append(order[j])
                 }
             }
@@ -432,7 +441,7 @@ final class JournalStore: ObservableObject {
         return groups
     }
 
-    private static func levenshtein(_ a: String, _ b: String) -> Int {
+    nonisolated private static func levenshtein(_ a: String, _ b: String) -> Int {
         let a = Array(a), b = Array(b)
         if a.isEmpty { return b.count }
         var d = Array(0...b.count)

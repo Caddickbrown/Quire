@@ -43,6 +43,7 @@ struct EntryDetailView: View {
     @State private var showingImagePicker = false
     @State private var showingVideoRecorder = false
     @State private var saveTask: Task<Void, Never>?
+    @State private var pendingReindex = false
     @StateObject private var recorder = AudioRecorder()
     @FocusState private var bodyFocused: Bool
 
@@ -67,6 +68,10 @@ struct EntryDetailView: View {
     }
     private var composedRaw: String { currentEntry.raw }
     private var isDirty: Bool { composedRaw != baselineRaw }
+    private var saveHelp: String {
+        if case .inbox = source { return "Save draft (keep in Inbox)" }
+        return "Save"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -154,6 +159,16 @@ struct EntryDetailView: View {
                 Image(systemName: "ellipsis.circle")
             }
             .fixedSize()
+
+            Button {
+                flush()
+                #if os(iOS)
+                dismiss()
+                #endif
+            } label: {
+                Label("Save", systemImage: "checkmark").labelStyle(.iconOnly)
+            }
+            .help(saveHelp)
 
             if case .inbox = source {
                 Button {
@@ -247,11 +262,19 @@ struct EntryDetailView: View {
         case .journal(let n):   store.updateJournalEntry(name: n, original: entry, newText: composedRaw, reindex: reindex)
         }
         baselineRaw = composedRaw
+        pendingReindex = !reindex
     }
 
+    /// Persist everything and make the store reload, so leaving the entry always
+    /// refreshes the lists — even if the last write was a deferred (unindexed) one.
     private func flush() {
         saveTask?.cancel()
-        commit(reindex: true)
+        if isDirty {
+            commit(reindex: true)
+        } else if pendingReindex {
+            store.reload()
+        }
+        pendingReindex = false
     }
 
     // MARK: Media / helpers
