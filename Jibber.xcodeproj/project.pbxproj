@@ -7,42 +7,42 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		D5E98B9AD6D34DC6B862B5CB /* JibberApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD9507497124455A98491147 /* JibberApp.swift */; };
-		A4946A5F49D64FDDB1E64638 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97FC3AB4BCF647CAA76A4990 /* Theme.swift */; };
-		3C4E39B1110445CBAC3261A5 /* Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95CB982B5C1040928B251600 /* Entry.swift */; };
-		24D20218C267478BA2CB6046 /* JournalParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C9F5CA6A4784612AF8813B7 /* JournalParser.swift */; };
-		908C084E661F4A4A8254FE0D /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B47971E28FC4CC6B149DFD1 /* JournalStore.swift */; };
-		5C26700DC9354B8A89540C30 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE3A99BA1C584EDFBC23E62D /* RootView.swift */; };
-		12ADEF64DB894716AF9F42D0 /* WritingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A464C5022B304DC5ACB3B1B7 /* WritingView.swift */; };
-		095DCCD4D2E14A33809FBD94 /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 794565843C3A4B0084464555 /* InboxView.swift */; };
-		17547022F10B4815AE7A3F08 /* ArchiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1953A7E75ACF4390ACD1F974 /* ArchiveView.swift */; };
-		40B2D84EE0DE4B88927BCA81 /* EntryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F305DA221FFF48FA971A477B /* EntryDetailView.swift */; };
-		61203DF182114C6A818F1BA2 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6043B587C31D48E5BE6B696C /* SettingsView.swift */; };
-		4F2DAE24CBFF41CFAFF60F40 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 395569F8EA644485AD5F5796 /* Assets.xcassets */; };
-		19B505824F334A2FA8EFAF3A /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = 9397BD12B1674E2E9D18E9BF /* fonts */; };
+		A6D1682FFD8E4B6A90767403 /* JibberApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3445C50F12304FCDA38DC0F7 /* JibberApp.swift */; };
+		762ECF9C397349D7B7BBAA34 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACF87A31FAE742F7829D0B6A /* Theme.swift */; };
+		D6B788ABE1024ABB9F7456E7 /* Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DD076AAF3914A3C9E0CF7EB /* Entry.swift */; };
+		BDC86DEDC798440D873D6283 /* JournalParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD9A61F8C29F43349D1B6557 /* JournalParser.swift */; };
+		9EBD18E09D344C0B9153D78E /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1413626AAD49433BAF2D07FA /* JournalStore.swift */; };
+		E6A7F92AF29E4A2AB47A307C /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6030F4554F1417C9E70564D /* RootView.swift */; };
+		5D9538B1E3FB4BF2B73D90A8 /* WritingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDAB89D7085C45CE85C22203 /* WritingView.swift */; };
+		E39282BBE1F6446BB7668AFF /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF7B7EDFEB4B4C53B2E1FFF4 /* InboxView.swift */; };
+		10E759C56FD84018A0FDA728 /* ArchiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 406A91148A4740D086265198 /* ArchiveView.swift */; };
+		7CDF3DDF2C7644388B8A24CE /* EntryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56C96C247CDF4087B8C9C431 /* EntryDetailView.swift */; };
+		5D571A4387FF47E5A8D447D9 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B318836A69A04CF7B225D71F /* SettingsView.swift */; };
+		A839893DB8304652967C5051 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = ACFE6E2945744969856AAE88 /* Assets.xcassets */; };
+		87511DAC24F5495AAE32EBAC /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = 64E9417330CE477E9E77FBCC /* fonts */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		FD9507497124455A98491147 /* JibberApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JibberApp.swift; sourceTree = "<group>"; };
-		97FC3AB4BCF647CAA76A4990 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		95CB982B5C1040928B251600 /* Entry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Entry.swift; sourceTree = "<group>"; };
-		2C9F5CA6A4784612AF8813B7 /* JournalParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalParser.swift; sourceTree = "<group>"; };
-		6B47971E28FC4CC6B149DFD1 /* JournalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalStore.swift; sourceTree = "<group>"; };
-		AE3A99BA1C584EDFBC23E62D /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
-		A464C5022B304DC5ACB3B1B7 /* WritingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingView.swift; sourceTree = "<group>"; };
-		794565843C3A4B0084464555 /* InboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxView.swift; sourceTree = "<group>"; };
-		1953A7E75ACF4390ACD1F974 /* ArchiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveView.swift; sourceTree = "<group>"; };
-		F305DA221FFF48FA971A477B /* EntryDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntryDetailView.swift; sourceTree = "<group>"; };
-		6043B587C31D48E5BE6B696C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		395569F8EA644485AD5F5796 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		9397BD12B1674E2E9D18E9BF /* fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = fonts; sourceTree = "<group>"; };
-		4D937015415A41599C82CF3B /* iOS/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		DC3D9F44C1C74E8AAFD95663 /* macOS/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		8DA84C7A5C444B0B8009E94B /* Jibber.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jibber.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3445C50F12304FCDA38DC0F7 /* JibberApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JibberApp.swift; sourceTree = "<group>"; };
+		ACF87A31FAE742F7829D0B6A /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		5DD076AAF3914A3C9E0CF7EB /* Entry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Entry.swift; sourceTree = "<group>"; };
+		AD9A61F8C29F43349D1B6557 /* JournalParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalParser.swift; sourceTree = "<group>"; };
+		1413626AAD49433BAF2D07FA /* JournalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalStore.swift; sourceTree = "<group>"; };
+		D6030F4554F1417C9E70564D /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		DDAB89D7085C45CE85C22203 /* WritingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingView.swift; sourceTree = "<group>"; };
+		BF7B7EDFEB4B4C53B2E1FFF4 /* InboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxView.swift; sourceTree = "<group>"; };
+		406A91148A4740D086265198 /* ArchiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveView.swift; sourceTree = "<group>"; };
+		56C96C247CDF4087B8C9C431 /* EntryDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntryDetailView.swift; sourceTree = "<group>"; };
+		B318836A69A04CF7B225D71F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		ACFE6E2945744969856AAE88 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		64E9417330CE477E9E77FBCC /* fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = fonts; sourceTree = "<group>"; };
+		F0A1BC236CB44D6199BBFBF0 /* iOS/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		77DC0DAF76DC4430A4CBA663 /* macOS/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		0C6B00CE727646ECAD10F7AD /* Jibber.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jibber.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		4A328533D5CC41E2B3464AAE /* Frameworks */ = {
+		E1F49CD79B8F4338B661EDC3 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -52,72 +52,72 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		81B54DCE5487434096790A49 = {
+		59A9CF662CAA46C9A34729A1 = {
 			isa = PBXGroup;
 			children = (
-				3EFD359428E7429DA5C09897 /* Jibber */,
-				3D29A323392144C0A02A02DC /* Products */,
+				5788AD4F67F0492B955DFE81 /* Jibber */,
+				8393448F55C340C5885DC840 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		3D29A323392144C0A02A02DC /* Products */ = {
+		8393448F55C340C5885DC840 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				8DA84C7A5C444B0B8009E94B /* Jibber.app */,
+				0C6B00CE727646ECAD10F7AD /* Jibber.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
-		3EFD359428E7429DA5C09897 /* Jibber */ = {
+		5788AD4F67F0492B955DFE81 /* Jibber */ = {
 			isa = PBXGroup;
 			children = (
-				FD9507497124455A98491147 /* JibberApp.swift */,
-				97FC3AB4BCF647CAA76A4990 /* Theme.swift */,
-				3FDC5C71296C4C92BCF624A8 /* Models */,
-				875D8FD8F8114B87A6A7ED22 /* Views */,
-				395569F8EA644485AD5F5796 /* Assets.xcassets */,
-				9397BD12B1674E2E9D18E9BF /* fonts */,
-				F9C7BE1B38944BE68D0CE527 /* iOS */,
-				1198252590934EC9B57BF29D /* macOS */,
+				3445C50F12304FCDA38DC0F7 /* JibberApp.swift */,
+				ACF87A31FAE742F7829D0B6A /* Theme.swift */,
+				C1D94884F78C4D4D8016E375 /* Models */,
+				07DE2B5B46DD45F89F27F61C /* Views */,
+				ACFE6E2945744969856AAE88 /* Assets.xcassets */,
+				64E9417330CE477E9E77FBCC /* fonts */,
+				DE133B93FC73476482967D9C /* iOS */,
+				D9DAE1EA3EDB4D9D9BA7C30B /* macOS */,
 			);
 			path = Jibber;
 			sourceTree = "<group>";
 		};
-		3FDC5C71296C4C92BCF624A8 /* Models */ = {
+		C1D94884F78C4D4D8016E375 /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				95CB982B5C1040928B251600 /* Entry.swift */,
-				2C9F5CA6A4784612AF8813B7 /* JournalParser.swift */,
-				6B47971E28FC4CC6B149DFD1 /* JournalStore.swift */,
+				5DD076AAF3914A3C9E0CF7EB /* Entry.swift */,
+				AD9A61F8C29F43349D1B6557 /* JournalParser.swift */,
+				1413626AAD49433BAF2D07FA /* JournalStore.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
 		};
-		875D8FD8F8114B87A6A7ED22 /* Views */ = {
+		07DE2B5B46DD45F89F27F61C /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				AE3A99BA1C584EDFBC23E62D /* RootView.swift */,
-				A464C5022B304DC5ACB3B1B7 /* WritingView.swift */,
-				794565843C3A4B0084464555 /* InboxView.swift */,
-				1953A7E75ACF4390ACD1F974 /* ArchiveView.swift */,
-				F305DA221FFF48FA971A477B /* EntryDetailView.swift */,
-				6043B587C31D48E5BE6B696C /* SettingsView.swift */,
+				D6030F4554F1417C9E70564D /* RootView.swift */,
+				DDAB89D7085C45CE85C22203 /* WritingView.swift */,
+				BF7B7EDFEB4B4C53B2E1FFF4 /* InboxView.swift */,
+				406A91148A4740D086265198 /* ArchiveView.swift */,
+				56C96C247CDF4087B8C9C431 /* EntryDetailView.swift */,
+				B318836A69A04CF7B225D71F /* SettingsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
 		};
-		F9C7BE1B38944BE68D0CE527 /* iOS */ = {
+		DE133B93FC73476482967D9C /* iOS */ = {
 			isa = PBXGroup;
 			children = (
-				4D937015415A41599C82CF3B /* Info.plist */,
+				F0A1BC236CB44D6199BBFBF0 /* Info.plist */,
 			);
 			path = iOS;
 			sourceTree = "<group>";
 		};
-		1198252590934EC9B57BF29D /* macOS */ = {
+		D9DAE1EA3EDB4D9D9BA7C30B /* macOS */ = {
 			isa = PBXGroup;
 			children = (
-				DC3D9F44C1C74E8AAFD95663 /* Info.plist */,
+				77DC0DAF76DC4430A4CBA663 /* Info.plist */,
 			);
 			path = macOS;
 			sourceTree = "<group>";
@@ -125,13 +125,13 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		6E37DD64E3BC4F0989129D42 /* Jibber */ = {
+		56A555C18D4A4100AD9A03E6 /* Jibber */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 61E9B4250AC446D986868091 /* Build configuration list for PBXNativeTarget "Jibber" */;
+			buildConfigurationList = C812D028B5E74E538588C80B /* Build configuration list for PBXNativeTarget "Jibber" */;
 			buildPhases = (
-				D2CF0EC3E7F44FDF98BB9CED /* Sources */,
-				4A328533D5CC41E2B3464AAE /* Frameworks */,
-				09FBC129D3C84D39AF8F9A91 /* Resources */,
+				1EAFB855F476479BA952DB5A /* Sources */,
+				E1F49CD79B8F4338B661EDC3 /* Frameworks */,
+				BB1C35AC9C6B49AF92B8F327 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -139,25 +139,25 @@
 			);
 			name = Jibber;
 			productName = Jibber;
-			productReference = 8DA84C7A5C444B0B8009E94B /* Jibber.app */;
+			productReference = 0C6B00CE727646ECAD10F7AD /* Jibber.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		BC72D81C9EB24E4291D236B1 /* Project object */ = {
+		6A5B2A588BC04F0A86945CB3 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1600;
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
-					6E37DD64E3BC4F0989129D42 = {
+					56A555C18D4A4100AD9A03E6 = {
 						CreatedOnToolsVersion = 16.0;
 					};
 				};
 			};
-			buildConfigurationList = D771D114A87745469EBDAD1E /* Build configuration list for PBXProject "Jibber" */;
+			buildConfigurationList = 49DB69432C4442689EFCC30B /* Build configuration list for PBXProject "Jibber" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -165,51 +165,51 @@
 				en,
 				Base,
 			);
-			mainGroup = 81B54DCE5487434096790A49;
-			productRefGroup = 3D29A323392144C0A02A02DC /* Products */;
+			mainGroup = 59A9CF662CAA46C9A34729A1;
+			productRefGroup = 8393448F55C340C5885DC840 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				6E37DD64E3BC4F0989129D42 /* Jibber */,
+				56A555C18D4A4100AD9A03E6 /* Jibber */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		09FBC129D3C84D39AF8F9A91 /* Resources */ = {
+		BB1C35AC9C6B49AF92B8F327 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				4F2DAE24CBFF41CFAFF60F40 /* Assets.xcassets in Resources */,
-				19B505824F334A2FA8EFAF3A /* fonts in Resources */,
+				A839893DB8304652967C5051 /* Assets.xcassets in Resources */,
+				87511DAC24F5495AAE32EBAC /* fonts in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		D2CF0EC3E7F44FDF98BB9CED /* Sources */ = {
+		1EAFB855F476479BA952DB5A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D5E98B9AD6D34DC6B862B5CB /* JibberApp.swift in Sources */,
-				A4946A5F49D64FDDB1E64638 /* Theme.swift in Sources */,
-				3C4E39B1110445CBAC3261A5 /* Entry.swift in Sources */,
-				24D20218C267478BA2CB6046 /* JournalParser.swift in Sources */,
-				908C084E661F4A4A8254FE0D /* JournalStore.swift in Sources */,
-				5C26700DC9354B8A89540C30 /* RootView.swift in Sources */,
-				12ADEF64DB894716AF9F42D0 /* WritingView.swift in Sources */,
-				095DCCD4D2E14A33809FBD94 /* InboxView.swift in Sources */,
-				17547022F10B4815AE7A3F08 /* ArchiveView.swift in Sources */,
-				40B2D84EE0DE4B88927BCA81 /* EntryDetailView.swift in Sources */,
-				61203DF182114C6A818F1BA2 /* SettingsView.swift in Sources */,
+				A6D1682FFD8E4B6A90767403 /* JibberApp.swift in Sources */,
+				762ECF9C397349D7B7BBAA34 /* Theme.swift in Sources */,
+				D6B788ABE1024ABB9F7456E7 /* Entry.swift in Sources */,
+				BDC86DEDC798440D873D6283 /* JournalParser.swift in Sources */,
+				9EBD18E09D344C0B9153D78E /* JournalStore.swift in Sources */,
+				E6A7F92AF29E4A2AB47A307C /* RootView.swift in Sources */,
+				5D9538B1E3FB4BF2B73D90A8 /* WritingView.swift in Sources */,
+				E39282BBE1F6446BB7668AFF /* InboxView.swift in Sources */,
+				10E759C56FD84018A0FDA728 /* ArchiveView.swift in Sources */,
+				7CDF3DDF2C7644388B8A24CE /* EntryDetailView.swift in Sources */,
+				5D571A4387FF47E5A8D447D9 /* SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		E042A69F276C49F9BD5AFBB3 /* Debug */ = {
+		AA6A0006EB364D46A80E614A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -230,7 +230,7 @@
 			};
 			name = Debug;
 		};
-		D7636D15E98049F39F9652E2 /* Release */ = {
+		3B8F936CC9BA449B8DDA20BC /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -248,7 +248,7 @@
 			};
 			name = Release;
 		};
-		498809E7D0C942C39BA3171A /* Debug */ = {
+		6B213EE45869446EAC14E42A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -285,7 +285,7 @@
 			};
 			name = Debug;
 		};
-		33EB846319344159B77A06B0 /* Release */ = {
+		17CF3B0418D74EE3A9151D87 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -325,20 +325,20 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		D771D114A87745469EBDAD1E /* Build configuration list for PBXProject "Jibber" */ = {
+		49DB69432C4442689EFCC30B /* Build configuration list for PBXProject "Jibber" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				E042A69F276C49F9BD5AFBB3 /* Debug */,
-				D7636D15E98049F39F9652E2 /* Release */,
+				AA6A0006EB364D46A80E614A /* Debug */,
+				3B8F936CC9BA449B8DDA20BC /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		61E9B4250AC446D986868091 /* Build configuration list for PBXNativeTarget "Jibber" */ = {
+		C812D028B5E74E538588C80B /* Build configuration list for PBXNativeTarget "Jibber" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				498809E7D0C942C39BA3171A /* Debug */,
-				33EB846319344159B77A06B0 /* Release */,
+				6B213EE45869446EAC14E42A /* Debug */,
+				17CF3B0418D74EE3A9151D87 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -346,5 +346,5 @@
 /* End XCConfigurationList section */
 
 	};
-	rootObject = BC72D81C9EB24E4291D236B1 /* Project object */;
+	rootObject = 6A5B2A588BC04F0A86945CB3 /* Project object */;
 }

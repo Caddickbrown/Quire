@@ -53,6 +53,14 @@ struct JibberApp: App {
         #if os(macOS)
         .defaultSize(width: 1100, height: 680)
         #endif
+
+        #if os(macOS)
+        Settings {
+            SettingsView()
+                .environmentObject(store)
+                .preferredColorScheme(AppColorScheme(rawValue: colorSchemeRaw)?.resolved)
+        }
+        #endif
     }
 
     /// Register every bundled Lato face at launch so `.custom("Lato-Regular", …)`

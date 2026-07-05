@@ -33,10 +33,12 @@ struct WritingView: View {
                 .focused($editorFocused)
 
             if text.isEmpty {
+                // Align the placeholder's left edge with the caret (the editor's
+                // text region starts at its own 8pt inset).
                 Text(placeholder)
                     .font(.custom(Theme.writingFont, size: size))
                     .foregroundStyle(Theme.placeholder(colorScheme))
-                    .padding(.horizontal, 13)
+                    .padding(.horizontal, 8)
                     .padding(.top, 8)
                     .allowsHitTesting(false)
             }

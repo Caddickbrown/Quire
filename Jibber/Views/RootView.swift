@@ -63,8 +63,19 @@ struct RootView: View {
             }
         }
         .sheet(isPresented: $showingSettings) {
-            SettingsView()
-                .environmentObject(store)
+            NavigationStack {
+                SettingsView()
+                    .environmentObject(store)
+                    .navigationTitle("Settings")
+                    #if os(iOS)
+                    .navigationBarTitleDisplayMode(.inline)
+                    #endif
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showingSettings = false }
+                        }
+                    }
+            }
         }
     }
 
@@ -83,6 +94,7 @@ struct RootView: View {
                       ?? "circle.lefthalf.filled")
             }
         }
+        #if os(iOS)
         ToolbarItem {
             Button {
                 showingSettings = true
@@ -90,5 +102,6 @@ struct RootView: View {
                 Image(systemName: "gearshape")
             }
         }
+        #endif
     }
 }
