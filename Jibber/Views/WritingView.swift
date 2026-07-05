@@ -128,6 +128,13 @@ struct WritingView: View {
                         Label("Promote first line to title", systemImage: "arrow.up.to.line")
                     }
                     .disabled(!hasFirstBodyLine)
+                    Divider()
+                    Button(role: .destructive) {
+                        discard()
+                    } label: {
+                        Label("Discard", systemImage: "trash")
+                    }
+                    .disabled(!hasText && activeTS == nil)
                     Button {
                         importEntries()
                     } label: {
@@ -238,6 +245,15 @@ struct WritingView: View {
         flush()
         reset()
         bodyFocused = true
+    }
+
+    /// Delete the current draft (autosaved to the inbox) without keeping it.
+    private func discard() {
+        saveTask?.cancel()
+        if let ts = activeTS { store.removeDraft(timestamp: ts); activeTS = nil }
+        reset()
+        bodyFocused = true
+        showToast("Discarded")
     }
 
     private func importEntries() {

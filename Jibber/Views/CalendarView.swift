@@ -195,7 +195,10 @@ struct MiniCalendarView: View {
             weekdayHeader
             ForEach(0..<6, id: \.self) { row in
                 HStack(spacing: 2) {
-                    if showWeekNumbers { weekNumber(row) }
+                    if showWeekNumbers {
+                        weekNumber(row)
+                        Divider().frame(height: 18)
+                    }
                     ForEach(0..<7, id: \.self) { col in
                         dayCell(grid[row * 7 + col])
                     }
@@ -213,7 +216,10 @@ struct MiniCalendarView: View {
 
     private var weekdayHeader: some View {
         HStack(spacing: 2) {
-            if showWeekNumbers { Text("").frame(width: 18) }
+            if showWeekNumbers {
+                Text("").frame(width: 18)
+                Divider().frame(height: 12)
+            }
             ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, s in
                 Text(s).font(.system(size: 9)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
