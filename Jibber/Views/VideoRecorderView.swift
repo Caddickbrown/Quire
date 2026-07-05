@@ -7,7 +7,7 @@
 //
 
 import SwiftUI
-import AVFoundation
+@preconcurrency import AVFoundation
 
 #if os(iOS)
 import UIKit

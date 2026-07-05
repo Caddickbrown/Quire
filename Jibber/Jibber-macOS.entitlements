@@ -2,7 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- macOS sandbox (ignored on iOS) -->
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
 	<key>com.apple.security.files.user-selected.read-write</key>
@@ -16,8 +15,7 @@
 	<key>com.apple.security.device.camera</key>
 	<true/>
 
-	<!-- iCloud Documents: journal files live in the app's ubiquity container.
-	     The container must be provisioned via Xcode → Signing & Capabilities → iCloud. -->
+	<!-- iCloud Documents: enable the container via Signing & Capabilities → iCloud. -->
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
 		<string>iCloud.com.caddickbrown.jibber</string>
