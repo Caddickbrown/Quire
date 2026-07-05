@@ -2,8 +2,9 @@
 //  TagsView.swift
 //  Jibber
 //
-//  Tag explorer (jnl `tags` / `tag <name>`): every @tag with a usage count,
-//  drilling into the entries that use it.
+//  Tag explorer (jnl `tags` / `tag <name>`): a horizontal rail of coloured tag
+//  chips across the top; picking one shows its entries in the shared two-pane
+//  (list + open entry on macOS, push on iOS). Tap another chip to switch tags.
 //
 
 import SwiftUI
@@ -11,35 +12,26 @@ import SwiftUI
 struct TagsView: View {
     @EnvironmentObject private var store: JournalStore
     @State private var searchText = ""
-    @State private var randomTag: RandomTag?
+    @State private var selectedTag: String?
 
-    struct RandomTag: Identifiable { let id = UUID(); let tag: String }
+    private var tags: [(tag: String, count: Int)] {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return q.isEmpty ? store.tagCounts : store.tagCounts.filter { $0.tag.lowercased().contains(q) }
+    }
 
     var body: some View {
-        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let tags = q.isEmpty
-            ? store.tagCounts
-            : store.tagCounts.filter { $0.tag.lowercased().contains(q) }
-        let maxCount = max(tags.map(\.count).max() ?? 1, 1)
         Group {
-            if tags.isEmpty {
+            if store.tagCounts.isEmpty {
                 ContentUnavailableView(
                     "No tags yet",
                     systemImage: "number",
                     description: Text("Write @tags in your entries and they'll show up here.")
                 )
             } else {
-                ScrollView {
-                    FlowLayout(spacing: 8) {
-                        ForEach(tags, id: \.tag) { item in
-                            NavigationLink(value: Route.tag(item.tag)) {
-                                bubble(item, maxCount: maxCount)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
+                VStack(spacing: 0) {
+                    rail
+                    Divider()
+                    entriesPane
                 }
             }
         }
@@ -50,24 +42,66 @@ struct TagsView: View {
         #endif
         .toolbar {
             Button {
-                if let t = store.tagCounts.randomElement() {
-                    randomTag = RandomTag(tag: t.tag)
-                }
+                selectedTag = tags.randomElement()?.tag
             } label: {
                 Label("Random", systemImage: "dice")
             }
             .disabled(tags.isEmpty)
         }
-        .sheet(item: $randomTag) { r in
-            NavigationStack {
-                TagDetailView(tag: r.tag).jibberRoutes()
+        .onAppear { if selectedTag == nil { selectedTag = store.tagCounts.first?.tag } }
+    }
+
+    private var rail: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(tags, id: \.tag) { item in
+                    Button {
+                        selectedTag = item.tag
+                    } label: {
+                        chip(item, selected: item.tag == selectedTag)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .environmentObject(store)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
     }
 
-    /// A palette so the tag cloud isn't a sea of one colour. Each tag gets a
-    /// stable colour from its name; frequency sets how strong the fill is.
+    @ViewBuilder
+    private var entriesPane: some View {
+        if let tag = selectedTag {
+            let hits = store.entries(taggedWith: tag)
+            let dateByTS = Dictionary(hits.map { ($0.entry.ts, $0.date) }, uniquingKeysWith: { a, _ in a })
+            EntryTwoPane(
+                entries: hits.map(\.entry),
+                sourceFor: { .archive(date: dateByTS[$0.ts] ?? "") },
+                fullDate: true
+            )
+            .id(tag)
+        } else {
+            ContentUnavailableView("Select a tag", systemImage: "number")
+        }
+    }
+
+    private func chip(_ item: (tag: String, count: Int), selected: Bool) -> some View {
+        let color = Self.color(for: item.tag)
+        return HStack(spacing: 6) {
+            Text(item.tag)
+                .fontWeight(.medium)
+                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(color))
+            Text("\(item.count)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.9)) : AnyShapeStyle(.secondary))
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(selected ? color : color.opacity(0.16), in: Capsule())
+        .overlay(Capsule().strokeBorder(color.opacity(selected ? 0 : 0.35), lineWidth: 1))
+    }
+
+    /// A palette so the tags aren't a sea of one colour; each tag maps to a stable colour.
     static let palette: [Color] = [
         .blue, .teal, .green, .orange, .pink, .purple, .red, .indigo, .mint, .cyan, .brown,
     ]
@@ -76,76 +110,24 @@ struct TagsView: View {
         let hash = tag.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
         return palette[hash % palette.count]
     }
-
-    /// A tag bubble: name + count, coloured per tag and filled by frequency.
-    private func bubble(_ item: (tag: String, count: Int), maxCount: Int) -> some View {
-        let color = Self.color(for: item.tag)
-        let intensity = 0.16 + 0.34 * (Double(item.count) / Double(maxCount))
-        return HStack(spacing: 6) {
-            Text(item.tag)
-                .fontWeight(.medium)
-                .foregroundStyle(color)
-            Text("\(item.count)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(color.opacity(0.85))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(color.opacity(0.18), in: Capsule())
-        }
-        .font(.callout)
-        .padding(.leading, 12)
-        .padding(.trailing, 8)
-        .padding(.vertical, 8)
-        .background(color.opacity(intensity), in: Capsule())
-        .overlay(Capsule().strokeBorder(color.opacity(0.35), lineWidth: 1))
-    }
 }
 
-/// Filed entries carrying one tag, newest first.
+/// Still reachable via Route.tag; a plain list of a tag's entries.
 struct TagDetailView: View {
     @EnvironmentObject private var store: JournalStore
     let tag: String
 
     var body: some View {
         let hits = store.entries(taggedWith: tag)
-        List {
-            ForEach(hits, id: \.entry.id) { hit in
-                NavigationLink(value: Route.entry(hit.entry, .archive(date: hit.date))) {
-                    tagRow(hit)
-                }
-                .contextMenu {
-                    Button(role: .destructive) {
-                        store.deleteFiledEntry(date: hit.date, entry: hit.entry)
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
-            }
-        }
+        let dateByTS = Dictionary(hits.map { ($0.entry.ts, $0.date) }, uniquingKeysWith: { a, _ in a })
+        EntryTwoPane(
+            entries: hits.map(\.entry),
+            sourceFor: { .archive(date: dateByTS[$0.ts] ?? "") },
+            fullDate: true
+        )
         .navigationTitle(tag)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-    }
-
-    @ViewBuilder
-    private func tagRow(_ hit: (date: String, entry: Entry)) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(hit.entry.preview.isEmpty ? "(empty)" : hit.entry.preview)
-                    .lineLimit(1)
-                Spacer()
-                Text(hit.date)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            if !hit.entry.body.isEmpty {
-                Text(hit.entry.body)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-        }
-        .padding(.vertical, 2)
     }
 }
