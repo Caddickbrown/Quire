@@ -22,10 +22,24 @@ enum InboxSort: String, CaseIterable, Identifiable {
     }
 }
 
+enum SwipeAction: String, CaseIterable, Identifiable {
+    case file, delete, none
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .file:   return "File"
+        case .delete: return "Delete"
+        case .none:   return "None"
+        }
+    }
+}
+
 struct InboxView: View {
     @EnvironmentObject private var store: JournalStore
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
     @AppStorage("inboxSort") private var sortRaw: String = InboxSort.newest.rawValue
+    @AppStorage("inboxSwipeLeft") private var swipeLeftRaw = SwipeAction.file.rawValue
+    @AppStorage("inboxSwipeRight") private var swipeRightRaw = SwipeAction.delete.rawValue
     @State private var searchText = ""
     @State private var randomDraft: Entry?
     @State private var selectedTS: String?
@@ -90,16 +104,30 @@ struct InboxView: View {
             ForEach(drafts) { draft in
                 row(for: draft)
                     .tag(draft.ts)
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        swipeButton(SwipeAction(rawValue: swipeRightRaw) ?? .delete, draft)
+                    }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button { store.fileDraft(draft) } label: { Label("File", systemImage: "archivebox") }
-                            .tint(.green)
-                        Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
+                        swipeButton(SwipeAction(rawValue: swipeLeftRaw) ?? .file, draft)
                     }
                     .contextMenu {
                         Button { store.fileDraft(draft) } label: { Label("Archive", systemImage: "archivebox") }
                         Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
                     }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func swipeButton(_ action: SwipeAction, _ draft: Entry) -> some View {
+        switch action {
+        case .file:
+            Button { store.fileDraft(draft) } label: { Label("File", systemImage: "archivebox") }
+                .tint(.green)
+        case .delete:
+            Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
+        case .none:
+            EmptyView()
         }
     }
 

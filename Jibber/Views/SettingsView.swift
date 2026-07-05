@@ -18,6 +18,8 @@ struct SettingsView: View {
     @AppStorage("highlightTags") private var highlightTags = true
     @AppStorage("firstWeekday") private var firstWeekday = 1
     @AppStorage("showWeekNumbers") private var showWeekNumbers = false
+    @AppStorage("inboxSwipeLeft") private var swipeLeftRaw = SwipeAction.file.rawValue
+    @AppStorage("inboxSwipeRight") private var swipeRightRaw = SwipeAction.delete.rawValue
     @AppStorage("splitTags") private var splitTagsRaw: String = ""
 
     static let shortcuts: [(action: String, keys: String)] = [
@@ -68,6 +70,17 @@ struct SettingsView: View {
                     Text("Saturday").tag(7)
                 }
                 Toggle("Show week numbers", isOn: $showWeekNumbers)
+            }
+
+            Section {
+                Picker("Swipe left", selection: $swipeLeftRaw) {
+                    ForEach(SwipeAction.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                Picker("Swipe right", selection: $swipeRightRaw) {
+                    ForEach(SwipeAction.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+            } header: {
+                Text("Inbox swipe")
             }
 
             Section {

@@ -186,14 +186,14 @@ struct RootView: View {
             Divider()
             MiniCalendarView()
             Divider()
-            HStack(spacing: 2) {
+            HStack(spacing: footerSpacing) {
                 Spacer()
                 timerControl
                 iconButton(.stats)
                 iconButton(.settings)
             }
-            .padding(.trailing, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
         .background(.bar)
     }
@@ -224,6 +224,14 @@ struct RootView: View {
         .fixedSize()
         .onChange(of: timerMinutes) { _, m in if !nav.timerRunning { nav.timerRemaining = m * 60 } }
         .help("Writing timer")
+    }
+
+    private var footerSpacing: CGFloat {
+        #if os(iOS)
+        return 16
+        #else
+        return 4
+        #endif
     }
 
     private func iconButton(_ section: AppSection) -> some View {
