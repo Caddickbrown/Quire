@@ -27,6 +27,7 @@ struct EntryDetailView: View {
     @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
     @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
+    @AppStorage("highlightTags") private var highlightTags = true
 
     @State private var title: String
     @State private var date: Date
@@ -108,7 +109,8 @@ struct EntryDetailView: View {
                                   fontRaw: writingFontRaw,
                                   size: size,
                                   textColor: Theme.bodyText(colorScheme),
-                                  lineSpacing: Theme.lineSpacing(for: size))
+                                  lineSpacing: Theme.lineSpacing(for: size),
+                                  highlightTags: highlightTags)
                     .overlay(alignment: .topLeading) {
                         if text.isEmpty {
                             Text("Begin writing")
@@ -141,12 +143,21 @@ struct EntryDetailView: View {
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()
-                Button {
-                    showingImagePicker = true
+                Menu {
+                    Button {
+                        showingImagePicker = true
+                    } label: {
+                        Label("Attach Media", systemImage: "paperclip")
+                    }
+                    Button {
+                        promoteFirstLine()
+                    } label: {
+                        Label("Promote first line to title", systemImage: "arrow.up.to.line")
+                    }
+                    .disabled(!hasFirstBodyLine)
                 } label: {
-                    Label("Attach Media", systemImage: "paperclip")
+                    Image(systemName: "ellipsis.circle")
                 }
-                .help("Attach an image, video, or audio file")
                 Button {
                     save()
                 } label: {
@@ -186,6 +197,20 @@ struct EntryDetailView: View {
             store.updateJournalEntry(name: name, original: entry, newText: composedRaw)
         }
         baselineRaw = composedRaw
+    }
+
+    private var hasFirstBodyLine: Bool {
+        text.split(separator: "\n", omittingEmptySubsequences: true).first != nil
+    }
+
+    private func promoteFirstLine() {
+        var lines = text.components(separatedBy: "\n")
+        guard let idx = lines.firstIndex(where: {
+            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+        }) else { return }
+        title = lines[idx].trimmingCharacters(in: .whitespaces)
+        lines.remove(at: idx)
+        text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func attachImage(_ url: URL) {

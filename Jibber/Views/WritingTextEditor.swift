@@ -9,6 +9,8 @@
 
 import SwiftUI
 
+private let tagRegex = try! NSRegularExpression(pattern: #"@[a-zA-Z][a-zA-Z0-9_-]*"#)
+
 #if os(macOS)
 import AppKit
 
@@ -32,6 +34,7 @@ struct WritingTextEditor: NSViewRepresentable {
     var size: CGFloat
     var textColor: Color
     var lineSpacing: CGFloat
+    var highlightTags: Bool = true
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
@@ -68,6 +71,12 @@ struct WritingTextEditor: NSViewRepresentable {
         tv.typingAttributes = [.font: font, .foregroundColor: color, .paragraphStyle: para]
         let full = NSRange(location: 0, length: (tv.string as NSString).length)
         tv.textStorage?.setAttributes([.font: font, .foregroundColor: color, .paragraphStyle: para], range: full)
+        if highlightTags {
+            let tagColor = NSColor.controlAccentColor
+            for m in tagRegex.matches(in: tv.string, range: full) {
+                tv.textStorage?.addAttribute(.foregroundColor, value: tagColor, range: m.range)
+            }
+        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -103,6 +112,7 @@ struct WritingTextEditor: UIViewRepresentable {
     var size: CGFloat
     var textColor: Color
     var lineSpacing: CGFloat
+    var highlightTags: Bool = true
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
@@ -131,6 +141,13 @@ struct WritingTextEditor: UIViewRepresentable {
         tv.font = font
         tv.textColor = color
         tv.typingAttributes = [.font: font, .foregroundColor: color, .paragraphStyle: para]
+        let full = NSRange(location: 0, length: (tv.text as NSString).length)
+        tv.textStorage.addAttributes([.font: font, .foregroundColor: color, .paragraphStyle: para], range: full)
+        if highlightTags {
+            for m in tagRegex.matches(in: tv.text, range: full) {
+                tv.textStorage.addAttribute(.foregroundColor, value: UIColor.tintColor, range: m.range)
+            }
+        }
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {

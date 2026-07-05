@@ -18,6 +18,7 @@ struct WritingView: View {
 
     @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
     @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
+    @AppStorage("highlightTags") private var highlightTags = true
 
     @State private var title = ""
     @State private var date = Date()
@@ -64,7 +65,8 @@ struct WritingView: View {
                               fontRaw: writingFontRaw,
                               size: size,
                               textColor: Theme.bodyText(colorScheme),
-                              lineSpacing: Theme.lineSpacing(for: size))
+                              lineSpacing: Theme.lineSpacing(for: size),
+                              highlightTags: highlightTags)
                 .focused($bodyFocused)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
