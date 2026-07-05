@@ -21,6 +21,9 @@ struct TagReviewView: View {
         }
     }
 
+    /// Groups still awaiting a decision (no tag chosen yet).
+    private var remaining: Int { groups.filter { choices[$0.id] == nil }.count }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -35,6 +38,9 @@ struct TagReviewView: View {
                         Section {
                             Text("Pick the tag to keep in each group, then Apply — the rest merge into it. Groups you leave untouched are unchanged.")
                                 .font(.callout).foregroundStyle(.secondary)
+                        } footer: {
+                            Text("Remaining: \(remaining) of \(groups.count)")
+                                .font(.callout.monospacedDigit())
                         }
                         ForEach(groups) { group in
                             Section {
