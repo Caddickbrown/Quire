@@ -146,17 +146,23 @@ struct ArchiveView: View {
 struct EntryPreviewRow: View {
     let entry: Entry
     var dateStyleRaw: String? = nil
+    var showTime: Bool = false
 
     private var time: String { String(entry.ts.suffix(8).prefix(5)) }
+    private var trailing: String? {
+        if let ds = dateStyleRaw { return "\(Theme.displayDate(entry.date, style: ds)) · \(time)" }
+        if showTime { return time }
+        return nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text(entry.preview.isEmpty ? "(empty)" : entry.preview)
                     .lineLimit(1)
-                if let ds = dateStyleRaw {
+                if let trailing {
                     Spacer()
-                    Text("\(Theme.displayDate(entry.date, style: ds)) · \(time)")
+                    Text(trailing)
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -182,7 +188,7 @@ struct DayView: View {
         List {
             ForEach(store.entries(for: date)) { entry in
                 NavigationLink(value: Route.entry(entry, .archive(date: date))) {
-                    EntryPreviewRow(entry: entry)
+                    EntryPreviewRow(entry: entry, showTime: true)
                 }
                 .contextMenu {
                     Button(role: .destructive) {
