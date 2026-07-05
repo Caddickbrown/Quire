@@ -629,6 +629,38 @@ final class JournalStore: ObservableObject {
 
     func deleteAsset(_ url: URL) { try? fm.removeItem(at: url) }
 
+    /// Total size on disk of everything in the assets folder.
+    func assetsBytes() -> Int {
+        guard let dir = assetsDirURL,
+              let en = fm.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey])
+        else { return 0 }
+        var total = 0
+        for case let url as URL in en where !url.hasDirectoryPath {
+            total += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        }
+        return total
+    }
+
+    /// Asset files that no entry references any more (safe to delete).
+    func orphanAssets() -> [URL] {
+        let all = allAssets().map(\.url)
+        guard !all.isEmpty else { return [] }
+        var texts: [String] = []
+        if let inboxURL { texts.append(readString(inboxURL)) }
+        for url in allJournalFiles() { texts.append(readString(url)) }
+        for sj in splitJournals { if let u = splitJournalURL(sj.name) { texts.append(readString(u)) } }
+        let corpus = texts.joined(separator: "\n")
+        return all.filter { !corpus.contains("assets/\($0.lastPathComponent)") }
+    }
+
+    @discardableResult
+    func deleteOrphanAssets() -> Int {
+        let orphans = orphanAssets()
+        for url in orphans { deleteAsset(url) }
+        if !orphans.isEmpty { rebuildIndex() }
+        return orphans.count
+    }
+
     /// Entries that reference an asset by file name (for "go to file").
     func usages(ofAsset fileName: String) -> [(entry: Entry, source: EntrySource)] {
         let needle = "assets/\(fileName)"
@@ -982,6 +1014,7 @@ final class JournalStore: ObservableObject {
         var longestDay = "", longestDayWords = 0
         var bytes = 0
         var inboxBytes = 0, archiveBytes = 0
+        var mediaBytes = 0
         var inboxDrafts = 0, tags = 0, splitJournals = 0
     }
 
@@ -1038,6 +1071,7 @@ final class JournalStore: ObservableObject {
         s.bytes = journalBytes()
         s.inboxBytes = fileBytes(inboxURL)
         s.archiveBytes = max(0, s.bytes - s.inboxBytes)
+        s.mediaBytes = assetsBytes()
         s.inboxDrafts = inboxDrafts.count
         s.tags = tagCounts.count
         s.splitJournals = splitJournals.count

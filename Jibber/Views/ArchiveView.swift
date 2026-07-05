@@ -316,7 +316,9 @@ struct StatsView: View {
                 if stats.splitJournals > 0 {
                     LabeledContent("Split journals", value: "\(stats.splitJournals)")
                 }
-                LabeledContent("Journal size", value: Self.size(stats.bytes))
+                LabeledContent("Text size", value: Self.size(stats.bytes))
+                LabeledContent("Media size", value: Self.size(stats.mediaBytes))
+                LabeledContent("Total size", value: Self.size(stats.bytes + stats.mediaBytes))
             }
             Section("Archive") {
                 LabeledContent("Days written", value: "\(stats.days)")

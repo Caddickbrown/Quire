@@ -42,6 +42,10 @@ struct SettingsView: View {
     @State private var showingBackupPicker = false
     @State private var backupMessage: String?
     @State private var showingTagReview = false
+    @State private var orphanCount = 0
+    @State private var showingOrphanConfirm = false
+    @State private var showingNoOrphans = false
+    @State private var orphanCleared: Int?
 
     var body: some View {
         Form {
@@ -169,6 +173,12 @@ struct SettingsView: View {
                     Label("Tag Review", systemImage: "checkmark.seal")
                 }
                 Button {
+                    orphanCount = store.orphanAssets().count
+                    if orphanCount == 0 { showingNoOrphans = true } else { showingOrphanConfirm = true }
+                } label: {
+                    Label("Clear Orphan Media", systemImage: "photo.badge.exclamationmark")
+                }
+                Button {
                     let md = store.exportMarkdown()
                     if md.isEmpty {
                         showingNothingToExport = true
@@ -278,6 +288,27 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showingTagReview) {
             TagReviewView().environmentObject(store)
+        }
+        .alert("Clear orphan media?", isPresented: $showingOrphanConfirm) {
+            Button("Delete \(orphanCount)", role: .destructive) {
+                orphanCleared = store.deleteOrphanAssets()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("\(orphanCount) media file\(orphanCount == 1 ? "" : "s") in assets/ \(orphanCount == 1 ? "is" : "are") not referenced by any entry. Delete \(orphanCount == 1 ? "it" : "them")?")
+        }
+        .alert("No orphan media", isPresented: $showingNoOrphans) {
+            Button("OK") { }
+        } message: {
+            Text("Every media file is referenced by an entry.")
+        }
+        .alert("Orphan media cleared", isPresented: Binding(
+            get: { orphanCleared != nil },
+            set: { if !$0 { orphanCleared = nil } }
+        )) {
+            Button("OK") { }
+        } message: {
+            Text("Deleted \(orphanCleared ?? 0) unused media file\((orphanCleared ?? 0) == 1 ? "" : "s").")
         }
         .alert("Cleanup complete", isPresented: $showingCleanup) {
             Button("OK") { }
