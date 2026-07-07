@@ -1,6 +1,6 @@
 //
 //  MediaPreview.swift
-//  Jibber
+//  Nook
 //
 //  Renders an entry's body with inline images. Images are stored as Obsidian-
 //  style markdown links (![](assets/…)); this splits the text on those links and

@@ -1,6 +1,6 @@
 //
 //  Entry.swift
-//  Jibber
+//  Nook
 //
 //  A single journal entry. Mirrors the `entry` struct in the jnl Go backend
 //  (~/Code/jnl/main.go) so the on-disk format stays byte-compatible with the

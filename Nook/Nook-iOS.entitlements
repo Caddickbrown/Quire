@@ -7,7 +7,7 @@
 	     Enable the container via Signing & Capabilities → iCloud. -->
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
-		<string>iCloud.com.caddickbrown.jibber</string>
+		<string>iCloud.com.caddickbrown.nook</string>
 	</array>
 	<key>com.apple.developer.icloud-services</key>
 	<array>
@@ -15,7 +15,7 @@
 	</array>
 	<key>com.apple.developer.ubiquity-container-identifiers</key>
 	<array>
-		<string>iCloud.com.caddickbrown.jibber</string>
+		<string>iCloud.com.caddickbrown.nook</string>
 	</array>
 </dict>
 </plist>

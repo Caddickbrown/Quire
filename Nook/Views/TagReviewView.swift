@@ -1,6 +1,6 @@
 //
 //  TagReviewView.swift
-//  Jibber
+//  Nook
 //
 //  Find near-duplicate tags (e.g. @tags vs @Tags, or a one-character typo) and
 //  merge a group into the variant you pick — renaming every occurrence.

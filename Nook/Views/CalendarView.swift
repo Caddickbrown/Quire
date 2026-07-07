@@ -1,6 +1,6 @@
 //
 //  CalendarView.swift
-//  Jibber
+//  Nook
 //
 //  A month calendar for browsing the journal by date. Days that have filed
 //  entries are highlighted; tapping one opens that day.
@@ -10,6 +10,7 @@ import SwiftUI
 
 struct CalendarView: View {
     @EnvironmentObject private var store: JournalStore
+    @Environment(\.accent) private var accent
     @State private var month: Date = CalendarView.startOfMonth(Date())
 
     private let cal = Calendar.current
@@ -103,7 +104,7 @@ struct CalendarView: View {
                     if day.hasPhoto { dot(.blue) }
                     if day.hasVideo { dot(.purple) }
                     if day.hasAudio { dot(.green) }
-                    if !day.hasPhoto && !day.hasVideo && !day.hasAudio { dot(.accentColor) }
+                    if !day.hasPhoto && !day.hasVideo && !day.hasAudio { dot(accent) }
                 } else {
                     Circle().fill(.clear).frame(width: 5, height: 5)
                 }
@@ -111,11 +112,11 @@ struct CalendarView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 42)
-        .background(filled ? Color.accentColor.opacity(0.12) : Color.clear,
+        .background(filled ? accent.opacity(0.12) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isToday ? Color.accentColor : Color.clear, lineWidth: 1.5)
+                .strokeBorder(isToday ? accent : Color.clear, lineWidth: 1.5)
         )
     }
 
@@ -166,6 +167,7 @@ struct CalendarView: View {
 struct MiniCalendarView: View {
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
+    @Environment(\.accent) private var accent
     @AppStorage("firstWeekday") private var firstWeekday = 1        // 1=Sun … 7=Sat
     @AppStorage("showWeekNumbers") private var showWeekNumbers = false
     @State private var month = MiniCalendarView.startOfMonth(Date())
@@ -249,10 +251,10 @@ struct MiniCalendarView: View {
                                          : AnyShapeStyle(.quaternary))
                 .frame(maxWidth: .infinity)
                 .frame(height: 22)
-                .background(has ? Color.accentColor.opacity(inMonth ? 0.18 : 0.08) : Color.clear,
+                .background(has ? accent.opacity(inMonth ? 0.18 : 0.08) : Color.clear,
                            in: RoundedRectangle(cornerRadius: 5))
                 .overlay(RoundedRectangle(cornerRadius: 5)
-                    .strokeBorder(isToday ? Color.accentColor : .clear, lineWidth: 1))
+                    .strokeBorder(isToday ? accent : .clear, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .disabled(!has)

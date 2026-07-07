@@ -1,6 +1,6 @@
 //
 //  TagField.swift
-//  Jibber
+//  Nook
 //
 //  An editable chip field for the split-tags setting: each tag is a little
 //  capsule you can tap to edit or delete, plus a field to add new ones. Backed
@@ -12,6 +12,7 @@ import SwiftUI
 struct SplitTagsEditor: View {
     @Binding var raw: String
     @State private var newTag = ""
+    @Environment(\.accent) private var accent
 
     private var tags: [String] {
         raw.split(whereSeparator: { $0 == " " || $0 == "," }).map { String($0) }
@@ -58,7 +59,7 @@ struct SplitTagsEditor: View {
         .padding(.leading, 10)
         .padding(.trailing, 6)
         .padding(.vertical, 5)
-        .background(Color.accentColor.opacity(0.15), in: Capsule())
+        .background(accent.opacity(0.15), in: Capsule())
     }
 
     private func addTag() {

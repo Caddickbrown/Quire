@@ -1,6 +1,6 @@
 //
 //  JournalStore.swift
-//  Jibber
+//  Nook
 //
 //  The app's data layer. Owns the on-disk journal (iCloud ubiquity container
 //  when available, local Documents otherwise) and exposes the inbox + archive
@@ -119,7 +119,7 @@ final class JournalStore: ObservableObject {
 
     /// Resolution order: a user-chosen custom folder (security-scoped bookmark),
     /// else the iCloud ubiquity container's Documents folder, else a local
-    /// Documents/Jibber folder. The chosen folder is the journal base directly —
+    /// Documents/Nook folder. The chosen folder is the journal base directly —
     /// same layout as jnl's `JNL_DIR`, so pointing it at an existing jnl notes
     /// folder just works.
     private nonisolated static func resolveBase(bookmark: Data?, containerID: String?) -> Resolved {
@@ -133,7 +133,7 @@ final class JournalStore: ObservableObject {
             return Resolved(url: docs, mode: .iCloud, scoped: false)
         }
         let local = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Jibber", isDirectory: true)
+            .appendingPathComponent("Nook", isDirectory: true)
         try? fm.createDirectory(at: local, withIntermediateDirectories: true)
         return Resolved(url: local, mode: .local, scoped: false)
     }
@@ -143,7 +143,7 @@ final class JournalStore: ObservableObject {
 
     // MARK: Choosing the journal folder
 
-    /// Point Jibber at a user-selected folder (from a file importer). It becomes
+    /// Point Nook at a user-selected folder (from a file importer). It becomes
     /// the journal base and is remembered across launches via a bookmark.
     func setCustomFolder(_ url: URL) {
         let accessed = url.startAccessingSecurityScopedResource()
@@ -194,7 +194,7 @@ final class JournalStore: ObservableObject {
         }
         let ok = backupBase.startAccessingSecurityScopedResource()
         defer { if ok { backupBase.stopAccessingSecurityScopedResource() } }
-        let name = "Jibber-Backup-\(Self.stampFormatter.string(from: Date()))"
+        let name = "Nook-Backup-\(Self.stampFormatter.string(from: Date()))"
         let dest = backupBase.appendingPathComponent(name)
         do {
             try fm.copyItem(at: base, to: dest)
@@ -260,7 +260,7 @@ final class JournalStore: ObservableObject {
         }
     }
 
-    nonisolated private static let reservedFiles: Set<String> = ["inbox.md", "transfer.md", "export.md", "jibber-export.md"]
+    nonisolated private static let reservedFiles: Set<String> = ["inbox.md", "transfer.md", "export.md", "nook-export.md"]
 
     nonisolated static func buildIndex(base: URL) -> BuiltIndex {
         let fm = FileManager.default
@@ -763,7 +763,7 @@ final class JournalStore: ObservableObject {
     nonisolated static func atomicWrite(_ url: URL, _ content: String) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let tmp = url.deletingLastPathComponent().appendingPathComponent(".jibber-\(UUID().uuidString).tmp")
+        let tmp = url.deletingLastPathComponent().appendingPathComponent(".nook-\(UUID().uuidString).tmp")
         try Data(content.utf8).write(to: tmp, options: .atomic)
         if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
         try fm.moveItem(at: tmp, to: url)
@@ -1047,7 +1047,7 @@ final class JournalStore: ObservableObject {
 
     /// Non-journal markdown files that live in the folder but aren't journal data
     /// (jnl's transfer scratch file and export outputs). Excluded from size totals.
-    private let nonJournalFiles: Set<String> = ["transfer.md", "export.md", "jibber-export.md"]
+    private let nonJournalFiles: Set<String> = ["transfer.md", "export.md", "nook-export.md"]
 
     /// Total size on disk of all markdown journal files (date journals, split
     /// journals, and the inbox) under the base folder. Skips transfer/export files.
@@ -1125,7 +1125,7 @@ final class JournalStore: ObservableObject {
         }
         let dir = url.deletingLastPathComponent()
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        let tmp = dir.appendingPathComponent(".jibber-\(UUID().uuidString).tmp")
+        let tmp = dir.appendingPathComponent(".nook-\(UUID().uuidString).tmp")
         try content.data(using: .utf8)!.write(to: tmp, options: .atomic)
         if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
         try fm.moveItem(at: tmp, to: url)

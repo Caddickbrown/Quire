@@ -1,6 +1,6 @@
 //
 //  ArchiveView.swift
-//  Jibber
+//  Nook
 //
 //  Browse filed entries (jnl `browse`/`list`): days grouped by year, each row
 //  showing a preview so the archive doesn't feel empty. Searchable across all

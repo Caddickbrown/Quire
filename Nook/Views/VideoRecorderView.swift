@@ -1,6 +1,6 @@
 //
 //  VideoRecorderView.swift
-//  Jibber
+//  Nook
 //
 //  Record a video in-app and hand back the file URL. iOS uses the system camera
 //  controller; macOS uses an AVCaptureSession with a live preview + record/stop.

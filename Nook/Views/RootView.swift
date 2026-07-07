@@ -1,6 +1,6 @@
 //
 //  RootView.swift
-//  Jibber
+//  Nook
 //
 //  Top-level shell. A sidebar of sections (Write / Inbox / Archive / Tags) with
 //  Settings pinned to the bottom, and a detail pane on macOS & iPad; on iPhone
@@ -35,7 +35,7 @@ struct RouteDestination: View {
 
 extension View {
     /// Register the shared pushable destinations on a NavigationStack.
-    func jibberRoutes() -> some View {
+    func nookRoutes() -> some View {
         navigationDestination(for: Route.self) { RouteDestination(route: $0) }
     }
 }
@@ -102,6 +102,12 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
 struct RootView: View {
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
+    @Environment(\.accent) private var accent
+    #if os(iOS)
+    // Sidebar calendar is collapsible on iOS: in landscape it can otherwise swamp
+    // the whole sidebar. Toggled from the footer; the choice is remembered.
+    @AppStorage("sidebarCalendarExpanded") private var calendarExpanded = true
+    #endif
 
     private var columnVisibility: Binding<NavigationSplitViewVisibility> {
         Binding(
@@ -129,7 +135,7 @@ struct RootView: View {
                     }
                 }
             }
-            .navigationTitle("jibber")
+            .navigationTitle("nook")
             .safeAreaInset(edge: .bottom) { sidebarFooter }
             #if os(macOS)
             .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
@@ -137,7 +143,7 @@ struct RootView: View {
         } detail: {
             NavigationStack(path: $nav.path) {
                 detailRoot
-                    .jibberRoutes()
+                    .nookRoutes()
             }
         }
         .onChange(of: nav.section) { _, _ in nav.path = NavigationPath() }
@@ -184,9 +190,14 @@ struct RootView: View {
     private var sidebarFooter: some View {
         VStack(spacing: 0) {
             Divider()
-            MiniCalendarView()
-            Divider()
+            if showsMiniCalendar {
+                MiniCalendarView()
+                Divider()
+            }
             HStack(spacing: footerSpacing) {
+                #if os(iOS)
+                calendarToggle
+                #endif
                 Spacer()
                 timerControl
                 iconButton(.stats)
@@ -213,7 +224,7 @@ struct RootView: View {
             if nav.timerRunning {
                 Text(String(format: "%d:%02d", nav.timerRemaining / 60, nav.timerRemaining % 60))
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(nav.timerRemaining == 0 ? Color.red : Color.accentColor)
+                    .foregroundStyle(nav.timerRemaining == 0 ? Color.red : accent)
             } else {
                 Image(systemName: "timer")
                     .font(.title3)
@@ -225,6 +236,32 @@ struct RootView: View {
         .onChange(of: timerMinutes) { _, m in if !nav.timerRunning { nav.timerRemaining = m * 60 } }
         .help("Writing timer")
     }
+
+    private var showsMiniCalendar: Bool {
+        #if os(iOS)
+        return calendarExpanded
+        #else
+        return true
+        #endif
+    }
+
+    #if os(iOS)
+    /// Footer toggle to show/hide the (tall) sidebar calendar. Always reachable at
+    /// the bottom even when the calendar is expanded, so it's never stuck open.
+    private var calendarToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { calendarExpanded.toggle() }
+        } label: {
+            Image(systemName: calendarExpanded ? "calendar.badge.minus" : "calendar")
+                .font(.title3)
+                .foregroundStyle(calendarExpanded ? accent : Color.secondary)
+                .padding(8)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(calendarExpanded ? "Hide calendar" : "Show calendar")
+    }
+    #endif
 
     private var footerSpacing: CGFloat {
         #if os(iOS)
@@ -240,7 +277,7 @@ struct RootView: View {
         } label: {
             Image(systemName: section.systemImage)
                 .font(.title3)
-                .foregroundStyle(nav.section == section ? Color.accentColor : Color.secondary)
+                .foregroundStyle(nav.section == section ? accent : Color.secondary)
                 .padding(8)
                 .contentShape(Rectangle())
         }

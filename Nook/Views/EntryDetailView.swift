@@ -1,6 +1,6 @@
 //
 //  EntryDetailView.swift
-//  Jibber
+//  Nook
 //
 //  Edit a single entry — an inbox draft, a filed archive entry, or a split-journal
 //  entry. Same title + date-picker + body layout as the composer, autosaving
@@ -10,6 +10,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import PhotosUI
 #if canImport(AppKit)
 import AppKit
 #elseif canImport(UIKit)
@@ -25,6 +26,7 @@ enum EntrySource: Hashable {
 struct EntryDetailView: View {
     @EnvironmentObject private var store: JournalStore
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accent) private var accent
     @Environment(\.dismiss) private var dismiss
 
     let entry: Entry
@@ -42,6 +44,8 @@ struct EntryDetailView: View {
     @State private var mode: EntryViewMode = .edit
     @State private var showingImagePicker = false
     @State private var showingVideoRecorder = false
+    @State private var showingPhotoPicker = false
+    @State private var photoItem: PhotosPickerItem?
     @State private var saveTask: Task<Void, Never>?
     @State private var pendingReindex = false
     @StateObject private var recorder = AudioRecorder()
@@ -111,9 +115,15 @@ struct EntryDetailView: View {
                       allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first { attachFile(url) }
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            for url in urls { attachFile(url) }
-            return !urls.isEmpty
+        #if os(iOS)
+        .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItem,
+                      matching: .any(of: [.images, .videos]))
+        .onChange(of: photoItem) { _, item in
+            if let item { loadPhoto(item) }
+        }
+        #endif
+        .onDrop(of: [.image, .movie, .audio, .fileURL], isTargeted: nil) { providers in
+            handleDrop(providers)
         }
         .sheet(isPresented: $showingVideoRecorder) {
             VideoRecorderView { url in
@@ -150,7 +160,12 @@ struct EntryDetailView: View {
             .help(recorder.isRecording ? "Stop recording" : "Record audio")
 
             Menu {
+                #if os(iOS)
+                Button { showingPhotoPicker = true } label: { Label("Photo Library", systemImage: "photo") }
+                Button { showingImagePicker = true } label: { Label("Choose File", systemImage: "folder") }
+                #else
                 Button { showingImagePicker = true } label: { Label("Attach Media", systemImage: "paperclip") }
+                #endif
                 Button { showingVideoRecorder = true } label: { Label("Record Video", systemImage: "video") }
                 Button { copyText() } label: { Label("Copy text", systemImage: "doc.on.doc") }
                 Button { promoteFirstLine() } label: { Label("Promote first line to title", systemImage: "arrow.up.to.line") }
@@ -224,7 +239,8 @@ struct EntryDetailView: View {
                               size: size,
                               textColor: Theme.bodyText(colorScheme),
                               lineSpacing: Theme.lineSpacing(for: size),
-                              highlightTags: highlightTags)
+                              highlightTags: highlightTags,
+                              accent: accent)
                 .focused($bodyFocused)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
@@ -303,6 +319,45 @@ struct EntryDetailView: View {
         guard let rel = store.saveAsset(data, ext: ext) else { return }
         let md = "![](\(rel))"
         text = text.isEmpty ? md : text + "\n\n" + md
+    }
+
+    /// Load a picked photo/video and attach it (iOS Photos library).
+    private func loadPhoto(_ item: PhotosPickerItem) {
+        Task { @MainActor in
+            defer { photoItem = nil }
+            guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+            let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
+            insertMedia(data, ext: ext)
+        }
+    }
+
+    /// Handle dropped items: file URLs (macOS/Files) or raw image/movie/audio
+    /// data (a photo dragged out of the iOS Photos app has no file URL).
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        var handled = false
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                handled = true
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in attachFile(url) }
+                }
+            } else if let id = provider.registeredTypeIdentifiers.first(where: { isMedia($0) }),
+                      let type = UTType(id) {
+                handled = true
+                provider.loadDataRepresentation(forTypeIdentifier: id) { data, _ in
+                    guard let data else { return }
+                    let ext = type.preferredFilenameExtension ?? "dat"
+                    Task { @MainActor in insertMedia(data, ext: ext) }
+                }
+            }
+        }
+        return handled
+    }
+
+    private func isMedia(_ id: String) -> Bool {
+        guard let t = UTType(id) else { return false }
+        return t.conforms(to: .image) || t.conforms(to: .movie) || t.conforms(to: .audio)
     }
 
     /// Copy the entry's title + body to the clipboard.

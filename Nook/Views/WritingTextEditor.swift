@@ -1,6 +1,6 @@
 //
 //  WritingTextEditor.swift
-//  Jibber
+//  Nook
 //
 //  A thin wrapper over NSTextView / UITextView so we can control what SwiftUI's
 //  TextEditor won't: zero text insets (so an overlaid placeholder lands exactly
@@ -39,6 +39,7 @@ struct WritingTextEditor: NSViewRepresentable {
     var textColor: Color
     var lineSpacing: CGFloat
     var highlightTags: Bool = true
+    var accent: Color = AccentTheme.blue.color
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
@@ -76,7 +77,7 @@ struct WritingTextEditor: NSViewRepresentable {
         let full = NSRange(location: 0, length: (tv.string as NSString).length)
         tv.textStorage?.setAttributes([.font: font, .foregroundColor: color, .paragraphStyle: para], range: full)
         if highlightTags {
-            let tagColor = NSColor.controlAccentColor
+            let tagColor = NSColor(accent)
             for m in tagRegex.matches(in: tv.string, range: full) {
                 tv.textStorage?.addAttribute(.foregroundColor, value: tagColor, range: m.range)
             }
@@ -120,6 +121,7 @@ struct WritingTextEditor: UIViewRepresentable {
     var textColor: Color
     var lineSpacing: CGFloat
     var highlightTags: Bool = true
+    var accent: Color = AccentTheme.blue.color
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
@@ -152,7 +154,7 @@ struct WritingTextEditor: UIViewRepresentable {
         tv.textStorage.addAttributes([.font: font, .foregroundColor: color, .paragraphStyle: para], range: full)
         if highlightTags {
             for m in tagRegex.matches(in: tv.text, range: full) {
-                tv.textStorage.addAttribute(.foregroundColor, value: UIColor.tintColor, range: m.range)
+                tv.textStorage.addAttribute(.foregroundColor, value: UIColor(accent), range: m.range)
             }
         }
         for m in emphasisRegex.matches(in: tv.text, range: full) {

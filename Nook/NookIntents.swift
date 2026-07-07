@@ -1,6 +1,6 @@
 //
-//  JibberIntents.swift
-//  Jibber
+//  NookIntents.swift
+//  Nook
 //
 //  App Intents: add journal entries (and query the inbox) from Shortcuts, Siri,
 //  and Spotlight without opening the app. They write straight to the journal
@@ -9,10 +9,10 @@
 
 import AppIntents
 
-/// Add a new draft to the Jibber inbox.
+/// Add a new draft to the Nook inbox.
 struct AddJournalEntryIntent: AppIntent {
     static var title: LocalizedStringResource = "Add Journal Entry"
-    static var description = IntentDescription("Adds a new draft to your Jibber inbox.")
+    static var description = IntentDescription("Adds a new draft to your Nook inbox.")
     static var openAppWhenRun = false
 
     @Parameter(title: "Entry", requestValueDialog: "What do you want to write?")
@@ -22,7 +22,7 @@ struct AddJournalEntryIntent: AppIntent {
     var title: String?
 
     static var parameterSummary: some ParameterSummary {
-        Summary("Add \(\.$body) to Jibber") {
+        Summary("Add \(\.$body) to Nook") {
             \.$title
         }
     }
@@ -39,7 +39,7 @@ struct AddJournalEntryIntent: AppIntent {
 /// Report how many drafts are waiting in the inbox.
 struct InboxCountIntent: AppIntent {
     static var title: LocalizedStringResource = "Inbox Draft Count"
-    static var description = IntentDescription("Returns how many drafts are waiting in your Jibber inbox.")
+    static var description = IntentDescription("Returns how many drafts are waiting in your Nook inbox.")
     static var openAppWhenRun = false
 
     @MainActor
@@ -51,7 +51,7 @@ struct InboxCountIntent: AppIntent {
 }
 
 /// Phrases exposed to Siri / Spotlight.
-struct JibberShortcuts: AppShortcutsProvider {
+struct NookShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: AddJournalEntryIntent(),

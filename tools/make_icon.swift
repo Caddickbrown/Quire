@@ -1,8 +1,8 @@
 //
-//  make_icon.swift — renders Jibber's app icon.
+//  make_icon.swift — renders Nook's app icon.
 //
 //  Usage:
-//    swift tools/make_icon.swift preview     → render every concept at 256px to /tmp/jibber-icons/
+//    swift tools/make_icon.swift preview     → render every concept at 256px to /tmp/nook-icons/
 //    swift tools/make_icon.swift <concept>   → render the chosen concept at ALL sizes into the appiconset
 //
 //  Concepts: bubble | pages | ink | glyph
@@ -13,7 +13,7 @@ import CoreText
 import CoreGraphics
 import Foundation
 
-let outDir = "Jibber/Assets.xcassets/AppIcon.appiconset"
+let outDir = "Nook/Assets.xcassets/AppIcon.appiconset"
 
 func srgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor {
     CGColor(srgbRed: r/255, green: g/255, blue: b/255, alpha: a)
@@ -29,12 +29,18 @@ func ctx(_ px: Int) -> CGContext {
     return c
 }
 
+/// When true, backgrounds fill the whole canvas with no margin or self-rounding.
+/// iOS masks the icon to its own superellipse, so an inset+rounded background
+/// leaves a transparent border ring; iOS icons must be full-bleed. macOS icons
+/// keep the inset+rounded look (Apple's icon grid expects padding).
+var fullBleed = false
+
 /// Background squircle filled with a vertical gradient; returns the clip rect.
 @discardableResult
 func squircle(_ c: CGContext, _ s: CGFloat, _ top: CGColor, _ bottom: CGColor) -> CGRect {
-    let margin = s * 0.085
+    let margin = fullBleed ? 0 : s * 0.085
     let rect = CGRect(x: margin, y: margin, width: s - 2*margin, height: s - 2*margin)
-    let radius = rect.width * 0.225
+    let radius = fullBleed ? 0 : rect.width * 0.225
     let path = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
     c.saveGState()
     c.addPath(path); c.clip()
@@ -64,7 +70,7 @@ func drawGlyphJ(_ c: CGContext, _ s: CGFloat, color: CGColor, fontFrac: CGFloat 
     c.restoreGState()
 }
 
-// ── Concept: bubble ── speech bubble + writing lines (jibber = talk + journal) ──
+// ── Concept: bubble ── speech bubble + writing lines (nook = talk + journal) ──
 func conceptBubble(_ s: CGFloat) -> CGContext {
     let c = ctx(Int(s))
     squircle(c, s, srgb(255, 138, 76), srgb(240, 66, 92))     // amber → coral
@@ -153,9 +159,10 @@ func conceptGlyph(_ s: CGFloat) -> CGContext {
 /// Flat (single-colour, no gradient) squircle; returns the rect.
 @discardableResult
 func squircleFlat(_ c: CGContext, _ s: CGFloat, _ color: CGColor) -> CGRect {
-    let margin = s * 0.085
+    let margin = fullBleed ? 0 : s * 0.085
     let rect = CGRect(x: margin, y: margin, width: s - 2*margin, height: s - 2*margin)
-    c.addPath(roundedRectPath(rect, rect.width * 0.225)); c.setFillColor(color); c.fillPath()
+    let radius = fullBleed ? 0 : rect.width * 0.225
+    c.addPath(roundedRectPath(rect, radius)); c.setFillColor(color); c.fillPath()
     return rect
 }
 
@@ -197,9 +204,304 @@ func conceptBook(_ s: CGFloat) -> CGContext {
     return c
 }
 
+// ── Whimsical concepts ──────────────────────────────────────────────────────
+
+/// Fill a closed path built by `build` with `color`.
+func fill(_ c: CGContext, _ color: CGColor, _ build: (CGContext) -> Void) {
+    c.beginPath(); build(c); c.setFillColor(color); c.fillPath()
+}
+
+// cat — a cat curled up asleep in its nook. Cozy + a little whimsical.
+func conceptCat(_ s: CGFloat) -> CGContext {
+    let c = ctx(Int(s))
+    squircle(c, s, srgb(255, 178, 112), srgb(240, 120, 96))   // warm peach → coral
+    let fur   = srgb(60, 54, 78)          // deep plum "cat"
+    let tail  = srgb(96, 88, 120)          // lighter fur so the tail reads
+    let blush = srgb(255, 176, 150)
+    let cx = s/2, cy = s*0.52
+
+    // Curled body — a fat oval.
+    fill(c, fur) { g in
+        g.addEllipse(in: CGRect(x: cx - s*0.30, y: cy - s*0.22, width: s*0.60, height: s*0.44))
+    }
+    // Tail wrapping across the front of the body (lighter tone, curls to a tip).
+    c.saveGState()
+    c.setStrokeColor(tail); c.setLineCap(.round); c.setLineWidth(s*0.065)
+    c.move(to: CGPoint(x: cx + s*0.26, y: cy + s*0.02))
+    c.addCurve(to: CGPoint(x: cx - s*0.02, y: cy - s*0.17),
+               control1: CGPoint(x: cx + s*0.30, y: cy - s*0.22),
+               control2: CGPoint(x: cx + s*0.12, y: cy - s*0.24))
+    c.strokePath()
+    c.restoreGState()
+
+    // Head resting on the body (upper-left).
+    let hx = cx - s*0.13, hy = cy + s*0.13, hr = s*0.135
+    fill(c, fur) { g in g.addEllipse(in: CGRect(x: hx - hr, y: hy - hr, width: hr*2, height: hr*2)) }
+    // Ears (two triangles).
+    for dx in [-1.0, 1.0] as [CGFloat] {
+        fill(c, fur) { g in
+            let ex = hx + dx*hr*0.62
+            g.move(to: CGPoint(x: ex - hr*0.34, y: hy + hr*0.55))
+            g.addLine(to: CGPoint(x: ex + hr*0.06, y: hy + hr*1.15))
+            g.addLine(to: CGPoint(x: ex + hr*0.42, y: hy + hr*0.5))
+            g.closePath()
+        }
+    }
+    // Closed, content eye — a downward arc.
+    c.setStrokeColor(srgb(252, 248, 240)); c.setLineWidth(s*0.016); c.setLineCap(.round)
+    c.move(to: CGPoint(x: hx - hr*0.55, y: hy + hr*0.10))
+    c.addQuadCurve(to: CGPoint(x: hx - hr*0.05, y: hy + hr*0.10),
+                   control: CGPoint(x: hx - hr*0.30, y: hy - hr*0.18))
+    c.strokePath()
+    // Blush cheek + tiny nose.
+    fill(c, blush) { g in g.addEllipse(in: CGRect(x: hx - hr*0.62, y: hy - hr*0.34, width: hr*0.5, height: hr*0.34)) }
+    fill(c, blush) { g in g.addEllipse(in: CGRect(x: hx - hr*0.14, y: hy - hr*0.06, width: hr*0.28, height: hr*0.20)) }
+    return c
+}
+
+// moon — a sleepy crescent moon over a little book. Bedtime journaling.
+func conceptMoon(_ s: CGFloat) -> CGContext {
+    let c = ctx(Int(s))
+    squircle(c, s, srgb(94, 108, 210), srgb(52, 46, 120))      // dusk indigo
+    let cream = srgb(252, 244, 214)
+
+    // Crescent = big disc minus an offset disc.
+    let mx = s*0.56, my = s*0.60, mr = s*0.22
+    c.saveGState()
+    fill(c, cream) { g in g.addEllipse(in: CGRect(x: mx - mr, y: my - mr, width: mr*2, height: mr*2)) }
+    c.setBlendMode(.destinationOut)
+    fill(c, srgb(0,0,0)) { g in
+        g.addEllipse(in: CGRect(x: mx - mr*0.55, y: my - mr*0.35, width: mr*2, height: mr*2))
+    }
+    c.restoreGState()
+
+    // A couple of little stars.
+    for (px, py, pr) in [(0.30, 0.72, 0.018), (0.72, 0.30, 0.014), (0.24, 0.44, 0.011)] as [(CGFloat,CGFloat,CGFloat)] {
+        fill(c, cream) { g in g.addEllipse(in: CGRect(x: s*px - s*pr, y: s*py - s*pr, width: s*pr*2, height: s*pr*2)) }
+    }
+
+    // Small open book resting at the bottom.
+    let bw = s*0.34, bh = s*0.12, bx = (s-bw)/2, by = s*0.24
+    for sign in [-1.0, 1.0] as [CGFloat] {
+        fill(c, cream) { g in
+            let x0 = sign<0 ? bx : s/2
+            g.move(to: CGPoint(x: sign<0 ? bx : s/2 + bw/2, y: by))
+            g.addQuadCurve(to: CGPoint(x: x0 + (sign<0 ? 0 : bw/2), y: by + bh),
+                           control: CGPoint(x: s/2, y: by + bh*0.4))
+            g.addLine(to: CGPoint(x: s/2, y: by + bh*0.72))
+            g.addLine(to: CGPoint(x: s/2, y: by))
+            g.closePath()
+        }
+    }
+    return c
+}
+
+// star — a friendly shooting star with a little face, on twilight.
+func conceptStar(_ s: CGFloat) -> CGContext {
+    let c = ctx(Int(s))
+    squircle(c, s, srgb(120, 96, 235), srgb(70, 52, 160))
+    let gold = srgb(255, 214, 120)
+    let cx = s*0.54, cy = s*0.54, R = s*0.24, r = R*0.42
+
+    // Five-point star.
+    fill(c, gold) { g in
+        for i in 0..<10 {
+            let rad = i.isMultiple(of: 2) ? R : r
+            let a = CGFloat(i) * .pi/5 + .pi/2
+            let p = CGPoint(x: cx + rad*cos(a), y: cy + rad*sin(a))
+            if i == 0 { g.move(to: p) } else { g.addLine(to: p) }
+        }
+        g.closePath()
+    }
+    // Trailing sparkle tail.
+    c.setStrokeColor(srgb(255, 236, 190, 0.9)); c.setLineCap(.round); c.setLineWidth(s*0.03)
+    c.move(to: CGPoint(x: cx - R*0.7, y: cy - R*0.7))
+    c.addLine(to: CGPoint(x: cx - R*1.9, y: cy - R*1.9))
+    c.strokePath()
+    // Happy little face: two eyes + a smile.
+    let ink = srgb(70, 52, 120)
+    for dx in [-1.0, 1.0] as [CGFloat] {
+        fill(c, ink) { g in g.addEllipse(in: CGRect(x: cx + dx*R*0.22 - R*0.05, y: cy + R*0.06, width: R*0.10, height: R*0.14)) }
+    }
+    c.setStrokeColor(ink); c.setLineWidth(s*0.016); c.setLineCap(.round)
+    c.move(to: CGPoint(x: cx - R*0.20, y: cy - R*0.06))
+    c.addQuadCurve(to: CGPoint(x: cx + R*0.20, y: cy - R*0.06), control: CGPoint(x: cx, y: cy - R*0.24))
+    c.strokePath()
+    return c
+}
+
+// bookface — a cheerful open book with a little smiling face. Journaling, but happy.
+func conceptBookFace(_ s: CGFloat) -> CGContext {
+    let c = ctx(Int(s))
+    squircle(c, s, srgb(46, 196, 182), srgb(28, 150, 200))     // fresh teal
+    let cream = srgb(252, 248, 240)
+    let cx = s/2, cy = s*0.50
+    let pw = s*0.30, ph = s*0.34, gap = s*0.018
+
+    // Two page panels, tops fanned slightly outward like an open book.
+    for sign in [-1.0, 1.0] as [CGFloat] {
+        c.saveGState()
+        // slight rotation about the spine so the book looks "open"
+        c.translateBy(x: cx, y: cy); c.rotate(by: sign * -0.06); c.translateBy(x: -cx, y: -cy)
+        let r = CGRect(x: cx + (sign<0 ? -pw - gap : gap), y: cy - ph/2, width: pw, height: ph)
+        fill(c, cream) { g in g.addPath(roundedRectPath(r, s*0.03)) }
+        // ruled lines on each page
+        c.setStrokeColor(srgb(28, 150, 200, 0.5)); c.setLineWidth(s*0.011); c.setLineCap(.round)
+        for i in 0..<3 {
+            let ly = r.maxY - ph*0.30 - CGFloat(i)*ph*0.22
+            c.move(to: CGPoint(x: r.minX + pw*0.16, y: ly)); c.addLine(to: CGPoint(x: r.maxX - pw*0.16, y: ly)); c.strokePath()
+        }
+        c.restoreGState()
+    }
+    // Spine
+    fill(c, srgb(255, 209, 102)) { g in g.addPath(roundedRectPath(CGRect(x: cx - gap, y: cy - ph/2 - s*0.008, width: gap*2, height: ph + s*0.016), gap)) }
+
+    // Little smiling face floating above, like the book is telling a story.
+    let fy = cy + ph*0.62
+    for dx in [-1.0, 1.0] as [CGFloat] {
+        fill(c, cream) { g in g.addEllipse(in: CGRect(x: cx + dx*s*0.075 - s*0.018, y: fy, width: s*0.036, height: s*0.05)) }
+    }
+    c.setStrokeColor(cream); c.setLineWidth(s*0.02); c.setLineCap(.round)
+    c.move(to: CGPoint(x: cx - s*0.06, y: fy - s*0.005))
+    c.addQuadCurve(to: CGPoint(x: cx + s*0.06, y: fy - s*0.005), control: CGPoint(x: cx, y: fy - s*0.06))
+    c.strokePath()
+    return c
+}
+
+// pencil — a friendly pencil character mid-doodle, on warm paper.
+func conceptPencil(_ s: CGFloat) -> CGContext {
+    let c = ctx(Int(s))
+    squircle(c, s, srgb(255, 196, 92), srgb(245, 150, 70))      // sunny amber
+    let cx = s/2, cy = s/2
+    let bodyW = s*0.22, bodyLen = s*0.46
+    let yellow = srgb(252, 224, 120), wood = srgb(240, 214, 168)
+    let lead = srgb(70, 62, 84), pink = srgb(244, 138, 150), band = srgb(190, 200, 210)
+
+    // Draw the pencil tilted, pointing down-right.
+    c.saveGState()
+    c.translateBy(x: cx, y: cy); c.rotate(by: -0.62); c.translateBy(x: -cx, y: -cy)
+    let bx = cx - bodyW/2
+    let topY = cy + bodyLen*0.36
+    // Barrel
+    fill(c, yellow) { g in g.addPath(roundedRectPath(CGRect(x: bx, y: cy - bodyLen*0.42, width: bodyW, height: bodyLen*0.72), s*0.02)) }
+    // Eraser + metal band at top
+    fill(c, pink) { g in g.addPath(roundedRectPath(CGRect(x: bx, y: topY - bodyLen*0.02, width: bodyW, height: bodyLen*0.12), s*0.03)) }
+    fill(c, band) { g in g.addRect(CGRect(x: bx, y: topY - bodyLen*0.06, width: bodyW, height: bodyLen*0.045)) }
+    // Wooden tip (triangle) + lead point
+    let tipY = cy - bodyLen*0.42
+    fill(c, wood) { g in
+        g.move(to: CGPoint(x: bx, y: tipY)); g.addLine(to: CGPoint(x: bx + bodyW, y: tipY))
+        g.addLine(to: CGPoint(x: bx + bodyW/2, y: tipY - bodyLen*0.20)); g.closePath()
+    }
+    fill(c, lead) { g in
+        g.move(to: CGPoint(x: bx + bodyW*0.34, y: tipY - bodyLen*0.128))
+        g.addLine(to: CGPoint(x: bx + bodyW*0.66, y: tipY - bodyLen*0.128))
+        g.addLine(to: CGPoint(x: bx + bodyW/2, y: tipY - bodyLen*0.20)); g.closePath()
+    }
+    // Face on the barrel: two eyes + a smile.
+    let fy = cy + bodyLen*0.02
+    for dx in [-1.0, 1.0] as [CGFloat] {
+        fill(c, lead) { g in g.addEllipse(in: CGRect(x: cx + dx*bodyW*0.24 - bodyW*0.07, y: fy, width: bodyW*0.14, height: bodyW*0.2)) }
+    }
+    c.setStrokeColor(lead); c.setLineWidth(s*0.014); c.setLineCap(.round)
+    c.move(to: CGPoint(x: cx - bodyW*0.22, y: fy - bodyW*0.02))
+    c.addQuadCurve(to: CGPoint(x: cx + bodyW*0.22, y: fy - bodyW*0.02), control: CGPoint(x: cx, y: fy - bodyW*0.28))
+    c.strokePath()
+    c.restoreGState()
+
+    // A little doodle squiggle the pencil just drew, at bottom-left.
+    c.setStrokeColor(srgb(252, 248, 240)); c.setLineWidth(s*0.022); c.setLineCap(.round)
+    c.move(to: CGPoint(x: s*0.24, y: s*0.30))
+    c.addCurve(to: CGPoint(x: s*0.44, y: s*0.28),
+               control1: CGPoint(x: s*0.30, y: s*0.40), control2: CGPoint(x: s*0.38, y: s*0.18))
+    c.strokePath()
+    return c
+}
+
+// ── "Professional whimsy" concepts — refined mark, one playful flourish ──────
+
+// nib — a fountain-pen nib with a graceful ink flourish curling off the tip.
+func conceptNib(_ s: CGFloat) -> CGContext {
+    let c = ctx(Int(s))
+    squircle(c, s, srgb(58, 72, 102), srgb(34, 44, 70))        // muted slate-navy
+    let gold  = srgb(226, 190, 108)
+    let cream = srgb(250, 246, 236)
+    let cx = s*0.5
+    let tipY = s*0.30, topY = s*0.74, halfW = s*0.115
+    let holeY = s*0.575
+
+    // Nib body: a slim leaf — near-straight sides tapering to a fine point,
+    // with softly rounded shoulders at the top.
+    fill(c, gold) { g in
+        g.move(to: CGPoint(x: cx, y: tipY))
+        g.addQuadCurve(to: CGPoint(x: cx - halfW, y: topY - s*0.08), control: CGPoint(x: cx - halfW*0.62, y: (tipY+topY)/2))
+        g.addQuadCurve(to: CGPoint(x: cx, y: topY),                  control: CGPoint(x: cx - halfW*0.85, y: topY))
+        g.addQuadCurve(to: CGPoint(x: cx + halfW, y: topY - s*0.08), control: CGPoint(x: cx + halfW*0.85, y: topY))
+        g.addQuadCurve(to: CGPoint(x: cx, y: tipY),                  control: CGPoint(x: cx + halfW*0.62, y: (tipY+topY)/2))
+        g.closePath()
+    }
+    // Breather hole.
+    fill(c, srgb(34, 44, 70)) { g in g.addEllipse(in: CGRect(x: cx - s*0.026, y: holeY, width: s*0.052, height: s*0.052)) }
+    // Center slit from breather hole to tip.
+    c.setStrokeColor(srgb(34, 44, 70)); c.setLineWidth(s*0.014); c.setLineCap(.round)
+    c.move(to: CGPoint(x: cx, y: holeY)); c.addLine(to: CGPoint(x: cx, y: tipY + s*0.015)); c.strokePath()
+
+    // Ink flourish trailing from the tip — the whimsy.
+    c.setStrokeColor(cream); c.setLineCap(.round); c.setLineJoin(.round); c.setLineWidth(s*0.026)
+    c.move(to: CGPoint(x: cx, y: tipY))
+    c.addCurve(to: CGPoint(x: s*0.35, y: s*0.235),
+               control1: CGPoint(x: cx, y: s*0.25), control2: CGPoint(x: s*0.41, y: s*0.25))
+    c.addCurve(to: CGPoint(x: s*0.67, y: s*0.225),
+               control1: CGPoint(x: s*0.30, y: s*0.215), control2: CGPoint(x: s*0.60, y: s*0.29))
+    c.strokePath()
+    return c
+}
+
+// ribbon — a clean closed journal with a satin bookmark that curls playfully.
+func conceptRibbon(_ s: CGFloat) -> CGContext {
+    let c = ctx(Int(s))
+    squircle(c, s, srgb(70, 150, 128), srgb(44, 112, 96))      // muted sage-teal
+    let cover = srgb(250, 246, 236)
+    let cx = s/2
+    let bw = s*0.44, bh = s*0.54
+    let r = CGRect(x: cx - bw/2, y: (s-bh)/2, width: bw, height: bh)
+
+    // Cover.
+    fill(c, cover) { g in g.addPath(roundedRectPath(r, s*0.045)) }
+    // Subtle inset frame line (bookbinding detail).
+    c.setStrokeColor(srgb(44, 112, 96, 0.35)); c.setLineWidth(s*0.01)
+    c.addPath(roundedRectPath(r.insetBy(dx: s*0.045, dy: s*0.045), s*0.03)); c.strokePath()
+
+    // Satin ribbon bookmark: tucked over the top edge, down the right third,
+    // out past the bottom where the tail flicks up in a soft curl (the whimsy).
+    let rw = s*0.05
+    let rx = r.minX + bw*0.66
+    let ribbon = srgb(214, 96, 92)          // warm coral
+    let ribbonHi = srgb(232, 132, 126)      // satin highlight
+    // Straight run from just over the top edge down to just below the bottom edge.
+    fill(c, ribbon) { g in
+        g.addRect(CGRect(x: rx, y: r.minY - s*0.015, width: rw, height: bh + s*0.03))
+    }
+    // Soft flick at the tail.
+    c.setStrokeColor(ribbon); c.setLineCap(.round); c.setLineJoin(.round); c.setLineWidth(rw)
+    c.move(to: CGPoint(x: rx + rw/2, y: r.minY - s*0.015))
+    c.addQuadCurve(to: CGPoint(x: rx + rw/2 + s*0.055, y: r.minY - s*0.075),
+                   control: CGPoint(x: rx + rw/2 + s*0.02, y: r.minY - s*0.02))
+    c.strokePath()
+    // Thin satin highlight stripe down the ribbon.
+    c.setStrokeColor(ribbonHi); c.setLineWidth(s*0.012); c.setLineCap(.round)
+    c.move(to: CGPoint(x: rx + rw*0.34, y: r.maxY + s*0.01))
+    c.addLine(to: CGPoint(x: rx + rw*0.34, y: r.minY + s*0.02))
+    c.strokePath()
+    return c
+}
+
 let concepts: [String: (CGFloat) -> CGContext] = [
     "bubble": conceptBubble, "pages": conceptPages, "ink": conceptInk, "glyph": conceptGlyph,
     "flatj": conceptFlatJ, "lines": conceptLines, "book": conceptBook,
+    "cat": conceptCat, "moon": conceptMoon, "star": conceptStar,
+    "bookface": conceptBookFace, "pencil": conceptPencil,
+    "nib": conceptNib, "ribbon": conceptRibbon,
 ]
 
 func write(_ image: CGImage, _ path: String) {
@@ -211,7 +513,7 @@ func write(_ image: CGImage, _ path: String) {
 let arg = CommandLine.arguments.dropFirst().first ?? "preview"
 
 if arg == "preview" {
-    let dir = "/tmp/jibber-icons"
+    let dir = "/tmp/nook-icons"
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     for (name, fn) in concepts {
         write(fn(256).makeImage()!, "\(dir)/\(name).png")
@@ -224,13 +526,18 @@ if arg == "preview" {
         ("512-mac 1.png", 512), ("512-mac.png", 512), ("1024-mac.png", 1024),
         ("icon-ios-1024.png", 1024),
     ]
-    var cache: [Int: CGImage] = [:]
+    // iOS icons must be full-bleed; macOS icons keep the inset+rounded look.
+    // Cache is keyed by (px, fullBleed) since both platforms share px=1024.
+    var cache: [String: CGImage] = [:]
     for (name, px) in targets {
-        let img = cache[px] ?? fn(CGFloat(px)).makeImage()!
-        cache[px] = img
+        fullBleed = name.hasPrefix("icon-ios")
+        let key = "\(px)-\(fullBleed)"
+        let img = cache[key] ?? fn(CGFloat(px)).makeImage()!
+        cache[key] = img
         write(img, "\(outDir)/\(name)")
-        print("  wrote \(name)")
+        print("  wrote \(name)\(fullBleed ? " (full-bleed)" : "")")
     }
+    fullBleed = false
     print("Done (\(arg)).")
 } else {
     print("Unknown concept '\(arg)'. Options: preview, \(concepts.keys.sorted().joined(separator: ", "))")

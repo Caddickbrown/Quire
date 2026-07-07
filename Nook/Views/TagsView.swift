@@ -1,6 +1,6 @@
 //
 //  TagsView.swift
-//  Jibber
+//  Nook
 //
 //  Tag explorer (jnl `tags` / `tag <name>`): a horizontal rail of coloured tag
 //  chips across the top; picking one shows its entries in the shared two-pane

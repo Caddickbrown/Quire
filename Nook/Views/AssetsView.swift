@@ -1,6 +1,6 @@
 //
 //  AssetsView.swift
-//  Jibber
+//  Nook
 //
 //  Browse everything in the journal's assets/ folder (images, video, audio).
 //  Right-click to reveal the file (macOS) or delete it.

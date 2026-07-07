@@ -1,23 +1,23 @@
-# Jibber — build helpers.
+# Nook — build helpers.
 # The Xcode project is generated from gen_pbxproj.py; never hand-edit the pbxproj.
 
-PROJECT = Jibber.xcodeproj
-SCHEME  = Jibber
+PROJECT = Nook.xcodeproj
+SCHEME  = Nook
 
 .PHONY: project icon check build-mac build-ios build open clean
 
-project:            ## Regenerate Jibber.xcodeproj/project.pbxproj
+project:            ## Regenerate Nook.xcodeproj/project.pbxproj
 	python3 gen_pbxproj.py
 
-icon:               ## Re-render the app icon (concept: lines) at all sizes
-	swift tools/make_icon.swift lines
+icon:               ## Re-render the app icon (concept: ribbon) at all sizes
+	swift tools/make_icon.swift ribbon
 
 check:              ## Run the JournalParser verification (jnl parity)
-	@mkdir -p /tmp/jibber-check
-	cp Tests/ParserChecks.swift /tmp/jibber-check/main.swift
-	xcrun swiftc Jibber/Models/Entry.swift Jibber/Models/JournalParser.swift \
-		/tmp/jibber-check/main.swift -o /tmp/jibber-check/run
-	/tmp/jibber-check/run
+	@mkdir -p /tmp/nook-check
+	cp Tests/ParserChecks.swift /tmp/nook-check/main.swift
+	xcrun swiftc Nook/Models/Entry.swift Nook/Models/JournalParser.swift \
+		/tmp/nook-check/main.swift -o /tmp/nook-check/run
+	/tmp/nook-check/run
 
 build-mac: project  ## Build for macOS (unsigned)
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration Debug \

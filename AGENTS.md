@@ -1,12 +1,12 @@
-# Jibber — Technical Documentation for AI Agents
+# Nook — Technical Documentation for AI Agents
 
 > **⚠️ KEEP IN SYNC**: `CLAUDE.md` and `AGENTS.md` are clones. When a change is
 > substantial (architecture, data flow, storage/sync, build process, major UX),
 > update **both** immediately. Skip churn for trivial tweaks.
 
-## What is Jibber?
+## What is Nook?
 
-Jibber is a native **iOS + macOS** journaling app built with SwiftUI. You write
+Nook is a native **iOS + macOS** journaling app built with SwiftUI. You write
 freely into a distraction-free composer; entries land in an **inbox** as drafts,
 then you **file** them into a date-organised **archive**. All data is plain
 markdown in an **iCloud Documents** container, so it syncs across devices and stays
@@ -36,9 +36,9 @@ Body text here.
 
 `<base>` is resolved in order: (1) a **custom folder** the user picks in Settings
 (persisted as a security-scoped bookmark), (2) the **iCloud** ubiquity container's
-`Documents/` folder, (3) a local `~/Documents/Jibber` fallback (so the app always
+`Documents/` folder, (3) a local `~/Documents/Nook` fallback (so the app always
 works offline / signed out). The chosen folder is used directly as the base — same
-as jnl's `JNL_DIR` — so pointing Jibber at an existing jnl notes folder makes both
+as jnl's `JNL_DIR` — so pointing Nook at an existing jnl notes folder makes both
 tools share the same files.
 
 ## Architecture
@@ -47,7 +47,7 @@ Single **multiplatform target** (`platform: [iOS, macOS]`), deployment iOS 17 /
 macOS 14. There is **no hand-maintained `project.pbxproj`** — it is generated:
 
 ```
-make project   # runs gen_pbxproj.py → Jibber.xcodeproj/project.pbxproj
+make project   # runs gen_pbxproj.py → Nook.xcodeproj/project.pbxproj
 make icon      # runs tools/make_icon.swift → app icon at all sizes
 make check     # compiles + runs Tests/ParserChecks.swift (jnl parity)
 make build     # xcodebuild macOS + iOS Simulator (unsigned)
@@ -56,8 +56,8 @@ make build     # xcodebuild macOS + iOS Simulator (unsigned)
 ### Source layout
 
 ```
-Jibber/
-  JibberApp.swift        @main; registers bundled Lato fonts; theme (auto/light/dark)
+Nook/
+  NookApp.swift        @main; registers bundled Lato fonts; theme (auto/light/dark)
   Theme.swift            shared colours, font, line-spacing (freewrite aesthetic)
   Models/
     Entry.swift          the entry value type + tag/preview helpers
@@ -81,9 +81,9 @@ Jibber/
     WritingTextEditor.swift  NSTextView/UITextView wrapper: zero insets, no scrollbar, @tag colour
     AudioRecorder.swift   voice memo (AVAudioRecorder) + RecordingBanner
     VideoRecorderView.swift  iOS camera controller / macOS AVCaptureSession recorder
-    SettingsView.swift    appearance, fonts, date format, tag highlight, split tags (chips),
+    SettingsView.swift    appearance, accent colour, fonts, date format, tag highlight, split tags (chips),
                           folder, backup, cleanup/export, shortcuts + how-to guides
-  iOS/Info.plist  macOS/Info.plist  Jibber.entitlements  Assets.xcassets  fonts/
+  iOS/Info.plist  macOS/Info.plist  Nook.entitlements  Assets.xcassets  fonts/
 gen_pbxproj.py   tools/make_icon.swift   Tests/ParserChecks.swift   Makefile
 _parked/video/   ← freewrite's video views, excluded from the build
 ```
@@ -106,19 +106,19 @@ makes/resolves cross-platform security-scoped bookmarks for the custom folder.
 
 ## iCloud setup (manual, one-time)
 
-The entitlement (`Jibber/Jibber.entitlements`) references container
-`iCloud.com.caddickbrown.jibber`. In Xcode → target → **Signing & Capabilities**,
+The entitlement (`Nook/Nook.entitlements`) references container
+`iCloud.com.caddickbrown.nook`. In Xcode → target → **Signing & Capabilities**,
 enable **iCloud → iCloud Documents** and select/create that container so the
 provisioning profile includes it. Automated builds here use
 `CODE_SIGNING_ALLOWED=NO`, which skips this; a real device/App Store build needs it.
 
 The custom-folder picker relies on the sandbox entitlements
 `com.apple.security.files.user-selected.read-write` and
-`com.apple.security.files.bookmarks.app-scope` (both in `Jibber.entitlements`).
+`com.apple.security.files.bookmarks.app-scope` (both in `Nook.entitlements`).
 
 ## jnl feature parity
 
-Every jnl command has a jibber equivalent: new→composer, review→Inbox actions,
+Every jnl command has a nook equivalent: new→composer, review→Inbox actions,
 browse/list→Archive, inbox→Inbox, sort→Inbox "Sort file", log/yesterday→Archive
 day, stats→Stats sheet, search→`.searchable`, tags/tag→Tags, random→Random,
 cleanup→Settings, export→Settings, transfer→Inbox "File All" + composer "Import",
@@ -142,7 +142,7 @@ list+detail beyond Inbox; an XCTest target (parser verified via `make check`).
 
 ## Conventions
 
-- Never hand-edit `Jibber.xcodeproj/project.pbxproj` — edit `gen_pbxproj.py` and
+- Never hand-edit `Nook.xcodeproj/project.pbxproj` — edit `gen_pbxproj.py` and
   run `make project`.
 - Keep `JournalParser` pure and jnl-faithful; add a case to `ParserChecks.swift`
   when you touch it.

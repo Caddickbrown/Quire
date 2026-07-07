@@ -1,6 +1,6 @@
 //
 //  AudioRecorder.swift
-//  Jibber
+//  Nook
 //
 //  Record a voice memo (AAC/.m4a) and hand the data back so it can be saved into
 //  the journal's assets folder. Plus a small toolbar RecordButton wrapper.

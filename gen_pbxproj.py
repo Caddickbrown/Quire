@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Jibber.xcodeproj/project.pbxproj for the multiplatform (iOS + macOS)
+"""Generate Nook.xcodeproj/project.pbxproj for the multiplatform (iOS + macOS)
 SwiftUI journaling app. Adapted from Pigeon's generator; hand-editing the pbxproj
 is avoided — edit this file and re-run instead.
 
@@ -14,11 +14,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def new_id():
     return uuid.uuid4().hex[:24].upper()
 
-# (key, path relative to Jibber/, containing group)
+# (key, path relative to Nook/, containing group)
 swift_files = [
-    ('JibberApp',       'JibberApp.swift',              'Jibber'),
-    ('JibberIntents',   'JibberIntents.swift',          'Jibber'),
-    ('Theme',           'Theme.swift',                  'Jibber'),
+    ('NookApp',       'NookApp.swift',              'Nook'),
+    ('NookIntents',   'NookIntents.swift',          'Nook'),
+    ('Theme',           'Theme.swift',                  'Nook'),
     ('Entry',           'Models/Entry.swift',           'Models'),
     ('JournalParser',   'Models/JournalParser.swift',   'Models'),
     ('JournalStore',    'Models/JournalStore.swift',    'Models'),
@@ -39,7 +39,7 @@ swift_files = [
     ('SettingsView',    'Views/SettingsView.swift',     'Views'),
 ]
 
-# (key, path relative to Jibber/, fileType) — copied into Resources.
+# (key, path relative to Nook/, fileType) — copied into Resources.
 resources = [
     ('Assets', 'Assets.xcassets', 'folder.assetcatalog'),
     ('Fonts',  'fonts',           'folder'),
@@ -47,7 +47,7 @@ resources = [
 
 # Allocate ids
 IDs = {k: new_id() for k in [
-    'project', 'mainGroup', 'jibberGroup', 'modelsGroup', 'viewsGroup',
+    'project', 'mainGroup', 'nookGroup', 'modelsGroup', 'viewsGroup',
     'iosGroup', 'macosGroup', 'productsGroup', 'target',
     'debugConfig', 'releaseConfig', 'projDebugConfig', 'projReleaseConfig',
     'configList', 'targetConfigList', 'sourcesBuildPhase', 'resourcesBuildPhase',
@@ -92,7 +92,7 @@ def pbxproj():
         a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = {ftype}; path = {base(path)}; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["iOSInfoPlist"]} /* iOS/Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["macOSInfoPlist"]} /* macOS/Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};')
-    a(f'\t\t{IDs["product"]} /* Jibber.app */ = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jibber.app; sourceTree = BUILT_PRODUCTS_DIR; }};')
+    a(f'\t\t{IDs["product"]} /* Nook.app */ = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nook.app; sourceTree = BUILT_PRODUCTS_DIR; }};')
     a('/* End PBXFileReference section */')
     a('')
 
@@ -114,7 +114,7 @@ def pbxproj():
     a(f'\t\t{IDs["mainGroup"]} = {{')
     a('\t\t\tisa = PBXGroup;')
     a('\t\t\tchildren = (')
-    a(f'\t\t\t\t{IDs["jibberGroup"]} /* Jibber */,')
+    a(f'\t\t\t\t{IDs["nookGroup"]} /* Nook */,')
     a(f'\t\t\t\t{IDs["productsGroup"]} /* Products */,')
     a('\t\t\t);')
     a('\t\t\tsourceTree = "<group>";')
@@ -124,15 +124,15 @@ def pbxproj():
     a(f'\t\t{IDs["productsGroup"]} /* Products */ = {{')
     a('\t\t\tisa = PBXGroup;')
     a('\t\t\tchildren = (')
-    a(f'\t\t\t\t{IDs["product"]} /* Jibber.app */,')
+    a(f'\t\t\t\t{IDs["product"]} /* Nook.app */,')
     a('\t\t\t);')
     a('\t\t\tname = Products;')
     a('\t\t\tsourceTree = "<group>";')
     a('\t\t};')
 
-    # Jibber source group
-    top = [n for n, p, g in swift_files if g == 'Jibber']
-    a(f'\t\t{IDs["jibberGroup"]} /* Jibber */ = {{')
+    # Nook source group
+    top = [n for n, p, g in swift_files if g == 'Nook']
+    a(f'\t\t{IDs["nookGroup"]} /* Nook */ = {{')
     a('\t\t\tisa = PBXGroup;')
     a('\t\t\tchildren = (')
     for n in top:
@@ -144,7 +144,7 @@ def pbxproj():
     a(f'\t\t\t\t{IDs["iosGroup"]} /* iOS */,')
     a(f'\t\t\t\t{IDs["macosGroup"]} /* macOS */,')
     a('\t\t\t);')
-    a('\t\t\tpath = Jibber;')
+    a('\t\t\tpath = Nook;')
     a('\t\t\tsourceTree = "<group>";')
     a('\t\t};')
 
@@ -187,9 +187,9 @@ def pbxproj():
 
     # ---- PBXNativeTarget ----
     a('/* Begin PBXNativeTarget section */')
-    a(f'\t\t{IDs["target"]} /* Jibber */ = {{')
+    a(f'\t\t{IDs["target"]} /* Nook */ = {{')
     a('\t\t\tisa = PBXNativeTarget;')
-    a(f'\t\t\tbuildConfigurationList = {IDs["targetConfigList"]} /* Build configuration list for PBXNativeTarget "Jibber" */;')
+    a(f'\t\t\tbuildConfigurationList = {IDs["targetConfigList"]} /* Build configuration list for PBXNativeTarget "Nook" */;')
     a('\t\t\tbuildPhases = (')
     a(f'\t\t\t\t{IDs["sourcesBuildPhase"]} /* Sources */,')
     a(f'\t\t\t\t{IDs["frameworksBuildPhase"]} /* Frameworks */,')
@@ -197,9 +197,9 @@ def pbxproj():
     a('\t\t\t);')
     a('\t\t\tbuildRules = (\n\t\t\t);')
     a('\t\t\tdependencies = (\n\t\t\t);')
-    a('\t\t\tname = Jibber;')
-    a('\t\t\tproductName = Jibber;')
-    a(f'\t\t\tproductReference = {IDs["product"]} /* Jibber.app */;')
+    a('\t\t\tname = Nook;')
+    a('\t\t\tproductName = Nook;')
+    a(f'\t\t\tproductReference = {IDs["product"]} /* Nook.app */;')
     a('\t\t\tproductType = "com.apple.product-type.application";')
     a('\t\t};')
     a('/* End PBXNativeTarget section */')
@@ -219,7 +219,7 @@ def pbxproj():
     a('\t\t\t\t\t};')
     a('\t\t\t\t};')
     a('\t\t\t};')
-    a(f'\t\t\tbuildConfigurationList = {IDs["configList"]} /* Build configuration list for PBXProject "Jibber" */;')
+    a(f'\t\t\tbuildConfigurationList = {IDs["configList"]} /* Build configuration list for PBXProject "Nook" */;')
     a('\t\t\tcompatibilityVersion = "Xcode 14.0";')
     a('\t\t\tdevelopmentRegion = en;')
     a('\t\t\thasScannedForEncodings = 0;')
@@ -229,7 +229,7 @@ def pbxproj():
     a('\t\t\tprojectDirPath = "";')
     a('\t\t\tprojectRoot = "";')
     a('\t\t\ttargets = (')
-    a(f'\t\t\t\t{IDs["target"]} /* Jibber */,')
+    a(f'\t\t\t\t{IDs["target"]} /* Nook */,')
     a('\t\t\t);')
     a('\t\t};')
     a('/* End PBXProject section */')
@@ -301,21 +301,21 @@ def pbxproj():
         a('\t\t\tbuildSettings = {')
         a('\t\t\t\tASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;')
         a('\t\t\t\tASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;')
-        a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Jibber/Jibber-macOS.entitlements;')
-        a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Jibber/Jibber-iOS.entitlements;')
-        a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Jibber/Jibber-iOS.entitlements;')
+        a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Nook/Nook-macOS.entitlements;')
+        a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Nook/Nook-iOS.entitlements;')
+        a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Nook/Nook-iOS.entitlements;')
         a('\t\t\t\tCODE_SIGN_STYLE = Automatic;')
         a('\t\t\t\tCURRENT_PROJECT_VERSION = 1;')
         a('\t\t\t\tDEVELOPMENT_TEAM = 52W73J6V95;')
         a('\t\t\t\tENABLE_HARDENED_RUNTIME = YES;')
         a('\t\t\t\tENABLE_PREVIEWS = YES;')
         a('\t\t\t\tGENERATE_INFOPLIST_FILE = YES;')
-        a('\t\t\t\t"INFOPLIST_FILE[sdk=iphoneos*]" = Jibber/iOS/Info.plist;')
-        a('\t\t\t\t"INFOPLIST_FILE[sdk=iphonesimulator*]" = Jibber/iOS/Info.plist;')
-        a('\t\t\t\t"INFOPLIST_FILE[sdk=macosx*]" = Jibber/macOS/Info.plist;')
-        a('\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = Jibber;')
-        a('\t\t\t\tINFOPLIST_KEY_NSMicrophoneUsageDescription = "Jibber records voice memos to attach to your journal entries.";')
-        a('\t\t\t\tINFOPLIST_KEY_NSCameraUsageDescription = "Jibber records video to attach to your journal entries.";')
+        a('\t\t\t\t"INFOPLIST_FILE[sdk=iphoneos*]" = Nook/iOS/Info.plist;')
+        a('\t\t\t\t"INFOPLIST_FILE[sdk=iphonesimulator*]" = Nook/iOS/Info.plist;')
+        a('\t\t\t\t"INFOPLIST_FILE[sdk=macosx*]" = Nook/macOS/Info.plist;')
+        a('\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = Nook;')
+        a('\t\t\t\tINFOPLIST_KEY_NSMicrophoneUsageDescription = "Nook records voice memos to attach to your journal entries.";')
+        a('\t\t\t\tINFOPLIST_KEY_NSCameraUsageDescription = "Nook records video to attach to your journal entries.";')
         a('\t\t\t\tINFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;')
         a('\t\t\t\tINFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;')
         a('\t\t\t\tINFOPLIST_KEY_UILaunchScreen_Generation = YES;')
@@ -326,7 +326,7 @@ def pbxproj():
         a('\t\t\t\t"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";')
         a('\t\t\t\tMACOSX_DEPLOYMENT_TARGET = 14.0;')
         a('\t\t\t\tMARKETING_VERSION = 1.0;')
-        a('\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.jibber;')
+        a('\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.nook;')
         a('\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";')
         a('\t\t\t\tSUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";')
         a('\t\t\t\tSUPPORTS_MACCATALYST = NO;')
@@ -347,7 +347,7 @@ def pbxproj():
 
     # ---- XCConfigurationList ----
     a('/* Begin XCConfigurationList section */')
-    a(f'\t\t{IDs["configList"]} /* Build configuration list for PBXProject "Jibber" */ = {{')
+    a(f'\t\t{IDs["configList"]} /* Build configuration list for PBXProject "Nook" */ = {{')
     a('\t\t\tisa = XCConfigurationList;')
     a('\t\t\tbuildConfigurations = (')
     a(f'\t\t\t\t{IDs["projDebugConfig"]} /* Debug */,')
@@ -356,7 +356,7 @@ def pbxproj():
     a('\t\t\tdefaultConfigurationIsVisible = 0;')
     a('\t\t\tdefaultConfigurationName = Release;')
     a('\t\t};')
-    a(f'\t\t{IDs["targetConfigList"]} /* Build configuration list for PBXNativeTarget "Jibber" */ = {{')
+    a(f'\t\t{IDs["targetConfigList"]} /* Build configuration list for PBXNativeTarget "Nook" */ = {{')
     a('\t\t\tisa = XCConfigurationList;')
     a('\t\t\tbuildConfigurations = (')
     a(f'\t\t\t\t{IDs["debugConfig"]} /* Debug */,')
@@ -375,7 +375,7 @@ def pbxproj():
 
 if __name__ == '__main__':
     out = pbxproj()
-    path = os.path.join(HERE, 'Jibber.xcodeproj', 'project.pbxproj')
+    path = os.path.join(HERE, 'Nook.xcodeproj', 'project.pbxproj')
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f:
         f.write(out)

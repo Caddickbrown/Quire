@@ -1,6 +1,6 @@
 //
 //  WritingView.swift
-//  Jibber
+//  Nook
 //
 //  The composer. A title field + date/time picker sit above the body; everything
 //  autosaves continuously into one inbox draft in the jnl format
@@ -10,11 +10,13 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import PhotosUI
 
 struct WritingView: View {
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accent) private var accent
 
     @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
     @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
@@ -28,8 +30,11 @@ struct WritingView: View {
     @State private var toast: String?
     @State private var showingImagePicker = false
     @State private var showingVideoRecorder = false
+    @State private var showingPhotoPicker = false
+    @State private var photoItem: PhotosPickerItem?
     @StateObject private var recorder = AudioRecorder()
     @FocusState private var bodyFocused: Bool
+    @FocusState private var titleFocused: Bool
 
     private var size: CGFloat { CGFloat(fontSize) }
     private var font: Font { Theme.font(writingFontRaw, size: size) }
@@ -44,6 +49,7 @@ struct WritingView: View {
                 TextField("Title", text: $title)
                     .font(font.weight(.semibold))
                     .textFieldStyle(.plain)
+                    .focused($titleFocused)
                     .onSubmit { bodyFocused = true }
                 HStack(spacing: 6) {
                     Image(systemName: "calendar")
@@ -69,7 +75,8 @@ struct WritingView: View {
                               size: size,
                               textColor: Theme.bodyText(colorScheme),
                               lineSpacing: Theme.lineSpacing(for: size),
-                              highlightTags: highlightTags)
+                              highlightTags: highlightTags,
+                              accent: accent)
                 .focused($bodyFocused)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
@@ -113,11 +120,24 @@ struct WritingView: View {
                 }
                 .help(recorder.isRecording ? "Stop recording" : "Record audio")
                 Menu {
+                    #if os(iOS)
+                    Button {
+                        showingPhotoPicker = true
+                    } label: {
+                        Label("Photo Library", systemImage: "photo")
+                    }
+                    Button {
+                        showingImagePicker = true
+                    } label: {
+                        Label("Choose File", systemImage: "folder")
+                    }
+                    #else
                     Button {
                         showingImagePicker = true
                     } label: {
                         Label("Attach Media", systemImage: "paperclip")
                     }
+                    #endif
                     Button {
                         showingVideoRecorder = true
                     } label: {
@@ -152,9 +172,15 @@ struct WritingView: View {
                       allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first { attachImage(url) }
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            for url in urls { attachImage(url) }
-            return !urls.isEmpty
+        #if os(iOS)
+        .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItem,
+                      matching: .any(of: [.images, .videos]))
+        .onChange(of: photoItem) { _, item in
+            if let item { loadPhoto(item) }
+        }
+        #endif
+        .onDrop(of: [.image, .movie, .audio, .fileURL], isTargeted: nil) { providers in
+            handleDrop(providers)
         }
         .sheet(isPresented: $showingVideoRecorder) {
             VideoRecorderView { url in
@@ -168,7 +194,7 @@ struct WritingView: View {
         .onChange(of: text) { _, _ in scheduleSave() }
         .onChange(of: date) { _, _ in scheduleSave() }
         .onChange(of: nav.newEntrySignal) { _, _ in newEntry() }
-        .onAppear { bodyFocused = true }
+        .onAppear { focusStart() }
         .onDisappear { flush() }
         .overlay(alignment: .bottom) {
             if recorder.isRecording {
@@ -242,10 +268,21 @@ struct WritingView: View {
         showToast("Saved to inbox")
     }
 
+    /// Where the cursor lands when the composer opens or resets. On iOS people
+    /// tend to title-then-write, so start in the title; on macOS keep the body
+    /// focused so you can type immediately.
+    private func focusStart() {
+        #if os(iOS)
+        titleFocused = true
+        #else
+        bodyFocused = true
+        #endif
+    }
+
     private func newEntry() {
         flush()
         reset()
-        bodyFocused = true
+        focusStart()
     }
 
     /// Delete the current draft (autosaved to the inbox) without keeping it.
@@ -253,7 +290,7 @@ struct WritingView: View {
         saveTask?.cancel()
         if let ts = activeTS { store.removeDraft(timestamp: ts); activeTS = nil }
         reset()
-        bodyFocused = true
+        focusStart()
         showToast("Discarded")
     }
 
@@ -270,9 +307,52 @@ struct WritingView: View {
         defer { if ok { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url) else { return }
         let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
+        insertMedia(data, ext: ext)
+    }
+
+    private func insertMedia(_ data: Data, ext: String) {
         guard let rel = store.saveAsset(data, ext: ext) else { return }
         let md = "![](\(rel))"
         text = text.isEmpty ? md : text + "\n\n" + md
+    }
+
+    /// Load a picked photo/video and attach it (iOS Photos library).
+    private func loadPhoto(_ item: PhotosPickerItem) {
+        Task { @MainActor in
+            defer { photoItem = nil }
+            guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+            let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
+            insertMedia(data, ext: ext)
+        }
+    }
+
+    /// Handle dropped items: file URLs (macOS/Files) or raw image/movie/audio
+    /// data (a photo dragged out of the iOS Photos app has no file URL).
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        var handled = false
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                handled = true
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in attachImage(url) }
+                }
+            } else if let id = provider.registeredTypeIdentifiers.first(where: { isMedia($0) }),
+                      let type = UTType(id) {
+                handled = true
+                provider.loadDataRepresentation(forTypeIdentifier: id) { data, _ in
+                    guard let data else { return }
+                    let ext = type.preferredFilenameExtension ?? "dat"
+                    Task { @MainActor in insertMedia(data, ext: ext) }
+                }
+            }
+        }
+        return handled
+    }
+
+    private func isMedia(_ id: String) -> Bool {
+        guard let t = UTType(id) else { return false }
+        return t.conforms(to: .image) || t.conforms(to: .movie) || t.conforms(to: .audio)
     }
 
     private func reset() {

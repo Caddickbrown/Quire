@@ -1,6 +1,6 @@
 //
 //  Theme.swift
-//  Jibber
+//  Nook
 //
 //  Shared, cross-platform styling ported from freewrite's writing aesthetic:
 //  Lato as the default writing font, a gentle 1.5× line rhythm, and off-black /
@@ -44,6 +44,58 @@ enum Theme {
         "What's on your mind?",
         "Just say it",
     ]
+}
+
+/// The app-wide accent colour the user can choose in Settings. Applied via
+/// `.tint(...)` (built-in controls) and the `\.accent` environment value
+/// (explicit accents like calendar dots, tag chips, sidebar selection).
+enum AccentTheme: String, CaseIterable, Identifiable {
+    case blue, indigo, purple, pink, red, orange, teal, green
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .blue:   return "Blue"
+        case .indigo: return "Indigo"
+        case .purple: return "Purple"
+        case .pink:   return "Pink"
+        case .red:    return "Red"
+        case .orange: return "Orange"
+        case .teal:   return "Teal"
+        case .green:  return "Green"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .blue:   return Color(red:  28/255, green: 126/255, blue: 214/255)
+        case .indigo: return Color(red:  92/255, green:  92/255, blue: 214/255)
+        case .purple: return Color(red: 148/255, green:  92/255, blue: 214/255)
+        case .pink:   return Color(red: 224/255, green:  86/255, blue: 140/255)
+        case .red:    return Color(red: 224/255, green:  74/255, blue:  74/255)
+        case .orange: return Color(red: 240/255, green: 140/255, blue:  56/255)
+        case .teal:   return Color(red:  36/255, green: 170/255, blue: 168/255)
+        case .green:  return Color(red:  52/255, green: 168/255, blue: 108/255)
+        }
+    }
+
+    /// Resolve a stored raw value, falling back to blue.
+    static func color(forRaw raw: String) -> Color {
+        (AccentTheme(rawValue: raw) ?? .blue).color
+    }
+}
+
+private struct AccentColorKey: EnvironmentKey {
+    static let defaultValue: Color = AccentTheme.blue.color
+}
+
+extension EnvironmentValues {
+    /// The user's chosen accent colour. Set once at the app root; read wherever
+    /// an explicit accent is drawn (in place of the fixed `Color.accentColor`).
+    var accent: Color {
+        get { self[AccentColorKey.self] }
+        set { self[AccentColorKey.self] = newValue }
+    }
 }
 
 /// How dates are shown throughout the app (chosen in Settings).

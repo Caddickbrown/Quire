@@ -1,6 +1,6 @@
 //
 //  SettingsView.swift
-//  Jibber
+//  Nook
 //
 //  Appearance, writing font, date format, the journal folder, and maintenance
 //  actions (jnl cleanup / export / open). Shown as a sidebar section.
@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
     @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
+    @AppStorage("accentColor") private var accentRaw: String = AccentTheme.blue.rawValue
     @AppStorage("highlightTags") private var highlightTags = true
     @AppStorage("firstWeekday") private var firstWeekday = 1
     @AppStorage("showWeekNumbers") private var showWeekNumbers = false
@@ -64,7 +65,8 @@ struct SettingsView: View {
          """),
         ("Photos, video & audio",
          """
-         Attach media from the ⋯ menu or by dragging files onto the editor. Record a voice \
+         Attach media from the ⋯ menu — on iOS pick from your Photo Library or Choose \
+         File; on macOS pick a file — or drag a photo or file onto the editor. Record a voice \
          memo with the mic button (a Stop banner appears while recording), or "Record \
          Video" from the ⋯ menu. Files are copied into an assets/ folder and stored as \
          ![](assets/…) links — switch to Preview to see them inline. Rows show a small \
@@ -158,6 +160,7 @@ struct SettingsView: View {
                 Picker("Date format", selection: $dateStyleRaw) {
                     ForEach(DateStyle.allCases) { Text($0.displayName).tag($0.rawValue) }
                 }
+                accentPicker
                 Toggle("Highlight @tags", isOn: $highlightTags)
                 Picker("Start week on", selection: $firstWeekday) {
                     Text("Sunday").tag(1)
@@ -208,7 +211,7 @@ struct SettingsView: View {
             } header: {
                 Text("Journal folder")
             } footer: {
-                Text("Jibber stores inbox.md and journal/YYYY/MM/DD.md here. Point this at an existing jnl folder to share files with the jnl CLI.")
+                Text("Nook stores inbox.md and journal/YYYY/MM/DD.md here. Point this at an existing jnl folder to share files with the jnl CLI.")
             }
 
             Section {
@@ -289,24 +292,6 @@ struct SettingsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .fileImporter(isPresented: $showingImporter,
-                      allowedContentTypes: [.folder],
-                      allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                store.setCustomFolder(url)
-            }
-        }
-        .fileImporter(isPresented: $showingBackupPicker,
-                      allowedContentTypes: [.folder],
-                      allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                store.setBackupFolder(url)
-            }
-        }
-        .fileExporter(isPresented: $showingExporter,
-                      document: exportDoc,
-                      contentType: .plainText,
-                      defaultFilename: "jibber-export.md") { _ in }
         .alert("Backup", isPresented: Binding(
             get: { backupMessage != nil },
             set: { if !$0 { backupMessage = nil } }
@@ -363,8 +348,47 @@ struct SettingsView: View {
         #endif
     }
 
+    /// A row of tappable colour swatches for the app-wide accent.
+    private var accentPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Accent colour")
+            HStack(spacing: 12) {
+                ForEach(AccentTheme.allCases) { theme in
+                    Button {
+                        accentRaw = theme.rawValue
+                    } label: {
+                        Circle()
+                            .fill(theme.color)
+                            .frame(width: 26, height: 26)
+                            .overlay(
+                                Circle().strokeBorder(.primary.opacity(0.8),
+                                                      lineWidth: accentRaw == theme.rawValue ? 2.5 : 0)
+                                    .padding(-3)
+                            )
+                            .overlay(
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .opacity(accentRaw == theme.rawValue ? 1 : 0)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help(theme.displayName)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
     private var chooseFolderButton: some View {
         Button { showingImporter = true } label: { Label("Choose Folder…", systemImage: "folder") }
+            .fileImporter(isPresented: $showingImporter,
+                          allowedContentTypes: [.folder],
+                          allowsMultipleSelection: false) { result in
+                if case .success(let urls) = result, let url = urls.first {
+                    store.setCustomFolder(url)
+                }
+            }
     }
     private var useDefaultButton: some View {
         Button(role: .destructive) { store.useDefaultFolder() } label: {
@@ -373,6 +397,13 @@ struct SettingsView: View {
     }
     private var chooseBackupButton: some View {
         Button { showingBackupPicker = true } label: { Label("Choose Backup Folder…", systemImage: "folder") }
+            .fileImporter(isPresented: $showingBackupPicker,
+                          allowedContentTypes: [.folder],
+                          allowsMultipleSelection: false) { result in
+                if case .success(let urls) = result, let url = urls.first {
+                    store.setBackupFolder(url)
+                }
+            }
     }
     private var backupNowButton: some View {
         Button { backupMessage = store.backupNow().message } label: {
@@ -412,6 +443,10 @@ struct SettingsView: View {
         } label: {
             Label("Export…", systemImage: "square.and.arrow.up")
         }
+        .fileExporter(isPresented: $showingExporter,
+                      document: exportDoc,
+                      contentType: .plainText,
+                      defaultFilename: "nook-export.md") { _ in }
     }
     #if os(macOS)
     private var showInFinderButton: some View {

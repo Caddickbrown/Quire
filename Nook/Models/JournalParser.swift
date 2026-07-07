@@ -1,6 +1,6 @@
 //
 //  JournalParser.swift
-//  Jibber
+//  Nook
 //
 //  Pure, platform-independent parsing/rendering of the jnl markdown format.
 //  Ported faithfully from ~/Code/jnl/main.go (parseEntries, leadingPreamble,

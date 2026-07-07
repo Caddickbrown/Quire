@@ -1,6 +1,6 @@
 //
 //  InboxView.swift
-//  Jibber
+//  Nook
 //
 //  The inbox: unfiled drafts. On macOS it's an email-style two-pane (list +
 //  selected draft); on iOS the list pushes to the editor. Each draft can be

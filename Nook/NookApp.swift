@@ -1,6 +1,6 @@
 //
-//  JibberApp.swift
-//  Jibber
+//  NookApp.swift
+//  Nook
 //
 //  App entry point. Registers bundled fonts, owns the single JournalStore, and
 //  drives the light/dark/auto theme (persisted). Runs on iOS + macOS.
@@ -36,18 +36,22 @@ enum AppColorScheme: String, CaseIterable, Identifiable {
 }
 
 @main
-struct JibberApp: App {
+struct NookApp: App {
     @StateObject private var store = JournalStore()
     @StateObject private var nav = NavigationModel()
     @AppStorage("colorScheme") private var colorSchemeRaw: String = AppColorScheme.auto.rawValue
+    @AppStorage("accentColor") private var accentRaw: String = AccentTheme.blue.rawValue
 
     init() { Self.registerBundledFonts() }
 
     var body: some Scene {
-        WindowGroup {
+        let accent = AccentTheme.color(forRaw: accentRaw)
+        return WindowGroup {
             RootView()
                 .environmentObject(store)
                 .environmentObject(nav)
+                .tint(accent)
+                .environment(\.accent, accent)
                 .preferredColorScheme(
                     AppColorScheme(rawValue: colorSchemeRaw)?.resolved
                 )

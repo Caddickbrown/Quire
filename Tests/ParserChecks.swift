@@ -3,7 +3,7 @@
 //  Standalone verification that the Swift JournalParser port matches the jnl Go
 //  backend's semantics. Mirrors cases in ~/Code/jnl/main_test.go.
 //
-//  Run:  swiftc Jibber/Models/Entry.swift Jibber/Models/JournalParser.swift \
+//  Run:  swiftc Nook/Models/Entry.swift Nook/Models/JournalParser.swift \
 //              Tests/ParserChecks.swift -o /tmp/parserchecks && /tmp/parserchecks
 //
 
