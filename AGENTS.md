@@ -41,6 +41,12 @@ works offline / signed out). The chosen folder is used directly as the base — 
 as jnl's `JNL_DIR` — so pointing Nook at an existing jnl notes folder makes both
 tools share the same files.
 
+**Starred entries**: an entry is "starred" when its title (the header suffix)
+ends with a trailing `*` — stored in the plain markdown so it round-trips through
+jnl. `Entry.isStarred` / `displayTitle` read it; `JournalStore.toggleStar` and the
+star button / context menus add/remove the marker; the **Starred** sidebar section
+(`StarredView`) collects them across archive + inbox + split journals.
+
 ## Architecture
 
 Single **multiplatform target** (`platform: [iOS, macOS]`), deployment iOS 17 /
@@ -64,16 +70,17 @@ Nook/
     JournalParser.swift  PURE port of jnl parse/render/sort/tags (no I/O; unit-tested)
     JournalStore.swift   @MainActor ObservableObject: iCloud base dir, load/file/sort, atomic writes
   Views/
-    RootView.swift       NavigationSplitView (path-based); sidebar = Write/Inbox/Journal/Split/
-                         Tags/Assets + mini calendar + timer/Stats/Settings footer. NavigationModel
+    RootView.swift       NavigationSplitView (path-based); sidebar = Write/Inbox/Journal/Starred/
+                         Split/Tags/Assets + mini calendar + timer/Stats/Settings footer. NavigationModel
                          owns section, NavigationPath (mouse Back / ⌘[), focus mode, timer.
     WritingView.swift     composer: title + date picker + body; continuous autosave; Import;
                           attach/record media; drag-drop
     InboxView.swift       macOS email-style (list + open draft); iOS push. Search / sort / File All
     ArchiveView.swift     "Journal": days by year with previews; search; sort; Random; DayView;
-                          SplitJournalsView; JournalFileView; StatsView
-    EntryDetailView.swift edit a draft/filed/split entry; autosaves; Edit/Preview modes; inline
-                          controls; attach/record media; drag-drop
+                          SplitJournalsView; JournalFileView; StarredView; StatsView
+    EntryDetailView.swift edit a draft/filed/split entry; autosaves; Edit/Preview modes (drafts
+                          open in Edit, filed entries in Preview); star toggle; inline controls;
+                          attach/record media; drag-drop
     TagsView.swift        tag cloud (coloured, searchable) → entries per tag; random tag
     CalendarView.swift    MiniCalendarView (sidebar) — days with entries, media-typed dots
     AssetsView.swift      media grid; right-click Reveal / Delete / Go to Entry
@@ -82,7 +89,7 @@ Nook/
     AudioRecorder.swift   voice memo (AVAudioRecorder) + RecordingBanner
     VideoRecorderView.swift  iOS camera controller / macOS AVCaptureSession recorder
     SettingsView.swift    appearance, accent colour, fonts, date format, tag highlight, split tags (chips),
-                          folder, backup, cleanup/export, shortcuts + how-to guides
+                          folder, backup, cleanup/merge-ex-split/export, shortcuts + how-to guides
   iOS/Info.plist  macOS/Info.plist  Nook.entitlements  Assets.xcassets  fonts/
 gen_pbxproj.py   tools/make_icon.swift   Tests/ParserChecks.swift   Makefile
 _parked/video/   ← freewrite's video views, excluded from the build
@@ -129,10 +136,26 @@ open→Settings "Show in Finder", config→Settings (incl. JNL_SPLIT_TAGS).
 Photos/video/audio are stored as files in `<base>/assets/` and referenced from
 entry bodies as Obsidian-style `![](assets/<uuid>.<ext>)` markdown links (never
 embedded). Attach via picker or drag-drop; record audio (mic) / video (camera)
-in-app; Preview renders them inline. `JournalStore.saveAsset`/`importAsset`/
-`assetURL`/`allAssets`/`usages(ofAsset:)` manage them. Entitlements: audio-input +
-camera; usage strings generated. Backup (`Settings → Backup`) copies the whole
-base folder to a timestamped folder in a chosen location.
+in-app; Preview renders them inline (image captions come from the link's alt text).
+`JournalStore.saveAsset`/`importAsset`/`assetURL`/`allAssets`/`usages(ofAsset:)`
+manage them. Entitlements: audio-input + camera; usage strings generated. Backup
+(`Settings → Backup`) copies the whole base folder to a timestamped folder in a
+chosen location.
+
+**Data Saver** (opt-in, `Settings → Media`): when on, attached media is
+re-compressed, keeping each file's format/extension so `![](assets/…)` links never
+break. Images downsample synchronously via `ImageDownsampler` (ImageIO). Video
+(720p H.264) and `.m4a` audio (48kbps mono AAC) transcode via `MediaTranscoder`
+(AVFoundation) — long-running, so they run off-main through a serial
+`MediaTranscodeQueue` and swap the file in place when done: `saveAsset`/`importAsset`
+call `scheduleCompression` on attach (iOS wraps it in a background-task assertion).
+`Compress Existing Media` (Maintenance) batch-processes `assets/` in place
+(`compressExistingMedia`, async, `store.mediaProgress` drives a progress row).
+Savings are a merged, no-double-count tally: each device owns one
+`<base>/.nook/datasaver-<uuid>.json` (`{savedBytes, assets[]}`); `store.dataSaved`
+sums all device files, and an asset uuid recorded on any device is never
+re-compressed elsewhere. On macOS, entry context menus expose
+`revealEntry(source:)` → "Reveal in Finder".
 
 ## Deferred (explicit follow-ups)
 

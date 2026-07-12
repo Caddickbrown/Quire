@@ -44,6 +44,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case write = "Write"
     case inbox = "Inbox"
     case archive = "Journal"
+    case starred = "Starred"
     case splitJournals = "Split Journals"
     case tags = "Tags"
     case assets = "Assets"
@@ -56,6 +57,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .write:         return "square.and.pencil"
         case .inbox:         return "tray"
         case .archive:       return "book.closed"
+        case .starred:       return "star"
         case .splitJournals: return "bookmark"
         case .tags:          return "number"
         case .assets:        return "photo.on.rectangle"
@@ -65,13 +67,19 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     }
 
     /// The journal sections shown in the main sidebar list (Settings sits apart).
-    static let primary: [AppSection] = [.write, .inbox, .archive, .splitJournals, .tags, .assets]
+    static let primary: [AppSection] = [.write, .inbox, .archive, .starred, .splitJournals, .tags, .assets]
 }
 
 /// Shared navigation state so keyboard-shortcut commands (defined at the App
 /// scene level) can drive the sidebar selection and trigger a new entry.
 @MainActor final class NavigationModel: ObservableObject {
+    // iPhone collapses the split view, so a non-nil section would push straight
+    // into that page on launch; start with no selection so the menu shows first.
+    #if os(iOS)
+    @Published var section: AppSection? = nil
+    #else
     @Published var section: AppSection? = .write
+    #endif
     @Published var path = NavigationPath()
     @Published var newEntrySignal = 0
     @Published var focusMode = false
@@ -109,6 +117,16 @@ struct RootView: View {
     @AppStorage("sidebarCalendarExpanded") private var calendarExpanded = true
     #endif
 
+    /// Sidebar rows. On iPhone, Write is a top-right compose button instead of a
+    /// browsable row, so it's dropped from the list there.
+    private var sidebarSections: [AppSection] {
+        #if os(iOS)
+        AppSection.primary.filter { $0 != .write }
+        #else
+        AppSection.primary
+        #endif
+    }
+
     private var columnVisibility: Binding<NavigationSplitViewVisibility> {
         Binding(
             get: { nav.focusMode ? .detailOnly : .all },
@@ -118,7 +136,7 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView(columnVisibility: columnVisibility) {
-            List(AppSection.primary, selection: $nav.section) { section in
+            List(sidebarSections, selection: $nav.section) { section in
                 NavigationLink(value: section) {
                     Label {
                         HStack {
@@ -137,6 +155,18 @@ struct RootView: View {
             }
             .navigationTitle("nook")
             .safeAreaInset(edge: .bottom) { sidebarFooter }
+            #if os(iOS)
+            // On iPhone, Write lives as a compose button top-right rather than a
+            // sidebar row — it's the one-tap action, not a place you browse to.
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { nav.section = .write } label: {
+                        Image(systemName: AppSection.write.systemImage)
+                    }
+                    .help("Write")
+                }
+            }
+            #endif
             #if os(macOS)
             .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
             #endif
@@ -164,6 +194,7 @@ struct RootView: View {
         case .write:         WritingView()
         case .inbox:         InboxView()
         case .archive:       ArchiveView()
+        case .starred:       StarredView()
         case .splitJournals: SplitJournalsView()
         case .tags:          TagsView()
         case .assets:        AssetsView()

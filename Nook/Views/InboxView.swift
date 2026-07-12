@@ -124,7 +124,7 @@ struct InboxView: View {
     private var draftList: some View {
         List(selection: selectionBinding) {
             ForEach(draftSections, id: \.date) { section in
-                Section(Theme.displayDate(section.date, style: dateStyleRaw)) {
+                Section(Theme.sectionDate(section.date, style: dateStyleRaw)) {
                     ForEach(section.entries) { draft in
                         row(for: draft)
                             .tag(draft.ts)
@@ -136,6 +136,15 @@ struct InboxView: View {
                             }
                             .contextMenu {
                                 Button { store.fileDraft(draft) } label: { Label("Archive", systemImage: "archivebox") }
+                                Button { store.toggleStar(draft, source: .inbox) } label: {
+                                    Label(draft.isStarred ? "Unstar" : "Star",
+                                          systemImage: draft.isStarred ? "star.slash" : "star")
+                                }
+                                #if os(macOS)
+                                Button { store.revealEntry(source: .inbox) } label: {
+                                    Label("Reveal in Finder", systemImage: "folder")
+                                }
+                                #endif
                                 Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
                             }
                     }
@@ -209,9 +218,14 @@ private struct DraftRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(draft.preview.isEmpty ? "(empty)" : draft.preview)
-                .lineLimit(1)
-                .font(.body)
+            HStack(spacing: 6) {
+                if draft.isStarred {
+                    Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
+                }
+                Text(draft.preview.isEmpty ? "(empty)" : draft.preview)
+                    .lineLimit(1)
+                    .font(.body)
+            }
             HStack(spacing: 8) {
                 Text(time)
                 Text("·")

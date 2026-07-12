@@ -63,6 +63,9 @@ struct EntryDetailView: View {
         _date = State(initialValue: JournalStore.date(from: entry.ts) ?? Date())
         _text = State(initialValue: entry.body)
         _baselineRaw = State(initialValue: entry.raw)
+        // Drafts open ready to edit; filed/journal entries open in Preview.
+        let startMode: EntryViewMode = { if case .inbox = source { return .edit }; return .preview }()
+        _mode = State(initialValue: startMode)
     }
 
     private var size: CGFloat { CGFloat(fontSize) }
@@ -72,6 +75,24 @@ struct EntryDetailView: View {
     }
     private var composedRaw: String { currentEntry.raw }
     private var isDirty: Bool { composedRaw != baselineRaw }
+
+    /// Star state is a trailing `*` on the title; toggling edits `title` so the
+    /// change flows through the normal autosave (and Preview) path.
+    private var isStarred: Bool { title.trimmingCharacters(in: .whitespaces).hasSuffix("*") }
+    private func toggleStar() {
+        let base = title.trimmingCharacters(in: .whitespaces)
+        if base.hasSuffix("*") {
+            title = String(base.dropLast()).trimmingCharacters(in: .whitespaces)
+        } else {
+            title = base.isEmpty ? "*" : base + " *"
+        }
+    }
+    /// Title as shown in Preview: the star marker stripped (it's drawn as an icon).
+    private var previewTitle: String {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.hasSuffix("*") else { return t }
+        return String(t.dropLast()).trimmingCharacters(in: .whitespaces)
+    }
     private var saveHelp: String {
         if case .inbox = source { return "Save draft (keep in Inbox)" }
         return "Save"
@@ -84,9 +105,12 @@ struct EntryDetailView: View {
 
             if mode == .preview {
                 VStack(alignment: .leading, spacing: 0) {
-                    if !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        HStack {
-                            Text(title).font(font.weight(.bold))
+                    if !previewTitle.isEmpty || isStarred {
+                        HStack(spacing: 6) {
+                            if isStarred {
+                                Image(systemName: "star.fill").foregroundStyle(.yellow)
+                            }
+                            Text(previewTitle).font(font.weight(.bold))
                             Spacer()
                             Text(Theme.displayDate(String(JournalStore.ts(from: date).prefix(10)), style: dateStyleRaw))
                                 .font(.caption).foregroundStyle(.secondary)
@@ -95,7 +119,7 @@ struct EntryDetailView: View {
                         .padding(.top, 16)
                         .padding(.bottom, 2)
                     }
-                    MediaPreview(text: text, font: font, textColor: Theme.bodyText(colorScheme))
+                    MediaPreview(text: text, font: font, textColor: Theme.bodyText(colorScheme)) { text = $0 }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -143,13 +167,24 @@ struct EntryDetailView: View {
 
     private var controlBar: some View {
         HStack(spacing: 18) {
-            Picker("Mode", selection: $mode) {
-                ForEach(EntryViewMode.allCases) { Text($0.rawValue).tag($0) }
+            Button {
+                mode = (mode == .edit) ? .preview : .edit
+            } label: {
+                Image(systemName: mode == .edit ? "eye" : "pencil")
             }
-            .pickerStyle(.segmented)
-            .fixedSize()
+            .help(mode == .edit ? "Preview" : "Edit")
 
             Spacer()
+
+            #if os(macOS)
+            Button {
+                toggleStar()
+            } label: {
+                Image(systemName: isStarred ? "star.fill" : "star")
+                    .foregroundStyle(isStarred ? Color.yellow : Color.primary)
+            }
+            .help(isStarred ? "Unstar" : "Star")
+            #endif
 
             Button {
                 toggleRecord()
@@ -161,6 +196,11 @@ struct EntryDetailView: View {
 
             Menu {
                 #if os(iOS)
+                Button { toggleStar() } label: {
+                    Label(isStarred ? "Unstar" : "Star",
+                          systemImage: isStarred ? "star.slash" : "star")
+                }
+                Divider()
                 Button { showingPhotoPicker = true } label: { Label("Photo Library", systemImage: "photo") }
                 Button { showingImagePicker = true } label: { Label("Choose File", systemImage: "folder") }
                 #else
@@ -189,7 +229,9 @@ struct EntryDetailView: View {
                 Button {
                     flush()
                     store.fileDraft(currentEntry)
+                    #if os(iOS)
                     dismiss()
+                    #endif
                 } label: {
                     Label("File", systemImage: "archivebox").labelStyle(.iconOnly)
                 }
@@ -197,7 +239,9 @@ struct EntryDetailView: View {
             }
             Button(role: .destructive) {
                 delete()
+                #if os(iOS)
                 dismiss()
+                #endif
             } label: {
                 Label("Delete", systemImage: "trash").labelStyle(.iconOnly)
             }

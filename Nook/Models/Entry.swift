@@ -25,10 +25,22 @@ struct Entry: Identifiable, Hashable {
         suffix.isEmpty ? "[\(ts)]" : "[\(ts)] \(suffix)"
     }
 
-    /// A short one-line preview for list rows: the title if present, else the
-    /// first non-empty body line.
+    /// Starred entries carry a trailing `*` on their title (the header suffix),
+    /// so the flag lives in the plain-markdown file and round-trips through the
+    /// jnl CLI. Toggling is add/remove of that marker (see `JournalStore.toggleStar`).
+    var isStarred: Bool { suffix.hasSuffix("*") }
+
+    /// The title with any trailing star marker (and surrounding spaces) removed.
+    var displayTitle: String {
+        guard isStarred else { return suffix }
+        return String(suffix.dropLast()).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// A short one-line preview for list rows: the title (sans star) if present,
+    /// else the first non-empty body line.
     var preview: String {
-        if !suffix.isEmpty { return suffix }
+        let t = displayTitle
+        if !t.isEmpty { return t }
         let firstLine = body
             .split(separator: "\n", omittingEmptySubsequences: true)
             .first.map(String.init) ?? ""

@@ -12,6 +12,7 @@ struct CalendarView: View {
     @EnvironmentObject private var store: JournalStore
     @Environment(\.accent) private var accent
     @State private var month: Date = CalendarView.startOfMonth(Date())
+    @State private var showingPicker = false
 
     private let cal = Calendar.current
     private static let ymd: DateFormatter = {
@@ -49,7 +50,18 @@ struct CalendarView: View {
             Button { shift(-1) } label: { Image(systemName: "chevron.left") }
                 .buttonStyle(.plain)
             Spacer()
-            Text(Self.monthTitle(month)).font(.title3.weight(.semibold))
+            Button { showingPicker = true } label: {
+                Text(Self.monthTitle(month)).font(.title3.weight(.semibold))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showingPicker, arrowEdge: .bottom) {
+                MonthYearPicker(month: $month) { showingPicker = false }
+                    .padding()
+                    #if os(iOS)
+                    .presentationCompactAdaptation(.popover)
+                    #endif
+            }
             Spacer()
             Button { shift(1) } label: { Image(systemName: "chevron.right") }
                 .buttonStyle(.plain)
@@ -101,10 +113,13 @@ struct CalendarView: View {
                 .foregroundStyle(filled ? .primary : .secondary)
             HStack(spacing: 3) {
                 if let day {
+                    if day.hasStarred {
+                        Image(systemName: "star.fill").font(.system(size: 7)).foregroundStyle(.yellow)
+                    }
                     if day.hasPhoto { dot(.blue) }
                     if day.hasVideo { dot(.purple) }
                     if day.hasAudio { dot(.green) }
-                    if !day.hasPhoto && !day.hasVideo && !day.hasAudio { dot(accent) }
+                    if !day.hasPhoto && !day.hasVideo && !day.hasAudio && !day.hasStarred { dot(accent) }
                 } else {
                     Circle().fill(.clear).frame(width: 5, height: 5)
                 }
@@ -171,6 +186,7 @@ struct MiniCalendarView: View {
     @AppStorage("firstWeekday") private var firstWeekday = 1        // 1=Sun … 7=Sat
     @AppStorage("showWeekNumbers") private var showWeekNumbers = false
     @State private var month = MiniCalendarView.startOfMonth(Date())
+    @State private var showingPicker = false
 
     private static let ymd: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
@@ -183,11 +199,23 @@ struct MiniCalendarView: View {
         return c
     }
     private var days: Set<String> { Set(store.archiveDays.map(\.date)) }
+    private var starredDays: Set<String> { Set(store.archiveDays.filter(\.hasStarred).map(\.date)) }
 
     var body: some View {
         VStack(spacing: 5) {
             HStack(spacing: 2) {
-                Text(Self.title(month)).font(.caption.weight(.semibold))
+                Button { showingPicker = true } label: {
+                    Text(Self.title(month)).font(.caption.weight(.semibold))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showingPicker, arrowEdge: .bottom) {
+                    MonthYearPicker(month: $month) { showingPicker = false }
+                        .padding()
+                        #if os(iOS)
+                        .presentationCompactAdaptation(.popover)
+                        #endif
+                }
                 Spacer()
                 calButton("chevron.left") { shift(-1) }
                 calButton("smallcircle.filled.circle") { month = Self.startOfMonth(Date()) }
@@ -255,6 +283,14 @@ struct MiniCalendarView: View {
                            in: RoundedRectangle(cornerRadius: 5))
                 .overlay(RoundedRectangle(cornerRadius: 5)
                     .strokeBorder(isToday ? accent : .clear, lineWidth: 1))
+                .overlay(alignment: .topTrailing) {
+                    if starredDays.contains(key) {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 6))
+                            .foregroundStyle(.yellow)
+                            .padding(1)
+                    }
+                }
         }
         .buttonStyle(.plain)
         .disabled(!has)
@@ -298,5 +334,52 @@ struct MiniCalendarView: View {
     }
     private static func title(_ d: Date) -> String {
         let f = DateFormatter(); f.dateFormat = "MMM yyyy"; return f.string(from: d)
+    }
+}
+
+/// Compact month + year picker shown in a popover when the calendar's title is
+/// tapped, so you can jump straight to a month instead of stepping one at a time.
+struct MonthYearPicker: View {
+    @Binding var month: Date
+    var done: () -> Void = {}
+    private let cal = Calendar.current
+
+    private var monthIndex: Int { cal.component(.month, from: month) }   // 1…12
+    private var year: Int { cal.component(.year, from: month) }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Picker("Month", selection: Binding(
+                get: { monthIndex },
+                set: { set(month: $0, year: year) })
+            ) {
+                ForEach(1...12, id: \.self) { m in
+                    Text(cal.monthSymbols[m - 1]).tag(m)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+
+            Stepper("Year \(String(year))", value: Binding(
+                get: { year },
+                set: { set(month: monthIndex, year: $0) }), in: 1900...2100)
+            .font(.callout)
+
+            HStack {
+                Button("This Month") { set(startOf: Date()) }
+                Spacer()
+                Button("Done") { done() }.keyboardShortcut(.defaultAction)
+            }
+            .font(.callout)
+        }
+        .frame(width: 220)
+    }
+
+    private func set(month m: Int, year y: Int) {
+        var c = DateComponents(); c.year = y; c.month = m; c.day = 1
+        if let d = cal.date(from: c) { month = d }
+    }
+    private func set(startOf date: Date) {
+        month = cal.date(from: cal.dateComponents([.year, .month], from: date)) ?? date
     }
 }

@@ -13,8 +13,14 @@
 
 import Foundation
 import Combine
+import ImageIO
+import UniformTypeIdentifiers
+import AVFoundation
 #if canImport(AppKit)
 import AppKit
+#endif
+#if canImport(UIKit)
+import UIKit
 #endif
 
 @MainActor
@@ -26,6 +32,11 @@ final class JournalStore: ObservableObject {
     /// Bumped on every reload so views can cheaply observe "data changed".
     @Published private(set) var revision = 0
     @Published private(set) var archiveDays: [ArchiveDay] = []
+    /// Total bytes reclaimed by Data Saver, merged across all devices (sum of
+    /// every per-device record in `<base>/.nook/`). Recomputed on reload.
+    @Published private(set) var dataSaved = 0
+    /// Non-nil while a batch media compression runs, for a progress indicator.
+    @Published private(set) var mediaProgress: (done: Int, total: Int)?
 
     struct ArchiveDay: Identifiable, Hashable {
         let date: String     // "YYYY-MM-DD"
@@ -34,6 +45,7 @@ final class JournalStore: ObservableObject {
         var hasPhoto = false
         var hasVideo = false
         var hasAudio = false
+        var hasStarred = false
         var id: String { date }
         var year: String { String(date.prefix(4)) }
     }
@@ -223,6 +235,7 @@ final class JournalStore: ObservableObject {
         revision &+= 1
         loadInbox()
         rebuildIndex()
+        dataSaved = totalDataSaved()
     }
 
     private func loadInbox() {
@@ -280,6 +293,7 @@ final class JournalStore: ObservableObject {
             var day = ArchiveDay(date: staticFileToDate(u),
                                  count: entries.count,
                                  preview: entries.first?.preview ?? "")
+            day.hasStarred = entries.contains { $0.isStarred }
             for path in mediaPaths(in: content) {
                 switch MediaKind(path: path) {
                 case .image: day.hasPhoto = true
@@ -540,6 +554,41 @@ final class JournalStore: ObservableObject {
         rebuildIndex()
     }
 
+    // MARK: Starred entries (trailing `*` on the title)
+
+    /// Add or remove the trailing `*` star marker on an entry, rewriting it in
+    /// whichever file it lives (inbox / archive day / split journal).
+    func toggleStar(_ entry: Entry, source: EntrySource) {
+        let base = entry.suffix.hasSuffix("*")
+            ? String(entry.suffix.dropLast()).trimmingCharacters(in: .whitespaces)
+            : entry.suffix.trimmingCharacters(in: .whitespaces)
+        let newTitle = entry.isStarred ? base : (base.isEmpty ? "*" : base + " *")
+        let newText = Self.makeEntry(timestamp: entry.ts, title: newTitle, body: entry.body).raw
+        switch source {
+        case .inbox:            updateDraft(entry, newText: newText)
+        case .archive(let d):   updateFiledEntry(date: d, original: entry, newText: newText)
+        case .journal(let n):   updateJournalEntry(name: n, original: entry, newText: newText)
+        }
+    }
+
+    /// Every starred entry across the archive, inbox and split journals, paired
+    /// with the source it came from so it can be opened/edited in place.
+    func starredEntries() -> [(entry: Entry, source: EntrySource)] {
+        var out: [(entry: Entry, source: EntrySource)] = []
+        for day in allEntriesByDay() {
+            for e in day.entries where e.isStarred {
+                out.append((e, .archive(date: day.date)))
+            }
+        }
+        for d in inboxDrafts where d.isStarred { out.append((d, .inbox)) }
+        for j in splitJournals {
+            for e in entries(inJournal: j.name) where e.isStarred {
+                out.append((e, .journal(name: j.name)))
+            }
+        }
+        return out
+    }
+
     // MARK: Composer autosave (jnl cmdNew)
 
     /// Build an Entry from title + timestamp + body in the jnl header format:
@@ -691,6 +740,18 @@ final class JournalStore: ObservableObject {
 
     #if os(macOS)
     func revealAsset(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+
+    /// Reveal the markdown file backing an entry (inbox.md, a journal day file, or
+    /// a split journal) in Finder, selecting it.
+    func revealEntry(source: EntrySource) {
+        let url: URL?
+        switch source {
+        case .inbox:            url = inboxURL
+        case .archive(let d):   url = journalFileURL(for: d)
+        case .journal(let n):   url = splitJournalURL(n)
+        }
+        if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+    }
     #endif
 
     /// Copy an existing file (e.g. a recorded video) into assets/ and return the
@@ -702,22 +763,180 @@ final class JournalStore: ObservableObject {
         let dest = dir.appendingPathComponent("\(UUID().uuidString).\(ext)")
         let ok = url.startAccessingSecurityScopedResource()
         defer { if ok { url.stopAccessingSecurityScopedResource() } }
-        do { try fm.copyItem(at: url, to: dest); return "assets/\(dest.lastPathComponent)" }
-        catch { return nil }
+        do {
+            try fm.copyItem(at: url, to: dest)
+            let rel = "assets/\(dest.lastPathComponent)"
+            scheduleCompression(assetRelPath: rel)   // video/audio, in the background
+            return rel
+        } catch { return nil }
     }
 
     /// Save image data into the journal's assets folder and return the relative
-    /// markdown-friendly path ("assets/<uuid>.<ext>"), or nil on failure.
+    /// markdown-friendly path ("assets/<uuid>.<ext>"), or nil on failure. When
+    /// Data Saver is on, raster images are downsampled/re-compressed first (format
+    /// and extension preserved, so the markdown link stays valid).
     func saveAsset(_ data: Data, ext: String) -> String? {
         guard let dir = assetsDirURL else { return nil }
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        let name = "\(UUID().uuidString).\(ext.lowercased())"
+        let id = UUID().uuidString
+        let lower = ext.lowercased()
+        let name = "\(id).\(lower)"
+        var out = data
+        if UserDefaults.standard.bool(forKey: "dataSaver"),
+           ImageDownsampler.compressible.contains(lower),
+           let shrunk = ImageDownsampler.downsample(data), shrunk.count < data.count {
+            out = shrunk
+        }
         do {
-            try data.write(to: dir.appendingPathComponent(name), options: .atomic)
-            return "assets/\(name)"
+            try out.write(to: dir.appendingPathComponent(name), options: .atomic)
+            if out.count < data.count { recordCompression(assetID: id, saved: data.count - out.count) }
+            let rel = "assets/\(name)"
+            // Images are handled synchronously above; video/audio compress in the background.
+            if !ImageDownsampler.compressible.contains(lower) { scheduleCompression(assetRelPath: rel) }
+            return rel
         } catch {
             return nil
         }
+    }
+
+    // MARK: Data Saver (image compression + merged, per-device savings tally)
+
+    /// One device's compression record. Each device writes ONLY its own file, so
+    /// syncing several devices' files into `<base>/.nook/` never conflicts; the
+    /// displayed total is the sum, and `assets` prevents re-compressing (and thus
+    /// double-counting) an image another device already handled.
+    private struct DataSaverRecord: Codable { var savedBytes = 0; var assets: [String] = [] }
+
+    /// Stable per-device id (one per Mac/iPhone), generated once and kept locally.
+    private var dataSaverDeviceID: String {
+        let key = "dataSaverDeviceID"
+        if let id = UserDefaults.standard.string(forKey: key) { return id }
+        let id = UUID().uuidString
+        UserDefaults.standard.set(id, forKey: key)
+        return id
+    }
+    private var dataSaverDirURL: URL? { baseURL?.appendingPathComponent(".nook", isDirectory: true) }
+    private var myDataSaverFileURL: URL? {
+        dataSaverDirURL?.appendingPathComponent("datasaver-\(dataSaverDeviceID).json")
+    }
+
+    private func loadMyRecord() -> DataSaverRecord {
+        guard let url = myDataSaverFileURL, let data = try? Data(contentsOf: url),
+              let rec = try? JSONDecoder().decode(DataSaverRecord.self, from: data) else { return DataSaverRecord() }
+        return rec
+    }
+    private func saveMyRecord(_ rec: DataSaverRecord) {
+        guard let dir = dataSaverDirURL, let url = myDataSaverFileURL else { return }
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(rec) { try? data.write(to: url, options: .atomic) }
+    }
+
+    /// Every device record file in `<base>/.nook/`.
+    private func allDataSaverRecords() -> [DataSaverRecord] {
+        guard let dir = dataSaverDirURL,
+              let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return [] }
+        return items
+            .filter { $0.lastPathComponent.hasPrefix("datasaver-") && $0.pathExtension == "json" }
+            .compactMap { try? Data(contentsOf: $0) }
+            .compactMap { try? JSONDecoder().decode(DataSaverRecord.self, from: $0) }
+    }
+
+    /// Bytes saved across ALL devices (merged sum — the number shown in Settings).
+    func totalDataSaved() -> Int { allDataSaverRecords().reduce(0) { $0 + $1.savedBytes } }
+
+    /// Asset uuids already compressed on ANY device, so batch runs never repeat one.
+    private func allCompressedAssetIDs() -> Set<String> {
+        Set(allDataSaverRecords().flatMap(\.assets))
+    }
+
+    private func recordCompression(assetID: String, saved: Int) {
+        var rec = loadMyRecord()
+        rec.savedBytes += max(0, saved)
+        if !rec.assets.contains(assetID) { rec.assets.append(assetID) }
+        saveMyRecord(rec)
+        dataSaved = totalDataSaved()
+    }
+
+    /// Mark an asset as handled (no bytes gained) so batch runs skip it next time.
+    private func markHandled(assetID: String) {
+        var rec = loadMyRecord()
+        guard !rec.assets.contains(assetID) else { return }
+        rec.assets.append(assetID)
+        saveMyRecord(rec)
+    }
+
+    /// Kick off background video/audio transcoding for a just-attached asset (when
+    /// Data Saver is on). The original is stored/returned immediately; the file is
+    /// swapped in place (same name/extension) once the export finishes.
+    func scheduleCompression(assetRelPath: String) {
+        guard UserDefaults.standard.bool(forKey: "dataSaver"),
+              let url = assetURL(forRelative: assetRelPath) else { return }
+        let ext = url.pathExtension.lowercased()
+        guard MediaTranscoder.video.contains(ext) || MediaTranscoder.audio.contains(ext) else { return }
+        let id = url.deletingPathExtension().lastPathComponent
+        Task.detached(priority: .background) {
+            #if os(iOS)
+            // Give the export a grace period if the app is backgrounded mid-encode.
+            let bgTask = await MainActor.run { UIApplication.shared.beginBackgroundTask(withName: "nook.compress") }
+            defer { if bgTask != .invalid { Task { @MainActor in UIApplication.shared.endBackgroundTask(bgTask) } } }
+            #endif
+            let saved = await MediaTranscodeQueue.shared.run { await MediaTranscoder.compressInPlace(url: url, ext: ext) }
+            await MainActor.run {
+                if let saved, saved > 0 { self.recordCompression(assetID: id, saved: saved) }
+                else { self.markHandled(assetID: id) }
+            }
+        }
+    }
+
+    struct MediaCompressionResult { var images = 0; var videos = 0; var audios = 0; var bytesSaved = 0 }
+
+    /// Compress existing media (images, video, audio) that no device has processed
+    /// yet, in place (same filename/format, so markdown links are untouched). Images
+    /// re-encode synchronously; video/audio transcode via the serial queue. Skips
+    /// anything already handled elsewhere so nothing is compressed — or counted —
+    /// twice. Async because video/audio export is long-running.
+    @discardableResult
+    func compressExistingMedia() async -> MediaCompressionResult {
+        guard let dir = assetsDirURL,
+              let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return MediaCompressionResult() }
+        let already = allCompressedAssetIDs()
+        let candidates = items.filter { url in
+            guard !url.hasDirectoryPath else { return false }
+            let ext = url.pathExtension.lowercased()
+            let known = ImageDownsampler.compressible.contains(ext)
+                || MediaTranscoder.video.contains(ext) || MediaTranscoder.audio.contains(ext)
+            return known && !already.contains(url.deletingPathExtension().lastPathComponent)
+        }
+        var res = MediaCompressionResult()
+        mediaProgress = (0, candidates.count)
+        for (i, url) in candidates.enumerated() {
+            let ext = url.pathExtension.lowercased()
+            let id = url.deletingPathExtension().lastPathComponent
+            if ImageDownsampler.compressible.contains(ext) {
+                if let data = try? Data(contentsOf: url),
+                   let shrunk = ImageDownsampler.downsample(data), shrunk.count < data.count,
+                   (try? shrunk.write(to: url, options: .atomic)) != nil {
+                    res.images += 1
+                    res.bytesSaved += data.count - shrunk.count
+                    recordCompression(assetID: id, saved: data.count - shrunk.count)
+                } else {
+                    markHandled(assetID: id)
+                }
+            } else {
+                let saved = await MediaTranscodeQueue.shared.run { await MediaTranscoder.compressInPlace(url: url, ext: ext) }
+                if let saved, saved > 0 {
+                    if MediaTranscoder.video.contains(ext) { res.videos += 1 } else { res.audios += 1 }
+                    res.bytesSaved += saved
+                    recordCompression(assetID: id, saved: saved)
+                } else {
+                    markHandled(assetID: id)
+                }
+            }
+            mediaProgress = (i + 1, candidates.count)
+        }
+        mediaProgress = nil
+        reload()
+        return res
     }
 
     // MARK: Headless add (App Intents)
@@ -853,13 +1072,15 @@ final class JournalStore: ObservableObject {
     // MARK: Filing internals (jnl fileDraft / splitTagTarget)
 
     /// Append one entry to its destination file. Throws on empty entry / IO error.
-    private func fileEntry(_ e: Entry) throws -> String {
+    /// `routeSplit: false` forces the dated journal, ignoring split-tag routing
+    /// (used when merging ex-split journals back in).
+    private func fileEntry(_ e: Entry, routeSplit: Bool = true) throws -> String {
         if e.body.isEmpty && e.suffix.isEmpty {
             throw JournalError.nothingToFile
         }
         let dest: URL
         let label: String
-        if let (tag, url) = splitTagTarget(e.raw) {
+        if routeSplit, let (tag, url) = splitTagTarget(e.raw) {
             dest = url; label = tag
         } else {
             let date = e.date.isEmpty ? Self.nowDate() : e.date
@@ -1028,6 +1249,39 @@ final class JournalStore: ObservableObject {
         return res
     }
 
+    struct MergeResult { var journals = 0; var entries = 0 }
+
+    /// Merge "ex-split" journals — top-level `<tag>.md` files whose tag is no
+    /// longer in the configured split tags — back into the dated main journal,
+    /// filing each entry by its timestamp and removing the emptied split file.
+    /// Entries that fail to move are left behind so the file isn't lost.
+    @discardableResult
+    func mergeExSplitJournals() -> MergeResult {
+        var res = MergeResult()
+        let configured = Set(splitTags.map { $0.hasPrefix("@") ? String($0.dropFirst()) : $0 })
+        for sj in splitJournals where !configured.contains(sj.name) {
+            guard let url = splitJournalURL(sj.name) else { continue }
+            let content = readString(url)
+            let entries = JournalParser.parseEntries(content)
+            guard !entries.isEmpty else { continue }
+            var remaining: [Entry] = []
+            for e in entries {
+                if (try? fileEntry(e, routeSplit: false)) != nil { res.entries += 1 }
+                else { remaining.append(e) }
+            }
+            if remaining.isEmpty {
+                try? fm.removeItem(at: url)
+                res.journals += 1
+            } else {
+                let preamble = JournalParser.leadingPreamble(content)
+                try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: remaining))
+                if res.entries > 0 { res.journals += 1 }
+            }
+        }
+        reload()
+        return res
+    }
+
     // MARK: Stats (jnl cmdStats)
 
     struct Stats {
@@ -1179,5 +1433,159 @@ enum FolderAccess {
         #endif
         return try? URL(resolvingBookmarkData: data, options: options,
                         relativeTo: nil, bookmarkDataIsStale: &stale)
+    }
+}
+
+/// Data Saver image compression. Uses ImageIO (identical on iOS and macOS), and
+/// re-encodes in the source's OWN format so the file extension — and therefore
+/// the `![](assets/<uuid>.<ext>)` markdown link — never changes.
+enum ImageDownsampler {
+    /// Raster formats we'll re-encode. GIF is excluded (would flatten animation).
+    static let compressible: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp"]
+
+    /// Downsample to `maxPixel` on the longest edge and re-encode in the same
+    /// format at `quality` (lossy formats only). Returns nil if not a decodable
+    /// image or on failure — callers keep the original bytes in that case.
+    static func downsample(_ data: Data, maxPixel: Int = 2048, quality: Double = 0.7) -> Data? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let type = CGImageSourceGetType(src) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,          // bake in EXIF orientation
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, type, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, cg, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return out as Data
+    }
+}
+
+/// Serialises transcode jobs so only one AVAssetExportSession / writer runs at a
+/// time — several concurrent 720p exports would spike memory. Shared by the
+/// on-attach background path and the batch action.
+actor MediaTranscodeQueue {
+    static let shared = MediaTranscodeQueue()
+    private var tail: Task<Void, Never> = Task {}
+
+    func run<T: Sendable>(_ operation: @escaping @Sendable () async -> T) async -> T {
+        let prior = tail
+        let work = Task { () -> T in
+            await prior.value            // wait for all earlier jobs
+            return await operation()
+        }
+        tail = Task { _ = await work.value }   // next caller waits for me
+        return await work.value
+    }
+}
+
+/// Data Saver video/audio compression (AVFoundation). Re-encodes in place keeping
+/// the original container/extension, so `![](assets/<uuid>.<ext>)` links stay valid.
+enum MediaTranscoder {
+    static let video: Set<String> = ["mov", "mp4", "m4v"]
+    /// Only m4a — AAC output can't validly keep a .wav/.mp3 extension, and m4a is
+    /// the only audio Nook records anyway.
+    static let audio: Set<String> = ["m4a"]
+
+    static func fileType(forExt ext: String) -> AVFileType? {
+        switch ext {
+        case "mov": return .mov
+        case "mp4": return .mp4
+        case "m4v": return .m4v
+        case "m4a": return .m4a
+        default:    return nil
+        }
+    }
+
+    /// Transcode `url` to a temp file and, if the result is smaller, atomically swap
+    /// it in place. Returns bytes saved, or nil if skipped / no gain / failure.
+    static func compressInPlace(url: URL, ext: String) async -> Int? {
+        let fm = FileManager.default
+        guard let originalSize = try? fm.attributesOfItem(atPath: url.path)[.size] as? Int, originalSize > 0
+        else { return nil }
+        let tmp = url.deletingLastPathComponent().appendingPathComponent("._tmp_\(UUID().uuidString).\(ext)")
+        let ok: Bool
+        if video.contains(ext) {
+            ok = await transcodeVideo(from: url, to: tmp, as: fileType(forExt: ext) ?? .mov)
+        } else if audio.contains(ext) {
+            ok = await transcodeAudio(from: url, to: tmp)
+        } else {
+            ok = false
+        }
+        guard ok, let newSize = try? fm.attributesOfItem(atPath: tmp.path)[.size] as? Int, newSize < originalSize else {
+            try? fm.removeItem(at: tmp)
+            return nil
+        }
+        do {
+            _ = try fm.replaceItemAt(url, withItemAt: tmp)   // atomic swap, keeps the name
+            return originalSize - newSize
+        } catch {
+            try? fm.removeItem(at: tmp)
+            return nil
+        }
+    }
+
+    /// 720p H.264 re-encode. Uses the completion-handler API (async `export()` is
+    /// iOS 18 / macOS 15 only; deployment here is iOS 17 / macOS 14).
+    static func transcodeVideo(from src: URL, to dest: URL, as type: AVFileType) async -> Bool {
+        let asset = AVURLAsset(url: src)
+        // If the preset is incompatible the export simply fails → caller keeps the original.
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1280x720)
+        else { return false }
+        // Used only within this function and its completion handler (single queue).
+        nonisolated(unsafe) let export = session
+        export.outputURL = dest
+        export.outputFileType = type
+        export.shouldOptimizeForNetworkUse = true
+        return await withCheckedContinuation { cont in
+            export.exportAsynchronously { cont.resume(returning: export.status == .completed) }
+        }
+    }
+
+    /// Re-encode audio to ~48 kbps mono AAC (.m4a) via reader → writer.
+    static func transcodeAudio(from src: URL, to dest: URL) async -> Bool {
+        let asset = AVURLAsset(url: src)
+        guard let track = try? await asset.loadTracks(withMediaType: .audio).first,
+              let r = try? AVAssetReader(asset: asset),
+              let w = try? AVAssetWriter(outputURL: dest, fileType: .m4a) else { return false }
+        // These AVFoundation objects are driven only from the writer's own queue below.
+        nonisolated(unsafe) let reader = r
+        nonisolated(unsafe) let writer = w
+        nonisolated(unsafe) let readerOutput = AVAssetReaderTrackOutput(
+            track: track,
+            outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
+        guard reader.canAdd(readerOutput) else { return false }
+        reader.add(readerOutput)
+
+        nonisolated(unsafe) let writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVNumberOfChannelsKey: 1,
+            AVSampleRateKey: 44100,
+            AVEncoderBitRateKey: 48000,
+        ])
+        guard writer.canAdd(writerInput) else { return false }
+        writer.add(writerInput)
+
+        guard reader.startReading(), writer.startWriting() else { return false }
+        writer.startSession(atSourceTime: .zero)
+
+        let queue = DispatchQueue(label: "nook.audio.transcode")
+        return await withCheckedContinuation { cont in
+            writerInput.requestMediaDataWhenReady(on: queue) {
+                while writerInput.isReadyForMoreMediaData {
+                    if let buffer = readerOutput.copyNextSampleBuffer() {
+                        writerInput.append(buffer)
+                    } else {
+                        writerInput.markAsFinished()
+                        writer.finishWriting {
+                            cont.resume(returning: writer.status == .completed && reader.status == .completed)
+                        }
+                        return
+                    }
+                }
+            }
+        }
     }
 }

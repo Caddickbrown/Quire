@@ -22,6 +22,7 @@ struct SettingsView: View {
     @AppStorage("inboxSwipeLeft") private var swipeLeftRaw = SwipeAction.file.rawValue
     @AppStorage("inboxSwipeRight") private var swipeRightRaw = SwipeAction.delete.rawValue
     @AppStorage("splitTags") private var splitTagsRaw: String = ""
+    @AppStorage("dataSaver") private var dataSaver = false
 
     static let shortcuts: [(action: String, keys: String)] = [
         ("New entry", "⌘N"),
@@ -237,8 +238,23 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Data Saver", isOn: $dataSaver)
+                LabeledContent("Data saved",
+                               value: ByteCountFormatter.string(fromByteCount: Int64(store.dataSaved), countStyle: .file))
+                if let p = store.mediaProgress {
+                    LabeledContent("Compressing", value: "\(p.done)/\(p.total)")
+                }
+            } header: {
+                Text("Media")
+            } footer: {
+                Text("Compresses attached media to save space — photos (longest edge 2048 px), videos (720p H.264) and voice memos (low-bitrate AAC). The original format is kept so links stay valid; videos re-encode in the background after attaching. Existing media isn't touched until you run “Compress Existing Media” below. The tally is merged across your devices.")
+            }
+
+            Section {
                 buttonRow {
                     cleanUpButton
+                    compressMediaButton
+                    mergeExSplitButton
                     tagReviewButton
                     clearOrphanButton
                     exportButton
@@ -419,6 +435,36 @@ struct SettingsView: View {
         } label: {
             Label("Clean Up", systemImage: "wand.and.sparkles")
         }
+    }
+    private var mergeExSplitButton: some View {
+        Button {
+            let r = store.mergeExSplitJournals()
+            cleanupMessage = r.journals == 0
+                ? "No ex-split journals to merge. (Only split files whose @tag is no longer configured are merged.)"
+                : "Merged \(r.entries) entr\(r.entries == 1 ? "y" : "ies") from \(r.journals) journal(s) back into the main journal."
+            showingCleanup = true
+        } label: {
+            Label("Merge Ex-Split Journals into Journal", systemImage: "arrow.triangle.merge")
+        }
+    }
+    private var compressMediaButton: some View {
+        Button {
+            Task {
+                let r = await store.compressExistingMedia()
+                let total = r.images + r.videos + r.audios
+                cleanupMessage = total == 0
+                    ? "No new media to compress."
+                    : "Compressed \(r.images) photo(s), \(r.videos) video(s), \(r.audios) audio — saved \(ByteCountFormatter.string(fromByteCount: Int64(r.bytesSaved), countStyle: .file))."
+                showingCleanup = true
+            }
+        } label: {
+            if store.mediaProgress != nil {
+                Label("Compressing…", systemImage: "photo.badge.arrow.down")
+            } else {
+                Label("Compress Existing Media", systemImage: "photo.badge.arrow.down")
+            }
+        }
+        .disabled(store.mediaProgress != nil)
     }
     private var tagReviewButton: some View {
         Button { showingTagReview = true } label: { Label("Tag Review", systemImage: "checkmark.seal") }

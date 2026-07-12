@@ -140,6 +140,16 @@ extension Theme {
         displayFormatter.dateFormat = style.format
         return displayFormatter.string(from: d)
     }
+
+    /// Like `displayDate`, but always carries the year — used for list section
+    /// headers and multi-day row labels so you can tell what year you're
+    /// scrolling through even in the year-less "weekday" style.
+    static func sectionDate(_ isoDate: String, style raw: String) -> String {
+        let style = DateStyle(rawValue: raw) ?? .weekday
+        let base = displayDate(isoDate, style: raw)
+        if style.format.contains("y") { return base }
+        return "\(base) \(isoDate.prefix(4))"
+    }
 }
 
 /// The writing font the user can choose in Settings. Serif/Mono use SwiftUI's

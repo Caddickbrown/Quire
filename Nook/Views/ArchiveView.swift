@@ -91,7 +91,7 @@ struct EntryPreviewRow: View {
 
     private var time: String { String(entry.ts.suffix(8).prefix(5)) }
     private var trailing: String? {
-        if let ds = dateStyleRaw { return "\(Theme.displayDate(entry.date, style: ds)) · \(time)" }
+        if let ds = dateStyleRaw { return "\(Theme.sectionDate(entry.date, style: ds)) · \(time)" }
         if showTime { return time }
         return nil
     }
@@ -99,6 +99,11 @@ struct EntryPreviewRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
+                if entry.isStarred {
+                    Image(systemName: "star.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.yellow)
+                }
                 Text(entry.preview.isEmpty ? "(empty)" : entry.preview)
                     .lineLimit(1)
                 let badges = entry.mediaBadges
@@ -182,7 +187,7 @@ struct EntryTwoPane: View {
         List(selection: selectionBinding) {
             if groupByDate {
                 ForEach(sections, id: \.date) { section in
-                    Section(Theme.displayDate(section.date, style: dateStyleRaw)) {
+                    Section(Theme.sectionDate(section.date, style: dateStyleRaw)) {
                         ForEach(section.entries) { entryRow($0) }
                     }
                 }
@@ -196,6 +201,15 @@ struct EntryTwoPane: View {
         rowLabel(entry)
             .tag(entry.ts)
             .contextMenu {
+                Button { store.toggleStar(entry, source: sourceFor(entry)) } label: {
+                    Label(entry.isStarred ? "Unstar" : "Star",
+                          systemImage: entry.isStarred ? "star.slash" : "star")
+                }
+                #if os(macOS)
+                Button { store.revealEntry(source: sourceFor(entry)) } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+                #endif
                 Button(role: .destructive) { delete(entry) } label: {
                     Label("Delete", systemImage: "trash")
                 }
@@ -309,6 +323,41 @@ struct JournalFileView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+    }
+}
+
+/// Starred entries (titles ending in `*`) from across the archive, inbox and
+/// split journals, opened/edited in place.
+struct StarredView: View {
+    @EnvironmentObject private var store: JournalStore
+    @State private var loaded: [(entry: Entry, source: EntrySource)] = []
+
+    var body: some View {
+        Group {
+            if loaded.isEmpty {
+                ContentUnavailableView(
+                    "No starred entries",
+                    systemImage: "star",
+                    description: Text("Star an entry (the ✩ button adds a * to its title) and it shows up here.")
+                )
+            } else {
+                let sources = Dictionary(loaded.map { ($0.entry.id, $0.source) },
+                                         uniquingKeysWith: { a, _ in a })
+                EntryTwoPane(
+                    entries: loaded.map(\.entry),
+                    sourceFor: { sources[$0.id] ?? .archive(date: $0.date) },
+                    showTime: true,
+                    groupByDate: true
+                )
+            }
+        }
+        .navigationTitle("Starred")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .task(id: store.revision) {
+            loaded = store.starredEntries().sorted { $0.entry.ts > $1.entry.ts }
+        }
     }
 }
 

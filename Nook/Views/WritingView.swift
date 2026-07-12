@@ -98,20 +98,13 @@ struct WritingView: View {
         .toolbar {
             ToolbarItemGroup {
                 Button {
-                    saveNow()
-                } label: {
-                    Label("Save", systemImage: "checkmark")
-                }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(!hasText)
-                .help("Save to inbox (⌘S)")
-                Button {
                     newEntry()
                 } label: {
                     Label("New", systemImage: "square.and.pencil")
                 }
+                .keyboardShortcut("s", modifiers: .command)
                 .disabled(!hasText)
-                .help("Start a new entry")
+                .help("Save to inbox & start a new entry (⌘S)")
                 Button {
                     toggleRecord()
                 } label: {
@@ -262,12 +255,6 @@ struct WritingView: View {
         commit(reindex: true)
     }
 
-    /// Explicit save (⌘S): commit immediately and confirm.
-    private func saveNow() {
-        flush()
-        showToast("Saved to inbox")
-    }
-
     /// Where the cursor lands when the composer opens or resets. On iOS people
     /// tend to title-then-write, so start in the title; on macOS keep the body
     /// focused so you can type immediately.
@@ -280,9 +267,11 @@ struct WritingView: View {
     }
 
     private func newEntry() {
+        let saved = hasText
         flush()
         reset()
         focusStart()
+        if saved { showToast("Saved to inbox") }
     }
 
     /// Delete the current draft (autosaved to the inbox) without keeping it.
