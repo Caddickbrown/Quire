@@ -157,6 +157,26 @@ sums all device files, and an asset uuid recorded on any device is never
 re-compressed elsewhere. On macOS, entry context menus expose
 `revealEntry(source:)` → "Reveal in Finder".
 
+## Linux port (`linux/`)
+
+A separate **Tauri v2** app (Rust core + dependency-free vanilla HTML/CSS/JS
+frontend, no build step) lives under `linux/`. It reuses the jnl on-disk format
+byte-for-byte, so it reads/writes the same folders as the SwiftUI app and `jnl`.
+The Swift data layer is re-ported to Rust: `linux/src-tauri/src/parser.rs`
+mirrors `JournalParser`, `store.rs` mirrors `JournalStore` (all file ops,
+star/split/tags/assets/stats/cleanup/backup/search/random/export/dedupe/merge),
+`media.rs` does Data-Saver compression (images via the `image` crate, video/audio
+via the `ffmpeg` CLI), and `lib.rs` exposes them as Tauri commands plus native
+folder/file/save dialogs and reveal-in-file-manager. The frontend (`linux/src/`)
+recreates every view. Backend prefs live in `~/.config/Nook/settings.json`;
+default data folder is `~/Documents/Nook`. Build/run: `cd linux/src-tauri &&
+cargo run` (needs `libwebkit2gtk-4.1-dev` + Rust + `ffmpeg`; see `linux/README.md`).
+
+**Not ported** (no Linux equivalent): iCloud Documents sync — point Nook at a
+synced folder instead; and App Intents/Shortcuts/Siri. The parser passes the same
+jnl-parity cases the Swift `ParserChecks` do. Keep `parser.rs`/`store.rs` faithful
+to jnl when touching either side.
+
 ## Deferred (explicit follow-ups)
 
 PDF export; AI-chat; live `NSMetadataQuery` sync refresh; iPhone Live Activity for

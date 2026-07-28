@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Nook",
+  "version": "0.1.0",
+  "identifier": "com.caddickbrown.nook",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Nook",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 720,
+        "minHeight": 480
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage"],
+    "category": "Productivity",
+    "shortDescription": "A distraction-free markdown journal",
+    "longDescription": "Nook is a distraction-free journaling app. Write freely into an inbox, then file entries into a date-organised archive. All data is plain markdown, compatible with the jnl CLI.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ]
+  }
+}
