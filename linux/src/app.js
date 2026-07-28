@@ -730,6 +730,9 @@ function renderSplit(main) {
   for (const j of sj) {
     const r = el(`<button class="nav-item" style="width:100%"><span class="ic">${icon("bookmark")}</span><span>@${esc(j.name)}</span><span class="badge">${j.count}</span></button>`);
     r.onclick = () => openJournalFile(j.name);
+    r.oncontextmenu = e => { e.preventDefault(); openMenuAt(e.clientX, e.clientY, [
+      { label: "Reveal in Files", icon: "folder", action: () => invoke("reveal_entry", { source: { kind: "journal", arg: j.name } }) },
+    ]); };
     listWrap.appendChild(r);
   }
   view.appendChild(listWrap); main.appendChild(view);

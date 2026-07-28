@@ -297,6 +297,13 @@ struct SplitJournalsView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        #if os(macOS)
+                        .contextMenu {
+                            Button { store.revealEntry(source: .journal(name: j.name)) } label: {
+                                Label("Reveal in Finder", systemImage: "folder")
+                            }
+                        }
+                        #endif
                     }
                 }
             }
