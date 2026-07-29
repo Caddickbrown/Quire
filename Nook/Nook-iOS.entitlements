@@ -2,9 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- iOS: no App Sandbox / device entitlements (camera & mic use the Info.plist
-	     usage strings + the runtime prompt). Only iCloud is an iOS entitlement.
-	     Enable the container via Signing & Capabilities → iCloud. -->
+	<!-- iOS: iCloud container for journal sync -->
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
 		<string>iCloud.com.caddickbrown.nook</string>
@@ -16,6 +14,11 @@
 	<key>com.apple.developer.ubiquity-container-identifiers</key>
 	<array>
 		<string>iCloud.com.caddickbrown.nook</string>
+	</array>
+	<!-- App Group: shared UserDefaults between app + widget extension -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.caddickbrown.nook</string>
 	</array>
 </dict>
 </plist>

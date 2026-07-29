@@ -16,6 +16,9 @@ import Combine
 import ImageIO
 import UniformTypeIdentifiers
 import AVFoundation
+#if os(iOS)
+import WidgetKit
+#endif
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -269,8 +272,30 @@ final class JournalStore: ObservableObject {
                 self.tagCounts = map.map { (tag: $0.key, count: $0.value) }
                     .sorted { $0.count != $1.count ? $0.count > $1.count : $0.tag < $1.tag }
                 self.splitJournals = idx.splits
+                self.writeWidgetSnapshot()
             }
         }
+    }
+
+    /// Write a NookSnapshot to the shared App Group so the widget can
+    /// display up-to-date stats without accessing the journal directly.
+    private func writeWidgetSnapshot() {
+        #if os(iOS)
+        let s = stats()
+        let accentRaw = UserDefaults.standard.string(forKey: "accentColor") ?? "blue"
+        var snap = NookSnapshot()
+        snap.currentStreak = s.currentStreak
+        snap.bestStreak    = s.bestStreak
+        snap.totalDays     = s.days
+        snap.totalEntries  = s.entries
+        snap.totalWords    = s.words
+        snap.inboxDrafts   = s.inboxDrafts
+        snap.accentRaw     = accentRaw
+        snap.updatedAt     = Date()
+        snap.save()
+        // Tell WidgetKit to reload its timelines.
+        WidgetCenter.shared.reloadAllTimelines()
+        #endif
     }
 
     nonisolated private static let reservedFiles: Set<String> = ["inbox.md", "transfer.md", "export.md", "nook-export.md"]

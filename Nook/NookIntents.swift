@@ -6,8 +6,19 @@
 //  and Spotlight without opening the app. They write straight to the journal
 //  folder via JournalStore's headless helpers.
 //
+//  Also declares:
+//  - OpenNewDraftIntent  — opens the app directly to the Write screen.
+//    Used by the widget "New Draft" link and home screen quick actions.
+//  - Home screen quick actions are registered dynamically on launch in
+//    NookApp (UIApplicationShortcutItem).
+//
 
 import AppIntents
+#if canImport(UIKit)
+import UIKit
+#endif
+
+// MARK: - Add entry (background, no open)
 
 /// Add a new draft to the Nook inbox.
 struct AddJournalEntryIntent: AppIntent {
@@ -36,6 +47,8 @@ struct AddJournalEntryIntent: AppIntent {
     }
 }
 
+// MARK: - Inbox count (background)
+
 /// Report how many drafts are waiting in the inbox.
 struct InboxCountIntent: AppIntent {
     static var title: LocalizedStringResource = "Inbox Draft Count"
@@ -50,18 +63,52 @@ struct InboxCountIntent: AppIntent {
     }
 }
 
+// MARK: - Open Write screen (opens app)
+
+/// Opens Nook directly to a blank Write screen. Used by the widget
+/// "New Draft" link and the home screen long-press quick action.
+struct OpenNewDraftIntent: AppIntent {
+    static var title: LocalizedStringResource = "New Draft"
+    static var description = IntentDescription("Opens Nook to a blank Write screen.")
+    // openAppWhenRun = true is the default — keep it so the app launches.
+    static var openAppWhenRun = true
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        // Post a notification the app's NavigationModel listens to.
+        NotificationCenter.default.post(name: .nookOpenWrite, object: nil)
+        return .result()
+    }
+}
+
+extension Notification.Name {
+    static let nookOpenWrite = Notification.Name("com.caddickbrown.nook.openWrite")
+}
+
+// MARK: - Siri / Spotlight shortcuts
+
 /// Phrases exposed to Siri / Spotlight.
 struct NookShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
+        AppShortcut(
+            intent: OpenNewDraftIntent(),
+            phrases: [
+                "New draft in \(.applicationName)",
+                "Write in \(.applicationName)",
+                "Open \(.applicationName) to write",
+                "Start a new entry in \(.applicationName)",
+            ],
+            shortTitle: "New Draft",
+            systemImageName: "square.and.pencil"
+        )
         AppShortcut(
             intent: AddJournalEntryIntent(),
             phrases: [
                 "Add a journal entry to \(.applicationName)",
                 "New entry in \(.applicationName)",
-                "Write in \(.applicationName)",
             ],
             shortTitle: "Add Entry",
-            systemImageName: "square.and.pencil"
+            systemImageName: "plus.square"
         )
         AppShortcut(
             intent: InboxCountIntent(),
@@ -74,3 +121,56 @@ struct NookShortcuts: AppShortcutsProvider {
         )
     }
 }
+
+// MARK: - Home screen quick actions (iOS only)
+
+#if canImport(UIKit)
+enum NookQuickAction: String {
+    case newDraft   = "com.caddickbrown.nook.newDraft"
+    case openInbox  = "com.caddickbrown.nook.openInbox"
+
+    var shortcutItem: UIApplicationShortcutItem {
+        switch self {
+        case .newDraft:
+            return UIApplicationShortcutItem(
+                type: rawValue,
+                localizedTitle: "New Draft",
+                localizedSubtitle: nil,
+                icon: UIApplicationShortcutIcon(systemImageName: "square.and.pencil"),
+                userInfo: nil
+            )
+        case .openInbox:
+            return UIApplicationShortcutItem(
+                type: rawValue,
+                localizedTitle: "Inbox",
+                localizedSubtitle: nil,
+                icon: UIApplicationShortcutIcon(systemImageName: "tray"),
+                userInfo: nil
+            )
+        }
+    }
+
+    /// Register both quick actions. Call from `application(_:didFinishLaunchingWithOptions:)`.
+    static func register() {
+        UIApplication.shared.shortcutItems = [
+            NookQuickAction.newDraft.shortcutItem,
+            NookQuickAction.openInbox.shortcutItem,
+        ]
+    }
+
+    /// Handle a shortcut item; returns true if handled.
+    @MainActor
+    static func handle(_ item: UIApplicationShortcutItem, nav: NavigationModel) -> Bool {
+        switch NookQuickAction(rawValue: item.type) {
+        case .newDraft:
+            nav.requestNewEntry()
+            return true
+        case .openInbox:
+            nav.section = .inbox
+            return true
+        case nil:
+            return false
+        }
+    }
+}
+#endif
