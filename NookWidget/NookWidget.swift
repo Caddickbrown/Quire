@@ -44,7 +44,7 @@ struct NookProvider: TimelineProvider {
 
 // MARK: - Accent colour helper
 
-private func accentColor(for raw: String) -> Color {
+private func nookAccentColor(for raw: String) -> Color {
     switch raw {
     case "indigo": return Color(red:  92/255, green:  92/255, blue: 214/255)
     case "purple": return Color(red: 148/255, green:  92/255, blue: 214/255)
@@ -105,7 +105,7 @@ private struct SmallWidgetView: View {
     let entry: NookEntry
     @Environment(\.colorScheme) private var scheme
 
-    private var accent: Color { accentColor(for: entry.snap.accentRaw) }
+    private var accent: Color { nookAccentColor(for: entry.snap.accentRaw) }
     private var bg: Color { scheme == .dark ? Color(white: 0.10) : Color(white: 0.97) }
 
     var body: some View {
@@ -153,7 +153,7 @@ private struct MediumWidgetView: View {
     let entry: NookEntry
     @Environment(\.colorScheme) private var scheme
 
-    private var accent: Color { accentColor(for: entry.snap.accentRaw) }
+    private var accent: Color { nookAccentColor(for: entry.snap.accentRaw) }
     private var bg: Color { scheme == .dark ? Color(white: 0.10) : Color(white: 0.97) }
 
     var body: some View {
@@ -218,7 +218,7 @@ private struct LargeWidgetView: View {
     let entry: NookEntry
     @Environment(\.colorScheme) private var scheme
 
-    private var accent: Color { accentColor(for: entry.snap.accentRaw) }
+    private var accent: Color { nookAccentColor(for: entry.snap.accentRaw) }
     private var bg: Color { scheme == .dark ? Color(white: 0.10) : Color(white: 0.97) }
 
     var body: some View {

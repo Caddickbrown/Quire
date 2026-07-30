@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Generate Nook.xcodeproj/project.pbxproj for the multiplatform (iOS + macOS)
-SwiftUI journaling app. Adapted from Pigeon's generator; hand-editing the pbxproj
-is avoided — edit this file and re-run instead.
+SwiftUI journaling app + its WidgetKit extension. Adapted from Pigeon's
+generator; hand-editing the pbxproj is avoided — edit this file and re-run.
+
+Two native targets are emitted:
+  * Nook                  — the app (iphoneos, iphonesimulator, macosx)
+  * NookWidgetExtension   — the WidgetKit extension, embedded into the app.
+Both are multiplatform so `make build` (macOS + iOS) works and Xcode can build
+either platform. NookShared.swift + the Lato fonts are compiled/copied into both.
 
 Usage:  python3 gen_pbxproj.py
 """
@@ -18,6 +24,7 @@ def new_id():
 swift_files = [
     ('NookApp',       'NookApp.swift',              'Nook'),
     ('NookIntents',   'NookIntents.swift',          'Nook'),
+    ('NookShared',    'NookShared.swift',           'Nook'),
     ('Theme',           'Theme.swift',                  'Nook'),
     ('Entry',           'Models/Entry.swift',           'Models'),
     ('JournalParser',   'Models/JournalParser.swift',   'Models'),
@@ -39,10 +46,18 @@ swift_files = [
     ('SettingsView',    'Views/SettingsView.swift',     'Views'),
 ]
 
-# (key, path relative to Nook/, fileType) — copied into Resources.
+# (key, path relative to Nook/, fileType) — copied into the app Resources.
 resources = [
     ('Assets', 'Assets.xcassets', 'folder.assetcatalog'),
     ('Fonts',  'fonts',           'folder'),
+]
+
+# Widget extension sources (own fileRefs; live in the NookWidget/ group).
+# NookShared.swift (shared with the app) + the Lato fonts are also built into
+# the widget, but reuse the app's fileRefs via extra PBXBuildFile entries below.
+widget_swift_files = [
+    ('WNookWidget',       'NookWidget/NookWidget.swift'),
+    ('WNookWidgetBundle', 'NookWidget/NookWidgetBundle.swift'),
 ]
 
 # Allocate ids
@@ -52,11 +67,21 @@ IDs = {k: new_id() for k in [
     'debugConfig', 'releaseConfig', 'projDebugConfig', 'projReleaseConfig',
     'configList', 'targetConfigList', 'sourcesBuildPhase', 'resourcesBuildPhase',
     'frameworksBuildPhase', 'product', 'iOSInfoPlist', 'macOSInfoPlist',
+    # Widget extension
+    'widgetGroup', 'widgetTarget', 'widgetProduct',
+    'widgetSources', 'widgetFrameworks', 'widgetResources', 'embedExtensions',
+    'widgetTargetConfigList', 'widgetDebugConfig', 'widgetReleaseConfig',
+    'widgetDep', 'widgetProxy',
+    'widgetInfoPlist', 'widgetIOSEnt', 'widgetMacEnt',
+    'bf_embed_widget', 'wbf_NookShared', 'wbf_Fonts',
 ]}
 for name, _, _ in swift_files:
     IDs[name] = new_id()
     IDs['bf_' + name] = new_id()
 for name, _, _ in resources:
+    IDs[name] = new_id()
+    IDs['bf_' + name] = new_id()
+for name, _ in widget_swift_files:
     IDs[name] = new_id()
     IDs['bf_' + name] = new_id()
 
@@ -81,7 +106,41 @@ def pbxproj():
         a(f'\t\t{IDs["bf_"+name]} /* {base(path)} in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs[name]} /* {base(path)} */; }};')
     for name, path, _ in resources:
         a(f'\t\t{IDs["bf_"+name]} /* {base(path)} in Resources */ = {{isa = PBXBuildFile; fileRef = {IDs[name]} /* {base(path)} */; }};')
+    # Widget build files
+    for name, path in widget_swift_files:
+        a(f'\t\t{IDs["bf_"+name]} /* {base(path)} in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs[name]} /* {base(path)} */; }};')
+    a(f'\t\t{IDs["wbf_NookShared"]} /* NookShared.swift in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs["NookShared"]} /* NookShared.swift */; }};')
+    a(f'\t\t{IDs["wbf_Fonts"]} /* fonts in Resources */ = {{isa = PBXBuildFile; fileRef = {IDs["Fonts"]} /* fonts */; }};')
+    a(f'\t\t{IDs["bf_embed_widget"]} /* NookWidgetExtension.appex in Embed Foundation Extensions */ = {{isa = PBXBuildFile; fileRef = {IDs["widgetProduct"]} /* NookWidgetExtension.appex */; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy, ); }}; }};')
     a('/* End PBXBuildFile section */')
+    a('')
+
+    # ---- PBXContainerItemProxy ----
+    a('/* Begin PBXContainerItemProxy section */')
+    a(f'\t\t{IDs["widgetProxy"]} /* PBXContainerItemProxy */ = {{')
+    a('\t\t\tisa = PBXContainerItemProxy;')
+    a(f'\t\t\tcontainerPortal = {IDs["project"]} /* Project object */;')
+    a('\t\t\tproxyType = 1;')
+    a(f'\t\t\tremoteGlobalIDString = {IDs["widgetTarget"]};')
+    a('\t\t\tremoteInfo = NookWidgetExtension;')
+    a('\t\t};')
+    a('/* End PBXContainerItemProxy section */')
+    a('')
+
+    # ---- PBXCopyFilesBuildPhase (Embed App Extensions) ----
+    a('/* Begin PBXCopyFilesBuildPhase section */')
+    a(f'\t\t{IDs["embedExtensions"]} /* Embed Foundation Extensions */ = {{')
+    a('\t\t\tisa = PBXCopyFilesBuildPhase;')
+    a('\t\t\tbuildActionMask = 2147483647;')
+    a('\t\t\tdstPath = "";')
+    a('\t\t\tdstSubfolderSpec = 13;')
+    a('\t\t\tfiles = (')
+    a(f'\t\t\t\t{IDs["bf_embed_widget"]} /* NookWidgetExtension.appex in Embed Foundation Extensions */,')
+    a('\t\t\t);')
+    a('\t\t\tname = "Embed Foundation Extensions";')
+    a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
+    a('\t\t};')
+    a('/* End PBXCopyFilesBuildPhase section */')
     a('')
 
     # ---- PBXFileReference ----
@@ -93,17 +152,26 @@ def pbxproj():
     a(f'\t\t{IDs["iOSInfoPlist"]} /* iOS/Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["macOSInfoPlist"]} /* macOS/Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["product"]} /* Nook.app */ = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nook.app; sourceTree = BUILT_PRODUCTS_DIR; }};')
+    # Widget file refs
+    for name, path in widget_swift_files:
+        a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {base(path)}; sourceTree = "<group>"; }};')
+    a(f'\t\t{IDs["widgetInfoPlist"]} /* NookWidget/Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};')
+    a(f'\t\t{IDs["widgetIOSEnt"]} /* NookWidget-iOS.entitlements */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NookWidget-iOS.entitlements"; sourceTree = "<group>"; }};')
+    a(f'\t\t{IDs["widgetMacEnt"]} /* NookWidget-macOS.entitlements */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NookWidget-macOS.entitlements"; sourceTree = "<group>"; }};')
+    a(f'\t\t{IDs["widgetProduct"]} /* NookWidgetExtension.appex */ = {{isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NookWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; }};')
     a('/* End PBXFileReference section */')
     a('')
 
     # ---- PBXFrameworksBuildPhase ----
     a('/* Begin PBXFrameworksBuildPhase section */')
-    a(f'\t\t{IDs["frameworksBuildPhase"]} /* Frameworks */ = {{')
-    a('\t\t\tisa = PBXFrameworksBuildPhase;')
-    a('\t\t\tbuildActionMask = 2147483647;')
-    a('\t\t\tfiles = (\n\t\t\t);')
-    a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
-    a('\t\t};')
+    for fid, label in [(IDs["frameworksBuildPhase"], 'Frameworks'),
+                       (IDs["widgetFrameworks"], 'Frameworks')]:
+        a(f'\t\t{fid} /* {label} */ = {{')
+        a('\t\t\tisa = PBXFrameworksBuildPhase;')
+        a('\t\t\tbuildActionMask = 2147483647;')
+        a('\t\t\tfiles = (\n\t\t\t);')
+        a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
+        a('\t\t};')
     a('/* End PBXFrameworksBuildPhase section */')
     a('')
 
@@ -115,6 +183,7 @@ def pbxproj():
     a('\t\t\tisa = PBXGroup;')
     a('\t\t\tchildren = (')
     a(f'\t\t\t\t{IDs["nookGroup"]} /* Nook */,')
+    a(f'\t\t\t\t{IDs["widgetGroup"]} /* NookWidget */,')
     a(f'\t\t\t\t{IDs["productsGroup"]} /* Products */,')
     a('\t\t\t);')
     a('\t\t\tsourceTree = "<group>";')
@@ -125,6 +194,7 @@ def pbxproj():
     a('\t\t\tisa = PBXGroup;')
     a('\t\t\tchildren = (')
     a(f'\t\t\t\t{IDs["product"]} /* Nook.app */,')
+    a(f'\t\t\t\t{IDs["widgetProduct"]} /* NookWidgetExtension.appex */,')
     a('\t\t\t);')
     a('\t\t\tname = Products;')
     a('\t\t\tsourceTree = "<group>";')
@@ -182,11 +252,26 @@ def pbxproj():
     a('\t\t\tsourceTree = "<group>";')
     a('\t\t};')
 
+    # NookWidget group
+    a(f'\t\t{IDs["widgetGroup"]} /* NookWidget */ = {{')
+    a('\t\t\tisa = PBXGroup;')
+    a('\t\t\tchildren = (')
+    for n, p in widget_swift_files:
+        a(f'\t\t\t\t{IDs[n]} /* {base(p)} */,')
+    a(f'\t\t\t\t{IDs["widgetInfoPlist"]} /* Info.plist */,')
+    a(f'\t\t\t\t{IDs["widgetIOSEnt"]} /* NookWidget-iOS.entitlements */,')
+    a(f'\t\t\t\t{IDs["widgetMacEnt"]} /* NookWidget-macOS.entitlements */,')
+    a('\t\t\t);')
+    a('\t\t\tpath = NookWidget;')
+    a('\t\t\tsourceTree = "<group>";')
+    a('\t\t};')
+
     a('/* End PBXGroup section */')
     a('')
 
     # ---- PBXNativeTarget ----
     a('/* Begin PBXNativeTarget section */')
+    # App target
     a(f'\t\t{IDs["target"]} /* Nook */ = {{')
     a('\t\t\tisa = PBXNativeTarget;')
     a(f'\t\t\tbuildConfigurationList = {IDs["targetConfigList"]} /* Build configuration list for PBXNativeTarget "Nook" */;')
@@ -194,13 +279,32 @@ def pbxproj():
     a(f'\t\t\t\t{IDs["sourcesBuildPhase"]} /* Sources */,')
     a(f'\t\t\t\t{IDs["frameworksBuildPhase"]} /* Frameworks */,')
     a(f'\t\t\t\t{IDs["resourcesBuildPhase"]} /* Resources */,')
+    a(f'\t\t\t\t{IDs["embedExtensions"]} /* Embed Foundation Extensions */,')
     a('\t\t\t);')
     a('\t\t\tbuildRules = (\n\t\t\t);')
-    a('\t\t\tdependencies = (\n\t\t\t);')
+    a('\t\t\tdependencies = (')
+    a(f'\t\t\t\t{IDs["widgetDep"]} /* PBXTargetDependency */,')
+    a('\t\t\t);')
     a('\t\t\tname = Nook;')
     a('\t\t\tproductName = Nook;')
     a(f'\t\t\tproductReference = {IDs["product"]} /* Nook.app */;')
     a('\t\t\tproductType = "com.apple.product-type.application";')
+    a('\t\t};')
+    # Widget target
+    a(f'\t\t{IDs["widgetTarget"]} /* NookWidgetExtension */ = {{')
+    a('\t\t\tisa = PBXNativeTarget;')
+    a(f'\t\t\tbuildConfigurationList = {IDs["widgetTargetConfigList"]} /* Build configuration list for PBXNativeTarget "NookWidgetExtension" */;')
+    a('\t\t\tbuildPhases = (')
+    a(f'\t\t\t\t{IDs["widgetSources"]} /* Sources */,')
+    a(f'\t\t\t\t{IDs["widgetFrameworks"]} /* Frameworks */,')
+    a(f'\t\t\t\t{IDs["widgetResources"]} /* Resources */,')
+    a('\t\t\t);')
+    a('\t\t\tbuildRules = (\n\t\t\t);')
+    a('\t\t\tdependencies = (\n\t\t\t);')
+    a('\t\t\tname = NookWidgetExtension;')
+    a('\t\t\tproductName = NookWidgetExtension;')
+    a(f'\t\t\tproductReference = {IDs["widgetProduct"]} /* NookWidgetExtension.appex */;')
+    a('\t\t\tproductType = "com.apple.product-type.app-extension";')
     a('\t\t};')
     a('/* End PBXNativeTarget section */')
     a('')
@@ -217,6 +321,9 @@ def pbxproj():
     a(f'\t\t\t\t\t{IDs["target"]} = {{')
     a('\t\t\t\t\t\tCreatedOnToolsVersion = 16.0;')
     a('\t\t\t\t\t};')
+    a(f'\t\t\t\t\t{IDs["widgetTarget"]} = {{')
+    a('\t\t\t\t\t\tCreatedOnToolsVersion = 16.0;')
+    a('\t\t\t\t\t};')
     a('\t\t\t\t};')
     a('\t\t\t};')
     a(f'\t\t\tbuildConfigurationList = {IDs["configList"]} /* Build configuration list for PBXProject "Nook" */;')
@@ -230,6 +337,7 @@ def pbxproj():
     a('\t\t\tprojectRoot = "";')
     a('\t\t\ttargets = (')
     a(f'\t\t\t\t{IDs["target"]} /* Nook */,')
+    a(f'\t\t\t\t{IDs["widgetTarget"]} /* NookWidgetExtension */,')
     a('\t\t\t);')
     a('\t\t};')
     a('/* End PBXProject section */')
@@ -243,6 +351,15 @@ def pbxproj():
     a('\t\t\tfiles = (')
     for name, path, _ in resources:
         a(f'\t\t\t\t{IDs["bf_"+name]} /* {base(path)} in Resources */,')
+    a('\t\t\t);')
+    a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
+    a('\t\t};')
+    # Widget resources (fonts only — accent colours are computed, no asset catalog)
+    a(f'\t\t{IDs["widgetResources"]} /* Resources */ = {{')
+    a('\t\t\tisa = PBXResourcesBuildPhase;')
+    a('\t\t\tbuildActionMask = 2147483647;')
+    a('\t\t\tfiles = (')
+    a(f'\t\t\t\t{IDs["wbf_Fonts"]} /* fonts in Resources */,')
     a('\t\t\t);')
     a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
     a('\t\t};')
@@ -260,7 +377,28 @@ def pbxproj():
     a('\t\t\t);')
     a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
     a('\t\t};')
+    # Widget sources
+    a(f'\t\t{IDs["widgetSources"]} /* Sources */ = {{')
+    a('\t\t\tisa = PBXSourcesBuildPhase;')
+    a('\t\t\tbuildActionMask = 2147483647;')
+    a('\t\t\tfiles = (')
+    for name, path in widget_swift_files:
+        a(f'\t\t\t\t{IDs["bf_"+name]} /* {base(path)} in Sources */,')
+    a(f'\t\t\t\t{IDs["wbf_NookShared"]} /* NookShared.swift in Sources */,')
+    a('\t\t\t);')
+    a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
+    a('\t\t};')
     a('/* End PBXSourcesBuildPhase section */')
+    a('')
+
+    # ---- PBXTargetDependency ----
+    a('/* Begin PBXTargetDependency section */')
+    a(f'\t\t{IDs["widgetDep"]} /* PBXTargetDependency */ = {{')
+    a('\t\t\tisa = PBXTargetDependency;')
+    a('\t\t\ttarget = ' + IDs["widgetTarget"] + ' /* NookWidgetExtension */;')
+    a(f'\t\t\ttargetProxy = {IDs["widgetProxy"]} /* PBXContainerItemProxy */;')
+    a('\t\t};')
+    a('/* End PBXTargetDependency section */')
     a('')
 
     # ---- XCBuildConfiguration ----
@@ -338,10 +476,45 @@ def pbxproj():
         a(f'\t\t\tname = {name};')
         a('\t\t};')
 
+    def widget_config(cfg_id, name):
+        a(f'\t\t{cfg_id} /* {name} */ = {{')
+        a('\t\t\tisa = XCBuildConfiguration;')
+        a('\t\t\tbuildSettings = {')
+        a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = NookWidget/NookWidget-macOS.entitlements;')
+        a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = NookWidget/NookWidget-iOS.entitlements;')
+        a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = NookWidget/NookWidget-iOS.entitlements;')
+        a('\t\t\t\tCODE_SIGN_STYLE = Automatic;')
+        a('\t\t\t\tCURRENT_PROJECT_VERSION = 1;')
+        a('\t\t\t\tDEVELOPMENT_TEAM = 52W73J6V95;')
+        a('\t\t\t\tENABLE_HARDENED_RUNTIME = YES;')
+        a('\t\t\t\tGENERATE_INFOPLIST_FILE = YES;')
+        a('\t\t\t\tINFOPLIST_FILE = NookWidget/Info.plist;')
+        a('\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = Nook;')
+        a('\t\t\t\tINFOPLIST_KEY_NSHumanReadableCopyright = "";')
+        a('\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 17.0;')
+        a('\t\t\t\tLD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";')
+        a('\t\t\t\t"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";')
+        a('\t\t\t\tMACOSX_DEPLOYMENT_TARGET = 14.0;')
+        a('\t\t\t\tMARKETING_VERSION = 1.0;')
+        a('\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.nook.NookWidget;')
+        a('\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";')
+        a('\t\t\t\tSKIP_INSTALL = YES;')
+        a('\t\t\t\tSUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";')
+        a('\t\t\t\tSUPPORTS_MACCATALYST = NO;')
+        a('\t\t\t\tSUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;')
+        a('\t\t\t\tSWIFT_EMIT_LOC_STRINGS = YES;')
+        a('\t\t\t\tSWIFT_VERSION = 5.0;')
+        a('\t\t\t\tTARGETED_DEVICE_FAMILY = "1,2";')
+        a('\t\t\t};')
+        a(f'\t\t\tname = {name};')
+        a('\t\t};')
+
     project_config(IDs['projDebugConfig'], 'Debug', True)
     project_config(IDs['projReleaseConfig'], 'Release', False)
     target_config(IDs['debugConfig'], 'Debug')
     target_config(IDs['releaseConfig'], 'Release')
+    widget_config(IDs['widgetDebugConfig'], 'Debug')
+    widget_config(IDs['widgetReleaseConfig'], 'Release')
     a('/* End XCBuildConfiguration section */')
     a('')
 
@@ -361,6 +534,15 @@ def pbxproj():
     a('\t\t\tbuildConfigurations = (')
     a(f'\t\t\t\t{IDs["debugConfig"]} /* Debug */,')
     a(f'\t\t\t\t{IDs["releaseConfig"]} /* Release */,')
+    a('\t\t\t);')
+    a('\t\t\tdefaultConfigurationIsVisible = 0;')
+    a('\t\t\tdefaultConfigurationName = Release;')
+    a('\t\t};')
+    a(f'\t\t{IDs["widgetTargetConfigList"]} /* Build configuration list for PBXNativeTarget "NookWidgetExtension" */ = {{')
+    a('\t\t\tisa = XCConfigurationList;')
+    a('\t\t\tbuildConfigurations = (')
+    a(f'\t\t\t\t{IDs["widgetDebugConfig"]} /* Debug */,')
+    a(f'\t\t\t\t{IDs["widgetReleaseConfig"]} /* Release */,')
     a('\t\t\t);')
     a('\t\t\tdefaultConfigurationIsVisible = 0;')
     a('\t\t\tdefaultConfigurationName = Release;')

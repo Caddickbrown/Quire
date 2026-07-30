@@ -7,10 +7,24 @@
 
 import WidgetKit
 import SwiftUI
+import CoreText
 
 @main
 struct NookWidgetBundle: WidgetBundle {
+    init() { Self.registerBundledFonts() }
+
     var body: some Widget {
         NookWidget()
+    }
+
+    /// The widget runs in its own process, so it must register the bundled
+    /// Lato fonts itself — it can't rely on the main app's registration.
+    private static func registerBundledFonts() {
+        guard let urls = Bundle.main.urls(forResourcesWithExtension: "ttf", subdirectory: "fonts")
+                ?? Bundle.main.urls(forResourcesWithExtension: "ttf", subdirectory: nil)
+        else { return }
+        for url in urls {
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
     }
 }

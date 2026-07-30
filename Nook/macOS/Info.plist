@@ -6,5 +6,16 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Dan Caddick-Brown. All rights reserved.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.caddickbrown.nook</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>nook</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

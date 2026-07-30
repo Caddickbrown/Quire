@@ -7,62 +7,106 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		F2E91C0151D64DE5B63B54A0 /* NookApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD104DCA5E5744D2AC89F3AE /* NookApp.swift */; };
-		B4F87F42A9C140BA844E0569 /* NookIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 015256B47459491E8CDE470C /* NookIntents.swift */; };
-		96E17BE599B9431AB066DED4 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2F6809024D42EF9F080D6C /* Theme.swift */; };
-		B64B18BA9E3145619AECF7B3 /* Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67B7D53A46F248768DD7A895 /* Entry.swift */; };
-		0FA7CF05A44D423A846C4777 /* JournalParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32ED7D4DE1D449A6927F85AB /* JournalParser.swift */; };
-		B7F4D46B6DD0494980844798 /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7BCF02C26D542EDBB953A38 /* JournalStore.swift */; };
-		2597C15400044818BAC3277E /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB4DED257ED64162B8F4B98F /* RootView.swift */; };
-		D1585A4463D84DF8967162D0 /* WritingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E158F50713FE4C0398D858C2 /* WritingView.swift */; };
-		32130B8AD2A5455595CE0B97 /* WritingTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06843F1323964D87B503B854 /* WritingTextEditor.swift */; };
-		442CAD6A70624789B398086B /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FA625EE489144B49730922F /* InboxView.swift */; };
-		FACC877799D443FE9950BE70 /* ArchiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D7A21DA08DE462B885DF82C /* ArchiveView.swift */; };
-		FDCB5247207D42D1AD741555 /* EntryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 466498F1C8C44456B72ADEC1 /* EntryDetailView.swift */; };
-		FA857ADD3D704733A2A9334D /* TagsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84685C9C9646476182072DEC /* TagsView.swift */; };
-		630201992BED40B7BB37B7BA /* TagReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 637800CD952A4CAEA022E16B /* TagReviewView.swift */; };
-		5C7D28C581F742A4A9A587E2 /* TagField.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A277DD726044A48B10FD20 /* TagField.swift */; };
-		6B7761A1481B4B7C92E38B15 /* CalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DA46DE61F9741ACB5899C9B /* CalendarView.swift */; };
-		634057A8FA6D4C659AADA131 /* MediaPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FFF2EE242694620A6B1FFD5 /* MediaPreview.swift */; };
-		31F1C2F08199438798A54053 /* AssetsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F000736CD6247C09B295F79 /* AssetsView.swift */; };
-		A08556CED87F4C4FB6B9B8ED /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 791C86C9B41A4F58AC7F4B22 /* AudioRecorder.swift */; };
-		997DA66CE0A147ACBE1EF386 /* VideoRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8566B935D2C4EF68FC52EA3 /* VideoRecorderView.swift */; };
-		3AD3D9D9B7B447B1B8EF9ED1 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B9955B117CD4C5881D1BEE8 /* SettingsView.swift */; };
-		F6D7E885B6F14BEAA454A16C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = ED64BEEE79DF44639F884B76 /* Assets.xcassets */; };
-		A15633EA801F47B691FDD788 /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = 73E6F4FD075D4DD2811B364A /* fonts */; };
+		525AD80DFD6D4C6C890F3ABB /* NookApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B072489E7F8E460E939E5156 /* NookApp.swift */; };
+		B32DC83AABF547749833F1F9 /* NookIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA0E37F8928B4341A781D60E /* NookIntents.swift */; };
+		5D09EC41EFA74C118C9875A2 /* NookShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7C71539DFB34BB38AD79CDC /* NookShared.swift */; };
+		F663A145DDED40748929FFFB /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5507EDB0DE234C5C84A1D3F3 /* Theme.swift */; };
+		35249F1D6A1C4005893F3AA3 /* Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AFA99AF93874B5F8E76A680 /* Entry.swift */; };
+		044C3AF5C1D14752856C2F53 /* JournalParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB9FBB293D244FD4B8B34500 /* JournalParser.swift */; };
+		8785421E1A0A419EB3F8F969 /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30D897C2A9294169A2CA6FB5 /* JournalStore.swift */; };
+		9B65A8FCC488484C92196D64 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D5D7AB92574F25B4C2B95C /* RootView.swift */; };
+		73523764E72D4D15AB534AAE /* WritingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C2B0A4DFEF746F4940B327F /* WritingView.swift */; };
+		191066E68FAE4B78B9D37E30 /* WritingTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74590C0045FC4C10BECD4304 /* WritingTextEditor.swift */; };
+		C556FC18F67E46838BA1D2F9 /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADB7855EFBC545CFBE71EECB /* InboxView.swift */; };
+		1132F7AC43E549C1B4EC435C /* ArchiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EEB1D4D5C5D400CADA1B90D /* ArchiveView.swift */; };
+		BD4B7B5BE2B54FBBAE17DF3C /* EntryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21291EEE0BD643D2886A7FC8 /* EntryDetailView.swift */; };
+		13AFDC5DD6EB494B89B01C28 /* TagsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DCCB742B6F5499ABC923F00 /* TagsView.swift */; };
+		68FE129BF0544878AF35BFE3 /* TagReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C771181C33B4F9380D7319E /* TagReviewView.swift */; };
+		5EED6C5E18374C9B97D968A5 /* TagField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93D99B84303A48F3A7C32427 /* TagField.swift */; };
+		7CC25809C2F44590B6ED56CA /* CalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A462C39443D4DECAF262E34 /* CalendarView.swift */; };
+		F240CFFE275B40EBBDD9330C /* MediaPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE5E5A6E9C85456CB8E8A551 /* MediaPreview.swift */; };
+		108642458F5E4F8CAD00FDDE /* AssetsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FEC1306F3B44C8F940E9C7B /* AssetsView.swift */; };
+		5598AE5148D74760833D21A5 /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1A09DFDF8104DF381E87785 /* AudioRecorder.swift */; };
+		666749A2513A45848E67C537 /* VideoRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113274E73748465880ED990C /* VideoRecorderView.swift */; };
+		A8313C45F3624D7F92DB81E6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01517E8CBE694DE69675D8BA /* SettingsView.swift */; };
+		9A887F1EF9464961AC65EBD4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C50CC7A5E490495DBFE2D9A8 /* Assets.xcassets */; };
+		D69BB9302AA647BC934FB1EB /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = DBA40DEDC9064E3FB4D82CD4 /* fonts */; };
+		A9128F9EB9F54D6D8830B733 /* NookWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BB572AB7D3545BF9285E4AF /* NookWidget.swift */; };
+		F76C7730BB31456E99840376 /* NookWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46A2867F5F044B0C8C61276E /* NookWidgetBundle.swift */; };
+		6BE320DF8E8A4FCA92CC7A0E /* NookShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7C71539DFB34BB38AD79CDC /* NookShared.swift */; };
+		C065FDE69F7945D5B12FF0A7 /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = DBA40DEDC9064E3FB4D82CD4 /* fonts */; };
+		01A520F9BEC34E9DA6A73DD7 /* NookWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 03C9F6DCBBF74BADA6DA7AD8 /* NookWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		ABC2832BB43E45D7A1DA1B48 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 9F971A0906F242EBA89AFA95 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 04CC3F71DA9E4368B8CD9BF5;
+			remoteInfo = NookWidgetExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		DC9E4284352C48259E48FDF1 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				01A520F9BEC34E9DA6A73DD7 /* NookWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
-		DD104DCA5E5744D2AC89F3AE /* NookApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookApp.swift; sourceTree = "<group>"; };
-		015256B47459491E8CDE470C /* NookIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookIntents.swift; sourceTree = "<group>"; };
-		ED2F6809024D42EF9F080D6C /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		67B7D53A46F248768DD7A895 /* Entry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Entry.swift; sourceTree = "<group>"; };
-		32ED7D4DE1D449A6927F85AB /* JournalParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalParser.swift; sourceTree = "<group>"; };
-		D7BCF02C26D542EDBB953A38 /* JournalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalStore.swift; sourceTree = "<group>"; };
-		BB4DED257ED64162B8F4B98F /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
-		E158F50713FE4C0398D858C2 /* WritingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingView.swift; sourceTree = "<group>"; };
-		06843F1323964D87B503B854 /* WritingTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingTextEditor.swift; sourceTree = "<group>"; };
-		1FA625EE489144B49730922F /* InboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxView.swift; sourceTree = "<group>"; };
-		0D7A21DA08DE462B885DF82C /* ArchiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveView.swift; sourceTree = "<group>"; };
-		466498F1C8C44456B72ADEC1 /* EntryDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntryDetailView.swift; sourceTree = "<group>"; };
-		84685C9C9646476182072DEC /* TagsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagsView.swift; sourceTree = "<group>"; };
-		637800CD952A4CAEA022E16B /* TagReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagReviewView.swift; sourceTree = "<group>"; };
-		C7A277DD726044A48B10FD20 /* TagField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagField.swift; sourceTree = "<group>"; };
-		4DA46DE61F9741ACB5899C9B /* CalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarView.swift; sourceTree = "<group>"; };
-		7FFF2EE242694620A6B1FFD5 /* MediaPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPreview.swift; sourceTree = "<group>"; };
-		8F000736CD6247C09B295F79 /* AssetsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetsView.swift; sourceTree = "<group>"; };
-		791C86C9B41A4F58AC7F4B22 /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
-		E8566B935D2C4EF68FC52EA3 /* VideoRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRecorderView.swift; sourceTree = "<group>"; };
-		9B9955B117CD4C5881D1BEE8 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		ED64BEEE79DF44639F884B76 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		73E6F4FD075D4DD2811B364A /* fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = fonts; sourceTree = "<group>"; };
-		2F745E45A8CE48CB9A293E90 /* iOS/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		AF016A91961746FF9711B124 /* macOS/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		9AA11CF64D4140AE90080741 /* Nook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nook.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B072489E7F8E460E939E5156 /* NookApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookApp.swift; sourceTree = "<group>"; };
+		EA0E37F8928B4341A781D60E /* NookIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookIntents.swift; sourceTree = "<group>"; };
+		F7C71539DFB34BB38AD79CDC /* NookShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookShared.swift; sourceTree = "<group>"; };
+		5507EDB0DE234C5C84A1D3F3 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		3AFA99AF93874B5F8E76A680 /* Entry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Entry.swift; sourceTree = "<group>"; };
+		BB9FBB293D244FD4B8B34500 /* JournalParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalParser.swift; sourceTree = "<group>"; };
+		30D897C2A9294169A2CA6FB5 /* JournalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalStore.swift; sourceTree = "<group>"; };
+		33D5D7AB92574F25B4C2B95C /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		5C2B0A4DFEF746F4940B327F /* WritingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingView.swift; sourceTree = "<group>"; };
+		74590C0045FC4C10BECD4304 /* WritingTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingTextEditor.swift; sourceTree = "<group>"; };
+		ADB7855EFBC545CFBE71EECB /* InboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxView.swift; sourceTree = "<group>"; };
+		1EEB1D4D5C5D400CADA1B90D /* ArchiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveView.swift; sourceTree = "<group>"; };
+		21291EEE0BD643D2886A7FC8 /* EntryDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntryDetailView.swift; sourceTree = "<group>"; };
+		9DCCB742B6F5499ABC923F00 /* TagsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagsView.swift; sourceTree = "<group>"; };
+		3C771181C33B4F9380D7319E /* TagReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagReviewView.swift; sourceTree = "<group>"; };
+		93D99B84303A48F3A7C32427 /* TagField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagField.swift; sourceTree = "<group>"; };
+		5A462C39443D4DECAF262E34 /* CalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarView.swift; sourceTree = "<group>"; };
+		FE5E5A6E9C85456CB8E8A551 /* MediaPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPreview.swift; sourceTree = "<group>"; };
+		6FEC1306F3B44C8F940E9C7B /* AssetsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetsView.swift; sourceTree = "<group>"; };
+		B1A09DFDF8104DF381E87785 /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
+		113274E73748465880ED990C /* VideoRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRecorderView.swift; sourceTree = "<group>"; };
+		01517E8CBE694DE69675D8BA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		C50CC7A5E490495DBFE2D9A8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		DBA40DEDC9064E3FB4D82CD4 /* fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = fonts; sourceTree = "<group>"; };
+		AE7ECEFB397F46ABB986E8C0 /* iOS/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		1E87D529CBE94DD4B99F2A7E /* macOS/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		33A1C19491B04246BD63BDDE /* Nook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nook.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		0BB572AB7D3545BF9285E4AF /* NookWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookWidget.swift; sourceTree = "<group>"; };
+		46A2867F5F044B0C8C61276E /* NookWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookWidgetBundle.swift; sourceTree = "<group>"; };
+		57D98D7B3A1F4028899E15BB /* NookWidget/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		79F807B0EF2D48768038B80D /* NookWidget-iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NookWidget-iOS.entitlements"; sourceTree = "<group>"; };
+		BF75135D9D654C16A423EE24 /* NookWidget-macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NookWidget-macOS.entitlements"; sourceTree = "<group>"; };
+		03C9F6DCBBF74BADA6DA7AD8 /* NookWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NookWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		B1D220C7D34744608EDDF8D0 /* Frameworks */ = {
+		8C526CEF64F14D90BA356192 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		69028D9C48B44AEA8BE980F8 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -72,122 +116,159 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		03124D42070242D1A0D6D0EB = {
+		716CBCBAF9334151B6BF27C7 = {
 			isa = PBXGroup;
 			children = (
-				A4A31E9535A144C2B6A3FC78 /* Nook */,
-				49DE60A316B0451E81FA7067 /* Products */,
+				F85F13A0817147B9B179B246 /* Nook */,
+				4578CC6E5CB94FE8B1DA6FC1 /* NookWidget */,
+				A54E4541ED3B4AA8AF3C0948 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		49DE60A316B0451E81FA7067 /* Products */ = {
+		A54E4541ED3B4AA8AF3C0948 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				9AA11CF64D4140AE90080741 /* Nook.app */,
+				33A1C19491B04246BD63BDDE /* Nook.app */,
+				03C9F6DCBBF74BADA6DA7AD8 /* NookWidgetExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
-		A4A31E9535A144C2B6A3FC78 /* Nook */ = {
+		F85F13A0817147B9B179B246 /* Nook */ = {
 			isa = PBXGroup;
 			children = (
-				DD104DCA5E5744D2AC89F3AE /* NookApp.swift */,
-				015256B47459491E8CDE470C /* NookIntents.swift */,
-				ED2F6809024D42EF9F080D6C /* Theme.swift */,
-				D497516A816A416BA00C702B /* Models */,
-				6E7D668D2364422E98D79DD6 /* Views */,
-				ED64BEEE79DF44639F884B76 /* Assets.xcassets */,
-				73E6F4FD075D4DD2811B364A /* fonts */,
-				2F56ED2731CD4F2F805CBC19 /* iOS */,
-				330AF5F2A6434B99BEC27818 /* macOS */,
+				B072489E7F8E460E939E5156 /* NookApp.swift */,
+				EA0E37F8928B4341A781D60E /* NookIntents.swift */,
+				F7C71539DFB34BB38AD79CDC /* NookShared.swift */,
+				5507EDB0DE234C5C84A1D3F3 /* Theme.swift */,
+				8310570ED32147C78319768A /* Models */,
+				BEA87A4207BD4FC2B2C1E0BB /* Views */,
+				C50CC7A5E490495DBFE2D9A8 /* Assets.xcassets */,
+				DBA40DEDC9064E3FB4D82CD4 /* fonts */,
+				8D038B55F0CA4D6D9878023F /* iOS */,
+				101D31E99E9D4831B4F52447 /* macOS */,
 			);
 			path = Nook;
 			sourceTree = "<group>";
 		};
-		D497516A816A416BA00C702B /* Models */ = {
+		8310570ED32147C78319768A /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				67B7D53A46F248768DD7A895 /* Entry.swift */,
-				32ED7D4DE1D449A6927F85AB /* JournalParser.swift */,
-				D7BCF02C26D542EDBB953A38 /* JournalStore.swift */,
+				3AFA99AF93874B5F8E76A680 /* Entry.swift */,
+				BB9FBB293D244FD4B8B34500 /* JournalParser.swift */,
+				30D897C2A9294169A2CA6FB5 /* JournalStore.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
 		};
-		6E7D668D2364422E98D79DD6 /* Views */ = {
+		BEA87A4207BD4FC2B2C1E0BB /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				BB4DED257ED64162B8F4B98F /* RootView.swift */,
-				E158F50713FE4C0398D858C2 /* WritingView.swift */,
-				06843F1323964D87B503B854 /* WritingTextEditor.swift */,
-				1FA625EE489144B49730922F /* InboxView.swift */,
-				0D7A21DA08DE462B885DF82C /* ArchiveView.swift */,
-				466498F1C8C44456B72ADEC1 /* EntryDetailView.swift */,
-				84685C9C9646476182072DEC /* TagsView.swift */,
-				637800CD952A4CAEA022E16B /* TagReviewView.swift */,
-				C7A277DD726044A48B10FD20 /* TagField.swift */,
-				4DA46DE61F9741ACB5899C9B /* CalendarView.swift */,
-				7FFF2EE242694620A6B1FFD5 /* MediaPreview.swift */,
-				8F000736CD6247C09B295F79 /* AssetsView.swift */,
-				791C86C9B41A4F58AC7F4B22 /* AudioRecorder.swift */,
-				E8566B935D2C4EF68FC52EA3 /* VideoRecorderView.swift */,
-				9B9955B117CD4C5881D1BEE8 /* SettingsView.swift */,
+				33D5D7AB92574F25B4C2B95C /* RootView.swift */,
+				5C2B0A4DFEF746F4940B327F /* WritingView.swift */,
+				74590C0045FC4C10BECD4304 /* WritingTextEditor.swift */,
+				ADB7855EFBC545CFBE71EECB /* InboxView.swift */,
+				1EEB1D4D5C5D400CADA1B90D /* ArchiveView.swift */,
+				21291EEE0BD643D2886A7FC8 /* EntryDetailView.swift */,
+				9DCCB742B6F5499ABC923F00 /* TagsView.swift */,
+				3C771181C33B4F9380D7319E /* TagReviewView.swift */,
+				93D99B84303A48F3A7C32427 /* TagField.swift */,
+				5A462C39443D4DECAF262E34 /* CalendarView.swift */,
+				FE5E5A6E9C85456CB8E8A551 /* MediaPreview.swift */,
+				6FEC1306F3B44C8F940E9C7B /* AssetsView.swift */,
+				B1A09DFDF8104DF381E87785 /* AudioRecorder.swift */,
+				113274E73748465880ED990C /* VideoRecorderView.swift */,
+				01517E8CBE694DE69675D8BA /* SettingsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
 		};
-		2F56ED2731CD4F2F805CBC19 /* iOS */ = {
+		8D038B55F0CA4D6D9878023F /* iOS */ = {
 			isa = PBXGroup;
 			children = (
-				2F745E45A8CE48CB9A293E90 /* Info.plist */,
+				AE7ECEFB397F46ABB986E8C0 /* Info.plist */,
 			);
 			path = iOS;
 			sourceTree = "<group>";
 		};
-		330AF5F2A6434B99BEC27818 /* macOS */ = {
+		101D31E99E9D4831B4F52447 /* macOS */ = {
 			isa = PBXGroup;
 			children = (
-				AF016A91961746FF9711B124 /* Info.plist */,
+				1E87D529CBE94DD4B99F2A7E /* Info.plist */,
 			);
 			path = macOS;
+			sourceTree = "<group>";
+		};
+		4578CC6E5CB94FE8B1DA6FC1 /* NookWidget */ = {
+			isa = PBXGroup;
+			children = (
+				0BB572AB7D3545BF9285E4AF /* NookWidget.swift */,
+				46A2867F5F044B0C8C61276E /* NookWidgetBundle.swift */,
+				57D98D7B3A1F4028899E15BB /* Info.plist */,
+				79F807B0EF2D48768038B80D /* NookWidget-iOS.entitlements */,
+				BF75135D9D654C16A423EE24 /* NookWidget-macOS.entitlements */,
+			);
+			path = NookWidget;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		46017C9525A742699A531A3C /* Nook */ = {
+		F3426657DA534169A4473A79 /* Nook */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 331650B729E94DE2B480699E /* Build configuration list for PBXNativeTarget "Nook" */;
+			buildConfigurationList = 27A6894FF7DB4953A6E6AFDA /* Build configuration list for PBXNativeTarget "Nook" */;
 			buildPhases = (
-				CFCB114E307B42C58FE26640 /* Sources */,
-				B1D220C7D34744608EDDF8D0 /* Frameworks */,
-				F0B24FD2C6204EDFBA0C7846 /* Resources */,
+				ADD7B849A0B24C3AACB0DE65 /* Sources */,
+				8C526CEF64F14D90BA356192 /* Frameworks */,
+				19E16687925D4A329478CAD9 /* Resources */,
+				DC9E4284352C48259E48FDF1 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B2973EF346F445979D2DAD6E /* PBXTargetDependency */,
+			);
+			name = Nook;
+			productName = Nook;
+			productReference = 33A1C19491B04246BD63BDDE /* Nook.app */;
+			productType = "com.apple.product-type.application";
+		};
+		04CC3F71DA9E4368B8CD9BF5 /* NookWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 53C1EBBC293A461B9E2F6CEE /* Build configuration list for PBXNativeTarget "NookWidgetExtension" */;
+			buildPhases = (
+				F219209DE9794BF2B853B92A /* Sources */,
+				69028D9C48B44AEA8BE980F8 /* Frameworks */,
+				496DF80B0762447B94703421 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = Nook;
-			productName = Nook;
-			productReference = 9AA11CF64D4140AE90080741 /* Nook.app */;
-			productType = "com.apple.product-type.application";
+			name = NookWidgetExtension;
+			productName = NookWidgetExtension;
+			productReference = 03C9F6DCBBF74BADA6DA7AD8 /* NookWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		90EA65D7EE7D4F379D5F1862 /* Project object */ = {
+		9F971A0906F242EBA89AFA95 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1600;
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
-					46017C9525A742699A531A3C = {
+					F3426657DA534169A4473A79 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					04CC3F71DA9E4368B8CD9BF5 = {
 						CreatedOnToolsVersion = 16.0;
 					};
 				};
 			};
-			buildConfigurationList = 8A6FB853857346A893A6A82A /* Build configuration list for PBXProject "Nook" */;
+			buildConfigurationList = FF13046F534A45188A166973 /* Build configuration list for PBXProject "Nook" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -195,61 +276,89 @@
 				en,
 				Base,
 			);
-			mainGroup = 03124D42070242D1A0D6D0EB;
-			productRefGroup = 49DE60A316B0451E81FA7067 /* Products */;
+			mainGroup = 716CBCBAF9334151B6BF27C7;
+			productRefGroup = A54E4541ED3B4AA8AF3C0948 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				46017C9525A742699A531A3C /* Nook */,
+				F3426657DA534169A4473A79 /* Nook */,
+				04CC3F71DA9E4368B8CD9BF5 /* NookWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		F0B24FD2C6204EDFBA0C7846 /* Resources */ = {
+		19E16687925D4A329478CAD9 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				F6D7E885B6F14BEAA454A16C /* Assets.xcassets in Resources */,
-				A15633EA801F47B691FDD788 /* fonts in Resources */,
+				9A887F1EF9464961AC65EBD4 /* Assets.xcassets in Resources */,
+				D69BB9302AA647BC934FB1EB /* fonts in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		496DF80B0762447B94703421 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C065FDE69F7945D5B12FF0A7 /* fonts in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		CFCB114E307B42C58FE26640 /* Sources */ = {
+		ADD7B849A0B24C3AACB0DE65 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				F2E91C0151D64DE5B63B54A0 /* NookApp.swift in Sources */,
-				B4F87F42A9C140BA844E0569 /* NookIntents.swift in Sources */,
-				96E17BE599B9431AB066DED4 /* Theme.swift in Sources */,
-				B64B18BA9E3145619AECF7B3 /* Entry.swift in Sources */,
-				0FA7CF05A44D423A846C4777 /* JournalParser.swift in Sources */,
-				B7F4D46B6DD0494980844798 /* JournalStore.swift in Sources */,
-				2597C15400044818BAC3277E /* RootView.swift in Sources */,
-				D1585A4463D84DF8967162D0 /* WritingView.swift in Sources */,
-				32130B8AD2A5455595CE0B97 /* WritingTextEditor.swift in Sources */,
-				442CAD6A70624789B398086B /* InboxView.swift in Sources */,
-				FACC877799D443FE9950BE70 /* ArchiveView.swift in Sources */,
-				FDCB5247207D42D1AD741555 /* EntryDetailView.swift in Sources */,
-				FA857ADD3D704733A2A9334D /* TagsView.swift in Sources */,
-				630201992BED40B7BB37B7BA /* TagReviewView.swift in Sources */,
-				5C7D28C581F742A4A9A587E2 /* TagField.swift in Sources */,
-				6B7761A1481B4B7C92E38B15 /* CalendarView.swift in Sources */,
-				634057A8FA6D4C659AADA131 /* MediaPreview.swift in Sources */,
-				31F1C2F08199438798A54053 /* AssetsView.swift in Sources */,
-				A08556CED87F4C4FB6B9B8ED /* AudioRecorder.swift in Sources */,
-				997DA66CE0A147ACBE1EF386 /* VideoRecorderView.swift in Sources */,
-				3AD3D9D9B7B447B1B8EF9ED1 /* SettingsView.swift in Sources */,
+				525AD80DFD6D4C6C890F3ABB /* NookApp.swift in Sources */,
+				B32DC83AABF547749833F1F9 /* NookIntents.swift in Sources */,
+				5D09EC41EFA74C118C9875A2 /* NookShared.swift in Sources */,
+				F663A145DDED40748929FFFB /* Theme.swift in Sources */,
+				35249F1D6A1C4005893F3AA3 /* Entry.swift in Sources */,
+				044C3AF5C1D14752856C2F53 /* JournalParser.swift in Sources */,
+				8785421E1A0A419EB3F8F969 /* JournalStore.swift in Sources */,
+				9B65A8FCC488484C92196D64 /* RootView.swift in Sources */,
+				73523764E72D4D15AB534AAE /* WritingView.swift in Sources */,
+				191066E68FAE4B78B9D37E30 /* WritingTextEditor.swift in Sources */,
+				C556FC18F67E46838BA1D2F9 /* InboxView.swift in Sources */,
+				1132F7AC43E549C1B4EC435C /* ArchiveView.swift in Sources */,
+				BD4B7B5BE2B54FBBAE17DF3C /* EntryDetailView.swift in Sources */,
+				13AFDC5DD6EB494B89B01C28 /* TagsView.swift in Sources */,
+				68FE129BF0544878AF35BFE3 /* TagReviewView.swift in Sources */,
+				5EED6C5E18374C9B97D968A5 /* TagField.swift in Sources */,
+				7CC25809C2F44590B6ED56CA /* CalendarView.swift in Sources */,
+				F240CFFE275B40EBBDD9330C /* MediaPreview.swift in Sources */,
+				108642458F5E4F8CAD00FDDE /* AssetsView.swift in Sources */,
+				5598AE5148D74760833D21A5 /* AudioRecorder.swift in Sources */,
+				666749A2513A45848E67C537 /* VideoRecorderView.swift in Sources */,
+				A8313C45F3624D7F92DB81E6 /* SettingsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F219209DE9794BF2B853B92A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A9128F9EB9F54D6D8830B733 /* NookWidget.swift in Sources */,
+				F76C7730BB31456E99840376 /* NookWidgetBundle.swift in Sources */,
+				6BE320DF8E8A4FCA92CC7A0E /* NookShared.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		B2973EF346F445979D2DAD6E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 04CC3F71DA9E4368B8CD9BF5 /* NookWidgetExtension */;
+			targetProxy = ABC2832BB43E45D7A1DA1B48 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
-		5A0636ECC39B4FE69739A265 /* Debug */ = {
+		237C23DD36A64B4BBECCA71C /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -270,7 +379,7 @@
 			};
 			name = Debug;
 		};
-		A31AEB4FE79043BBB8619ADF /* Release */ = {
+		6C24822FC9264F029FE099DE /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -288,7 +397,7 @@
 			};
 			name = Release;
 		};
-		96214D6BDD6149CB8B9E61BA /* Debug */ = {
+		C32FC1DBA17A4804A6A178DA /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -329,7 +438,7 @@
 			};
 			name = Debug;
 		};
-		4CA61D3DC7894543900FF68E /* Release */ = {
+		37029FC27ACD4B55AF8B47E6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -370,23 +479,94 @@
 			};
 			name = Release;
 		};
+		985970A602714EF7B6771AE2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = NookWidget/NookWidget-macOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = NookWidget/NookWidget-iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = NookWidget/NookWidget-iOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 52W73J6V95;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = NookWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Nook;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.nook.NookWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		9D63551BBB304FCF82C01392 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = NookWidget/NookWidget-macOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = NookWidget/NookWidget-iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = NookWidget/NookWidget-iOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 52W73J6V95;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = NookWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Nook;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.nook.NookWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		8A6FB853857346A893A6A82A /* Build configuration list for PBXProject "Nook" */ = {
+		FF13046F534A45188A166973 /* Build configuration list for PBXProject "Nook" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				5A0636ECC39B4FE69739A265 /* Debug */,
-				A31AEB4FE79043BBB8619ADF /* Release */,
+				237C23DD36A64B4BBECCA71C /* Debug */,
+				6C24822FC9264F029FE099DE /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		331650B729E94DE2B480699E /* Build configuration list for PBXNativeTarget "Nook" */ = {
+		27A6894FF7DB4953A6E6AFDA /* Build configuration list for PBXNativeTarget "Nook" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				96214D6BDD6149CB8B9E61BA /* Debug */,
-				4CA61D3DC7894543900FF68E /* Release */,
+				C32FC1DBA17A4804A6A178DA /* Debug */,
+				37029FC27ACD4B55AF8B47E6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		53C1EBBC293A461B9E2F6CEE /* Build configuration list for PBXNativeTarget "NookWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				985970A602714EF7B6771AE2 /* Debug */,
+				9D63551BBB304FCF82C01392 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -394,5 +574,5 @@
 /* End XCConfigurationList section */
 
 	};
-	rootObject = 90EA65D7EE7D4F379D5F1862 /* Project object */;
+	rootObject = 9F971A0906F242EBA89AFA95 /* Project object */;
 }

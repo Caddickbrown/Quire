@@ -15,6 +15,12 @@
 	<key>com.apple.security.device.camera</key>
 	<true/>
 
+	<!-- App Group: shared UserDefaults between app + widget extension -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.caddickbrown.nook</string>
+	</array>
+
 	<!-- iCloud Documents: enable the container via Signing & Capabilities → iCloud. -->
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>

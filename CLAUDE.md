@@ -49,8 +49,11 @@ star button / context menus add/remove the marker; the **Starred** sidebar secti
 
 ## Architecture
 
-Single **multiplatform target** (`platform: [iOS, macOS]`), deployment iOS 17 /
-macOS 14. There is **no hand-maintained `project.pbxproj`** — it is generated:
+Two **multiplatform targets** (`platform: [iOS, macOS]`), deployment iOS 17 /
+macOS 14: the **Nook** app and the **NookWidgetExtension** WidgetKit extension
+(embedded into the app). There is **no hand-maintained `project.pbxproj`** — it
+is generated (both targets, the embed phase, and the app→widget dependency all
+come out of `gen_pbxproj.py`):
 
 ```
 make project   # runs gen_pbxproj.py → Nook.xcodeproj/project.pbxproj
@@ -92,8 +95,35 @@ Nook/
                           folder, backup, cleanup/merge-ex-split/export, shortcuts + how-to guides
   iOS/Info.plist  macOS/Info.plist  Nook.entitlements  Assets.xcassets  fonts/
 gen_pbxproj.py   tools/make_icon.swift   Tests/ParserChecks.swift   Makefile
+  Nook/NookShared.swift  `NookSnapshot` — Codable stats shared app↔widget
+NookWidget/          WidgetKit extension (own target, embedded in the app)
+  NookWidget.swift       small/medium/large widgets; deep-links `nook://write`
+  NookWidgetBundle.swift @main WidgetBundle; registers bundled Lato fonts
+  Info.plist             NSExtension point `com.apple.widgetkit-extension`
+  NookWidget-{iOS,macOS}.entitlements   App Group (macOS also sandboxed)
+gen_pbxproj.py   tools/make_icon.swift   Tests/ParserChecks.swift   Makefile
 _parked/video/   ← freewrite's video views, excluded from the build
 ```
+
+### Widget (WidgetKit extension)
+
+`NookWidgetExtension` is a separate multiplatform target embedded in the app's
+`PlugIns/`. It shows writing-streak + journal stats and never touches the
+journal files directly — instead the app writes a **`NookSnapshot`** (defined in
+`Nook/NookShared.swift`, compiled into *both* targets) into an **App Group**
+UserDefaults suite (`group.com.caddickbrown.nook`) after every reload via
+`JournalStore.writeWidgetSnapshot()`, then calls `WidgetCenter.reloadAllTimelines()`;
+the widget reads it on its 30-min timeline refresh. The App Group entitlement is
+in `Nook-iOS.entitlements` / `Nook-macOS.entitlements` and both widget
+entitlements files. Widgets deep-link via the `nook://` URL scheme (registered in
+both app `Info.plist`s, handled by `NookApp.onOpenURL`). Custom `Lato-*` fonts are
+bundled into the widget and registered at runtime in `NookWidgetBundle.init`
+(a separate process can't inherit the app's font registration).
+
+> Requires the App Group `group.com.caddickbrown.nook` to exist on the signing
+> account; Xcode automatic signing normally registers it on first build. If the
+> widget doesn't appear, confirm it was actually built + embedded (it's in
+> `Nook.app/PlugIns/NookWidgetExtension.appex`).
 
 ### Data-layer port (jnl main.go → Swift)
 
@@ -180,8 +210,9 @@ to jnl when touching either side.
 ## Deferred (explicit follow-ups)
 
 PDF export; AI-chat; live `NSMetadataQuery` sync refresh; iPhone Live Activity for
-the timer (needs a widget extension target); extend the macOS email-style
-list+detail beyond Inbox; an XCTest target (parser verified via `make check`).
+the timer (could reuse the `NookWidgetExtension` target); extend the macOS
+email-style list+detail beyond Inbox; an XCTest target (parser verified via
+`make check`).
 
 ## Conventions
 

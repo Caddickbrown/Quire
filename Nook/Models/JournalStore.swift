@@ -16,7 +16,7 @@ import Combine
 import ImageIO
 import UniformTypeIdentifiers
 import AVFoundation
-#if os(iOS)
+#if os(iOS) || os(macOS)
 import WidgetKit
 #endif
 #if canImport(AppKit)
@@ -280,7 +280,7 @@ final class JournalStore: ObservableObject {
     /// Write a NookSnapshot to the shared App Group so the widget can
     /// display up-to-date stats without accessing the journal directly.
     private func writeWidgetSnapshot() {
-        #if os(iOS)
+        #if os(iOS) || os(macOS)
         let s = stats()
         let accentRaw = UserDefaults.standard.string(forKey: "accentColor") ?? "blue"
         var snap = NookSnapshot()
