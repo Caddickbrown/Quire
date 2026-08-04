@@ -227,6 +227,7 @@ struct EntryTwoPane: View {
                 Button(role: .destructive) { delete(entry) } label: {
                     Label("Delete", systemImage: "trash")
                 }
+                .destructiveAction()
             }
     }
 

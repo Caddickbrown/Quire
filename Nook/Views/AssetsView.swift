@@ -98,6 +98,7 @@ struct AssetsView: View {
                                     } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
+                                    .destructiveAction()
                                 }
                         }
                     }

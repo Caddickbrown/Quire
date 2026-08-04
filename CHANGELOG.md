@@ -64,6 +64,9 @@ section is dated development history rather than versioned releases.
 - **Assets**: the grid is a photo gallery — uniform square tiles with hairline
   gaps, capped so they stay thumbnail-sized on a wide window, and no uuid
   filename captions.
+- **Destructive actions** are red everywhere — Delete in the inbox, journal,
+  entry editor and assets menus, Discard in the composer, and Clear Orphan
+  Media. `role: .destructive` alone left several of them looking ordinary.
 - **Entry rows**: the thumbnail is bigger and sits on the right of the row.
 - **Sidebar** (iOS): the "nook" title is gone — the section list stands on its
   own and the title only crowded it. macOS still uses it as the window title.

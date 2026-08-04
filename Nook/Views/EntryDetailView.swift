@@ -272,6 +272,7 @@ struct EntryDetailView: View {
         } label: {
             Label("Delete", systemImage: "trash").labelStyle(.iconOnly)
         }
+        .destructiveAction()
         .help("Delete")
     }
 

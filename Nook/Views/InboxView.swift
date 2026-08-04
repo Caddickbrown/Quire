@@ -179,6 +179,7 @@ struct InboxView: View {
                 }
                 #endif
                 Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
+                    .destructiveAction()
             }
     }
 

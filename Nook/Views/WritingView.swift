@@ -148,6 +148,7 @@ struct WritingView: View {
                     } label: {
                         Label("Discard", systemImage: "trash")
                     }
+                    .destructiveAction()
                     .disabled(!hasText && activeTS == nil)
                     Button {
                         importEntries()

@@ -176,3 +176,16 @@ enum WritingFont: String, CaseIterable, Identifiable {
         }
     }
 }
+
+extension View {
+    /// Red treatment for a destructive control — Delete, Discard — so those
+    /// actions look the same everywhere. `role: .destructive` alone isn't
+    /// enough: a toolbar button, an inline button, and a macOS menu item all
+    /// ignore it, so the colour is set explicitly.
+    ///
+    /// Not for swipe actions: those take their colour from `.tint` and draw
+    /// their label on top of it, so tinting the label would hide it.
+    func destructiveAction() -> some View {
+        foregroundStyle(.red)
+    }
+}

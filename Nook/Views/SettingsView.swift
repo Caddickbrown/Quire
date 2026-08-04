@@ -512,6 +512,7 @@ struct SettingsView: View {
         } label: {
             Label("Clear Orphan Media", systemImage: "photo.badge.exclamationmark")
         }
+        .destructiveAction()
     }
     private var exportButton: some View {
         Button {
