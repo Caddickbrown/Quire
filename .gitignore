@@ -46,6 +46,9 @@ fastlane/test_output
 
 # Xcode Server
 *.xcscheme
+# …except the shared schemes gen_pbxproj.py generates (they carry the widget's
+# _XCWidgetKind, without which Xcode won't launch a multi-widget extension).
+!Nook.xcodeproj/xcshareddata/xcschemes/*.xcscheme
 *.xctestrun
 
 # Playgrounds

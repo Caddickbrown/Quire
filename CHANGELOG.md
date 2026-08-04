@@ -80,6 +80,10 @@ section is dated development history rather than versioned releases.
   folder also moved off the main thread.
 - **Inbox**: the swipe-to-delete action is red on both swipe edges (a
   destructive role alone doesn't tint the leading edge).
+- **Widget scheme**: running the widget extension from Xcode failed with
+  "Please specify the widget kind … `_XCWidgetKind`" once the bundle held two
+  widgets. `gen_pbxproj.py` now generates a shared `NookWidgetExtension` scheme
+  carrying that variable.
 - **`make check`** compiles again: `Entry`'s media helpers referenced
   `JournalStore`, which isn't in the check's compile set. The pure link-parsing
   and media-kind helpers moved to `Models/Media.swift`.

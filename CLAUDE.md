@@ -229,7 +229,9 @@ email-style list+detail beyond Inbox; an XCTest target (parser verified via
   on-disk format, build steps); see the "How to update this file" block at the
   top of that file for the buckets and phrasing.
 - Never hand-edit `Nook.xcodeproj/project.pbxproj` — edit `gen_pbxproj.py` and
-  run `make project`.
+  run `make project`. The same script also writes the shared
+  `NookWidgetExtension.xcscheme`; its `_XCWidgetKind` variable picks which
+  widget `Run` previews, which Xcode can't infer once a bundle holds several.
 - Keep `JournalParser` pure and jnl-faithful; add a case to `ParserChecks.swift`
   when you touch it.
 - Guard platform-specific code with `#if os(macOS)` / `#if os(iOS)`; keep the

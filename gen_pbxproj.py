@@ -566,6 +566,84 @@ def pbxproj():
     a('}')
     return '\n'.join(L) + '\n'
 
+# Which widget `Run` previews when the NookWidgetExtension scheme is selected.
+# A bundle with more than one widget can't be inferred, so Xcode refuses to
+# launch without _XCWidgetKind ("Please specify the widget kind in the scheme's
+# Environment Variables"). Switch to 'NookNewEntryWidget' to preview the Lock
+# Screen button instead — or edit the variable in Xcode's scheme editor.
+WIDGET_PREVIEW_KIND = 'NookWidget'
+
+
+def widget_scheme():
+    """Shared scheme for the widget extension, carrying _XCWidgetKind."""
+    return f'''<?xml version="1.0" encoding="UTF-8"?>
+<Scheme LastUpgradeVersion = "1600" version = "1.7">
+   <BuildAction parallelizeBuildables = "YES" buildImplicitDependencies = "YES">
+      <BuildActionEntries>
+         <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "YES" buildForArchiving = "YES" buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "{IDs['widgetTarget']}"
+               BuildableName = "NookWidgetExtension.appex"
+               BlueprintName = "NookWidgetExtension"
+               ReferencedContainer = "container:Nook.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <LaunchAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      launchStyle = "0"
+      askForAppToLaunch = "Yes"
+      useCustomWorkingDirectory = "NO"
+      ignoresPersistentStateOnLaunch = "NO"
+      debugDocumentVersioning = "YES"
+      debugServiceExtension = "internal"
+      allowLocationSimulation = "YES"
+      launchAutomaticallySubstyle = "2">
+      <BuildableProductRunnable runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "{IDs['widgetTarget']}"
+            BuildableName = "NookWidgetExtension.appex"
+            BlueprintName = "NookWidgetExtension"
+            ReferencedContainer = "container:Nook.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "_XCWidgetKind"
+            value = "{WIDGET_PREVIEW_KIND}"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
+   </LaunchAction>
+   <ProfileAction
+      buildConfiguration = "Release"
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      savedToolIdentifier = ""
+      useCustomWorkingDirectory = "NO"
+      debugDocumentVersioning = "YES">
+      <BuildableProductRunnable runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "{IDs['widgetTarget']}"
+            BuildableName = "NookWidgetExtension.appex"
+            BlueprintName = "NookWidgetExtension"
+            ReferencedContainer = "container:Nook.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </ProfileAction>
+   <AnalyzeAction buildConfiguration = "Debug">
+   </AnalyzeAction>
+   <ArchiveAction buildConfiguration = "Release" revealArchiveInOrganizer = "YES">
+   </ArchiveAction>
+</Scheme>
+'''
+
+
 if __name__ == '__main__':
     out = pbxproj()
     path = os.path.join(HERE, 'Nook.xcodeproj', 'project.pbxproj')
@@ -573,3 +651,10 @@ if __name__ == '__main__':
     with open(path, 'w') as f:
         f.write(out)
     print(f'Wrote {len(out)} bytes to {path}')
+
+    schemes = os.path.join(HERE, 'Nook.xcodeproj', 'xcshareddata', 'xcschemes')
+    os.makedirs(schemes, exist_ok=True)
+    scheme_path = os.path.join(schemes, 'NookWidgetExtension.xcscheme')
+    with open(scheme_path, 'w') as f:
+        f.write(widget_scheme())
+    print(f'Wrote {scheme_path} (_XCWidgetKind = {WIDGET_PREVIEW_KIND})')
