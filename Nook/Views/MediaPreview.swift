@@ -241,9 +241,36 @@ enum RowThumbnail {
     }
     private static let cache = NSCache<NSString, Box>()
 
+    /// Synchronous still for an image file — cheap enough for a list row.
     static func load(_ url: URL, side: Int = 96) -> Image? {
-        let key = "\(url.path)#\(side)" as NSString
+        let key = cacheKey(url, side)
         if let hit = cache.object(forKey: key) { return hit.image }
+        guard let image = decode(url, side: side) else { return nil }
+        cache.setObject(Box(image), forKey: key)
+        return image
+    }
+
+    /// A thumbnail for any asset: a downsampled still for images, a poster frame
+    /// for video (generating one needs to decode, so this is async), nil for
+    /// audio — there's no frame to show.
+    static func thumbnail(for url: URL, side: Int = 200) async -> Image? {
+        let key = cacheKey(url, side)
+        if let hit = cache.object(forKey: key) { return hit.image }
+        let image: Image?
+        switch MediaKind(path: url.lastPathComponent) {
+        case .image: image = decode(url, side: side)
+        case .video: image = await posterFrame(url, side: side)
+        case .audio: image = nil
+        }
+        if let image { cache.setObject(Box(image), forKey: key) }
+        return image
+    }
+
+    private static func cacheKey(_ url: URL, _ side: Int) -> NSString {
+        "\(url.path)#\(side)" as NSString
+    }
+
+    private static func decode(_ url: URL, side: Int) -> Image? {
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,   // bake in EXIF orientation
@@ -252,13 +279,25 @@ enum RowThumbnail {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
               let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
         else { return nil }
+        return platformImage(cg)
+    }
+
+    private static func posterFrame(_ url: URL, side: Int) async -> Image? {
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.appliesPreferredTrackTransform = true          // respect the recorded rotation
+        generator.maximumSize = CGSize(width: side * 2, height: side * 2)
+        // A moment in rather than frame zero, which is often black.
+        let time = CMTime(seconds: 0.3, preferredTimescale: 600)
+        guard let cg = try? await generator.image(at: time).image else { return nil }
+        return platformImage(cg)
+    }
+
+    private static func platformImage(_ cg: CGImage) -> Image {
         #if canImport(AppKit)
-        let image = Image(nsImage: NSImage(cgImage: cg, size: .zero))
+        return Image(nsImage: NSImage(cgImage: cg, size: .zero))
         #else
-        let image = Image(uiImage: UIImage(cgImage: cg))
+        return Image(uiImage: UIImage(cgImage: cg))
         #endif
-        cache.setObject(Box(image), forKey: key)
-        return image
     }
 }
 
@@ -267,7 +306,7 @@ enum RowThumbnail {
 struct EntryThumbnail: View {
     @EnvironmentObject private var store: JournalStore
     let entry: Entry
-    var side: CGFloat = 40
+    var side: CGFloat = 56
 
     var body: some View {
         if let path = entry.firstImagePath,

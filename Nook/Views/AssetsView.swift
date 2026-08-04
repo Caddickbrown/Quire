@@ -30,8 +30,16 @@ struct AssetsView: View {
     @AppStorage("assetSort") private var sortRaw = AssetSort.newest.rawValue
     @State private var assets: [JournalStore.AssetItem] = []
     @State private var viewing: JournalStore.AssetItem?
+    @State private var usagePicker: UsagePicker?
 
-    private let columns = [GridItem(.adaptive(minimum: 130), spacing: 14)]
+    /// Shown when an asset is used by several entries, so you can pick one.
+    struct UsagePicker: Identifiable {
+        let id = UUID()
+        let uses: [(entry: Entry, source: EntrySource)]
+    }
+
+    // Tight square tiles with hairline gaps — a photo gallery, not a file list.
+    private let columns = [GridItem(.adaptive(minimum: 108), spacing: 2)]
 
     /// Kind order for the "By kind" sort: images, then video, then audio.
     private static func kindRank(_ name: String) -> Int {
@@ -66,7 +74,7 @@ struct AssetsView: View {
                 )
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 14) {
+                    LazyVGrid(columns: columns, spacing: 2) {
                         ForEach(sorted) { item in
                             Button { viewing = item } label: { cell(item) }
                                 .buttonStyle(.plain)
@@ -91,7 +99,7 @@ struct AssetsView: View {
                                 }
                         }
                     }
-                    .padding()
+                    .padding(.horizontal, 2)
                 }
             }
         }
@@ -113,31 +121,37 @@ struct AssetsView: View {
         .sheet(item: $viewing) { item in
             AssetViewer(item: item)
         }
+        .confirmationDialog("Go to Entry",
+                            isPresented: Binding(get: { usagePicker != nil },
+                                                 set: { if !$0 { usagePicker = nil } }),
+                            presenting: usagePicker) { picker in
+            ForEach(Array(picker.uses.enumerated()), id: \.offset) { _, use in
+                Button(label(for: use)) { nav.open(use.entry, source: use.source) }
+            }
+        } message: { picker in
+            Text("Used by \(picker.uses.count) entries.")
+        }
         .task { reload() }
     }
 
-    private func reload() { assets = store.allAssets() }
+    private func reload() {
+        Task { assets = await store.allAssetsAsync() }
+    }
 
-    /// "Go to entry" — direct if one usage, a submenu to pick if several.
-    @ViewBuilder
+    /// "Go to entry". Finding an asset's usages means reading every journal
+    /// file, so it happens when this is *pressed* — building it into the menu up
+    /// front scanned the whole journal once per visible cell, which made opening
+    /// Assets crawl.
     private func goToMenu(_ item: JournalStore.AssetItem) -> some View {
-        let uses = store.usages(ofAsset: item.name)
-        if uses.count == 1 {
-            Button {
+        Button {
+            let uses = store.usages(ofAsset: item.name)
+            if uses.count == 1 {
                 nav.open(uses[0].entry, source: uses[0].source)
-            } label: {
-                Label("Go to Entry", systemImage: "arrow.turn.up.right")
+            } else if uses.count > 1 {
+                usagePicker = UsagePicker(uses: uses)
             }
-        } else if uses.count > 1 {
-            Menu {
-                ForEach(Array(uses.enumerated()), id: \.offset) { _, use in
-                    Button(label(for: use)) {
-                        nav.open(use.entry, source: use.source)
-                    }
-                }
-            } label: {
-                Label("Go to Entry (\(uses.count))", systemImage: "arrow.turn.up.right")
-            }
+        } label: {
+            Label("Go to Entry", systemImage: "arrow.turn.up.right")
         }
     }
 
@@ -155,43 +169,57 @@ struct AssetsView: View {
     /// Thumbnail only — the uuid filenames carry no meaning, so the gallery
     /// stays a clean grid of pictures.
     private func cell(_ item: JournalStore.AssetItem) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8).fill(.quaternary)
-            switch MediaKind(path: item.name) {
-            case .image:
-                if let img = thumbnail(item.url) {
-                    img.resizable().scaledToFill()
-                } else {
-                    Image(systemName: "photo").font(.largeTitle).foregroundStyle(.secondary)
-                }
-            case .video:
-                Image(systemName: "film").font(.largeTitle).foregroundStyle(.secondary)
-            case .audio:
-                Image(systemName: "waveform").font(.largeTitle).foregroundStyle(.secondary)
-            }
-        }
-        .frame(height: 100)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .contentShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func thumbnail(_ url: URL) -> Image? {
-        #if os(macOS)
-        return NSImage(contentsOf: url).map { Image(nsImage: $0) }
-        #else
-        return UIImage(contentsOfFile: url.path).map { Image(uiImage: $0) }
-        #endif
+        AssetThumbnailCell(url: item.url)
+            .aspectRatio(1, contentMode: .fill)
+            .clipped()
+            .contentShape(Rectangle())
     }
 }
 
-/// One asset, full size. Images pinch/scroll to zoom; video and audio play.
+/// A grid cell's picture: a still for images, a poster frame for video (marked
+/// with a play badge so it still reads as a video), a glyph for audio. Video
+/// frames have to be decoded, so it loads asynchronously and shows the glyph
+/// until the frame arrives.
+private struct AssetThumbnailCell: View {
+    let url: URL
+    @State private var image: Image?
+
+    private var kind: MediaKind { MediaKind(path: url.lastPathComponent) }
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.quaternary)
+            if let image {
+                image.resizable().scaledToFill()
+                if kind == .video {
+                    Image(systemName: "play.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.white.opacity(0.9))
+                        .shadow(radius: 3)
+                }
+            } else {
+                Image(systemName: glyph).font(.largeTitle).foregroundStyle(.secondary)
+            }
+        }
+        .task(id: url) { image = await RowThumbnail.thumbnail(for: url) }
+    }
+
+    private var glyph: String {
+        switch kind {
+        case .image: return "photo"
+        case .video: return "film"
+        case .audio: return "waveform"
+        }
+    }
+}
+
+/// One asset, full size. Images open fitted to the screen and zoom like the
+/// Photos app; video and audio play.
 struct AssetViewer: View {
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
     @Environment(\.dismiss) private var dismiss
     let item: JournalStore.AssetItem
-
-    @State private var zoom: CGFloat = 1
 
     private var subtitle: String {
         let size = ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file)
@@ -240,15 +268,8 @@ struct AssetViewer: View {
     private var content: some View {
         switch MediaKind(path: item.name) {
         case .image:
-            if let img = fullImage {
-                ScrollView([.horizontal, .vertical]) {
-                    img.resizable().scaledToFit()
-                        .scaleEffect(zoom)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .gesture(MagnificationGesture()
-                    .onChanged { zoom = max(1, min(6, $0)) }
-                    .onEnded { _ in if zoom < 1.05 { zoom = 1 } })
+            if let img = platformImage {
+                ZoomableImage(image: img)
             } else {
                 ContentUnavailableView("Can't open this image", systemImage: "photo")
             }
@@ -259,11 +280,139 @@ struct AssetViewer: View {
         }
     }
 
-    private var fullImage: Image? {
-        #if os(macOS)
-        return NSImage(contentsOf: item.url).map { Image(nsImage: $0) }
-        #else
-        return UIImage(contentsOfFile: item.url.path).map { Image(uiImage: $0) }
-        #endif
+    #if os(macOS)
+    private var platformImage: NSImage? { NSImage(contentsOf: item.url) }
+    #else
+    private var platformImage: UIImage? { UIImage(contentsOfFile: item.url.path) }
+    #endif
+}
+
+#if os(iOS)
+/// A scroll-view-backed image: opens fitted, pinch to zoom, drag to pan,
+/// double-tap to zoom in and back out, rubber-banding at the edges — the Photos
+/// app behaviour. SwiftUI's own gestures don't reproduce it convincingly.
+struct ZoomableImage: UIViewRepresentable {
+    let image: UIImage
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scroll = LayoutReportingScrollView()
+        scroll.delegate = context.coordinator
+        scroll.minimumZoomScale = 1
+        scroll.maximumZoomScale = 6
+        scroll.bouncesZoom = true
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.showsVerticalScrollIndicator = false
+        scroll.backgroundColor = .clear
+        scroll.contentInsetAdjustmentBehavior = .never
+
+        let imageView = UIImageView(image: image)
+        imageView.contentMode = .scaleAspectFit
+        imageView.isUserInteractionEnabled = true
+        scroll.addSubview(imageView)
+
+        context.coordinator.scrollView = scroll
+        context.coordinator.imageView = imageView
+        scroll.onLayout = { [weak coordinator = context.coordinator] in
+            coordinator?.fitIfBoundsChanged()
+        }
+
+        let doubleTap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleDoubleTap(_:))
+        )
+        doubleTap.numberOfTapsRequired = 2
+        scroll.addGestureRecognizer(doubleTap)
+        return scroll
+    }
+
+    func updateUIView(_ scroll: UIScrollView, context: Context) {
+        context.coordinator.imageView?.image = image
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// Reports every layout pass, so the image can be re-fitted after a rotation
+    /// or a resize (a scroll view has no delegate callback for that).
+    final class LayoutReportingScrollView: UIScrollView {
+        var onLayout: (() -> Void)?
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            onLayout?()
+        }
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        weak var scrollView: UIScrollView?
+        weak var imageView: UIImageView?
+        private var lastSize: CGSize = .zero
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+        func scrollViewDidZoom(_ scrollView: UIScrollView) { centre() }
+
+        /// Refit only when the viewport actually changed, so a re-render can't
+        /// throw away the zoom the reader set.
+        func fitIfBoundsChanged() {
+            guard let scroll = scrollView, let imageView else { return }
+            let size = scroll.bounds.size
+            guard size != lastSize, size.width > 0, size.height > 0 else { return }
+            lastSize = size
+            scroll.zoomScale = 1
+            imageView.frame = CGRect(origin: .zero, size: size)
+            scroll.contentSize = size
+            centre()
+        }
+
+        /// Keep the image in the middle while it's smaller than the viewport.
+        private func centre() {
+            guard let scroll = scrollView, let imageView else { return }
+            let x = max(0, (scroll.bounds.width - imageView.frame.width) / 2)
+            let y = max(0, (scroll.bounds.height - imageView.frame.height) / 2)
+            scroll.contentInset = UIEdgeInsets(top: y, left: x, bottom: y, right: x)
+        }
+
+        @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+            guard let scroll = scrollView else { return }
+            if scroll.zoomScale > scroll.minimumZoomScale {
+                scroll.setZoomScale(scroll.minimumZoomScale, animated: true)
+            } else {
+                // Zoom to a third of the viewport around the tapped point.
+                let point = gesture.location(in: imageView)
+                let size = CGSize(width: scroll.bounds.width / 3, height: scroll.bounds.height / 3)
+                scroll.zoom(to: CGRect(x: point.x - size.width / 2,
+                                       y: point.y - size.height / 2,
+                                       width: size.width,
+                                       height: size.height),
+                            animated: true)
+            }
+        }
     }
 }
+#else
+/// macOS: an NSScrollView gives native magnification (pinch / ⌘-scroll) and
+/// scrolling around a zoomed image.
+struct ZoomableImage: NSViewRepresentable {
+    let image: NSImage
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.allowsMagnification = true
+        scroll.minMagnification = 1
+        scroll.maxMagnification = 6
+        scroll.hasVerticalScroller = false
+        scroll.hasHorizontalScroller = false
+        scroll.drawsBackground = false
+
+        let imageView = NSImageView()
+        imageView.image = image
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.frame = scroll.contentView.bounds
+        imageView.autoresizingMask = [.width, .height]
+        scroll.documentView = imageView
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        (scroll.documentView as? NSImageView)?.image = image
+    }
+}
+#endif

@@ -87,7 +87,9 @@ Nook/
                           attach/record media; drag-drop
     TagsView.swift        tag cloud (coloured, searchable) → entries per tag; random tag
     CalendarView.swift    MiniCalendarView (sidebar) — days with entries, media-typed dots
-    AssetsView.swift      media grid; right-click Reveal / Delete / Go to Entry
+    AssetsView.swift      photo-gallery grid (video poster frames); tap → AssetViewer
+                          (Photos-style zoom); sort; Reveal / Delete / Go to Entry
+    ChangelogView.swift   "What's New" — parses the bundled CHANGELOG.md resource
     MediaPreview.swift    render body markdown + inline images/video/audio
     WritingTextEditor.swift  NSTextView/UITextView wrapper: zero insets, no scrollbar, @tag colour
     AudioRecorder.swift   voice memo (AVAudioRecorder) + RecordingBanner

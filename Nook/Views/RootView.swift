@@ -156,9 +156,19 @@ struct RootView: View {
             .navigationTitle("nook")
             .safeAreaInset(edge: .bottom) { sidebarFooter }
             #if os(iOS)
-            // On iPhone, Write lives as a compose button top-right rather than a
-            // sidebar row — it's the one-tap action, not a place you browse to.
+            // The plain system title read as flat next to the rest of the app, so
+            // the wordmark is drawn as a principal item instead: Lato, italic, in
+            // the accent colour.
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("nook")
+                        .font(.custom("Lato-Regular", size: 20).italic())
+                        .foregroundStyle(accent)
+                        .tracking(1)
+                }
+                // On iPhone, Write lives as a compose button top-right rather than
+                // a sidebar row — it's the one-tap action, not a place you browse to.
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { nav.section = .write } label: {
                         Image(systemName: AppSection.write.systemImage)

@@ -27,6 +27,10 @@ struct ArchiveView: View {
 
     private var oldestFirst: Bool { ArchiveSort(rawValue: sortRaw) == .oldest }
 
+    private func openRandom() {
+        if let r = store.randomEntry() { randomHit = Hit(date: r.date, entry: r.entry) }
+    }
+
     private var filtered: [Entry] {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return q.isEmpty ? loaded : loaded.filter { $0.raw.lowercased().contains(q) }
@@ -46,7 +50,8 @@ struct ArchiveView: View {
                     sourceFor: { .archive(date: $0.date) },
                     showTime: true,
                     groupByDate: true,
-                    oldestFirst: oldestFirst
+                    oldestFirst: oldestFirst,
+                    onPullRandom: openRandom
                 )
             }
         }
@@ -57,9 +62,7 @@ struct ArchiveView: View {
         #endif
         // Dice then sort — same order as the Inbox toolbar.
         .toolbar {
-            Button {
-                if let r = store.randomEntry() { randomHit = Hit(date: r.date, entry: r.entry) }
-            } label: {
+            Button { openRandom() } label: {
                 Label("Random", systemImage: "dice")
             }
             .keyboardShortcut("r", modifiers: .command)
@@ -99,7 +102,6 @@ struct EntryPreviewRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            EntryThumbnail(entry: entry)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     if entry.isStarred {
@@ -131,6 +133,8 @@ struct EntryPreviewRow: View {
                         .lineLimit(2)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            EntryThumbnail(entry: entry)
         }
         .padding(.vertical, 2)
     }
@@ -147,6 +151,8 @@ struct EntryTwoPane: View {
     var fullDate = false     // date + time (flat, multi-day contexts)
     var groupByDate = false  // section the list by date (headers), entries under each
     var oldestFirst = false  // date-section order when grouping
+    /// Pull down past the top to open a random entry (iOS), as in the Inbox.
+    var onPullRandom: (() -> Void)? = nil
     @State private var selectedTS: String?
     @State private var openEntry: Entry?
 
@@ -199,6 +205,10 @@ struct EntryTwoPane: View {
                 ForEach(entries) { entryRow($0) }
             }
         }
+        #if os(iOS)
+        .refreshable { onPullRandom?() }
+        .background { if onPullRandom != nil { DiceRefreshDecorator() } }
+        #endif
     }
 
     private func entryRow(_ entry: Entry) -> some View {
@@ -349,6 +359,12 @@ struct StarredView: View {
 
     private var oldestFirst: Bool { ArchiveSort(rawValue: sortRaw) == .oldest }
 
+    private func openRandom() {
+        if let pick = loaded.randomElement() {
+            randomHit = StarredHit(entry: pick.entry, source: pick.source)
+        }
+    }
+
     var body: some View {
         Group {
             if loaded.isEmpty {
@@ -365,7 +381,8 @@ struct StarredView: View {
                     sourceFor: { sources[$0.id] ?? .archive(date: $0.date) },
                     showTime: true,
                     groupByDate: true,
-                    oldestFirst: oldestFirst
+                    oldestFirst: oldestFirst,
+                    onPullRandom: openRandom
                 )
             }
         }
@@ -375,11 +392,7 @@ struct StarredView: View {
         #endif
         // Dice then sort — same order as the Inbox and Journal toolbars.
         .toolbar {
-            Button {
-                if let pick = loaded.randomElement() {
-                    randomHit = StarredHit(entry: pick.entry, source: pick.source)
-                }
-            } label: {
+            Button { openRandom() } label: {
                 Label("Random", systemImage: "dice")
             }
             .disabled(loaded.isEmpty)
@@ -418,14 +431,10 @@ struct StatsView: View {
         Form {
             Section("Overview") {
                 LabeledContent("Inbox drafts", value: "\(stats.inboxDrafts)")
-                LabeledContent("Inbox size", value: Self.size(stats.inboxBytes))
                 LabeledContent("Tags", value: "\(stats.tags)")
                 if stats.splitJournals > 0 {
                     LabeledContent("Split journals", value: "\(stats.splitJournals)")
                 }
-                LabeledContent("Text size", value: Self.size(stats.bytes))
-                LabeledContent("Media size", value: Self.size(stats.mediaBytes))
-                LabeledContent("Total size", value: Self.size(stats.bytes + stats.mediaBytes))
             }
             Section("Archive") {
                 LabeledContent("Days written", value: "\(stats.days)")
@@ -434,7 +443,21 @@ struct StatsView: View {
                 if stats.entries > 0 {
                     LabeledContent("Avg per entry", value: "\(stats.words / stats.entries) words")
                 }
-                LabeledContent("Archive size", value: Self.size(stats.archiveBytes))
+            }
+            Section("Sizes") {
+                LabeledContent("Text", value: Self.size(stats.bytes))
+                LabeledContent("Images", value: Self.size(stats.imageBytes))
+                LabeledContent("Video", value: Self.size(stats.videoBytes))
+                LabeledContent("Audio", value: Self.size(stats.audioBytes))
+                if stats.otherMediaBytes > 0 {
+                    LabeledContent("Other media", value: Self.size(stats.otherMediaBytes))
+                }
+                LabeledContent("Total", value: Self.size(stats.bytes + stats.mediaBytes))
+            }
+            Section("Sizes by location") {
+                LabeledContent("Inbox", value: Self.size(stats.inboxBytes))
+                LabeledContent("Archive", value: Self.size(stats.archiveBytes))
+                LabeledContent("Media", value: Self.size(stats.mediaBytes))
             }
             Section("Streaks") {
                 LabeledContent("Current", value: "\(stats.currentStreak) day\(stats.currentStreak == 1 ? "" : "s")")

@@ -42,6 +42,7 @@ swift_files = [
     ('CalendarView',    'Views/CalendarView.swift',     'Views'),
     ('MediaPreview',    'Views/MediaPreview.swift',      'Views'),
     ('AssetsView',      'Views/AssetsView.swift',       'Views'),
+    ('ChangelogView',   'Views/ChangelogView.swift',    'Views'),
     ('AudioRecorder',   'Views/AudioRecorder.swift',    'Views'),
     ('VideoRecorderView','Views/VideoRecorderView.swift','Views'),
     ('SettingsView',    'Views/SettingsView.swift',     'Views'),
@@ -76,6 +77,10 @@ IDs = {k: new_id() for k in [
     'widgetDep', 'widgetProxy',
     'widgetInfoPlist', 'widgetIOSEnt', 'widgetMacEnt',
     'bf_embed_widget', 'wbf_NookShared', 'wbf_Fonts',
+    # CHANGELOG.md lives at the repo root (not under Nook/), so it gets its own
+    # fileRef in the project group and is copied into the app's Resources —
+    # the in-app "What's New" screen renders it.
+    'changelog', 'bf_changelog',
 ]}
 for name, _, _ in swift_files:
     IDs[name] = new_id()
@@ -113,6 +118,7 @@ def pbxproj():
         a(f'\t\t{IDs["bf_"+name]} /* {base(path)} in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs[name]} /* {base(path)} */; }};')
     a(f'\t\t{IDs["wbf_NookShared"]} /* NookShared.swift in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs["NookShared"]} /* NookShared.swift */; }};')
     a(f'\t\t{IDs["wbf_Fonts"]} /* fonts in Resources */ = {{isa = PBXBuildFile; fileRef = {IDs["Fonts"]} /* fonts */; }};')
+    a(f'\t\t{IDs["bf_changelog"]} /* CHANGELOG.md in Resources */ = {{isa = PBXBuildFile; fileRef = {IDs["changelog"]} /* CHANGELOG.md */; }};')
     a(f'\t\t{IDs["bf_embed_widget"]} /* NookWidgetExtension.appex in Embed Foundation Extensions */ = {{isa = PBXBuildFile; fileRef = {IDs["widgetProduct"]} /* NookWidgetExtension.appex */; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy, ); }}; }};')
     a('/* End PBXBuildFile section */')
     a('')
@@ -154,6 +160,7 @@ def pbxproj():
     a(f'\t\t{IDs["iOSInfoPlist"]} /* iOS/Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["macOSInfoPlist"]} /* macOS/Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["product"]} /* Nook.app */ = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nook.app; sourceTree = BUILT_PRODUCTS_DIR; }};')
+    a(f'\t\t{IDs["changelog"]} /* CHANGELOG.md */ = {{isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = CHANGELOG.md; sourceTree = "<group>"; }};')
     # Widget file refs
     for name, path in widget_swift_files:
         a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {base(path)}; sourceTree = "<group>"; }};')
@@ -186,6 +193,7 @@ def pbxproj():
     a('\t\t\tchildren = (')
     a(f'\t\t\t\t{IDs["nookGroup"]} /* Nook */,')
     a(f'\t\t\t\t{IDs["widgetGroup"]} /* NookWidget */,')
+    a(f'\t\t\t\t{IDs["changelog"]} /* CHANGELOG.md */,')
     a(f'\t\t\t\t{IDs["productsGroup"]} /* Products */,')
     a('\t\t\t);')
     a('\t\t\tsourceTree = "<group>";')
@@ -353,6 +361,7 @@ def pbxproj():
     a('\t\t\tfiles = (')
     for name, path, _ in resources:
         a(f'\t\t\t\t{IDs["bf_"+name]} /* {base(path)} in Resources */,')
+    a(f'\t\t\t\t{IDs["bf_changelog"]} /* CHANGELOG.md in Resources */,')
     a('\t\t\t);')
     a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
     a('\t\t};')

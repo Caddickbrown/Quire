@@ -31,8 +31,11 @@ section is dated development history rather than versioned releases.
 ## [Unreleased]
 
 ### Added
-- **Assets**: tap an asset to view it full size — pinch to zoom images, play
-  video and audio — plus **sort by date, size, kind, or name**.
+- **Assets**: tap an asset to view it full size — images open fitted and zoom
+  like the Photos app (pinch, pan, double-tap), video and audio play — plus
+  **sort by date, size, kind, or name**.
+- **Assets**: video tiles show a real poster frame with a play badge instead of
+  a film glyph.
 - **Backup**: automatic backups on a schedule (`Settings → Backup`) — Off /
   Daily / Weekly / On every change, with a "keep last N backups" setting that
   prunes older copies. The copy runs off the main thread, so a large assets
@@ -44,15 +47,25 @@ section is dated development history rather than versioned releases.
 - **Entry rows**: image thumbnails in the Inbox and Journal, decoded at
   thumbnail size and cached so long lists stay smooth.
 - **Inbox**: a grouping toggle in the sort menu — date headers, or one flat list.
-- **Inbox**: pull down to open a random draft (iOS).
+- **Inbox, Journal, Starred**: pull down to open a random entry (iOS). The
+  pull indicator is a spinning dice rather than the stock spinner.
 - **Lock Screen widget** (iOS): a New Draft button in all three accessory sizes
   (circular, rectangular, inline) that opens Nook straight into the composer.
+- **Settings → About**: a **What's New** screen rendering the whole release
+  history. `CHANGELOG.md` ships as an app resource, so the screen can't drift
+  from the repo.
+- **Stats**: a **Sizes** section broken down by text, images, video, and audio,
+  plus sizes by location (inbox, archive, media).
 - **Preview**: `@tag` highlighting now renders in reading mode, not just the
   editor.
 - **Starred**: the same dice + sort toolbar as the Inbox and Journal.
 
 ### Changed
-- **Assets**: dropped the uuid filename captions from the gallery.
+- **Assets**: the grid is a photo gallery — square tiles, hairline gaps, and no
+  uuid filename captions.
+- **Entry rows**: the thumbnail is bigger and sits on the right of the row.
+- **Sidebar** (iOS): the "nook" wordmark is set in italic Lato in the accent
+  colour instead of the plain system title.
 - **Calendar**: the month/year picker is a real picker — two wheels on iOS, two
   pop-up menus on macOS — instead of a month menu plus a year stepper.
 - **Entry view** (iOS): the controls moved into the navigation bar, so an entry
@@ -60,6 +73,10 @@ section is dated development history rather than versioned releases.
 - **Journal**: the toolbar puts the dice before sort, matching the Inbox.
 
 ### Fixed
+- **Assets**: opening the gallery was very slow. Working out which entries use
+  an asset reads every journal file, and that was being done up front for each
+  visible tile; it now happens only when "Go to Entry" is pressed. Listing the
+  folder also moved off the main thread.
 - **Inbox**: the swipe-to-delete action is red on both swipe edges (a
   destructive role alone doesn't tint the leading edge).
 - **`make check`** compiles again: `Entry`'s media helpers referenced

@@ -136,6 +136,7 @@ struct SettingsView: View {
     @State private var showingBackupPicker = false
     @State private var backupMessage: String?
     @State private var showingTagReview = false
+    @State private var showingChangelog = false
     @State private var expandedHowTos: Set<String> = []
     @State private var orphanCount = 0
     @State private var showingOrphanConfirm = false
@@ -297,6 +298,16 @@ struct SettingsView: View {
                 }
             }
 
+            Section {
+                Button { showingChangelog = true } label: {
+                    Label("What's New", systemImage: "sparkles")
+                }
+            } header: {
+                Text("About")
+            } footer: {
+                Text("Every release and what changed in it.")
+            }
+
             Section("How to") {
                 ForEach(Self.howTos, id: \.title) { item in
                     DisclosureGroup(isExpanded: Binding(
@@ -338,6 +349,9 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showingTagReview) {
             TagReviewView().environmentObject(store)
+        }
+        .sheet(isPresented: $showingChangelog) {
+            ChangelogView()
         }
         .alert("Clear orphan media?", isPresented: $showingOrphanConfirm) {
             Button("Delete \(orphanCount)", role: .destructive) {

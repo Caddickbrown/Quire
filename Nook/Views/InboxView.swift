@@ -8,6 +8,9 @@
 //
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 enum InboxSort: String, CaseIterable, Identifiable {
     case newest, oldest, longest, shortest
@@ -151,6 +154,7 @@ struct InboxView: View {
         #if os(iOS)
         // Pull down past the top to jump to a random draft.
         .refreshable { selectRandom() }
+        .background { DiceRefreshDecorator() }
         #endif
     }
 
@@ -243,6 +247,61 @@ struct InboxView: View {
     }
 }
 
+#if os(iOS)
+/// Swaps the pull-to-refresh spinner for a spinning dice, since pulling down
+/// here rolls a random entry rather than reloading anything.
+///
+/// `.refreshable` gives no hook for a custom indicator, so this drops an
+/// invisible probe into the list's background, walks up to the enclosing scroll
+/// view, and restyles its refresh control. If the hierarchy ever changes shape
+/// the lookup simply finds nothing and the stock spinner stays.
+struct DiceRefreshDecorator: UIViewRepresentable {
+    private static let diceTag = 0x0D1CE
+
+    func makeUIView(context: Context) -> UIView {
+        let probe = UIView(frame: .zero)
+        probe.isUserInteractionEnabled = false
+        return probe
+    }
+
+    func updateUIView(_ probe: UIView, context: Context) {
+        // The refresh control isn't attached yet during this layout pass.
+        DispatchQueue.main.async { decorate(from: probe) }
+    }
+
+    private func decorate(from probe: UIView) {
+        var view: UIView? = probe
+        while let current = view, !(current is UIScrollView) { view = current.superview }
+        guard let scroll = view as? UIScrollView,
+              let refresh = scroll.refreshControl,
+              refresh.viewWithTag(Self.diceTag) == nil
+        else { return }
+
+        refresh.tintColor = .clear      // hide the stock spinner, keep the mechanics
+
+        let dice = UIImageView(image: UIImage(systemName: "dice"))
+        dice.tag = Self.diceTag
+        dice.tintColor = .secondaryLabel
+        dice.contentMode = .scaleAspectFit
+        dice.translatesAutoresizingMaskIntoConstraints = false
+        refresh.addSubview(dice)
+        NSLayoutConstraint.activate([
+            dice.centerXAnchor.constraint(equalTo: refresh.centerXAnchor),
+            dice.centerYAnchor.constraint(equalTo: refresh.centerYAnchor),
+            dice.widthAnchor.constraint(equalToConstant: 22),
+            dice.heightAnchor.constraint(equalToConstant: 22),
+        ])
+
+        let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+        spin.fromValue = 0
+        spin.toValue = 2 * Double.pi
+        spin.duration = 1.1
+        spin.repeatCount = .infinity
+        dice.layer.add(spin, forKey: "spin")
+    }
+}
+#endif
+
 private struct DraftRow: View {
     let draft: Entry
 
@@ -250,7 +309,6 @@ private struct DraftRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            EntryThumbnail(entry: draft)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     if draft.isStarred {
@@ -277,6 +335,8 @@ private struct DraftRow: View {
                         .lineLimit(1)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            EntryThumbnail(entry: draft)
         }
         .padding(.vertical, 2)
     }

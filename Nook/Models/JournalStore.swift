@@ -826,10 +826,22 @@ final class JournalStore: ObservableObject {
 
     /// All files in the assets folder (for the Assets browser).
     func allAssets() -> [AssetItem] {
+        guard let dir = assetsDirURL else { return [] }
+        return Self.listAssets(in: dir)
+    }
+
+    /// Same listing, off the main actor — stat-ing every file in a large assets
+    /// folder is far too slow to do while the Assets view is appearing.
+    func allAssetsAsync() async -> [AssetItem] {
+        guard let dir = assetsDirURL else { return [] }
+        return await Task.detached(priority: .userInitiated) { Self.listAssets(in: dir) }.value
+    }
+
+    nonisolated private static func listAssets(in dir: URL) -> [AssetItem] {
         let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey]
-        guard let dir = assetsDirURL,
-              let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys)
-        else { return [] }
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: keys
+        ) else { return [] }
         return items
             .filter { !$0.hasDirectoryPath }
             .map { url in
@@ -842,6 +854,33 @@ final class JournalStore: ObservableObject {
     }
 
     func deleteAsset(_ url: URL) { try? fm.removeItem(at: url) }
+
+    /// Size on disk of the assets folder, split by media kind. A file whose
+    /// extension isn't a known image/video/audio type lands in `other` rather
+    /// than being silently counted as a picture.
+    func assetBytesByKind() -> (image: Int, video: Int, audio: Int, other: Int) {
+        guard let dir = assetsDirURL,
+              let en = fm.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey])
+        else { return (0, 0, 0, 0) }
+        var image = 0, video = 0, audio = 0, other = 0
+        for case let url as URL in en where !url.hasDirectoryPath {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            let ext = url.pathExtension.lowercased()
+            switch MediaKind(path: url.lastPathComponent) {
+            case .video: video += size
+            case .audio: audio += size
+            case .image:
+                // MediaKind treats anything unrecognised as an image, so check
+                // the extension really is one before counting it there.
+                if Self.imageExtensions.contains(ext) { image += size } else { other += size }
+            }
+        }
+        return (image, video, audio, other)
+    }
+
+    private static let imageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tiff", "tif", "bmp",
+    ]
 
     /// Total size on disk of everything in the assets folder.
     func assetsBytes() -> Int {
@@ -1447,6 +1486,9 @@ final class JournalStore: ObservableObject {
         var bytes = 0
         var inboxBytes = 0, archiveBytes = 0
         var mediaBytes = 0
+        /// `mediaBytes` broken down by kind; `otherMediaBytes` catches anything
+        /// in assets/ that isn't recognisable image, video, or audio.
+        var imageBytes = 0, videoBytes = 0, audioBytes = 0, otherMediaBytes = 0
         var inboxDrafts = 0, tags = 0, splitJournals = 0
     }
 
@@ -1503,7 +1545,12 @@ final class JournalStore: ObservableObject {
         s.bytes = journalBytes()
         s.inboxBytes = fileBytes(inboxURL)
         s.archiveBytes = max(0, s.bytes - s.inboxBytes)
-        s.mediaBytes = assetsBytes()
+        let media = assetBytesByKind()
+        s.imageBytes = media.image
+        s.videoBytes = media.video
+        s.audioBytes = media.audio
+        s.otherMediaBytes = media.other
+        s.mediaBytes = media.image + media.video + media.audio + media.other
         s.inboxDrafts = inboxDrafts.count
         s.tags = tagCounts.count
         s.splitJournals = splitJournals.count
