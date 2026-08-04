@@ -59,6 +59,7 @@ resources = [
 widget_swift_files = [
     ('WNookWidget',       'NookWidget/NookWidget.swift'),
     ('WNookWidgetBundle', 'NookWidget/NookWidgetBundle.swift'),
+    ('WNookLockScreen',   'NookWidget/NookLockScreenWidget.swift'),
 ]
 
 # Allocate ids

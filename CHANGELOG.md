@@ -45,6 +45,8 @@ section is dated development history rather than versioned releases.
   thumbnail size and cached so long lists stay smooth.
 - **Inbox**: a grouping toggle in the sort menu — date headers, or one flat list.
 - **Inbox**: pull down to open a random draft (iOS).
+- **Lock Screen widget** (iOS): a New Draft button in all three accessory sizes
+  (circular, rectangular, inline) that opens Nook straight into the composer.
 - **Preview**: `@tag` highlighting now renders in reading mode, not just the
   editor.
 - **Starred**: the same dice + sort toolbar as the Inbox and Journal.

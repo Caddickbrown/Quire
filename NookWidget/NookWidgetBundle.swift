@@ -15,6 +15,10 @@ struct NookWidgetBundle: WidgetBundle {
 
     var body: some Widget {
         NookWidget()
+        // Lock Screen accessories exist on iOS only.
+        #if os(iOS)
+        NookNewEntryWidget()
+        #endif
     }
 
     /// The widget runs in its own process, so it must register the bundled

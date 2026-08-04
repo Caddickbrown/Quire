@@ -99,6 +99,7 @@ gen_pbxproj.py   tools/make_icon.swift   Tests/ParserChecks.swift   Makefile
   Nook/NookShared.swift  `NookSnapshot` — Codable stats shared app↔widget
 NookWidget/          WidgetKit extension (own target, embedded in the app)
   NookWidget.swift       small/medium/large widgets; deep-links `nook://write`
+  NookLockScreenWidget.swift  iOS-only Lock Screen accessory: a New Draft button
   NookWidgetBundle.swift @main WidgetBundle; registers bundled Lato fonts
   Info.plist             NSExtension point `com.apple.widgetkit-extension`
   NookWidget-{iOS,macOS}.entitlements   App Group (macOS also sandboxed)
