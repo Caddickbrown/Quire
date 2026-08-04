@@ -91,6 +91,7 @@ struct NookApp: App {
     @StateObject private var nav   = NavigationModel()
     @AppStorage("colorScheme") private var colorSchemeRaw: String = AppColorScheme.auto.rawValue
     @AppStorage("accentColor") private var accentRaw: String = AccentTheme.blue.rawValue
+    @Environment(\.scenePhase) private var scenePhase
 
     #if canImport(UIKit)
     @UIApplicationDelegateAdaptor(NookAppDelegate.self) private var delegate
@@ -104,6 +105,10 @@ struct NookApp: App {
             RootView()
                 .environmentObject(store)
                 .environmentObject(nav)
+                // Take the scheduled backup if one came due while we were closed.
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { store.autoBackupIfDue() }
+                }
                 .tint(accent)
                 .environment(\.accent, accent)
                 .preferredColorScheme(

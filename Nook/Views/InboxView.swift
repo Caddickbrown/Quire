@@ -22,6 +22,18 @@ enum InboxSort: String, CaseIterable, Identifiable {
     }
 }
 
+/// How the inbox list is broken up: date headers, or one flat list.
+enum InboxGrouping: String, CaseIterable, Identifiable {
+    case date, none
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .date: return "Group by date"
+        case .none: return "No grouping"
+        }
+    }
+}
+
 enum SwipeAction: String, CaseIterable, Identifiable {
     case file, delete, none
     var id: String { rawValue }
@@ -39,6 +51,7 @@ struct InboxView: View {
     @EnvironmentObject private var nav: NavigationModel
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
     @AppStorage("inboxSort") private var sortRaw: String = InboxSort.newest.rawValue
+    @AppStorage("inboxGrouping") private var groupingRaw: String = InboxGrouping.date.rawValue
     @AppStorage("inboxSwipeLeft") private var swipeLeftRaw = SwipeAction.file.rawValue
     @AppStorage("inboxSwipeRight") private var swipeRightRaw = SwipeAction.delete.rawValue
     @State private var searchText = ""
@@ -121,36 +134,48 @@ struct InboxView: View {
         return order.map { (date: $0, entries: map[$0] ?? []) }
     }
 
+    private var grouping: InboxGrouping { InboxGrouping(rawValue: groupingRaw) ?? .date }
+
     private var draftList: some View {
         List(selection: selectionBinding) {
-            ForEach(draftSections, id: \.date) { section in
-                Section(Theme.sectionDate(section.date, style: dateStyleRaw)) {
-                    ForEach(section.entries) { draft in
-                        row(for: draft)
-                            .tag(draft.ts)
-                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                swipeButton(SwipeAction(rawValue: swipeRightRaw) ?? .delete, draft)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                swipeButton(SwipeAction(rawValue: swipeLeftRaw) ?? .file, draft)
-                            }
-                            .contextMenu {
-                                Button { store.fileDraft(draft) } label: { Label("Archive", systemImage: "archivebox") }
-                                Button { store.toggleStar(draft, source: .inbox) } label: {
-                                    Label(draft.isStarred ? "Unstar" : "Star",
-                                          systemImage: draft.isStarred ? "star.slash" : "star")
-                                }
-                                #if os(macOS)
-                                Button { store.revealEntry(source: .inbox) } label: {
-                                    Label("Reveal in Finder", systemImage: "folder")
-                                }
-                                #endif
-                                Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
-                            }
+            if grouping == .date {
+                ForEach(draftSections, id: \.date) { section in
+                    Section(Theme.sectionDate(section.date, style: dateStyleRaw)) {
+                        ForEach(section.entries) { draftRow($0) }
                     }
                 }
+            } else {
+                ForEach(drafts) { draftRow($0) }
             }
         }
+        #if os(iOS)
+        // Pull down past the top to jump to a random draft.
+        .refreshable { selectRandom() }
+        #endif
+    }
+
+    private func draftRow(_ draft: Entry) -> some View {
+        row(for: draft)
+            .tag(draft.ts)
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                swipeButton(SwipeAction(rawValue: swipeRightRaw) ?? .delete, draft)
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                swipeButton(SwipeAction(rawValue: swipeLeftRaw) ?? .file, draft)
+            }
+            .contextMenu {
+                Button { store.fileDraft(draft) } label: { Label("Archive", systemImage: "archivebox") }
+                Button { store.toggleStar(draft, source: .inbox) } label: {
+                    Label(draft.isStarred ? "Unstar" : "Star",
+                          systemImage: draft.isStarred ? "star.slash" : "star")
+                }
+                #if os(macOS)
+                Button { store.revealEntry(source: .inbox) } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+                #endif
+                Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
+            }
     }
 
     @ViewBuilder
@@ -160,7 +185,9 @@ struct InboxView: View {
             Button { store.fileDraft(draft) } label: { Label("File", systemImage: "archivebox") }
                 .tint(.green)
         case .delete:
+            // Explicitly red: a destructive role alone doesn't tint the leading edge.
             Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
+                .tint(.red)
         case .none:
             EmptyView()
         }
@@ -201,6 +228,11 @@ struct InboxView: View {
                 }
                 .pickerStyle(.inline)
                 Divider()
+                Picker("Grouping", selection: $groupingRaw) {
+                    ForEach(InboxGrouping.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.inline)
+                Divider()
                 Button { store.fileAllDrafts() } label: { Label("File All", systemImage: "archivebox") }
                     .disabled(store.inboxDrafts.isEmpty)
                 Button { store.sortInbox() } label: { Label("Sort file by date", systemImage: "calendar") }
@@ -217,30 +249,33 @@ private struct DraftRow: View {
     private var time: String { String(draft.ts.suffix(8).prefix(5)) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                if draft.isStarred {
-                    Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
+        HStack(spacing: 10) {
+            EntryThumbnail(entry: draft)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    if draft.isStarred {
+                        Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
+                    }
+                    Text(draft.preview.isEmpty ? "(empty)" : draft.preview)
+                        .lineLimit(1)
+                        .font(.body)
                 }
-                Text(draft.preview.isEmpty ? "(empty)" : draft.preview)
-                    .lineLimit(1)
-                    .font(.body)
-            }
-            HStack(spacing: 8) {
-                Text(time)
-                Text("·")
-                Text("\(draft.wordCount) words")
-                ForEach(draft.mediaBadges, id: \.self) { symbol in
-                    Image(systemName: symbol)
+                HStack(spacing: 8) {
+                    Text(time)
+                    Text("·")
+                    Text("\(draft.wordCount) words")
+                    ForEach(draft.mediaBadges, id: \.self) { symbol in
+                        Image(systemName: symbol)
+                    }
                 }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            if !draft.tags.isEmpty {
-                Text(draft.tags.joined(separator: " "))
-                    .font(.caption)
-                    .foregroundStyle(.tint)
-                    .lineLimit(1)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                if !draft.tags.isEmpty {
+                    Text(draft.tags.joined(separator: " "))
+                        .font(.caption)
+                        .foregroundStyle(.tint)
+                        .lineLimit(1)
+                }
             }
         }
         .padding(.vertical, 2)

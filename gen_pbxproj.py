@@ -28,6 +28,7 @@ swift_files = [
     ('Theme',           'Theme.swift',                  'Nook'),
     ('Entry',           'Models/Entry.swift',           'Models'),
     ('JournalParser',   'Models/JournalParser.swift',   'Models'),
+    ('Media',           'Models/Media.swift',           'Models'),
     ('JournalStore',    'Models/JournalStore.swift',    'Models'),
     ('RootView',        'Views/RootView.swift',         'Views'),
     ('WritingView',     'Views/WritingView.swift',      'Views'),

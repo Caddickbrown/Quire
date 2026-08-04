@@ -26,6 +26,31 @@ import AppKit
 import UIKit
 #endif
 
+/// How often Nook copies the journal folder to the backup location by itself.
+enum BackupInterval: String, CaseIterable, Identifiable {
+    case off, daily, weekly, onChange
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .off:      return "Off"
+        case .daily:    return "Daily"
+        case .weekly:   return "Weekly"
+        case .onChange: return "On every change"
+        }
+    }
+
+    /// Seconds that must pass before another scheduled backup is due — nil for
+    /// the settings that aren't time-based (`off`, `onChange`).
+    var scheduledGap: TimeInterval? {
+        switch self {
+        case .daily:  return 24 * 60 * 60
+        case .weekly: return 7 * 24 * 60 * 60
+        default:      return nil
+        }
+    }
+}
+
 @MainActor
 final class JournalStore: ObservableObject {
 
@@ -97,6 +122,7 @@ final class JournalStore: ObservableObject {
     private var securityScopedURL: URL?
 
     init() {
+        loadLastBackupDate()
         resolveBaseAndReload()
     }
 
@@ -156,6 +182,10 @@ final class JournalStore: ObservableObject {
     /// Human-readable location for display (e.g. "…/Notes" or an iCloud path).
     var storagePath: String { baseURL?.path ?? "Resolving…" }
 
+    /// Dates ("YYYY-MM-DD") that still have unfiled drafts sitting in the inbox.
+    /// The calendars shade these differently from filed journal days.
+    var inboxDays: Set<String> { Set(inboxDrafts.map(\.date)) }
+
     // MARK: Choosing the journal folder
 
     /// Point Nook at a user-selected folder (from a file importer). It becomes
@@ -177,6 +207,13 @@ final class JournalStore: ObservableObject {
     // MARK: Backup
 
     private let backupBookmarkKey = "backupFolderBookmark"
+    static let backupIntervalKey = "backupInterval"
+    static let backupKeepKey = "backupKeepCount"
+    private let lastBackupKey = "lastBackupAt"
+    /// Backups closer together than this are skipped on the "every change"
+    /// setting, so a burst of edits can't spin the disk copying all day.
+    private static let changeBackupFloor: TimeInterval = 300
+
     private static let stampFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd-HH-mm-ss"
         f.locale = Locale(identifier: "en_US_POSIX"); return f
@@ -200,22 +237,111 @@ final class JournalStore: ObservableObject {
         }
     }
 
+    // MARK: Automatic backup
+
+    /// When the last successful backup (manual or automatic) finished.
+    @Published private(set) var lastBackupAt: Date?
+    /// True while a copy is in flight, so the UI can show progress and we never
+    /// start a second one on top of the first.
+    @Published private(set) var backupRunning = false
+
+    private var backupDebounce: Task<Void, Never>?
+
+    private var backupInterval: BackupInterval {
+        BackupInterval(rawValue: UserDefaults.standard.string(forKey: Self.backupIntervalKey) ?? "") ?? .off
+    }
+    /// How many timestamped copies to keep before pruning the oldest.
+    private var backupKeepCount: Int {
+        let n = UserDefaults.standard.integer(forKey: Self.backupKeepKey)
+        return n > 0 ? n : 10
+    }
+
+    private func loadLastBackupDate() {
+        let t = UserDefaults.standard.double(forKey: lastBackupKey)
+        lastBackupAt = t > 0 ? Date(timeIntervalSince1970: t) : nil
+    }
+
+    /// Run a scheduled (Daily / Weekly) backup if one is overdue. Safe to call
+    /// as often as you like — app launch, foreground, after a write.
+    func autoBackupIfDue() {
+        guard let gap = backupInterval.scheduledGap else { return }
+        if let last = lastBackupAt, Date().timeIntervalSince(last) < gap { return }
+        Task { await runBackup() }
+    }
+
+    /// A journal file just changed on disk. Drives the "On every change"
+    /// setting (debounced, so a burst of edits produces one copy) and lets a
+    /// long-running session still take its daily/weekly backup.
+    private func journalDidChange() {
+        guard backupInterval == .onChange else {
+            autoBackupIfDue()
+            return
+        }
+        backupDebounce?.cancel()
+        backupDebounce = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard !Task.isCancelled, let self else { return }
+            if let last = self.lastBackupAt,
+               Date().timeIntervalSince(last) < Self.changeBackupFloor { return }
+            await self.runBackup()
+        }
+    }
+
     /// Copy the whole journal folder into a timestamped subfolder of the backup
-    /// location. Returns a user-facing result message.
-    func backupNow() -> (ok: Bool, message: String) {
+    /// location, then prune to the newest `backupKeepCount` copies. The copy runs
+    /// off the main actor so a big assets folder never blocks writing.
+    @discardableResult
+    func runBackup() async -> (ok: Bool, message: String) {
+        guard !backupRunning else { return (false, "A backup is already running.") }
         guard let base = baseURL else { return (false, "No journal folder to back up.") }
         guard let backupBase = resolveBackupURL() else {
             return (false, "Choose a backup folder first.")
         }
-        let ok = backupBase.startAccessingSecurityScopedResource()
-        defer { if ok { backupBase.stopAccessingSecurityScopedResource() } }
+        backupRunning = true
+        defer { backupRunning = false }
         let name = "Nook-Backup-\(Self.stampFormatter.string(from: Date()))"
-        let dest = backupBase.appendingPathComponent(name)
+        let keep = backupKeepCount
+        let result = await Task.detached(priority: .utility) {
+            Self.copyTree(from: base, into: backupBase, named: name, keep: keep)
+        }.value
+        if result.ok {
+            let now = Date()
+            lastBackupAt = now
+            UserDefaults.standard.set(now.timeIntervalSince1970, forKey: lastBackupKey)
+        }
+        return result
+    }
+
+    /// The copy + prune itself, off-main. Security-scoped access is held around
+    /// both so a sandboxed user-picked backup folder stays writable.
+    private nonisolated static func copyTree(
+        from base: URL, into backupBase: URL, named name: String, keep: Int
+    ) -> (ok: Bool, message: String) {
+        let fm = FileManager.default
+        let scoped = backupBase.startAccessingSecurityScopedResource()
+        defer { if scoped { backupBase.stopAccessingSecurityScopedResource() } }
         do {
-            try fm.copyItem(at: base, to: dest)
-            return (true, "Backed up to \(name).")
+            try fm.copyItem(at: base, to: backupBase.appendingPathComponent(name))
         } catch {
             return (false, "Backup failed: \(error.localizedDescription)")
+        }
+        prune(in: backupBase, keep: keep)
+        return (true, "Backed up to \(name).")
+    }
+
+    /// Keep only the newest `keep` backups. The timestamped names sort
+    /// lexicographically == chronologically, the same trick jnl uses for entries.
+    private nonisolated static func prune(in backupBase: URL, keep: Int) {
+        guard keep > 0 else { return }
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: backupBase, includingPropertiesForKeys: nil)
+        else { return }
+        let names = items
+            .map(\.lastPathComponent)
+            .filter { $0.hasPrefix("Nook-Backup-") }
+            .sorted(by: >)
+        for stale in names.dropFirst(keep) {
+            try? fm.removeItem(at: backupBase.appendingPathComponent(stale))
         }
     }
 
@@ -346,13 +472,9 @@ final class JournalStore: ObservableObject {
         return idx
     }
 
-    nonisolated private static let mediaLinkRegex = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\(([^)]+)\)"#)
-
     /// Extract the paths from markdown media links in some content.
     nonisolated static func mediaPaths(in content: String) -> [String] {
-        let ns = content as NSString
-        return mediaLinkRegex.matches(in: content, range: NSRange(location: 0, length: ns.length))
-            .map { ns.substring(with: $0.range(at: 1)) }
+        MediaLinks.paths(in: content)
     }
 
     nonisolated static func staticFileToDate(_ url: URL) -> String {
@@ -695,18 +817,27 @@ final class JournalStore: ObservableObject {
 
     struct AssetItem: Identifiable, Hashable {
         let url: URL
+        /// Last-modified date and size on disk, so the browser can sort by them.
+        var modified: Date = .distantPast
+        var size: Int = 0
         var id: String { url.path }
         var name: String { url.lastPathComponent }
     }
 
     /// All files in the assets folder (for the Assets browser).
     func allAssets() -> [AssetItem] {
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey]
         guard let dir = assetsDirURL,
-              let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+              let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys)
         else { return [] }
         return items
             .filter { !$0.hasDirectoryPath }
-            .map { AssetItem(url: $0) }
+            .map { url in
+                let values = try? url.resourceValues(forKeys: Set(keys))
+                return AssetItem(url: url,
+                                 modified: values?.contentModificationDate ?? .distantPast,
+                                 size: values?.fileSize ?? 0)
+            }
             .sorted { $0.name < $1.name }
     }
 
@@ -1398,6 +1529,7 @@ final class JournalStore: ObservableObject {
     /// Write via temp-file + rename so an interrupted write never truncates the
     /// user's only copy of their notes. An empty string removes the file.
     private func writeFile(_ url: URL, _ content: String) throws {
+        defer { journalDidChange() }
         if content.isEmpty {
             try? fm.removeItem(at: url)
             return

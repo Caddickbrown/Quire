@@ -71,6 +71,7 @@ Nook/
   Models/
     Entry.swift          the entry value type + tag/preview helpers
     JournalParser.swift  PURE port of jnl parse/render/sort/tags (no I/O; unit-tested)
+    Media.swift          PURE media-link paths + MediaKind (used by Entry; in `make check`)
     JournalStore.swift   @MainActor ObservableObject: iCloud base dir, load/file/sort, atomic writes
   Views/
     RootView.swift       NavigationSplitView (path-based); sidebar = Write/Inbox/Journal/Starred/
@@ -170,7 +171,11 @@ in-app; Preview renders them inline (image captions come from the link's alt tex
 `JournalStore.saveAsset`/`importAsset`/`assetURL`/`allAssets`/`usages(ofAsset:)`
 manage them. Entitlements: audio-input + camera; usage strings generated. Backup
 (`Settings → Backup`) copies the whole base folder to a timestamped folder in a
-chosen location.
+chosen location. It can also run **automatically** — `BackupInterval` (Off /
+Daily / Weekly / On every change, in `JournalStore`) plus a keep-last-N prune.
+The copy runs off the main actor (`runBackup` → `copyTree`/`prune`); scheduled
+runs fire from `autoBackupIfDue()` (app launch + foreground via `scenePhase`),
+and `writeFile` calls `journalDidChange()` to drive the change-triggered ones.
 
 **Data Saver** (opt-in, `Settings → Media`): when on, attached media is
 re-compressed, keeping each file's format/extension so `![](assets/…)` links never
@@ -216,6 +221,10 @@ email-style list+detail beyond Inbox; an XCTest target (parser verified via
 
 ## Conventions
 
+- **Update `CHANGELOG.md` in the same change that ships the work.** Add a bullet
+  under `## [Unreleased]` for anything user-visible (features, behaviour, fixes,
+  on-disk format, build steps); see the "How to update this file" block at the
+  top of that file for the buckets and phrasing.
 - Never hand-edit `Nook.xcodeproj/project.pbxproj` — edit `gen_pbxproj.py` and
   run `make project`.
 - Keep `JournalParser` pure and jnl-faithful; add a case to `ParserChecks.swift`

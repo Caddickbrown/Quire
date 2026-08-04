@@ -107,10 +107,13 @@ struct CalendarView: View {
 
     private func cellContent(_ date: Date, day: JournalStore.ArchiveDay?, isToday: Bool) -> some View {
         let filled = day != nil
+        // Unfiled drafts shade grey, so you can see what's still waiting in the
+        // inbox alongside the accent-shaded days you've already filed.
+        let hasInbox = !filled && store.inboxDays.contains(Self.ymd.string(from: date))
         return VStack(spacing: 3) {
             Text("\(cal.component(.day, from: date))")
                 .font(.callout)
-                .foregroundStyle(filled ? .primary : .secondary)
+                .foregroundStyle(filled || hasInbox ? .primary : .secondary)
             HStack(spacing: 3) {
                 if let day {
                     if day.hasStarred {
@@ -120,6 +123,8 @@ struct CalendarView: View {
                     if day.hasVideo { dot(.purple) }
                     if day.hasAudio { dot(.green) }
                     if !day.hasPhoto && !day.hasVideo && !day.hasAudio && !day.hasStarred { dot(accent) }
+                } else if hasInbox {
+                    dot(.secondary)
                 } else {
                     Circle().fill(.clear).frame(width: 5, height: 5)
                 }
@@ -127,7 +132,8 @@ struct CalendarView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 42)
-        .background(filled ? accent.opacity(0.12) : Color.clear,
+        .background(filled ? accent.opacity(0.12)
+                           : (hasInbox ? Color.secondary.opacity(0.12) : Color.clear),
                     in: RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
@@ -200,6 +206,8 @@ struct MiniCalendarView: View {
     }
     private var days: Set<String> { Set(store.archiveDays.map(\.date)) }
     private var starredDays: Set<String> { Set(store.archiveDays.filter(\.hasStarred).map(\.date)) }
+    /// Days with unfiled drafts — shaded grey, distinct from filed days.
+    private var inboxOnlyDays: Set<String> { store.inboxDays.subtracting(days) }
 
     var body: some View {
         VStack(spacing: 5) {
@@ -268,6 +276,7 @@ struct MiniCalendarView: View {
     private func dayCell(_ date: Date) -> some View {
         let key = Self.ymd.string(from: date)
         let has = days.contains(key)
+        let inboxOnly = inboxOnlyDays.contains(key)
         let inMonth = cal.isDate(date, equalTo: month, toGranularity: .month)
         let isToday = cal.isDateInToday(date)
         Button {
@@ -275,11 +284,11 @@ struct MiniCalendarView: View {
         } label: {
             Text("\(cal.component(.day, from: date))")
                 .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(inMonth ? (has ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                .foregroundStyle(inMonth ? (has || inboxOnly ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                                          : AnyShapeStyle(.quaternary))
                 .frame(maxWidth: .infinity)
                 .frame(height: 22)
-                .background(has ? accent.opacity(inMonth ? 0.18 : 0.08) : Color.clear,
+                .background(dayFill(filed: has, inbox: inboxOnly, inMonth: inMonth),
                            in: RoundedRectangle(cornerRadius: 5))
                 .overlay(RoundedRectangle(cornerRadius: 5)
                     .strokeBorder(isToday ? accent : .clear, lineWidth: 1))
@@ -294,6 +303,14 @@ struct MiniCalendarView: View {
         }
         .buttonStyle(.plain)
         .disabled(!has)
+    }
+
+    /// Accent for days you've filed, grey for days that still have drafts waiting.
+    private func dayFill(filed: Bool, inbox: Bool, inMonth: Bool) -> Color {
+        let opacity = inMonth ? 0.18 : 0.08
+        if filed { return accent.opacity(opacity) }
+        if inbox { return Color.secondary.opacity(opacity) }
+        return .clear
     }
 
     private func calButton(_ symbol: String, action: @escaping () -> Void) -> some View {
@@ -337,34 +354,28 @@ struct MiniCalendarView: View {
     }
 }
 
-/// Compact month + year picker shown in a popover when the calendar's title is
-/// tapped, so you can jump straight to a month instead of stepping one at a time.
+/// Month + year picker shown in a popover when the calendar's title is tapped,
+/// so you can spin straight to a month instead of stepping one at a time. Two
+/// wheels on iOS (the system date-picker idiom); two pop-up menus on macOS.
 struct MonthYearPicker: View {
     @Binding var month: Date
     var done: () -> Void = {}
     private let cal = Calendar.current
+    private static let years = Array(1970...2100)
 
     private var monthIndex: Int { cal.component(.month, from: month) }   // 1…12
     private var year: Int { cal.component(.year, from: month) }
 
+    private var monthBinding: Binding<Int> {
+        Binding(get: { monthIndex }, set: { set(month: $0, year: year) })
+    }
+    private var yearBinding: Binding<Int> {
+        Binding(get: { year }, set: { set(month: monthIndex, year: $0) })
+    }
+
     var body: some View {
         VStack(spacing: 12) {
-            Picker("Month", selection: Binding(
-                get: { monthIndex },
-                set: { set(month: $0, year: year) })
-            ) {
-                ForEach(1...12, id: \.self) { m in
-                    Text(cal.monthSymbols[m - 1]).tag(m)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-
-            Stepper("Year \(String(year))", value: Binding(
-                get: { year },
-                set: { set(month: monthIndex, year: $0) }), in: 1900...2100)
-            .font(.callout)
-
+            wheels
             HStack {
                 Button("This Month") { set(startOf: Date()) }
                 Spacer()
@@ -372,7 +383,40 @@ struct MonthYearPicker: View {
             }
             .font(.callout)
         }
-        .frame(width: 220)
+        #if os(iOS)
+        .frame(width: 300)
+        #else
+        .frame(width: 260)
+        #endif
+    }
+
+    @ViewBuilder
+    private var wheels: some View {
+        #if os(iOS)
+        HStack(spacing: 0) {
+            Picker("Month", selection: monthBinding) {
+                ForEach(1...12, id: \.self) { Text(cal.monthSymbols[$0 - 1]).tag($0) }
+            }
+            .pickerStyle(.wheel)
+            Picker("Year", selection: yearBinding) {
+                ForEach(Self.years, id: \.self) { Text(String($0)).tag($0) }
+            }
+            .pickerStyle(.wheel)
+        }
+        .labelsHidden()
+        .frame(height: 170)
+        #else
+        HStack(spacing: 8) {
+            Picker("Month", selection: monthBinding) {
+                ForEach(1...12, id: \.self) { Text(cal.monthSymbols[$0 - 1]).tag($0) }
+            }
+            Picker("Year", selection: yearBinding) {
+                ForEach(Self.years, id: \.self) { Text(String($0)).tag($0) }
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        #endif
     }
 
     private func set(month m: Int, year y: Int) {

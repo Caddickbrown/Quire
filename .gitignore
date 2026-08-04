@@ -64,3 +64,6 @@ playground.xcworkspace
 
 # Icon?
 Icon?
+
+# Claude Code local settings
+.claude/settings.local.json

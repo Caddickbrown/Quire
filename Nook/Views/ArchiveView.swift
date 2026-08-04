@@ -55,7 +55,15 @@ struct ArchiveView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        // Dice then sort — same order as the Inbox toolbar.
         .toolbar {
+            Button {
+                if let r = store.randomEntry() { randomHit = Hit(date: r.date, entry: r.entry) }
+            } label: {
+                Label("Random", systemImage: "dice")
+            }
+            .keyboardShortcut("r", modifiers: .command)
+            .disabled(loaded.isEmpty)
             Menu {
                 Picker("Sort", selection: $sortRaw) {
                     ForEach(ArchiveSort.allCases) { Text($0.label).tag($0.rawValue) }
@@ -64,13 +72,6 @@ struct ArchiveView: View {
             } label: {
                 Label("Sort", systemImage: "arrow.up.arrow.down")
             }
-            Button {
-                if let r = store.randomEntry() { randomHit = Hit(date: r.date, entry: r.entry) }
-            } label: {
-                Label("Random", systemImage: "dice")
-            }
-            .keyboardShortcut("r", modifiers: .command)
-            .disabled(loaded.isEmpty)
         }
         .task(id: store.revision) { loaded = store.allEntriesByDay().flatMap(\.entries) }
         .sheet(item: $randomHit) { hit in
@@ -97,35 +98,38 @@ struct EntryPreviewRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                if entry.isStarred {
-                    Image(systemName: "star.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.yellow)
-                }
-                Text(entry.preview.isEmpty ? "(empty)" : entry.preview)
-                    .lineLimit(1)
-                let badges = entry.mediaBadges
-                if !badges.isEmpty || trailing != nil {
-                    Spacer(minLength: 6)
-                    ForEach(badges, id: \.self) { symbol in
-                        Image(systemName: symbol)
+        HStack(spacing: 10) {
+            EntryThumbnail(entry: entry)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    if entry.isStarred {
+                        Image(systemName: "star.fill")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.yellow)
                     }
-                    if let trailing {
-                        Text(trailing)
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                    Text(entry.preview.isEmpty ? "(empty)" : entry.preview)
+                        .lineLimit(1)
+                    let badges = entry.mediaBadges
+                    if !badges.isEmpty || trailing != nil {
+                        Spacer(minLength: 6)
+                        ForEach(badges, id: \.self) { symbol in
+                            Image(systemName: symbol)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let trailing {
+                            Text(trailing)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
-            }
-            if !entry.body.isEmpty {
-                Text(entry.body)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                if !entry.body.isEmpty {
+                    Text(entry.body)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
         }
         .padding(.vertical, 2)
@@ -337,7 +341,13 @@ struct JournalFileView: View {
 /// split journals, opened/edited in place.
 struct StarredView: View {
     @EnvironmentObject private var store: JournalStore
+    @AppStorage("starredSort") private var sortRaw: String = ArchiveSort.newest.rawValue
     @State private var loaded: [(entry: Entry, source: EntrySource)] = []
+    @State private var randomHit: StarredHit?
+
+    struct StarredHit: Identifiable { let id = UUID(); let entry: Entry; let source: EntrySource }
+
+    private var oldestFirst: Bool { ArchiveSort(rawValue: sortRaw) == .oldest }
 
     var body: some View {
         Group {
@@ -354,7 +364,8 @@ struct StarredView: View {
                     entries: loaded.map(\.entry),
                     sourceFor: { sources[$0.id] ?? .archive(date: $0.date) },
                     showTime: true,
-                    groupByDate: true
+                    groupByDate: true,
+                    oldestFirst: oldestFirst
                 )
             }
         }
@@ -362,6 +373,31 @@ struct StarredView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        // Dice then sort — same order as the Inbox and Journal toolbars.
+        .toolbar {
+            Button {
+                if let pick = loaded.randomElement() {
+                    randomHit = StarredHit(entry: pick.entry, source: pick.source)
+                }
+            } label: {
+                Label("Random", systemImage: "dice")
+            }
+            .disabled(loaded.isEmpty)
+            Menu {
+                Picker("Sort", selection: $sortRaw) {
+                    ForEach(ArchiveSort.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Label("Sort", systemImage: "arrow.up.arrow.down")
+            }
+        }
+        .sheet(item: $randomHit) { hit in
+            NavigationStack {
+                EntryDetailView(entry: hit.entry, source: hit.source)
+            }
+            .environmentObject(store)
+        }
         .task(id: store.revision) {
             loaded = store.starredEntries().sorted { $0.entry.ts > $1.entry.ts }
         }

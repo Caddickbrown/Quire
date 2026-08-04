@@ -23,6 +23,8 @@ struct SettingsView: View {
     @AppStorage("inboxSwipeRight") private var swipeRightRaw = SwipeAction.delete.rawValue
     @AppStorage("splitTags") private var splitTagsRaw: String = ""
     @AppStorage("dataSaver") private var dataSaver = false
+    @AppStorage(JournalStore.backupIntervalKey) private var backupIntervalRaw = BackupInterval.off.rawValue
+    @AppStorage(JournalStore.backupKeepKey) private var backupKeepCount = 10
 
     static let shortcuts: [(action: String, keys: String)] = [
         ("New entry", "⌘N"),
@@ -231,10 +233,28 @@ struct SettingsView: View {
                     showBackupInFinderButton
                     #endif
                 }
+                Picker("Automatic backup", selection: $backupIntervalRaw) {
+                    ForEach(BackupInterval.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .disabled(store.backupFolderName == nil)
+                if backupIntervalRaw != BackupInterval.off.rawValue {
+                    Stepper("Keep last \(backupKeepCount) backups",
+                            value: $backupKeepCount, in: 1...50)
+                }
+                LabeledContent("Last backup") {
+                    if store.backupRunning {
+                        Text("Backing up…").foregroundStyle(.secondary)
+                    } else if let last = store.lastBackupAt {
+                        Text(last.formatted(date: .abbreviated, time: .shortened))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Never").foregroundStyle(.secondary)
+                    }
+                }
             } header: {
                 Text("Backup")
             } footer: {
-                Text("Copies everything (inbox, journal, split journals, and assets) into a timestamped folder in the backup location.")
+                Text("Copies everything (inbox, journal, split journals, and assets) into a timestamped folder in the backup location. Automatic backups run in the background and prune down to the number you keep; “On every change” waits for a pause in writing and won't run more than once every five minutes.")
             }
 
             Section {
@@ -422,10 +442,12 @@ struct SettingsView: View {
             }
     }
     private var backupNowButton: some View {
-        Button { backupMessage = store.backupNow().message } label: {
+        Button {
+            Task { backupMessage = await store.runBackup().message }
+        } label: {
             Label("Back Up Now", systemImage: "externaldrive.badge.timemachine")
         }
-        .disabled(store.backupFolderName == nil)
+        .disabled(store.backupFolderName == nil || store.backupRunning)
     }
     private var cleanUpButton: some View {
         Button {

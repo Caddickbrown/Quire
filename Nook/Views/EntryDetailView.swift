@@ -100,8 +100,10 @@ struct EntryDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            #if os(macOS)
             controlBar
             Divider()
+            #endif
 
             if mode == .preview {
                 VStack(alignment: .leading, spacing: 0) {
@@ -157,102 +159,120 @@ struct EntryDetailView: View {
                 }
             }
         }
+        #if os(iOS)
+        // In the navigation bar rather than a row of their own: an entry used to
+        // pay for two rows of chrome (an all-but-empty nav bar plus this) before
+        // any text showed up.
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                modeButton
+                actionButtons
+            }
+        }
+        #endif
         .onChange(of: title) { _, _ in scheduleSave() }
         .onChange(of: text) { _, _ in scheduleSave() }
         .onChange(of: date) { _, _ in scheduleSave() }
         .onDisappear { flush() }
     }
 
-    // MARK: Controls (inline, so they don't reshuffle the window toolbar)
+    // MARK: Controls
+    //
+    // macOS keeps them inline — a detail pane must not reshuffle the window
+    // toolbar when the selection changes. iOS hoists them into the nav bar.
 
     private var controlBar: some View {
         HStack(spacing: 18) {
-            Button {
-                mode = (mode == .edit) ? .preview : .edit
-            } label: {
-                Image(systemName: mode == .edit ? "eye" : "pencil")
-            }
-            .help(mode == .edit ? "Preview" : "Edit")
-
+            modeButton
             Spacer()
-
-            #if os(macOS)
-            Button {
-                toggleStar()
-            } label: {
-                Image(systemName: isStarred ? "star.fill" : "star")
-                    .foregroundStyle(isStarred ? Color.yellow : Color.primary)
-            }
-            .help(isStarred ? "Unstar" : "Star")
-            #endif
-
-            Button {
-                toggleRecord()
-            } label: {
-                Image(systemName: recorder.isRecording ? "stop.circle.fill" : "mic")
-                    .foregroundStyle(recorder.isRecording ? Color.red : Color.primary)
-            }
-            .help(recorder.isRecording ? "Stop recording" : "Record audio")
-
-            Menu {
-                #if os(iOS)
-                Button { toggleStar() } label: {
-                    Label(isStarred ? "Unstar" : "Star",
-                          systemImage: isStarred ? "star.slash" : "star")
-                }
-                Divider()
-                Button { showingPhotoPicker = true } label: { Label("Photo Library", systemImage: "photo") }
-                Button { showingImagePicker = true } label: { Label("Choose File", systemImage: "folder") }
-                #else
-                Button { showingImagePicker = true } label: { Label("Attach Media", systemImage: "paperclip") }
-                #endif
-                Button { showingVideoRecorder = true } label: { Label("Record Video", systemImage: "video") }
-                Button { copyText() } label: { Label("Copy text", systemImage: "doc.on.doc") }
-                Button { promoteFirstLine() } label: { Label("Promote first line to title", systemImage: "arrow.up.to.line") }
-                    .disabled(!hasFirstBodyLine)
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-            .fixedSize()
-
-            Button {
-                flush()
-                #if os(iOS)
-                dismiss()
-                #endif
-            } label: {
-                Label("Save", systemImage: "checkmark").labelStyle(.iconOnly)
-            }
-            .help(saveHelp)
-
-            if case .inbox = source {
-                Button {
-                    flush()
-                    store.fileDraft(currentEntry)
-                    #if os(iOS)
-                    dismiss()
-                    #endif
-                } label: {
-                    Label("File", systemImage: "archivebox").labelStyle(.iconOnly)
-                }
-                .help("File into the archive")
-            }
-            Button(role: .destructive) {
-                delete()
-                #if os(iOS)
-                dismiss()
-                #endif
-            } label: {
-                Label("Delete", systemImage: "trash").labelStyle(.iconOnly)
-            }
-            .help("Delete")
+            actionButtons
         }
         .buttonStyle(.borderless)
-        #if os(iOS)
-        .imageScale(.large)
-        #endif
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    private var modeButton: some View {
+        Button {
+            mode = (mode == .edit) ? .preview : .edit
+        } label: {
+            Image(systemName: mode == .edit ? "eye" : "pencil")
+        }
+        .help(mode == .edit ? "Preview" : "Edit")
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        #if os(macOS)
+        Button {
+            toggleStar()
+        } label: {
+            Image(systemName: isStarred ? "star.fill" : "star")
+                .foregroundStyle(isStarred ? Color.yellow : Color.primary)
+        }
+        .help(isStarred ? "Unstar" : "Star")
+        #endif
+
+        Button {
+            toggleRecord()
+        } label: {
+            Image(systemName: recorder.isRecording ? "stop.circle.fill" : "mic")
+                .foregroundStyle(recorder.isRecording ? Color.red : Color.primary)
+        }
+        .help(recorder.isRecording ? "Stop recording" : "Record audio")
+
+        Menu {
+            #if os(iOS)
+            Button { toggleStar() } label: {
+                Label(isStarred ? "Unstar" : "Star",
+                      systemImage: isStarred ? "star.slash" : "star")
+            }
+            Divider()
+            Button { showingPhotoPicker = true } label: { Label("Photo Library", systemImage: "photo") }
+            Button { showingImagePicker = true } label: { Label("Choose File", systemImage: "folder") }
+            #else
+            Button { showingImagePicker = true } label: { Label("Attach Media", systemImage: "paperclip") }
+            #endif
+            Button { showingVideoRecorder = true } label: { Label("Record Video", systemImage: "video") }
+            Button { copyText() } label: { Label("Copy text", systemImage: "doc.on.doc") }
+            Button { promoteFirstLine() } label: { Label("Promote first line to title", systemImage: "arrow.up.to.line") }
+                .disabled(!hasFirstBodyLine)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .fixedSize()
+
+        Button {
+            flush()
+            #if os(iOS)
+            dismiss()
+            #endif
+        } label: {
+            Label("Save", systemImage: "checkmark").labelStyle(.iconOnly)
+        }
+        .help(saveHelp)
+
+        if case .inbox = source {
+            Button {
+                flush()
+                store.fileDraft(currentEntry)
+                #if os(iOS)
+                dismiss()
+                #endif
+            } label: {
+                Label("File", systemImage: "archivebox").labelStyle(.iconOnly)
+            }
+            .help("File into the archive")
+        }
+        Button(role: .destructive) {
+            delete()
+            #if os(iOS)
+            dismiss()
+            #endif
+        } label: {
+            Label("Delete", systemImage: "trash").labelStyle(.iconOnly)
+        }
+        .help("Delete")
     }
 
     private var editArea: some View {

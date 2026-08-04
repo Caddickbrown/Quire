@@ -9,6 +9,12 @@
 
 import SwiftUI
 import AVKit
+import ImageIO
+#if canImport(AppKit)
+import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 
 enum MDSegment {
     case text(String)
@@ -37,8 +43,13 @@ func parseMediaSegments(_ s: String) -> [MDSegment] {
     return segments
 }
 
+/// Same `@tag` shape the parser and the editor use.
+private let previewTagRegex = try! NSRegularExpression(pattern: #"@[a-zA-Z][a-zA-Z0-9_-]*"#)
+
 struct MediaPreview: View {
     @EnvironmentObject private var store: JournalStore
+    @Environment(\.accent) private var accent
+    @AppStorage("highlightTags") private var highlightTags = true
     let text: String
     let font: Font
     let textColor: Color
@@ -112,12 +123,30 @@ struct MediaPreview: View {
         }.joined()
     }
 
-    /// Render inline markdown (bold/italic/links/code), preserving line breaks.
+    /// Render inline markdown (bold/italic/links/code), preserving line breaks,
+    /// then tint any `@tags` the same way the editor does.
     private func markdown(_ s: String) -> AttributedString {
-        (try? AttributedString(
+        var out = (try? AttributedString(
             markdown: s,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         )) ?? AttributedString(s)
+        if highlightTags { tintTags(in: &out) }
+        return out
+    }
+
+    /// Colour every `@tag` in the rendered text. Offsets are converted through
+    /// Character distances so multi-byte text (emoji) doesn't shift the ranges.
+    private func tintTags(in attributed: inout AttributedString) {
+        let plain = String(attributed.characters)
+        let full = NSRange(plain.startIndex..<plain.endIndex, in: plain)
+        for match in previewTagRegex.matches(in: plain, range: full) {
+            guard let r = Range(match.range, in: plain) else { continue }
+            let lower = plain.distance(from: plain.startIndex, to: r.lowerBound)
+            let upper = plain.distance(from: plain.startIndex, to: r.upperBound)
+            let start = attributed.index(attributed.startIndex, offsetByCharacters: lower)
+            let end = attributed.index(attributed.startIndex, offsetByCharacters: upper)
+            attributed[start..<end].foregroundColor = accent
+        }
     }
 
     /// The media itself plus its caption (the image link's alt text), drawn as a
@@ -202,13 +231,54 @@ struct MediaPreview: View {
     }
 }
 
-enum MediaKind {
-    case image, video, audio
-    init(path: String) {
-        let ext = (path as NSString).pathExtension.lowercased()
-        if ["mov", "mp4", "m4v"].contains(ext) { self = .video }
-        else if ["m4a", "mp3", "wav", "aac", "aiff", "caf"].contains(ext) { self = .audio }
-        else { self = .image }
+/// Small square thumbnails for list rows. Decoded at thumbnail size via ImageIO
+/// (a full-resolution photo never lands in memory) and cached by path, so
+/// scrolling a long inbox stays cheap.
+enum RowThumbnail {
+    final class Box {
+        let image: Image
+        init(_ image: Image) { self.image = image }
+    }
+    private static let cache = NSCache<NSString, Box>()
+
+    static func load(_ url: URL, side: Int = 96) -> Image? {
+        let key = "\(url.path)#\(side)" as NSString
+        if let hit = cache.object(forKey: key) { return hit.image }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,   // bake in EXIF orientation
+            kCGImageSourceThumbnailMaxPixelSize: side,
+        ]
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
+        else { return nil }
+        #if canImport(AppKit)
+        let image = Image(nsImage: NSImage(cgImage: cg, size: .zero))
+        #else
+        let image = Image(uiImage: UIImage(cgImage: cg))
+        #endif
+        cache.setObject(Box(image), forKey: key)
+        return image
+    }
+}
+
+/// The leading thumbnail on an entry row — drawn only when the entry links an
+/// image, so text-only rows keep their current shape.
+struct EntryThumbnail: View {
+    @EnvironmentObject private var store: JournalStore
+    let entry: Entry
+    var side: CGFloat = 40
+
+    var body: some View {
+        if let path = entry.firstImagePath,
+           let url = store.assetURL(forRelative: path),
+           let image = RowThumbnail.load(url) {
+            image
+                .resizable()
+                .scaledToFill()
+                .frame(width: side, height: side)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
     }
 }
 

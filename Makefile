@@ -16,6 +16,7 @@ check:              ## Run the JournalParser verification (jnl parity)
 	@mkdir -p /tmp/nook-check
 	cp Tests/ParserChecks.swift /tmp/nook-check/main.swift
 	xcrun swiftc Nook/Models/Entry.swift Nook/Models/JournalParser.swift \
+		Nook/Models/Media.swift \
 		/tmp/nook-check/main.swift -o /tmp/nook-check/run
 	/tmp/nook-check/run
 

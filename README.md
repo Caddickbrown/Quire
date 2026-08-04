@@ -37,4 +37,5 @@ journal/YYYY/MM/DD.md     filed entries, one file per day
 
 Each entry: `[YYYY-MM-DD HH:MM:SS] optional title` + body, with `@tags`.
 
-See [CLAUDE.md](CLAUDE.md) for the full architecture.
+See [CLAUDE.md](CLAUDE.md) for the full architecture and
+[CHANGELOG.md](CHANGELOG.md) for what has changed.

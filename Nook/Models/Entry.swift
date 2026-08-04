@@ -54,11 +54,17 @@ struct Entry: Identifiable, Hashable {
         body.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
     }
 
+    /// Relative path of the first image this entry links, if any — the list rows
+    /// draw it as a thumbnail.
+    var firstImagePath: String? {
+        MediaLinks.paths(in: raw).first { MediaKind(path: $0) == .image }
+    }
+
     /// SF Symbol names for the kinds of media this entry links — image (photo),
     /// audio (mic), video (film) — plus a paperclip for any other attachment.
     /// Deduped and ordered; empty when the entry has no media.
     var mediaBadges: [String] {
-        let paths = JournalStore.mediaPaths(in: raw)
+        let paths = MediaLinks.paths(in: raw)
         guard !paths.isEmpty else { return [] }
         var image = false, audio = false, video = false, other = false
         for p in paths {
