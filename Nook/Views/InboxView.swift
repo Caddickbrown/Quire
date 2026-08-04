@@ -265,17 +265,20 @@ struct DiceRefreshDecorator: UIViewRepresentable {
     }
 
     func updateUIView(_ probe: UIView, context: Context) {
-        // The refresh control isn't attached yet during this layout pass.
-        DispatchQueue.main.async { decorate(from: probe) }
+        // SwiftUI attaches the refresh control after this layout pass, and not
+        // always on the first run loop turn, so the lookup retries for a beat.
+        decorate(from: probe, attempt: 0)
     }
 
-    private func decorate(from probe: UIView) {
-        var view: UIView? = probe
-        while let current = view, !(current is UIScrollView) { view = current.superview }
-        guard let scroll = view as? UIScrollView,
-              let refresh = scroll.refreshControl,
-              refresh.viewWithTag(Self.diceTag) == nil
-        else { return }
+    private func decorate(from probe: UIView, attempt: Int) {
+        guard attempt < 10 else { return }          // give up; stock spinner stays
+        guard let refresh = Self.findRefreshControl(from: probe) else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                decorate(from: probe, attempt: attempt + 1)
+            }
+            return
+        }
+        guard refresh.viewWithTag(Self.diceTag) == nil else { return }
 
         refresh.tintColor = .clear      // hide the stock spinner, keep the mechanics
 
@@ -298,6 +301,31 @@ struct DiceRefreshDecorator: UIViewRepresentable {
         spin.duration = 1.1
         spin.repeatCount = .infinity
         dice.layer.add(spin, forKey: "spin")
+    }
+
+    /// Look up the enclosing scroll view's refresh control, then — if the probe
+    /// isn't hosted inside the scroll view at all — search down from the window
+    /// for the first one that has a refresh control.
+    private static func findRefreshControl(from probe: UIView) -> UIRefreshControl? {
+        var view: UIView? = probe
+        while let current = view {
+            if let scroll = current as? UIScrollView, let refresh = scroll.refreshControl {
+                return refresh
+            }
+            view = current.superview
+        }
+        guard let root = probe.window else { return nil }
+        return firstRefreshControl(in: root)
+    }
+
+    private static func firstRefreshControl(in view: UIView) -> UIRefreshControl? {
+        if let scroll = view as? UIScrollView, let refresh = scroll.refreshControl {
+            return refresh
+        }
+        for subview in view.subviews {
+            if let found = firstRefreshControl(in: subview) { return found }
+        }
+        return nil
     }
 }
 #endif

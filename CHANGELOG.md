@@ -61,11 +61,12 @@ section is dated development history rather than versioned releases.
 - **Starred**: the same dice + sort toolbar as the Inbox and Journal.
 
 ### Changed
-- **Assets**: the grid is a photo gallery — square tiles, hairline gaps, and no
-  uuid filename captions.
+- **Assets**: the grid is a photo gallery — uniform square tiles with hairline
+  gaps, capped so they stay thumbnail-sized on a wide window, and no uuid
+  filename captions.
 - **Entry rows**: the thumbnail is bigger and sits on the right of the row.
-- **Sidebar** (iOS): the "nook" wordmark is set in italic Lato in the accent
-  colour instead of the plain system title.
+- **Sidebar** (iOS): the "nook" title is gone — the section list stands on its
+  own and the title only crowded it. macOS still uses it as the window title.
 - **Calendar**: the month/year picker is a real picker — two wheels on iOS, two
   pop-up menus on macOS — instead of a month menu plus a year stepper.
 - **Entry view** (iOS): the controls moved into the navigation bar, so an entry

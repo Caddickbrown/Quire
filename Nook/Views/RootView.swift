@@ -153,22 +153,15 @@ struct RootView: View {
                     }
                 }
             }
-            .navigationTitle("nook")
             .safeAreaInset(edge: .bottom) { sidebarFooter }
             #if os(iOS)
-            // The plain system title read as flat next to the rest of the app, so
-            // the wordmark is drawn as a principal item instead: Lato, italic, in
-            // the accent colour.
+            // No wordmark in the sidebar bar — the sections speak for themselves
+            // and the title only crowded them. macOS still names the window.
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
+            // On iPhone, Write lives as a compose button top-right rather than a
+            // sidebar row — it's the one-tap action, not a place you browse to.
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("nook")
-                        .font(.custom("Lato-Regular", size: 20).italic())
-                        .foregroundStyle(accent)
-                        .tracking(1)
-                }
-                // On iPhone, Write lives as a compose button top-right rather than
-                // a sidebar row — it's the one-tap action, not a place you browse to.
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { nav.section = .write } label: {
                         Image(systemName: AppSection.write.systemImage)
@@ -176,6 +169,8 @@ struct RootView: View {
                     .help("Write")
                 }
             }
+            #else
+            .navigationTitle("nook")
             #endif
             #if os(macOS)
             .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)

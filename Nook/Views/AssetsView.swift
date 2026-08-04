@@ -39,7 +39,9 @@ struct AssetsView: View {
     }
 
     // Tight square tiles with hairline gaps — a photo gallery, not a file list.
-    private let columns = [GridItem(.adaptive(minimum: 108), spacing: 2)]
+    // The maximum keeps tiles from ballooning into a handful of huge squares on
+    // a wide window; they stay thumbnail-sized and the grid just gets more columns.
+    private let columns = [GridItem(.adaptive(minimum: 96, maximum: 140), spacing: 2)]
 
     /// Kind order for the "By kind" sort: images, then video, then audio.
     private static func kindRank(_ name: String) -> Int {
@@ -170,9 +172,6 @@ struct AssetsView: View {
     /// stays a clean grid of pictures.
     private func cell(_ item: JournalStore.AssetItem) -> some View {
         AssetThumbnailCell(url: item.url)
-            .aspectRatio(1, contentMode: .fill)
-            .clipped()
-            .contentShape(Rectangle())
     }
 }
 
@@ -187,21 +186,30 @@ private struct AssetThumbnailCell: View {
     private var kind: MediaKind { MediaKind(path: url.lastPathComponent) }
 
     var body: some View {
-        ZStack {
-            Rectangle().fill(.quaternary)
-            if let image {
-                image.resizable().scaledToFill()
-                if kind == .video {
+        // The square is established first and the picture fills into it. Letting
+        // a `scaledToFill` image sit loose in the stack lets the image's own size
+        // drive the cell, which is what made the grid ragged.
+        Rectangle()
+            .fill(.quaternary)
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                if let image {
+                    image.resizable().scaledToFill()
+                } else {
+                    Image(systemName: glyph).font(.title).foregroundStyle(.secondary)
+                }
+            }
+            .overlay {
+                if kind == .video, image != nil {
                     Image(systemName: "play.circle.fill")
                         .font(.title2)
                         .foregroundStyle(.white.opacity(0.9))
                         .shadow(radius: 3)
                 }
-            } else {
-                Image(systemName: glyph).font(.largeTitle).foregroundStyle(.secondary)
             }
-        }
-        .task(id: url) { image = await RowThumbnail.thumbnail(for: url) }
+            .clipped()
+            .contentShape(Rectangle())
+            .task(id: url) { image = await RowThumbnail.thumbnail(for: url) }
     }
 
     private var glyph: String {
