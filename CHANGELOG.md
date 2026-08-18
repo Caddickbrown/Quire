@@ -36,6 +36,8 @@ section is dated development history rather than versioned releases.
   **sort by date, size, kind, or name**.
 - **Assets**: video tiles show a real poster frame with a play badge instead of
   a film glyph.
+- **Assets**: a grouping toggle in the sort menu — no grouping, or date headers
+  by day, month, or year (the headers stay pinned while you scroll).
 - **Backup**: automatic backups on a schedule (`Settings → Backup`) — Off /
   Daily / Weekly / On every change, with a "keep last N backups" setting that
   prunes older copies. The copy runs off the main thread, so a large assets
@@ -46,9 +48,43 @@ section is dated development history rather than versioned releases.
   accent shading of days you've filed.
 - **Entry rows**: image thumbnails in the Inbox and Journal, decoded at
   thumbnail size and cached so long lists stay smooth.
+- **External display** (iOS): plug into a monitor or TV and Nook gives it its
+  own screen instead of mirroring the phone. It follows what you're doing —
+  the composer puts your text up as a live wall with a blinking caret, word
+  count, and tags; an open entry is laid out with its photos, video, and audio
+  inline; with neither on screen it rests on the date and your current streak.
+  Type is sized off the monitor, not the phone, and kept clear of TV overscan.
+- **Keyboard**: ↑/↓ move a selection through the Inbox, Journal, Starred, a day,
+  and a split journal; ↩ opens it, ⎋ clears it, `?` shows or hides the hint bar.
+  The selected row is highlighted and scrolled into view. From the section menu
+  the first ↑/↓ opens the Journal, so there's always something to browse. Works
+  with any hardware keyboard, monitor or not; typing in a search or writing
+  field keeps the keys for itself.
+- **External display** (iOS): with nothing selected the monitor shows the
+  journal at a glance — streak, days written, words, drafts — and turns into an
+  entry browser on the first ↑/↓, tracking the selection on the device so you
+  can pick an entry without looking at it.
+- **External display** (iOS): a hint bar along the bottom lists the keys that
+  are live on the current screen, since the device screen is dimmed and there's
+  nowhere else to read them. `?` hides and shows it.
+- **External display** (iOS): **Settings → External display → Dim this screen**
+  turns the device's own brightness down while a display is connected, with a
+  slider for how far, and puts it back when you unplug or quit. Off by default.
+  Because Nook no longer mirrors, dimming the phone doesn't dim the monitor.
+- **Composer** (iOS): a Done button (and ⎋) to save the draft and go back to the
+  menu. The composer is opened by switching section rather than by pushing, so
+  it never had a back button — there was no way out of it.
+- **Composer / entry editor**: **Take Photo** in the attach menu — snap a
+  picture with the camera and it attaches like any other asset (the system
+  camera on iOS, a live preview with a shutter button on macOS).
 - **Inbox**: a grouping toggle in the sort menu — date headers, or one flat list.
+- **Journal, split journals, Starred**: the same grouping toggle as the Inbox —
+  date headers, or one flat list where each row carries its own date.
 - **Inbox, Journal, Starred**: pull down to open a random entry (iOS). The
   pull indicator is a spinning dice rather than the stock spinner.
+- **Control** (iOS 18+): a New Draft control for Control Center, the Lock Screen
+  control slots, and the Action Button — the same one-tap jump into the composer
+  as the Lock Screen widget.
 - **Lock Screen widget** (iOS): a New Draft button in all three accessory sizes
   (circular, rectangular, inline) that opens Nook straight into the composer.
 - **Settings → About**: a **What's New** screen rendering the whole release
@@ -64,10 +100,39 @@ section is dated development history rather than versioned releases.
 - **Assets**: the grid is a photo gallery — uniform square tiles with hairline
   gaps, capped so they stay thumbnail-sized on a wide window, and no uuid
   filename captions.
+- **Assets**: the gallery dates media by the entry that uses it, not by when
+  the file landed on disk — so a photo imported today into a back-dated entry
+  sorts and groups under that entry's day. Media no entry references still
+  falls back to the file's own date.
 - **Destructive actions** are red everywhere — Delete in the inbox, journal,
   entry editor and assets menus, Discard in the composer, and Clear Orphan
   Media. `role: .destructive` alone left several of them looking ordinary.
-- **Entry rows**: the thumbnail is bigger and sits on the right of the row.
+- **Entry editor**: Preview lines up with the editor instead of sitting 8pt
+  further in, so toggling Edit/Preview no longer shifts the text sideways; the
+  editor's header now matches the composer's spacing exactly.
+- **Build**: the project carries Xcode 26's recommended settings — the
+  recommended warning set, dead-code stripping, app-group registration, user
+  script sandboxing, string-catalog symbols, asset symbol extensions, and a
+  project-level `DEVELOPMENT_TEAM` both targets inherit — so Xcode stops
+  offering to update them. They live in `gen_pbxproj.py`; accepting Xcode's
+  sheet instead would be undone by the next `make project`.
+- **Build**: Xcode's scheme selector shows one scheme, `Nook`, instead of also
+  offering `NookWidgetExtension`. The widget was never separate to ship — the
+  app depends on it and embeds the `.appex`, so building `Nook` builds it — and
+  running the extension's scheme only ever popped an app-picker dialog. Set
+  `GENERATE_WIDGET_SCHEME = True` in `gen_pbxproj.py` to get it back for widget
+  work.
+- **Entry rows**: one row template everywhere — the Inbox, Journal, Starred,
+  days, and split journals all share the same layout (title, body snippet,
+  a date/time · words · media meta line, tags) instead of two near-identical
+  ones; only the meta line's date/time varies by list. The Inbox gains the
+  body snippet, the Journal loses the date crammed onto the title line,
+  untitled entries no longer repeat their first line in the snippet, and the
+  tag line's height is kept even on untagged entries, so tagged and untagged
+  rows stand the same height.
+- **Entry rows**: the thumbnail is bigger and sits on the right of the row,
+  bleeding slightly into the row's margins so the picture, not whitespace,
+  fills the corner.
 - **Sidebar** (iOS): the "nook" title is gone — the section list stands on its
   own and the title only crowded it. macOS still uses it as the window title.
 - **Calendar**: the month/year picker is a real picker — two wheels on iOS, two
@@ -75,6 +140,10 @@ section is dated development history rather than versioned releases.
 - **Entry view** (iOS): the controls moved into the navigation bar, so an entry
   no longer pays for two rows of chrome before the text starts.
 - **Journal**: the toolbar puts the dice before sort, matching the Inbox.
+- **Journal, split journals, Starred**: entry rows show their `@tags`, as the
+  Inbox rows already did.
+- **Calendar**: the month/year picker has no "Done" button — the wheels apply as
+  you spin them and the popover closes on a tap outside.
 
 ### Fixed
 - **Assets**: opening the gallery was very slow. Working out which entries use

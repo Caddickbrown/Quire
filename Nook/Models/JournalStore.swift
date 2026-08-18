@@ -819,25 +819,39 @@ final class JournalStore: ObservableObject {
         let url: URL
         /// Last-modified date and size on disk, so the browser can sort by them.
         var modified: Date = .distantPast
+        /// Timestamp of the earliest entry linking this file, when one does.
+        /// Nil for orphans, and for the plain `allAssets()` listing which
+        /// doesn't read the journal.
+        var entryDate: Date? = nil
         var size: Int = 0
         var id: String { url.path }
         var name: String { url.lastPathComponent }
+        /// The date the gallery sorts and groups by: when the file was written
+        /// about, not when it landed on disk. A photo imported today into a
+        /// back-dated entry belongs to that entry's day.
+        var date: Date { entryDate ?? modified }
     }
 
-    /// All files in the assets folder (for the Assets browser).
+    /// All files in the assets folder, with file dates only — the callers that
+    /// use this (orphan sweeps) don't need `entryDate` and shouldn't pay for
+    /// the journal-wide scan it costs.
     func allAssets() -> [AssetItem] {
         guard let dir = assetsDirURL else { return [] }
         return Self.listAssets(in: dir)
     }
 
-    /// Same listing, off the main actor — stat-ing every file in a large assets
-    /// folder is far too slow to do while the Assets view is appearing.
+    /// The Assets browser's listing, off the main actor — stat-ing every file in
+    /// a large assets folder (and reading the journal for their entry dates) is
+    /// far too slow to do while the Assets view is appearing.
     func allAssetsAsync() async -> [AssetItem] {
-        guard let dir = assetsDirURL else { return [] }
-        return await Task.detached(priority: .userInitiated) { Self.listAssets(in: dir) }.value
+        guard let dir = assetsDirURL, let base = baseURL else { return [] }
+        return await Task.detached(priority: .userInitiated) {
+            Self.listAssets(in: dir, entryDates: Self.assetEntryDates(base: base))
+        }.value
     }
 
-    nonisolated private static func listAssets(in dir: URL) -> [AssetItem] {
+    nonisolated private static func listAssets(in dir: URL,
+                                               entryDates: [String: Date] = [:]) -> [AssetItem] {
         let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey]
         guard let items = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: keys
@@ -848,9 +862,50 @@ final class JournalStore: ObservableObject {
                 let values = try? url.resourceValues(forKeys: Set(keys))
                 return AssetItem(url: url,
                                  modified: values?.contentModificationDate ?? .distantPast,
+                                 entryDate: entryDates[url.lastPathComponent],
                                  size: values?.fileSize ?? 0)
             }
             .sorted { $0.name < $1.name }
+    }
+
+    /// asset file name → timestamp of the earliest entry that links it, built in
+    /// one pass over the inbox, the day files and the split journals. One scan
+    /// for the whole gallery: `usages(ofAsset:)` per file would re-read the
+    /// entire journal once per thumbnail.
+    nonisolated static func assetEntryDates(base: URL) -> [String: Date] {
+        let fm = FileManager.default
+        var files: [URL] = [base.appendingPathComponent("inbox.md")]
+        let journalDir = base.appendingPathComponent("journal", isDirectory: true)
+        if let en = fm.enumerator(at: journalDir, includingPropertiesForKeys: nil) {
+            for case let u as URL in en where u.pathExtension == "md" { files.append(u) }
+        }
+        if let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) {
+            for u in items where u.pathExtension == "md" && !reservedFiles.contains(u.lastPathComponent) {
+                files.append(u)
+            }
+        }
+
+        // A local formatter: `tsFormatter` is main-actor isolated and this runs
+        // off the main thread.
+        let stamps = DateFormatter()
+        stamps.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        stamps.locale = Locale(identifier: "en_US_POSIX")
+
+        var map: [String: Date] = [:]
+        for url in files {
+            guard let content = try? String(contentsOf: url, encoding: .utf8),
+                  content.contains("assets/") else { continue }
+            for entry in JournalParser.parseEntries(content) {
+                let paths = MediaLinks.paths(in: entry.raw)
+                guard !paths.isEmpty, let date = stamps.date(from: entry.ts) else { continue }
+                for path in paths {
+                    let name = (path as NSString).lastPathComponent
+                    if let existing = map[name], existing <= date { continue }
+                    map[name] = date
+                }
+            }
+        }
+        return map
     }
 
     func deleteAsset(_ url: URL) { try? fm.removeItem(at: url) }

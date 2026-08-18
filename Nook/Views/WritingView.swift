@@ -30,6 +30,7 @@ struct WritingView: View {
     @State private var toast: String?
     @State private var showingImagePicker = false
     @State private var showingVideoRecorder = false
+    @State private var showingPhotoCapture = false
     @State private var showingPhotoPicker = false
     @State private var photoItem: PhotosPickerItem?
     @StateObject private var recorder = AudioRecorder()
@@ -96,6 +97,21 @@ struct WritingView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
+            #if os(iOS)
+            // The composer is reached by setting the section, not by pushing,
+            // so it gets no system back button — without this there is no way
+            // out of it. Saves on the way, like every other exit from here.
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    flush()
+                    nav.section = nil
+                } label: {
+                    Label("Done", systemImage: "chevron.left")
+                }
+                .keyboardShortcut(.escape, modifiers: [])
+                .help("Save to inbox & back to the menu")
+            }
+            #endif
             ToolbarItemGroup {
                 Button {
                     newEntry()
@@ -131,6 +147,11 @@ struct WritingView: View {
                         Label("Attach Media", systemImage: "paperclip")
                     }
                     #endif
+                    Button {
+                        showingPhotoCapture = true
+                    } label: {
+                        Label("Take Photo", systemImage: "camera")
+                    }
                     Button {
                         showingVideoRecorder = true
                     } label: {
@@ -177,17 +198,17 @@ struct WritingView: View {
             handleDrop(providers)
         }
         .sheet(isPresented: $showingVideoRecorder) {
-            VideoRecorderView { url in
-                if let rel = store.importAsset(from: url) {
-                    let md = "![](\(rel))"
-                    text = text.isEmpty ? md : text + "\n\n" + md
-                }
-            }
+            VideoRecorderView { url in attachCaptured(url) }
+        }
+        .sheet(isPresented: $showingPhotoCapture) {
+            PhotoCaptureView { url in attachCaptured(url) }
         }
         .onChange(of: title) { _, _ in scheduleSave() }
         .onChange(of: text) { _, _ in scheduleSave() }
         .onChange(of: date) { _, _ in scheduleSave() }
         .onChange(of: nav.newEntrySignal) { _, _ in newEntry() }
+        // Put the live text on a connected external display (iOS second screen).
+        .externalDisplay(.composing(title: title, date: date, text: text))
         .onAppear { focusStart() }
         .onDisappear { flush() }
         .overlay(alignment: .bottom) {
@@ -302,6 +323,15 @@ struct WritingView: View {
 
     private func insertMedia(_ data: Data, ext: String) {
         guard let rel = store.saveAsset(data, ext: ext) else { return }
+        appendLink(rel)
+    }
+
+    /// Attach a file the camera just wrote (photo or video).
+    private func attachCaptured(_ url: URL) {
+        if let rel = store.importAsset(from: url) { appendLink(rel) }
+    }
+
+    private func appendLink(_ rel: String) {
         let md = "![](\(rel))"
         text = text.isEmpty ? md : text + "\n\n" + md
     }

@@ -19,6 +19,8 @@ struct SettingsView: View {
     @AppStorage("highlightTags") private var highlightTags = true
     @AppStorage("firstWeekday") private var firstWeekday = 1
     @AppStorage("showWeekNumbers") private var showWeekNumbers = false
+    @AppStorage(ExternalDisplayModel.autoDimKey) private var dimWithExternalDisplay = false
+    @AppStorage(ExternalDisplayModel.dimLevelKey) private var externalDisplayDimLevel = ExternalDisplayModel.dimFloor
     @AppStorage("inboxSwipeLeft") private var swipeLeftRaw = SwipeAction.file.rawValue
     @AppStorage("inboxSwipeRight") private var swipeRightRaw = SwipeAction.delete.rawValue
     @AppStorage("splitTags") private var splitTagsRaw: String = ""
@@ -175,6 +177,35 @@ struct SettingsView: View {
             }
 
             #if os(iOS)
+            Section {
+                // onChange sits on the controls, not the Section: a modified
+                // Section is no longer a Section to the enclosing Form.
+                Toggle("Dim this screen", isOn: $dimWithExternalDisplay)
+                    .onChange(of: dimWithExternalDisplay) { _, _ in
+                        ExternalDisplayModel.shared.autoDimPreferenceChanged()
+                    }
+                if dimWithExternalDisplay {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Dim to")
+                            Spacer()
+                            Text("\(Int(externalDisplayDimLevel * 100))%")
+                                .font(.callout.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $externalDisplayDimLevel,
+                               in: ExternalDisplayModel.dimFloor...0.5)
+                    }
+                    .onChange(of: externalDisplayDimLevel) { _, _ in
+                        ExternalDisplayModel.shared.autoDimPreferenceChanged()
+                    }
+                }
+            } header: {
+                Text("External display")
+            } footer: {
+                Text("Connected to a monitor, Nook shows your writing on it instead of mirroring — so this screen's brightness no longer affects what's up there, and turning it down saves power. Restored when you unplug.")
+            }
+
             Section {
                 Picker("Swipe left", selection: $swipeLeftRaw) {
                     ForEach(SwipeAction.allCases) { Text($0.label).tag($0.rawValue) }

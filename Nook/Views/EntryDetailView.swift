@@ -44,6 +44,7 @@ struct EntryDetailView: View {
     @State private var mode: EntryViewMode = .edit
     @State private var showingImagePicker = false
     @State private var showingVideoRecorder = false
+    @State private var showingPhotoCapture = false
     @State private var showingPhotoPicker = false
     @State private var photoItem: PhotosPickerItem?
     @State private var saveTask: Task<Void, Never>?
@@ -117,8 +118,10 @@ struct EntryDetailView: View {
                             Text(Theme.displayDate(String(JournalStore.ts(from: date).prefix(10)), style: dateStyleRaw))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        .padding(.horizontal, 24)
-                        .padding(.top, 16)
+                        // 16 to match the editor's gutter, so toggling
+                        // Edit/Preview doesn't shift the text sideways.
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
                         .padding(.bottom, 2)
                     }
                     MediaPreview(text: text, font: font, textColor: Theme.bodyText(colorScheme)) { text = $0 }
@@ -152,12 +155,10 @@ struct EntryDetailView: View {
             handleDrop(providers)
         }
         .sheet(isPresented: $showingVideoRecorder) {
-            VideoRecorderView { url in
-                if let rel = store.importAsset(from: url) {
-                    let md = "![](\(rel))"
-                    text = text.isEmpty ? md : text + "\n\n" + md
-                }
-            }
+            VideoRecorderView { url in attachCaptured(url) }
+        }
+        .sheet(isPresented: $showingPhotoCapture) {
+            PhotoCaptureView { url in attachCaptured(url) }
         }
         #if os(iOS)
         // In the navigation bar rather than a row of their own: an entry used to
@@ -173,6 +174,8 @@ struct EntryDetailView: View {
         .onChange(of: title) { _, _ in scheduleSave() }
         .onChange(of: text) { _, _ in scheduleSave() }
         .onChange(of: date) { _, _ in scheduleSave() }
+        // Present the entry on a connected external display (iOS second screen).
+        .externalDisplay(.reading(title: title, date: date, text: text, isStarred: isStarred))
         .onDisappear { flush() }
     }
 
@@ -233,6 +236,7 @@ struct EntryDetailView: View {
             #else
             Button { showingImagePicker = true } label: { Label("Attach Media", systemImage: "paperclip") }
             #endif
+            Button { showingPhotoCapture = true } label: { Label("Take Photo", systemImage: "camera") }
             Button { showingVideoRecorder = true } label: { Label("Record Video", systemImage: "video") }
             Button { copyText() } label: { Label("Copy text", systemImage: "doc.on.doc") }
             Button { promoteFirstLine() } label: { Label("Promote first line to title", systemImage: "arrow.up.to.line") }
@@ -294,8 +298,11 @@ struct EntryDetailView: View {
                         #endif
                 }
             }
+            // Same rhythm as the composer's header — the two screens are the
+            // same layout and shouldn't sit a couple of points apart.
             .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
 
             Divider()
 
@@ -382,6 +389,15 @@ struct EntryDetailView: View {
 
     private func insertMedia(_ data: Data, ext: String) {
         guard let rel = store.saveAsset(data, ext: ext) else { return }
+        appendLink(rel)
+    }
+
+    /// Attach a file the camera just wrote (photo or video).
+    private func attachCaptured(_ url: URL) {
+        if let rel = store.importAsset(from: url) { appendLink(rel) }
+    }
+
+    private func appendLink(_ rel: String) {
         let md = "![](\(rel))"
         text = text.isEmpty ? md : text + "\n\n" + md
     }

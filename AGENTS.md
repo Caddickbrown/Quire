@@ -88,12 +88,22 @@ Nook/
     TagsView.swift        tag cloud (coloured, searchable) → entries per tag; random tag
     CalendarView.swift    MiniCalendarView (sidebar) — days with entries, media-typed dots
     AssetsView.swift      photo-gallery grid (video poster frames); tap → AssetViewer
-                          (Photos-style zoom); sort; Reveal / Delete / Go to Entry
+                          (Photos-style zoom); sort + group by day/month/year;
+                          Reveal / Delete / Go to Entry
+    ExternalDisplayView.swift  iOS second screen — the external-display scene
+                          delegate + the window shown on a connected monitor
+                          (entry / browse list / idle stats / hint bar), and
+                          the optional device-screen dimming
+    KeyboardNavigation.swift  ↑/↓/↩/⎋ selection over an entry list, shared by
+                          InboxView and EntryTwoPane; mirrors to the monitor.
+                          iOS uses UIKeyCommand, NOT SwiftUI onKeyPress — see
+                          the file header for why
     ChangelogView.swift   "What's New" — parses the bundled CHANGELOG.md resource
     MediaPreview.swift    render body markdown + inline images/video/audio
     WritingTextEditor.swift  NSTextView/UITextView wrapper: zero insets, no scrollbar, @tag colour
     AudioRecorder.swift   voice memo (AVAudioRecorder) + RecordingBanner
-    VideoRecorderView.swift  iOS camera controller / macOS AVCaptureSession recorder
+    VideoRecorderView.swift  camera capture — video + stills; iOS camera controller /
+                          macOS AVCaptureSession (movie + photo output)
     SettingsView.swift    appearance, accent colour, fonts, date format, tag highlight, split tags (chips),
                           folder, backup, cleanup/merge-ex-split/export, shortcuts + how-to guides
   iOS/Info.plist  macOS/Info.plist  Nook.entitlements  Assets.xcassets  fonts/
@@ -102,6 +112,7 @@ gen_pbxproj.py   tools/make_icon.swift   Tests/ParserChecks.swift   Makefile
 NookWidget/          WidgetKit extension (own target, embedded in the app)
   NookWidget.swift       small/medium/large widgets; deep-links `nook://write`
   NookLockScreenWidget.swift  iOS-only Lock Screen accessory: a New Draft button
+  NookControlWidget.swift  iOS 18+ Control Center control: the same New Draft button
   NookWidgetBundle.swift @main WidgetBundle; registers bundled Lato fonts
   Info.plist             NSExtension point `com.apple.widgetkit-extension`
   NookWidget-{iOS,macOS}.entitlements   App Group (macOS also sandboxed)
@@ -120,7 +131,12 @@ UserDefaults suite (`group.com.caddickbrown.nook`) after every reload via
 the widget reads it on its 30-min timeline refresh. The App Group entitlement is
 in `Nook-iOS.entitlements` / `Nook-macOS.entitlements` and both widget
 entitlements files. Widgets deep-link via the `nook://` URL scheme (registered in
-both app `Info.plist`s, handled by `NookApp.onOpenURL`). Custom `Lato-*` fonts are
+both app `Info.plist`s, handled by `NookApp.onOpenURL`). The same bundle also
+ships a **Control Center control** (`NookControlWidget.swift`) — iOS 18+, so it is
+`@available`-gated and registered behind `if #available` in the bundle body; its
+`ControlWidgetButton` runs a local `AppIntent` that returns an `OpenURLIntent` for
+`nook://write` (the app's own `OpenNewDraftIntent` isn't compiled into the widget
+target). Custom `Lato-*` fonts are
 bundled into the widget and registered at runtime in `NookWidgetBundle.init`
 (a separate process can't inherit the app's font registration).
 
@@ -128,6 +144,44 @@ bundled into the widget and registered at runtime in `NookWidgetBundle.init`
 > account; Xcode automatic signing normally registers it on first build. If the
 > widget doesn't appear, confirm it was actually built + embedded (it's in
 > `Nook.app/PlugIns/NookWidgetExtension.appex`).
+
+### External display (iOS second screen)
+
+Connected to a monitor, iOS mirrors an app unless the app declares an
+external-display scene. Nook declares one, so it gets its own window there
+instead — which also decouples the device panel, letting Nook dim it to save
+power without dimming what's on the monitor.
+
+The wiring, all in `Views/ExternalDisplayView.swift`:
+- `Nook/iOS/Info.plist` carries a **hand-written `UIApplicationSceneManifest`**
+  (`UIApplicationSupportsMultipleScenes` + a
+  `UIWindowSceneSessionRoleExternalDisplayNonInteractive` configuration naming
+  `$(PRODUCT_MODULE_NAME).ExternalDisplaySceneDelegate`). It is written by hand
+  because `INFOPLIST_KEY_UIApplicationSceneManifest_Generation` can't express
+  the extra scene — that build setting is deliberately **absent** from
+  `gen_pbxproj.py`, and adding it back would collide with the plist. The
+  application role is omitted; SwiftUI's `WindowGroup` supplies it.
+- `ExternalDisplaySceneDelegate` builds a `UIWindow` hosting
+  `ExternalDisplayRoot` (shown, never made key).
+- `ExternalDisplayModel.shared` is the bridge: the scene delegate can't reach
+  the app scene's environment, so `RootView` hands it the `JournalStore` **and
+  its resolved `colorScheme`** (an external scene has its own trait collection
+  and won't follow the device's appearance on its own). Views push content with
+  `.externalDisplay(...)` — a no-op on macOS, and it only republishes while a
+  display is attached, so the composer doesn't broadcast every keystroke into
+  the void. `WritingView` pushes `.composing`, `EntryDetailView` pushes
+  `.reading`, the keyboard-navigation modifier pushes `.browsing`; otherwise
+  `.idle`, a stats screen fed by the App Group `NookSnapshot` rather than by
+  touching the journal.
+- Composing and reading share one `ExternalEntryView` (a `live` flag is the only
+  difference) — they were two views once and drifted apart on the same screen.
+  Keep it that way.
+- Dimming (`Settings → External display`, off by default) writes the app
+  scene's `UIScreen.brightness`, remembers the user's level, and restores it on
+  disconnect *and* on `willTerminate`.
+
+Only the scene plumbing and brightness control are `#if os(iOS)`; the content
+model and views compile on macOS so the shared views stay guard-free.
 
 ### Data-layer port (jnl main.go → Swift)
 
@@ -169,8 +223,9 @@ open→Settings "Show in Finder", config→Settings (incl. JNL_SPLIT_TAGS).
 
 Photos/video/audio are stored as files in `<base>/assets/` and referenced from
 entry bodies as Obsidian-style `![](assets/<uuid>.<ext>)` markdown links (never
-embedded). Attach via picker or drag-drop; record audio (mic) / video (camera)
-in-app; Preview renders them inline (image captions come from the link's alt text).
+embedded). Attach via picker or drag-drop; record audio (mic), take a photo or
+record video (camera) in-app; Preview renders them inline (image captions come
+from the link's alt text).
 `JournalStore.saveAsset`/`importAsset`/`assetURL`/`allAssets`/`usages(ofAsset:)`
 manage them. Entitlements: audio-input + camera; usage strings generated. Backup
 (`Settings → Backup`) copies the whole base folder to a timestamped folder in a
@@ -228,10 +283,37 @@ email-style list+detail beyond Inbox; an XCTest target (parser verified via
   under `## [Unreleased]` for anything user-visible (features, behaviour, fixes,
   on-disk format, build steps); see the "How to update this file" block at the
   top of that file for the buckets and phrasing.
+- **Never accept Xcode's "Update to recommended settings" sheet.** It writes
+  straight into `project.pbxproj`, which the next `make project` regenerates
+  from scratch — the changes vanish and the sheet comes back. Hit Cancel, then
+  add the settings to `gen_pbxproj.py` instead. The recommended warning set,
+  `DEAD_CODE_STRIPPING`, `REGISTER_APP_GROUPS`, `ENABLE_USER_SCRIPT_SANDBOXING`,
+  `STRING_CATALOG_GENERATE_SYMBOLS`,
+  `ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS` and a
+  project-level `DEVELOPMENT_TEAM` (targets inherit it) are already there. Watch
+  the setting names: a wrong one is accepted silently as a user-defined key and
+  even echoes back from `-showBuildSettings`, so confirm against Xcode's own
+  `.xcspec` files rather than `-showBuildSettings` when the sheet won't go away.
+  Also bump
+  `LastUpgradeCheck` / `LastSwiftUpdateCheck` to the Xcode you're on — a stale
+  stamp raises the sheet on its own, whatever the settings say. (Currently 2650
+  for Xcode 26.5; the encoding is major × 100 + minor × 10.)
 - Never hand-edit `Nook.xcodeproj/project.pbxproj` — edit `gen_pbxproj.py` and
-  run `make project`. The same script also writes the shared
-  `NookWidgetExtension.xcscheme`; its `_XCWidgetKind` variable picks which
-  widget `Run` previews, which Xcode can't infer once a bundle holds several.
+  run `make project`. Don't re-add
+  `INFOPLIST_KEY_UIApplicationSceneManifest_Generation`: the iOS scene manifest
+  is hand-written (see "External display" above).
+- **Schemes are generated too, and there is deliberately only one: `Nook`.**
+  `gen_pbxproj.py` writes the shared `Nook.xcscheme` plus the per-user
+  `xcuserdata/…/xcschememanagement.plist`, whose `SuppressBuildableAutocreation`
+  entry stops Xcode helpfully recreating a `NookWidgetExtension` scheme (it is
+  keyed by target id, which this generator re-rolls each run — hence generating
+  it rather than leaving it to Xcode). The widget needs no scheme of its own:
+  the app target depends on it and embeds the `.appex`, so building `Nook`
+  builds the widget. To work on a widget in isolation, set
+  `GENERATE_WIDGET_SCHEME = True` and re-run `make project` — that restores
+  `NookWidgetExtension.xcscheme` and its `_XCWidgetKind` variable, which picks
+  which widget `Run` previews (Xcode can't infer it once a bundle holds
+  several).
 - Keep `JournalParser` pure and jnl-faithful; add a case to `ParserChecks.swift`
   when you touch it.
 - Guard platform-specific code with `#if os(macOS)` / `#if os(iOS)`; keep the

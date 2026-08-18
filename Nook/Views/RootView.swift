@@ -111,6 +111,9 @@ struct RootView: View {
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
     @Environment(\.accent) private var accent
+    // Resolved appearance (after the app's own preferredColorScheme, so Auto
+    // reads as the system's choice) — mirrored to the external display.
+    @Environment(\.colorScheme) private var colorScheme
     #if os(iOS)
     // Sidebar calendar is collapsible on iOS: in landscape it can otherwise swamp
     // the whole sidebar. Toggled from the footer; the choice is remembered.
@@ -182,6 +185,18 @@ struct RootView: View {
             }
         }
         .onChange(of: nav.section) { _, _ in nav.path = NavigationPath() }
+        // Hand the store to the external-display scene, which is built by a
+        // UIKit scene delegate and so can't reach this environment itself.
+        // The colour scheme goes the same way: an external scene has its own
+        // trait collection and won't follow the device's appearance on its own.
+        .onAppear {
+            ExternalDisplayModel.shared.store = store
+            ExternalDisplayModel.shared.colorScheme = colorScheme
+            registerRootKeys()
+        }
+        .onChange(of: colorScheme) { _, new in
+            ExternalDisplayModel.shared.colorScheme = new
+        }
         .onReceive(ticker) { _ in
             guard nav.timerRunning else { return }
             if nav.timerRemaining > 0 { nav.timerRemaining -= 1 } else { nav.timerRunning = false }
@@ -192,6 +207,22 @@ struct RootView: View {
     }
 
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    /// Bottom of the key-command stack: what ↑/↓ do when no list is on screen.
+    /// The external display's idle screen offers "↑↓ Browse", and from the
+    /// section menu there is nothing to browse yet — so the first press opens
+    /// the Journal, whose list then registers over this and takes the next one.
+    private func registerRootKeys() {
+        let intoJournal = { if nav.section == nil { nav.section = .archive } }
+        KeyCommandRouter.shared.register(Self.rootKeyID, NookKeyHandlers(
+            moveUp:   intoJournal,
+            moveDown: intoJournal,
+            open:     {},
+            clear:    { nav.section = nil }
+        ))
+    }
+
+    private static let rootKeyID = UUID()
 
     @ViewBuilder
     private var detailRoot: some View {

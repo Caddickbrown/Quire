@@ -56,7 +56,7 @@ struct CalendarView: View {
             }
             .buttonStyle(.plain)
             .popover(isPresented: $showingPicker, arrowEdge: .bottom) {
-                MonthYearPicker(month: $month) { showingPicker = false }
+                MonthYearPicker(month: $month)
                     .padding()
                     #if os(iOS)
                     .presentationCompactAdaptation(.popover)
@@ -218,7 +218,7 @@ struct MiniCalendarView: View {
                 }
                 .buttonStyle(.plain)
                 .popover(isPresented: $showingPicker, arrowEdge: .bottom) {
-                    MonthYearPicker(month: $month) { showingPicker = false }
+                    MonthYearPicker(month: $month)
                         .padding()
                         #if os(iOS)
                         .presentationCompactAdaptation(.popover)
@@ -359,7 +359,6 @@ struct MiniCalendarView: View {
 /// wheels on iOS (the system date-picker idiom); two pop-up menus on macOS.
 struct MonthYearPicker: View {
     @Binding var month: Date
-    var done: () -> Void = {}
     private let cal = Calendar.current
     private static let years = Array(1970...2100)
 
@@ -376,10 +375,11 @@ struct MonthYearPicker: View {
     var body: some View {
         VStack(spacing: 12) {
             wheels
+            // No "Done": the wheels apply as you spin them and the popover
+            // closes on a tap outside.
             HStack {
                 Button("This Month") { set(startOf: Date()) }
                 Spacer()
-                Button("Done") { done() }.keyboardShortcut(.defaultAction)
             }
             .font(.callout)
         }

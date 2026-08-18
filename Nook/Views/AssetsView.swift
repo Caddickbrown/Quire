@@ -24,10 +24,36 @@ enum AssetSort: String, CaseIterable, Identifiable {
     }
 }
 
+/// How the gallery is broken up: one continuous grid, or date headers at day,
+/// month, or year granularity (by the date of the entry using the file).
+enum AssetGrouping: String, CaseIterable, Identifiable {
+    case none, day, month, year
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .none:  return "No grouping"
+        case .day:   return "By day"
+        case .month: return "By month"
+        case .year:  return "By year"
+        }
+    }
+
+    /// Sortable section key, so section order is just the keys sorted.
+    var keyFormat: String {
+        switch self {
+        case .none, .day: return "yyyy-MM-dd"
+        case .month:      return "yyyy-MM"
+        case .year:       return "yyyy"
+        }
+    }
+}
+
 struct AssetsView: View {
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
     @AppStorage("assetSort") private var sortRaw = AssetSort.newest.rawValue
+    @AppStorage("assetGrouping") private var groupingRaw = AssetGrouping.none.rawValue
+    @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
     @State private var assets: [JournalStore.AssetItem] = []
     @State private var viewing: JournalStore.AssetItem?
     @State private var usagePicker: UsagePicker?
@@ -52,18 +78,99 @@ struct AssetsView: View {
         }
     }
 
+    /// Dates come from the entry that links each file (see `AssetItem.date`),
+    /// falling back to the file's own date for media no entry references.
     private var sorted: [JournalStore.AssetItem] {
         switch AssetSort(rawValue: sortRaw) ?? .newest {
-        case .newest:  return assets.sorted { $0.modified > $1.modified }
-        case .oldest:  return assets.sorted { $0.modified < $1.modified }
+        case .newest:  return assets.sorted { $0.date > $1.date }
+        case .oldest:  return assets.sorted { $0.date < $1.date }
         case .largest: return assets.sorted { $0.size > $1.size }
         case .name:    return assets.sorted { $0.name < $1.name }
         case .kind:
             return assets.sorted {
                 let (a, b) = (Self.kindRank($0.name), Self.kindRank($1.name))
-                return a == b ? $0.modified > $1.modified : a < b
+                return a == b ? $0.date > $1.date : a < b
             }
         }
+    }
+
+    private var grouping: AssetGrouping { AssetGrouping(rawValue: groupingRaw) ?? .none }
+
+    struct AssetSection: Identifiable {
+        let id: String
+        let title: String
+        let items: [JournalStore.AssetItem]
+    }
+
+    private static func formatter(_ format: String) -> DateFormatter {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = format
+        return f
+    }
+
+    /// The sorted assets cut into date sections. Sections run newest-first
+    /// unless the sort is oldest-first; the items inside keep the chosen sort.
+    private var sections: [AssetSection] {
+        let items = sorted
+        guard grouping != .none else { return [AssetSection(id: "all", title: "", items: items)] }
+
+        let key = Self.formatter(grouping.keyFormat)
+        var order: [String] = [], map: [String: [JournalStore.AssetItem]] = [:]
+        for item in items {
+            let k = key.string(from: item.date)
+            if map[k] == nil { order.append(k) }
+            map[k, default: []].append(item)
+        }
+        let ascending = AssetSort(rawValue: sortRaw) == .oldest
+        order.sort { ascending ? $0 < $1 : $0 > $1 }
+        return order.map { AssetSection(id: $0, title: title(for: $0), items: map[$0] ?? []) }
+    }
+
+    /// Section keys are machine-sortable; headers are the readable form.
+    private func title(for key: String) -> String {
+        switch grouping {
+        case .none:  return key
+        case .day:   return Theme.sectionDate(key, style: dateStyleRaw)
+        case .month:
+            guard let d = Self.formatter("yyyy-MM").date(from: key) else { return key }
+            return Self.formatter("MMMM yyyy").string(from: d)
+        case .year:  return key
+        }
+    }
+
+    private func header(_ title: String) -> some View {
+        Text(title)
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 6)
+            .background(.bar)
+    }
+
+    private func tile(_ item: JournalStore.AssetItem) -> some View {
+        Button { viewing = item } label: { cell(item) }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button { viewing = item } label: {
+                    Label("View", systemImage: "eye")
+                }
+                goToMenu(item)
+                #if os(macOS)
+                Button {
+                    store.revealAsset(item.url)
+                } label: {
+                    Label("Reveal in Finder", systemImage: "magnifyingglass")
+                }
+                #endif
+                Button(role: .destructive) {
+                    store.deleteAsset(item.url)
+                    reload()
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .destructiveAction()
+            }
     }
 
     var body: some View {
@@ -76,30 +183,15 @@ struct AssetsView: View {
                 )
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 2) {
-                        ForEach(sorted) { item in
-                            Button { viewing = item } label: { cell(item) }
-                                .buttonStyle(.plain)
-                                .contextMenu {
-                                    Button { viewing = item } label: {
-                                        Label("View", systemImage: "eye")
-                                    }
-                                    goToMenu(item)
-                                    #if os(macOS)
-                                    Button {
-                                        store.revealAsset(item.url)
-                                    } label: {
-                                        Label("Reveal in Finder", systemImage: "magnifyingglass")
-                                    }
-                                    #endif
-                                    Button(role: .destructive) {
-                                        store.deleteAsset(item.url)
-                                        reload()
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                    .destructiveAction()
-                                }
+                    LazyVGrid(columns: columns,
+                              spacing: 2,
+                              pinnedViews: grouping == .none ? [] : [.sectionHeaders]) {
+                        ForEach(sections) { section in
+                            Section {
+                                ForEach(section.items) { tile($0) }
+                            } header: {
+                                if grouping != .none { header(section.title) }
+                            }
                         }
                     }
                     .padding(.horizontal, 2)
@@ -114,6 +206,11 @@ struct AssetsView: View {
             Menu {
                 Picker("Sort", selection: $sortRaw) {
                     ForEach(AssetSort.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.inline)
+                Divider()
+                Picker("Grouping", selection: $groupingRaw) {
+                    ForEach(AssetGrouping.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 .pickerStyle(.inline)
             } label: {
@@ -232,7 +329,7 @@ struct AssetViewer: View {
 
     private var subtitle: String {
         let size = ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file)
-        return "\(item.modified.formatted(date: .abbreviated, time: .shortened)) · \(size)"
+        return "\(item.date.formatted(date: .abbreviated, time: .shortened)) · \(size)"
     }
 
     var body: some View {

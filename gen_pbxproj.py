@@ -12,6 +12,7 @@ either platform. NookShared.swift + the Lato fonts are compiled/copied into both
 Usage:  python3 gen_pbxproj.py
 """
 
+import getpass
 import uuid
 import os
 
@@ -42,6 +43,8 @@ swift_files = [
     ('CalendarView',    'Views/CalendarView.swift',     'Views'),
     ('MediaPreview',    'Views/MediaPreview.swift',      'Views'),
     ('AssetsView',      'Views/AssetsView.swift',       'Views'),
+    ('ExternalDisplay',  'Views/ExternalDisplayView.swift', 'Views'),
+    ('KeyboardNav',      'Views/KeyboardNavigation.swift',   'Views'),
     ('ChangelogView',   'Views/ChangelogView.swift',    'Views'),
     ('AudioRecorder',   'Views/AudioRecorder.swift',    'Views'),
     ('VideoRecorderView','Views/VideoRecorderView.swift','Views'),
@@ -61,6 +64,7 @@ widget_swift_files = [
     ('WNookWidget',       'NookWidget/NookWidget.swift'),
     ('WNookWidgetBundle', 'NookWidget/NookWidgetBundle.swift'),
     ('WNookLockScreen',   'NookWidget/NookLockScreenWidget.swift'),
+    ('WNookControl',      'NookWidget/NookControlWidget.swift'),
 ]
 
 # Allocate ids
@@ -325,8 +329,8 @@ def pbxproj():
     a('\t\t\tisa = PBXProject;')
     a('\t\t\tattributes = {')
     a('\t\t\t\tBuildIndependentTargetsInParallel = 1;')
-    a('\t\t\t\tLastSwiftUpdateCheck = 1600;')
-    a('\t\t\t\tLastUpgradeCheck = 1600;')
+    a('\t\t\t\tLastSwiftUpdateCheck = 2650;')
+    a('\t\t\t\tLastUpgradeCheck = 2650;')
     a('\t\t\t\tTargetAttributes = {')
     a(f'\t\t\t\t\t{IDs["target"]} = {{')
     a('\t\t\t\t\t\tCreatedOnToolsVersion = 16.0;')
@@ -420,13 +424,60 @@ def pbxproj():
         a('\t\t\tisa = XCBuildConfiguration;')
         a('\t\t\tbuildSettings = {')
         a('\t\t\t\tALWAYS_SEARCH_USER_PATHS = NO;')
+        # Note the SWIFT_ in the middle: ASSETCATALOG_COMPILER_GENERATE_ASSET_
+        # SYMBOL_EXTENSIONS is not a real setting, and Xcode will happily echo
+        # it back from -showBuildSettings as a user-defined key while ignoring
+        # it. The one Xcode's validator checks is this (default NO).
+        a('\t\t\t\tASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;')
         a('\t\t\t\tCLANG_ENABLE_MODULES = YES;')
         a('\t\t\t\tCLANG_ENABLE_OBJC_ARC = YES;')
         a('\t\t\t\tCLANG_ENABLE_OBJC_WEAK = YES;')
+        # Xcode's "recommended warnings" set. Kept here rather than accepted
+        # through Xcode's *Update to recommended settings* sheet, which edits
+        # the pbxproj by hand — the next `make project` would wipe it and the
+        # prompt would come straight back. Most are Objective-C only and inert
+        # in a pure-Swift project; they're set so the sheet stops asking.
+        for setting in [
+            'CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES',
+            'CLANG_WARN_BOOL_CONVERSION = YES',
+            'CLANG_WARN_COMMA = YES',
+            'CLANG_WARN_CONSTANT_CONVERSION = YES',
+            'CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES',
+            'CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR',
+            'CLANG_WARN_EMPTY_BODY = YES',
+            'CLANG_WARN_ENUM_CONVERSION = YES',
+            'CLANG_WARN_INFINITE_RECURSION = YES',
+            'CLANG_WARN_INT_CONVERSION = YES',
+            'CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES',
+            'CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES',
+            'CLANG_WARN_OBJC_LITERAL_CONVERSION = YES',
+            'CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR',
+            'CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES',
+            'CLANG_WARN_RANGE_LOOP_ANALYSIS = YES',
+            'CLANG_WARN_STRICT_PROTOTYPES = YES',
+            'CLANG_WARN_SUSPICIOUS_MOVE = YES',
+            'CLANG_WARN_UNREACHABLE_CODE = YES',
+            'CLANG_WARN__DUPLICATE_METHOD_MATCH = YES',
+            'GCC_WARN_64_TO_32_BIT_CONVERSION = YES',
+            'GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR',
+            'GCC_WARN_UNDECLARED_SELECTOR = YES',
+            'GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE',
+            'GCC_WARN_UNUSED_FUNCTION = YES',
+            'GCC_WARN_UNUSED_VARIABLE = YES',
+        ]:
+            a(f'\t\t\t\t{setting};')
         a('\t\t\t\tCOPY_PHASE_STRIP = NO;')
+        a('\t\t\t\tDEAD_CODE_STRIPPING = YES;')
+        # At project level so both targets inherit it — that's the "Inherit
+        # Development Team from Project Settings" recommendation, and it means
+        # the id is written once instead of once per target.
+        a('\t\t\t\tDEVELOPMENT_TEAM = 52W73J6V95;')
         a('\t\t\t\tENABLE_STRICT_OBJC_MSGSEND = YES;')
+        # Safe here: the project has no run-script build phases to sandbox.
+        a('\t\t\t\tENABLE_USER_SCRIPT_SANDBOXING = YES;')
         a('\t\t\t\tGCC_C_LANGUAGE_STANDARD = gnu17;')
         a('\t\t\t\tGCC_NO_COMMON_BLOCKS = YES;')
+        a('\t\t\t\tSTRING_CATALOG_GENERATE_SYMBOLS = YES;')
         if debug:
             a('\t\t\t\tDEBUG_INFORMATION_FORMAT = dwarf;')
             a('\t\t\t\tENABLE_TESTABILITY = YES;')
@@ -454,8 +505,8 @@ def pbxproj():
         a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Nook/Nook-iOS.entitlements;')
         a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Nook/Nook-iOS.entitlements;')
         a('\t\t\t\tCODE_SIGN_STYLE = Automatic;')
+        a('\t\t\t\tDEAD_CODE_STRIPPING = YES;')
         a('\t\t\t\tCURRENT_PROJECT_VERSION = 1;')
-        a('\t\t\t\tDEVELOPMENT_TEAM = 52W73J6V95;')
         a('\t\t\t\tENABLE_HARDENED_RUNTIME = YES;')
         a('\t\t\t\tENABLE_PREVIEWS = YES;')
         a('\t\t\t\tGENERATE_INFOPLIST_FILE = YES;')
@@ -464,8 +515,11 @@ def pbxproj():
         a('\t\t\t\t"INFOPLIST_FILE[sdk=macosx*]" = Nook/macOS/Info.plist;')
         a('\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = Nook;')
         a('\t\t\t\tINFOPLIST_KEY_NSMicrophoneUsageDescription = "Nook records voice memos to attach to your journal entries.";')
-        a('\t\t\t\tINFOPLIST_KEY_NSCameraUsageDescription = "Nook records video to attach to your journal entries.";')
-        a('\t\t\t\tINFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;')
+        a('\t\t\t\tINFOPLIST_KEY_NSCameraUsageDescription = "Nook takes photos and records video to attach to your journal entries.";')
+        # No INFOPLIST_KEY_UIApplicationSceneManifest_Generation: the iOS
+        # Info.plist declares UIApplicationSceneManifest by hand so it can carry
+        # the external-display scene (second-screen support). Letting Xcode
+        # generate one too would collide with it.
         a('\t\t\t\tINFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;')
         a('\t\t\t\tINFOPLIST_KEY_UILaunchScreen_Generation = YES;')
         a('\t\t\t\tINFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";')
@@ -476,6 +530,7 @@ def pbxproj():
         a('\t\t\t\tMACOSX_DEPLOYMENT_TARGET = 14.0;')
         a('\t\t\t\tMARKETING_VERSION = 1.0;')
         a('\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.nook;')
+        a('\t\t\t\tREGISTER_APP_GROUPS = YES;')
         a('\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";')
         a('\t\t\t\tSUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";')
         a('\t\t\t\tSUPPORTS_MACCATALYST = NO;')
@@ -495,8 +550,8 @@ def pbxproj():
         a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = NookWidget/NookWidget-iOS.entitlements;')
         a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = NookWidget/NookWidget-iOS.entitlements;')
         a('\t\t\t\tCODE_SIGN_STYLE = Automatic;')
+        a('\t\t\t\tDEAD_CODE_STRIPPING = YES;')
         a('\t\t\t\tCURRENT_PROJECT_VERSION = 1;')
-        a('\t\t\t\tDEVELOPMENT_TEAM = 52W73J6V95;')
         a('\t\t\t\tENABLE_HARDENED_RUNTIME = YES;')
         a('\t\t\t\tGENERATE_INFOPLIST_FILE = YES;')
         a('\t\t\t\tINFOPLIST_FILE = NookWidget/Info.plist;')
@@ -508,6 +563,7 @@ def pbxproj():
         a('\t\t\t\tMACOSX_DEPLOYMENT_TARGET = 14.0;')
         a('\t\t\t\tMARKETING_VERSION = 1.0;')
         a('\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.nook.NookWidget;')
+        a('\t\t\t\tREGISTER_APP_GROUPS = YES;')
         a('\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";')
         a('\t\t\t\tSKIP_INSTALL = YES;')
         a('\t\t\t\tSUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";')
@@ -566,12 +622,133 @@ def pbxproj():
     a('}')
     return '\n'.join(L) + '\n'
 
+# Xcode's scheme selector shows one entry per scheme, and a scheme for the
+# widget extension earns its keep only while you're working on the widget: the
+# Nook target already depends on it and embeds the .appex, so building/running
+# "Nook" builds the widget either way. Off by default so the selector reads just
+# "Nook"; flip to True (and re-run `make project`) to get the widget scheme back
+# for previewing a widget on its own.
+GENERATE_WIDGET_SCHEME = False
+
 # Which widget `Run` previews when the NookWidgetExtension scheme is selected.
 # A bundle with more than one widget can't be inferred, so Xcode refuses to
 # launch without _XCWidgetKind ("Please specify the widget kind in the scheme's
 # Environment Variables"). Switch to 'NookNewEntryWidget' to preview the Lock
-# Screen button instead — or edit the variable in Xcode's scheme editor.
+# Screen button, or 'NookNewDraftControl' for the Control Center control —
+# or edit the variable in Xcode's scheme editor.
 WIDGET_PREVIEW_KIND = 'NookWidget'
+
+
+def app_scheme():
+    """Shared scheme for the app. Generated rather than left to Xcode's
+    autocreation so the one scheme in the selector is deterministic and tracked
+    in git — and so the widget target, whose autocreation is suppressed in the
+    scheme-management plist below, has no scheme to be autocreated next to."""
+    return f'''<?xml version="1.0" encoding="UTF-8"?>
+<Scheme LastUpgradeVersion = "1600" version = "1.7">
+   <BuildAction parallelizeBuildables = "YES" buildImplicitDependencies = "YES">
+      <BuildActionEntries>
+         <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "YES" buildForArchiving = "YES" buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "{IDs['target']}"
+               BuildableName = "Nook.app"
+               BlueprintName = "Nook"
+               ReferencedContainer = "container:Nook.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      shouldUseLaunchSchemeArgsEnv = "YES">
+      <Testables>
+      </Testables>
+   </TestAction>
+   <LaunchAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      launchStyle = "0"
+      useCustomWorkingDirectory = "NO"
+      ignoresPersistentStateOnLaunch = "NO"
+      debugDocumentVersioning = "YES"
+      debugServiceExtension = "internal"
+      allowLocationSimulation = "YES">
+      <BuildableProductRunnable runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "{IDs['target']}"
+            BuildableName = "Nook.app"
+            BlueprintName = "Nook"
+            ReferencedContainer = "container:Nook.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </LaunchAction>
+   <ProfileAction
+      buildConfiguration = "Release"
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      savedToolIdentifier = ""
+      useCustomWorkingDirectory = "NO"
+      debugDocumentVersioning = "YES">
+      <BuildableProductRunnable runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "{IDs['target']}"
+            BuildableName = "Nook.app"
+            BlueprintName = "Nook"
+            ReferencedContainer = "container:Nook.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </ProfileAction>
+   <AnalyzeAction buildConfiguration = "Debug">
+   </AnalyzeAction>
+   <ArchiveAction buildConfiguration = "Release" revealArchiveInOrganizer = "YES">
+   </ArchiveAction>
+</Scheme>
+'''
+
+
+def scheme_management():
+    """Per-user scheme state (`xcuserdata/`, gitignored). Its job here is
+    SuppressBuildableAutocreation: without it Xcode notices the widget target
+    has no scheme and helpfully makes one, putting "NookWidgetExtension" back in
+    the selector. Keyed by target id, which this generator re-rolls on every
+    run — hence writing it here, alongside the pbxproj it has to match."""
+    shown = ['\t\t<key>Nook.xcscheme_^#shared#^_</key>',
+             '\t\t<dict>',
+             '\t\t\t<key>isShown</key>',
+             '\t\t\t<true/>',
+             '\t\t\t<key>orderHint</key>',
+             '\t\t\t<integer>0</integer>',
+             '\t\t</dict>']
+    suppressed = []
+    if GENERATE_WIDGET_SCHEME:
+        shown += ['\t\t<key>NookWidgetExtension.xcscheme_^#shared#^_</key>',
+                  '\t\t<dict>',
+                  '\t\t\t<key>isShown</key>',
+                  '\t\t\t<true/>',
+                  '\t\t\t<key>orderHint</key>',
+                  '\t\t\t<integer>1</integer>',
+                  '\t\t</dict>']
+    else:
+        suppressed = ['\t<key>SuppressBuildableAutocreation</key>',
+                      '\t<dict>',
+                      f'\t\t<key>{IDs["widgetTarget"]}</key>',
+                      '\t\t<dict>',
+                      '\t\t\t<key>primary</key>',
+                      '\t\t\t<true/>',
+                      '\t\t</dict>',
+                      '\t</dict>']
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+             '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+             '<plist version="1.0">',
+             '<dict>',
+             '\t<key>SchemeUserState</key>',
+             '\t<dict>'] + shown + ['\t</dict>'] + suppressed + ['</dict>', '</plist>', '']
+    return '\n'.join(lines)
 
 
 def widget_scheme():
@@ -654,7 +831,30 @@ if __name__ == '__main__':
 
     schemes = os.path.join(HERE, 'Nook.xcodeproj', 'xcshareddata', 'xcschemes')
     os.makedirs(schemes, exist_ok=True)
-    scheme_path = os.path.join(schemes, 'NookWidgetExtension.xcscheme')
-    with open(scheme_path, 'w') as f:
-        f.write(widget_scheme())
-    print(f'Wrote {scheme_path} (_XCWidgetKind = {WIDGET_PREVIEW_KIND})')
+
+    app_path = os.path.join(schemes, 'Nook.xcscheme')
+    with open(app_path, 'w') as f:
+        f.write(app_scheme())
+    print(f'Wrote {app_path}')
+
+    widget_path = os.path.join(schemes, 'NookWidgetExtension.xcscheme')
+    if GENERATE_WIDGET_SCHEME:
+        with open(widget_path, 'w') as f:
+            f.write(widget_scheme())
+        print(f'Wrote {widget_path} (_XCWidgetKind = {WIDGET_PREVIEW_KIND})')
+    elif os.path.exists(widget_path):
+        os.remove(widget_path)
+        print(f'Removed {widget_path} (GENERATE_WIDGET_SCHEME = False)')
+
+    # Per-user scheme state. xcuserdata/ is gitignored, so this is rewritten
+    # locally on every run rather than shared — which is what keeps its target
+    # ids in step with the freshly generated pbxproj.
+    userdata = os.path.join(HERE, 'Nook.xcodeproj', 'xcuserdata')
+    existing = [d for d in os.listdir(userdata)] if os.path.isdir(userdata) else []
+    who = existing[0] if existing else f'{getpass.getuser()}.xcuserdatad'
+    mgmt_dir = os.path.join(userdata, who, 'xcschemes')
+    os.makedirs(mgmt_dir, exist_ok=True)
+    mgmt_path = os.path.join(mgmt_dir, 'xcschememanagement.plist')
+    with open(mgmt_path, 'w') as f:
+        f.write(scheme_management())
+    print(f'Wrote {mgmt_path}')

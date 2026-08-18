@@ -25,18 +25,6 @@ enum InboxSort: String, CaseIterable, Identifiable {
     }
 }
 
-/// How the inbox list is broken up: date headers, or one flat list.
-enum InboxGrouping: String, CaseIterable, Identifiable {
-    case date, none
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .date: return "Group by date"
-        case .none: return "No grouping"
-        }
-    }
-}
-
 enum SwipeAction: String, CaseIterable, Identifiable {
     case file, delete, none
     var id: String { rawValue }
@@ -54,11 +42,14 @@ struct InboxView: View {
     @EnvironmentObject private var nav: NavigationModel
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
     @AppStorage("inboxSort") private var sortRaw: String = InboxSort.newest.rawValue
-    @AppStorage("inboxGrouping") private var groupingRaw: String = InboxGrouping.date.rawValue
+    @AppStorage("inboxGrouping") private var groupingRaw: String = EntryGrouping.date.rawValue
     @AppStorage("inboxSwipeLeft") private var swipeLeftRaw = SwipeAction.file.rawValue
     @AppStorage("inboxSwipeRight") private var swipeRightRaw = SwipeAction.delete.rawValue
+    @Environment(\.accent) private var accent
     @State private var searchText = ""
     @State private var selectedTS: String?
+    /// Hardware-keyboard selection (↑/↓), mirrored to the external display.
+    @State private var kbIndex: Int?
 
     private var drafts: [Entry] {
         var d = store.inboxDrafts
@@ -137,18 +128,26 @@ struct InboxView: View {
         return order.map { (date: $0, entries: map[$0] ?? []) }
     }
 
-    private var grouping: InboxGrouping { InboxGrouping(rawValue: groupingRaw) ?? .date }
+    private var grouping: EntryGrouping { EntryGrouping(rawValue: groupingRaw) ?? .date }
 
     private var draftList: some View {
-        List(selection: selectionBinding) {
-            if grouping == .date {
-                ForEach(draftSections, id: \.date) { section in
-                    Section(Theme.sectionDate(section.date, style: dateStyleRaw)) {
-                        ForEach(section.entries) { draftRow($0) }
+        // ScrollViewReader so an arrow-key selection off the bottom of the
+        // screen brings its row into view rather than silently moving.
+        ScrollViewReader { proxy in
+            List(selection: selectionBinding) {
+                if grouping == .date {
+                    ForEach(draftSections, id: \.date) { section in
+                        Section(Theme.sectionDate(section.date, style: dateStyleRaw)) {
+                            ForEach(section.entries) { draftRow($0) }
+                        }
                     }
+                } else {
+                    ForEach(drafts) { draftRow($0) }
                 }
-            } else {
-                ForEach(drafts) { draftRow($0) }
+            }
+            .onChange(of: kbIndex) { _, i in
+                guard let i, drafts.indices.contains(i) else { return }
+                withAnimation { proxy.scrollTo(drafts[i].ts, anchor: .center) }
             }
         }
         #if os(iOS)
@@ -156,11 +155,21 @@ struct InboxView: View {
         .refreshable { selectRandom() }
         .background { DiceRefreshDecorator() }
         #endif
+        .entryListNavigation(entries: drafts, index: $kbIndex, listTitle: "Inbox") { draft in
+            #if os(macOS)
+            selectedTS = draft.ts
+            #else
+            nav.path.append(Route.entry(draft, .inbox))
+            #endif
+        }
     }
 
     private func draftRow(_ draft: Entry) -> some View {
-        row(for: draft)
+        let keyboardSelected = kbIndex.map { drafts.indices.contains($0) && drafts[$0].ts == draft.ts } ?? false
+        return row(for: draft)
             .tag(draft.ts)
+            .id(draft.ts)
+            .keyboardSelectedRow(keyboardSelected, accent: accent)
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                 swipeButton(SwipeAction(rawValue: swipeRightRaw) ?? .delete, draft)
             }
@@ -202,10 +211,10 @@ struct InboxView: View {
     @ViewBuilder
     private func row(for draft: Entry) -> some View {
         #if os(macOS)
-        DraftRow(draft: draft)
+        EntryPreviewRow(entry: draft, showTime: true)
         #else
         NavigationLink(value: Route.entry(draft, .inbox)) {
-            DraftRow(draft: draft)
+            EntryPreviewRow(entry: draft, showTime: true)
         }
         #endif
     }
@@ -234,7 +243,7 @@ struct InboxView: View {
                 .pickerStyle(.inline)
                 Divider()
                 Picker("Grouping", selection: $groupingRaw) {
-                    ForEach(InboxGrouping.allCases) { Text($0.label).tag($0.rawValue) }
+                    ForEach(EntryGrouping.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 .pickerStyle(.inline)
                 Divider()
@@ -331,42 +340,3 @@ struct DiceRefreshDecorator: UIViewRepresentable {
 }
 #endif
 
-private struct DraftRow: View {
-    let draft: Entry
-
-    private var time: String { String(draft.ts.suffix(8).prefix(5)) }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    if draft.isStarred {
-                        Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
-                    }
-                    Text(draft.preview.isEmpty ? "(empty)" : draft.preview)
-                        .lineLimit(1)
-                        .font(.body)
-                }
-                HStack(spacing: 8) {
-                    Text(time)
-                    Text("·")
-                    Text("\(draft.wordCount) words")
-                    ForEach(draft.mediaBadges, id: \.self) { symbol in
-                        Image(systemName: symbol)
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                if !draft.tags.isEmpty {
-                    Text(draft.tags.joined(separator: " "))
-                        .font(.caption)
-                        .foregroundStyle(.tint)
-                        .lineLimit(1)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            EntryThumbnail(entry: draft)
-        }
-        .padding(.vertical, 2)
-    }
-}

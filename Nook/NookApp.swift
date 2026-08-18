@@ -46,9 +46,40 @@ enum AppColorScheme: String, CaseIterable, Identifiable {
 // MARK: - App delegate (iOS only — quick actions + launch handling)
 
 #if canImport(UIKit)
-final class NookAppDelegate: NSObject, UIApplicationDelegate {
+/// A `UIResponder` (not merely `NSObject`) so it joins the responder chain: the
+/// hardware-keyboard commands below are declared here precisely because the app
+/// delegate sits at the *end* of that chain, which means they fire for keys
+/// nothing else wanted — and a focused text field, being earlier in the chain,
+/// keeps its arrows and `?` to itself.
+final class NookAppDelegate: UIResponder, UIApplicationDelegate {
     /// Stashed on launch so we can handle quick actions before nav is ready.
     var pendingShortcut: UIApplicationShortcutItem?
+
+    // MARK: Hardware keyboard
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    override var keyCommands: [UIKeyCommand]? {
+        let arrows = [
+            UIKeyCommand(input: UIKeyCommand.inputUpArrow,   modifierFlags: [], action: #selector(nookMoveUp)),
+            UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(nookMoveDown)),
+        ]
+        // Arrows would otherwise be eaten by a scroll view's own key handling.
+        // Deliberately not applied to Return or "?", which have no competing
+        // system behaviour and are better left to ordinary chain order.
+        for command in arrows { command.wantsPriorityOverSystemBehavior = true }
+        return arrows + [
+            UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(nookOpenSelection)),
+            UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(nookClearSelection)),
+            UIKeyCommand(input: "?", modifierFlags: [], action: #selector(nookToggleHints)),
+        ]
+    }
+
+    @objc private func nookMoveUp()   { KeyCommandRouter.shared.moveUp() }
+    @objc private func nookMoveDown() { KeyCommandRouter.shared.moveDown() }
+    @objc private func nookOpenSelection()  { KeyCommandRouter.shared.open() }
+    @objc private func nookClearSelection() { KeyCommandRouter.shared.clear() }
+    @objc private func nookToggleHints()    { ShortcutHints.toggle() }
 
     func application(
         _ application: UIApplication,

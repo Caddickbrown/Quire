@@ -13,5 +13,33 @@
 			</array>
 		</dict>
 	</array>
+	<!--
+	  Scene manifest, written by hand rather than generated
+	  (INFOPLIST_KEY_UIApplicationSceneManifest_Generation) so it can declare the
+	  external-display scene below. Declaring that scene is what stops iOS
+	  mirroring the app onto a connected monitor and gives Nook its own window
+	  there instead — see Nook/Views/ExternalDisplayView.swift. The application
+	  role is deliberately absent: SwiftUI's WindowGroup supplies it.
+
+	  UIApplicationSupportsMultipleScenes must be YES for the app to be handed a
+	  second scene at all. On iPad that also enables multiple app windows.
+	-->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleExternalDisplayNonInteractive</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>External Display</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).ExternalDisplaySceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 </dict>
 </plist>

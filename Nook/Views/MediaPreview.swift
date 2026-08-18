@@ -53,6 +53,12 @@ struct MediaPreview: View {
     let text: String
     let font: Font
     let textColor: Color
+    /// Inset around the rendered body. Defaults to the app's writing gutter, so
+    /// Preview lines up with the composer and the entry editor instead of
+    /// shifting the text sideways when you toggle modes. The external display
+    /// passes 0 — it supplies its own, much larger margin, and a second inset
+    /// would indent a read entry further than a composed one on that screen.
+    var contentPadding: CGFloat = 16
     /// When provided, captions become editable: tapping one (or "Add caption")
     /// rewrites the image's alt text and hands the whole updated body back here.
     var onUpdateText: ((String) -> Void)? = nil
@@ -85,7 +91,7 @@ struct MediaPreview: View {
                     }
                 }
             }
-            .padding(24)
+            .padding(contentPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .alert("Caption", isPresented: editorPresented) {
@@ -301,22 +307,30 @@ enum RowThumbnail {
     }
 }
 
-/// The leading thumbnail on an entry row — drawn only when the entry links an
+/// The trailing thumbnail on an entry row — drawn only when the entry links an
 /// image, so text-only rows keep their current shape.
+///
+/// The square bleeds into the row's own insets: negative padding shrinks what
+/// it reports to the layout, so the picture draws `bleed` points taller than
+/// the space it takes up and sits closer to the row's edges without the row
+/// growing or the text moving. A modest bleed, so a sliver of margin survives;
+/// it stays well under the list's vertical cell inset, so nothing is clipped.
 struct EntryThumbnail: View {
     @EnvironmentObject private var store: JournalStore
     let entry: Entry
-    var side: CGFloat = 56
+    var side: CGFloat = 84
+    var bleed: CGFloat = 24
 
     var body: some View {
         if let path = entry.firstImagePath,
            let url = store.assetURL(forRelative: path),
-           let image = RowThumbnail.load(url) {
+           let image = RowThumbnail.load(url, side: 200) {
             image
                 .resizable()
                 .scaledToFill()
                 .frame(width: side, height: side)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
+                .padding(.vertical, -bleed)
         }
     }
 }

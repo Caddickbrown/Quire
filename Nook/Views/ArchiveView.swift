@@ -15,9 +15,18 @@ enum ArchiveSort: String, CaseIterable, Identifiable {
     var label: String { self == .newest ? "Newest first" : "Oldest first" }
 }
 
+/// How an entry list is broken up: date headers, or one flat list. Shared by the
+/// Inbox, Journal, split journals and Starred so they all group the same way.
+enum EntryGrouping: String, CaseIterable, Identifiable {
+    case date, none
+    var id: String { rawValue }
+    var label: String { self == .date ? "Group by date" : "No grouping" }
+}
+
 struct ArchiveView: View {
     @EnvironmentObject private var store: JournalStore
     @AppStorage("archiveSort") private var sortRaw: String = ArchiveSort.newest.rawValue
+    @AppStorage("archiveGrouping") private var groupingRaw: String = EntryGrouping.date.rawValue
 
     @State private var searchText = ""
     @State private var randomHit: Hit?
@@ -26,6 +35,7 @@ struct ArchiveView: View {
     struct Hit: Identifiable { let id = UUID(); let date: String; let entry: Entry }
 
     private var oldestFirst: Bool { ArchiveSort(rawValue: sortRaw) == .oldest }
+    private var grouping: EntryGrouping { EntryGrouping(rawValue: groupingRaw) ?? .date }
 
     private func openRandom() {
         if let r = store.randomEntry() { randomHit = Hit(date: r.date, entry: r.entry) }
@@ -33,7 +43,8 @@ struct ArchiveView: View {
 
     private var filtered: [Entry] {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return q.isEmpty ? loaded : loaded.filter { $0.raw.lowercased().contains(q) }
+        let hits = q.isEmpty ? loaded : loaded.filter { $0.raw.lowercased().contains(q) }
+        return hits.sorted { oldestFirst ? $0.ts < $1.ts : $0.ts > $1.ts }
     }
 
     var body: some View {
@@ -48,8 +59,10 @@ struct ArchiveView: View {
                 EntryTwoPane(
                     entries: filtered,
                     sourceFor: { .archive(date: $0.date) },
-                    showTime: true,
-                    groupByDate: true,
+                    listTitle: "Journal",
+                    showTime: grouping == .date,
+                    fullDate: grouping == .none,   // ungrouped rows carry their own date
+                    groupByDate: grouping == .date,
                     oldestFirst: oldestFirst,
                     onPullRandom: openRandom
                 )
@@ -72,6 +85,11 @@ struct ArchiveView: View {
                     ForEach(ArchiveSort.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 .pickerStyle(.inline)
+                Divider()
+                Picker("Grouping", selection: $groupingRaw) {
+                    ForEach(EntryGrouping.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.inline)
             } label: {
                 Label("Sort", systemImage: "arrow.up.arrow.down")
             }
@@ -86,18 +104,34 @@ struct ArchiveView: View {
     }
 }
 
-/// A compact entry preview row (title/first line + body snippet). When
-/// `dateStyleRaw` is set, the entry's date + time is shown on the trailing side.
+/// THE entry row — the one template every list uses (Inbox, Journal, Starred,
+/// a day, a split journal, tag results), so an entry reads the same wherever
+/// you meet it. Only the meta line's leading date/time varies by list:
+/// title line, body snippet, then a caption meta line (date/time · words ·
+/// media badges), tags, and the trailing thumbnail.
 struct EntryPreviewRow: View {
     let entry: Entry
+    /// When set, the meta line leads with the entry's full date (lists that mix
+    /// days); otherwise `showTime` puts just the time there (single-day lists
+    /// and the Inbox).
     var dateStyleRaw: String? = nil
     var showTime: Bool = false
 
     private var time: String { String(entry.ts.suffix(8).prefix(5)) }
-    private var trailing: String? {
+    private var when: String? {
         if let ds = dateStyleRaw { return "\(Theme.sectionDate(entry.date, style: ds)) · \(time)" }
         if showTime { return time }
         return nil
+    }
+
+    /// The body snippet under the title. For an untitled entry the title line
+    /// already shows the body's first line, so the snippet starts after it
+    /// rather than repeating it.
+    private var snippet: String {
+        guard entry.displayTitle.isEmpty else { return entry.body }
+        guard let cut = entry.body.range(of: "\n") else { return "" }
+        return String(entry.body[cut.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var body: some View {
@@ -111,27 +145,33 @@ struct EntryPreviewRow: View {
                     }
                     Text(entry.preview.isEmpty ? "(empty)" : entry.preview)
                         .lineLimit(1)
-                    let badges = entry.mediaBadges
-                    if !badges.isEmpty || trailing != nil {
-                        Spacer(minLength: 6)
-                        ForEach(badges, id: \.self) { symbol in
-                            Image(systemName: symbol)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        if let trailing {
-                            Text(trailing)
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                        .font(.body)
                 }
-                if !entry.body.isEmpty {
-                    Text(entry.body)
+                if !snippet.isEmpty {
+                    Text(snippet)
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(1)
                 }
+                HStack(spacing: 8) {
+                    if let when {
+                        Text(when).monospacedDigit()
+                        Text("·")
+                    }
+                    Text("\(entry.wordCount) words")
+                    ForEach(entry.mediaBadges, id: \.self) { symbol in
+                        Image(systemName: symbol)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                // Tags on their own line — kept even when there are none (a
+                // blank of the same height), so tagged and untagged rows stand
+                // the same and the list doesn't look uneven.
+                Text(entry.tags.isEmpty ? " " : entry.tags.joined(separator: " "))
+                    .font(.caption)
+                    .foregroundStyle(.tint)
+                    .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             EntryThumbnail(entry: entry)
@@ -144,9 +184,13 @@ struct EntryPreviewRow: View {
 /// Same look as the Inbox: fixed-width list on the left, open entry on the right.
 struct EntryTwoPane: View {
     @EnvironmentObject private var store: JournalStore
+    @EnvironmentObject private var nav: NavigationModel
+    @Environment(\.accent) private var accent
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
     let entries: [Entry]
     let sourceFor: (Entry) -> EntrySource
+    /// What the external display calls this list while you arrow through it.
+    var listTitle = "Journal"
     var showTime = false     // just HH:mm (single-day contexts)
     var fullDate = false     // date + time (flat, multi-day contexts)
     var groupByDate = false  // section the list by date (headers), entries under each
@@ -155,6 +199,8 @@ struct EntryTwoPane: View {
     var onPullRandom: (() -> Void)? = nil
     @State private var selectedTS: String?
     @State private var openEntry: Entry?
+    /// Hardware-keyboard selection (↑/↓), mirrored to the external display.
+    @State private var kbIndex: Int?
 
     var body: some View {
         #if os(macOS)
@@ -194,26 +240,50 @@ struct EntryTwoPane: View {
 
     @ViewBuilder
     private var list: some View {
-        List(selection: selectionBinding) {
-            if groupByDate {
-                ForEach(sections, id: \.date) { section in
-                    Section(Theme.sectionDate(section.date, style: dateStyleRaw)) {
-                        ForEach(section.entries) { entryRow($0) }
+        // ScrollViewReader so an arrow-key selection off the bottom of the
+        // screen brings its row into view rather than silently moving.
+        ScrollViewReader { proxy in
+            List(selection: selectionBinding) {
+                if groupByDate {
+                    ForEach(sections, id: \.date) { section in
+                        Section(Theme.sectionDate(section.date, style: dateStyleRaw)) {
+                            ForEach(section.entries) { entryRow($0) }
+                        }
                     }
+                } else {
+                    ForEach(entries) { entryRow($0) }
                 }
-            } else {
-                ForEach(entries) { entryRow($0) }
+            }
+            .onChange(of: kbIndex) { _, i in
+                guard let i, entries.indices.contains(i) else { return }
+                withAnimation { proxy.scrollTo(entries[i].ts, anchor: .center) }
             }
         }
         #if os(iOS)
         .refreshable { onPullRandom?() }
         .background { if onPullRandom != nil { DiceRefreshDecorator() } }
         #endif
+        .entryListNavigation(entries: entries, index: $kbIndex, listTitle: listTitle) { entry in
+            open(entry)
+        }
+    }
+
+    /// Open the keyboard-selected entry: the side pane on macOS, a push on iOS.
+    private func open(_ entry: Entry) {
+        #if os(macOS)
+        selectedTS = entry.ts
+        openEntry = entry
+        #else
+        nav.path.append(Route.entry(entry, sourceFor(entry)))
+        #endif
     }
 
     private func entryRow(_ entry: Entry) -> some View {
-        rowLabel(entry)
+        let keyboardSelected = kbIndex.map { entries.indices.contains($0) && entries[$0].ts == entry.ts } ?? false
+        return rowLabel(entry)
             .tag(entry.ts)
+            .id(entry.ts)
+            .keyboardSelectedRow(keyboardSelected, accent: accent)
             .contextMenu {
                 Button { store.toggleStar(entry, source: sourceFor(entry)) } label: {
                     Label(entry.isStarred ? "Unstar" : "Star",
@@ -279,6 +349,7 @@ struct DayView: View {
     var body: some View {
         EntryTwoPane(entries: store.entries(for: date),
                      sourceFor: { _ in .archive(date: date) },
+                     listTitle: Theme.sectionDate(date, style: dateStyleRaw),
                      showTime: true)
             .navigationTitle(Theme.displayDate(date, style: dateStyleRaw))
             #if os(iOS)
@@ -334,17 +405,45 @@ struct SplitJournalsView: View {
 struct JournalFileView: View {
     @EnvironmentObject private var store: JournalStore
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
+    // Shares the Journal's sort/grouping — a split journal is the same list,
+    // just filtered to one tag.
+    @AppStorage("archiveSort") private var sortRaw: String = ArchiveSort.newest.rawValue
+    @AppStorage("archiveGrouping") private var groupingRaw: String = EntryGrouping.date.rawValue
     let name: String
 
+    private var oldestFirst: Bool { ArchiveSort(rawValue: sortRaw) == .oldest }
+    private var grouping: EntryGrouping { EntryGrouping(rawValue: groupingRaw) ?? .date }
+    private var entries: [Entry] {
+        store.entries(inJournal: name).sorted { oldestFirst ? $0.ts < $1.ts : $0.ts > $1.ts }
+    }
+
     var body: some View {
-        EntryTwoPane(entries: store.entries(inJournal: name),
+        EntryTwoPane(entries: entries,
                      sourceFor: { _ in .journal(name: name) },
-                     showTime: true,
-                     groupByDate: true)
+                     listTitle: name,
+                     showTime: grouping == .date,
+                     fullDate: grouping == .none,
+                     groupByDate: grouping == .date,
+                     oldestFirst: oldestFirst)
             .navigationTitle("@\(name)")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+            .toolbar {
+                Menu {
+                    Picker("Sort", selection: $sortRaw) {
+                        ForEach(ArchiveSort.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.inline)
+                    Divider()
+                    Picker("Grouping", selection: $groupingRaw) {
+                        ForEach(EntryGrouping.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Label("Sort", systemImage: "arrow.up.arrow.down")
+                }
+            }
     }
 }
 
@@ -353,12 +452,17 @@ struct JournalFileView: View {
 struct StarredView: View {
     @EnvironmentObject private var store: JournalStore
     @AppStorage("starredSort") private var sortRaw: String = ArchiveSort.newest.rawValue
+    @AppStorage("starredGrouping") private var groupingRaw: String = EntryGrouping.date.rawValue
     @State private var loaded: [(entry: Entry, source: EntrySource)] = []
     @State private var randomHit: StarredHit?
 
     struct StarredHit: Identifiable { let id = UUID(); let entry: Entry; let source: EntrySource }
 
     private var oldestFirst: Bool { ArchiveSort(rawValue: sortRaw) == .oldest }
+    private var grouping: EntryGrouping { EntryGrouping(rawValue: groupingRaw) ?? .date }
+    private var entries: [Entry] {
+        loaded.map(\.entry).sorted { oldestFirst ? $0.ts < $1.ts : $0.ts > $1.ts }
+    }
 
     private func openRandom() {
         if let pick = loaded.randomElement() {
@@ -378,10 +482,12 @@ struct StarredView: View {
                 let sources = Dictionary(loaded.map { ($0.entry.id, $0.source) },
                                          uniquingKeysWith: { a, _ in a })
                 EntryTwoPane(
-                    entries: loaded.map(\.entry),
+                    entries: entries,
                     sourceFor: { sources[$0.id] ?? .archive(date: $0.date) },
-                    showTime: true,
-                    groupByDate: true,
+                    listTitle: "Starred",
+                    showTime: grouping == .date,
+                    fullDate: grouping == .none,   // ungrouped rows carry their own date
+                    groupByDate: grouping == .date,
                     oldestFirst: oldestFirst,
                     onPullRandom: openRandom
                 )
@@ -400,6 +506,11 @@ struct StarredView: View {
             Menu {
                 Picker("Sort", selection: $sortRaw) {
                     ForEach(ArchiveSort.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.inline)
+                Divider()
+                Picker("Grouping", selection: $groupingRaw) {
+                    ForEach(EntryGrouping.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 .pickerStyle(.inline)
             } label: {
