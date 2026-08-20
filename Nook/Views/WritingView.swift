@@ -17,6 +17,9 @@ struct WritingView: View {
     @EnvironmentObject private var nav: NavigationModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accent) private var accent
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
 
     @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
     @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
@@ -99,17 +102,22 @@ struct WritingView: View {
         .toolbar {
             #if os(iOS)
             // The composer is reached by setting the section, not by pushing,
-            // so it gets no system back button — without this there is no way
-            // out of it. Saves on the way, like every other exit from here.
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    flush()
-                    nav.section = nil
-                } label: {
-                    Label("Done", systemImage: "chevron.left")
+            // so at regular width it gets no system back button — without this
+            // there is no way out of it. Saves on the way, like every other exit
+            // from here. Compact width is excluded: there the split view is
+            // collapsed, so setting the section *is* a push and UIKit already
+            // supplies a back chevron — adding ours put two side by side.
+            if sizeClass != .compact {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        flush()
+                        nav.section = nil
+                    } label: {
+                        Label("Done", systemImage: "chevron.left")
+                    }
+                    .keyboardShortcut(.escape, modifiers: [])
+                    .help("Save to inbox & back to the menu")
                 }
-                .keyboardShortcut(.escape, modifiers: [])
-                .help("Save to inbox & back to the menu")
             }
             #endif
             ToolbarItemGroup {

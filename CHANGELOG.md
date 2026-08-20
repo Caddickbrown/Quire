@@ -146,6 +146,9 @@ section is dated development history rather than versioned releases.
   you spin them and the popover closes on a tap outside.
 
 ### Fixed
+- **Write** (iOS): the composer no longer shows two back chevrons on iPhone —
+  the collapsed navigation stack already supplies one, so its own Done arrow now
+  appears only at regular width (iPad), where there is no system back button.
 - **Assets**: opening the gallery was very slow. Working out which entries use
   an asset reads every journal file, and that was being done up front for each
   visible tile; it now happens only when "Go to Entry" is pressed. Listing the
