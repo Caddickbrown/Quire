@@ -27,14 +27,31 @@ struct SettingsView: View {
     @AppStorage("dataSaver") private var dataSaver = false
     @AppStorage(JournalStore.backupIntervalKey) private var backupIntervalRaw = BackupInterval.off.rawValue
     @AppStorage(JournalStore.backupKeepKey) private var backupKeepCount = 10
+    @AppStorage("typewriterScroll") private var typewriterScroll = false
+    @AppStorage("focusParagraph") private var focusParagraph = false
+    @AppStorage(PromptDeck.enabledKey) private var promptsOn = false
+    @AppStorage("wordGoalEnabled") private var wordGoalEnabled = false
+    @AppStorage("wordGoal") private var wordGoal = 750
+    @AppStorage(ReminderScheduler.enabledKey) private var reminderOn = false
+    @AppStorage(ReminderScheduler.hourKey) private var reminderHour = ReminderScheduler.defaultHour
+    @AppStorage(ReminderScheduler.minuteKey) private var reminderMinute = 0
+    @AppStorage(ResurfacingScheduler.enabledKey) private var weeklyResurfaceOn = false
+    @AppStorage(ResurfacingScheduler.weekdayKey) private var weeklyWeekday = ResurfacingScheduler.defaultWeekday
+    @AppStorage(ResurfacingScheduler.hourKey) private var weeklyHour = ResurfacingScheduler.defaultHour
+    @AppStorage(AppLockManager.enabledKey) private var appLockOn = false
+    @AppStorage(AppLockManager.graceKey) private var appLockGrace = 0.0
+    @AppStorage(SpotlightIndexer.enabledKey) private var spotlightOn = false
+    @AppStorage(JournalStore.autoTranscribeKey) private var autoTranscribe = false
 
     static let shortcuts: [(action: String, keys: String)] = [
         ("New entry", "⌘N"),
         ("Save", "⌘S"),
+        ("Bold / italic selection", "⌘B / ⌘I"),
         ("Write", "⌘1"),
         ("Inbox", "⌘2"),
-        ("Archive", "⌘3"),
+        ("Journal", "⌘3"),
         ("Tags", "⌘4"),
+        ("Search everything", "⌘⇧F"),
         ("Random entry (Archive)", "⌘R"),
         ("Settings", "⌘,"),
     ]
@@ -80,9 +97,44 @@ struct SettingsView: View {
          """),
         ("Formatting & copying",
          """
-         Wrap text in __double underscores__ to italicise it while editing. Preview mode \
-         renders markdown (bold, italics, links, lists) with your media inline. An entry's \
-         ⋯ menu has "Copy text" to put its title + body on the clipboard.
+         Wrap text in __double underscores__ to italicise it, **double asterisks** to \
+         bold, or `backticks` for code — all render live while editing, and ⌘B/⌘I wrap \
+         the selection for you. Pressing ↩ inside a "- ", "1. " or "- [ ]" line continues \
+         the list (↩ on an empty item ends it), and Preview draws "- [ ]" lines as \
+         tappable checkboxes that write the ✓ back into the markdown. Preview renders \
+         markdown (bold, italics, links, lists) with your media inline. An entry's ⋯ menu \
+         has "Copy text" to put its title + body on the clipboard.
+         """),
+        ("Search everything",
+         """
+         The Search section (⌘⇧F) looks across the inbox, journal and split journals at \
+         once. Plain words match anywhere; quotes match an "exact phrase"; and operators \
+         narrow it down: tag:work · before:2026-03 · after:2025 · has:image (or video / \
+         audio / media) · is:starred. Every clause must match.
+         """),
+        ("Voice memo transcription",
+         """
+         An entry with a voice memo can be transcribed from the ⋯ menu — the words are \
+         recognised on this device (nothing is uploaded) and inserted beneath the audio \
+         link as ordinary text, so the memo becomes searchable and taggable. The \
+         recording itself stays attached.
+         """),
+        ("Templates & prompts",
+         """
+         Templates (Settings → Templates) are markdown files inserted from the composer's \
+         ⋯ menu — a morning-pages skeleton, a weekly review with checkboxes, anything. \
+         {{date}}, {{time}} and {{weekday}} fill in when inserted. Writing prompts \
+         (Settings → Writing) show a question in the empty composer; the ⋯ menu deals a \
+         new one.
+         """),
+        ("Importing another journal",
+         """
+         Settings → Maintenance → "Import from Day One" reads a Day One JSON export \
+         (unzip it first, then pick the folder or its Journal.json): dates, text, photos \
+         and tags all come across as ordinary filed entries. "Import Markdown Folder" \
+         does the same for a folder of dated .md/.txt files (Obsidian daily notes work). \
+         You'll see a count before anything is written, and re-running an import skips \
+         entries that are already in place.
          """),
         ("Calendar, timer & focus",
          """
@@ -125,7 +177,10 @@ struct SettingsView: View {
          By default your journal lives in iCloud so it syncs across devices, with a local \
          fallback when iCloud is off. Point "Journal folder" at any folder — including an \
          existing jnl notes folder — to share the same inbox.md and journal/YYYY/MM/DD.md \
-         files with the jnl CLI. The Stats sheet breaks size into text vs media.
+         files with the jnl CLI. Changes from other devices or the CLI appear as they \
+         sync; for a local folder, edits saved directly into an existing day file show up \
+         when Nook next comes to the foreground. The Stats sheet breaks size into text vs \
+         media.
          """),
     ]
 
@@ -144,6 +199,15 @@ struct SettingsView: View {
     @State private var showingOrphanConfirm = false
     @State private var showingNoOrphans = false
     @State private var orphanCleared: Int?
+    @State private var showingReminderDenied = false
+    @State private var templateNames: [String] = []
+    @State private var showingDayOnePicker = false
+    @State private var showingFolderPicker = false
+    @State private var pendingImport: ImportPreview?
+    @State private var showingImportConfirm = false
+    @State private var showingNothingToImport = false
+    @State private var showingPDFSheet = false
+    @State private var showingRestore = false
 
     var body: some View {
         Form {
@@ -174,6 +238,104 @@ struct SettingsView: View {
                     Text("Saturday").tag(7)
                 }
                 Toggle("Show week numbers", isOn: $showWeekNumbers)
+            }
+
+            Section {
+                Toggle("Typewriter scrolling", isOn: $typewriterScroll)
+                Toggle("Focus current paragraph", isOn: $focusParagraph)
+                Toggle("Writing prompts", isOn: $promptsOn)
+                Toggle("Transcribe voice memos automatically", isOn: $autoTranscribe)
+                // onChange sits on the controls, not the Section: a modified
+                // Section is no longer a Section to the enclosing Form.
+                Toggle("Daily word goal", isOn: $wordGoalEnabled)
+                    .onChange(of: wordGoalEnabled) { _, _ in store.reload() }
+                if wordGoalEnabled {
+                    Stepper("Goal: \(wordGoal) words", value: $wordGoal, in: 50...5000, step: 50)
+                        .onChange(of: wordGoal) { _, _ in store.reload() }
+                }
+            } header: {
+                Text("Writing")
+            } footer: {
+                Text("Typewriter scrolling keeps the line you're typing centred; focus dims everything but the current paragraph. Prompts show a question in the empty composer. The word goal counts everything dated today and shows a quiet ring by the timer.")
+            }
+
+            Section {
+                Toggle("Daily reminder", isOn: $reminderOn)
+                    .onChange(of: reminderOn) { _, on in
+                        if on {
+                            Task {
+                                if await ReminderScheduler.requestPermission() {
+                                    refreshReminder()
+                                } else {
+                                    reminderOn = false
+                                    showingReminderDenied = true
+                                }
+                            }
+                        } else {
+                            refreshReminder()
+                        }
+                    }
+                if reminderOn {
+                    DatePicker("Remind me at", selection: reminderTimeBinding,
+                               displayedComponents: .hourAndMinute)
+                        .onChange(of: reminderHour) { _, _ in refreshReminder() }
+                        .onChange(of: reminderMinute) { _, _ in refreshReminder() }
+                }
+                Toggle("Weekly \u{201C}From your journal\u{201D}", isOn: $weeklyResurfaceOn)
+                    .onChange(of: weeklyResurfaceOn) { _, on in
+                        if on {
+                            Task {
+                                if await ReminderScheduler.requestPermission() {
+                                    ResurfacingScheduler.settingsChanged(store: store)
+                                } else {
+                                    weeklyResurfaceOn = false
+                                    showingReminderDenied = true
+                                }
+                            }
+                        } else {
+                            ResurfacingScheduler.settingsChanged(store: store)
+                        }
+                    }
+                if weeklyResurfaceOn {
+                    Picker("On", selection: $weeklyWeekday) {
+                        Text("Sunday").tag(1); Text("Monday").tag(2); Text("Tuesday").tag(3)
+                        Text("Wednesday").tag(4); Text("Thursday").tag(5)
+                        Text("Friday").tag(6); Text("Saturday").tag(7)
+                    }
+                    .onChange(of: weeklyWeekday) { _, _ in ResurfacingScheduler.settingsChanged(store: store) }
+                    Picker("Around", selection: $weeklyHour) {
+                        ForEach(6..<23, id: \.self) { h in
+                            Text(String(format: "%02d:00", h)).tag(h)
+                        }
+                    }
+                    .onChange(of: weeklyHour) { _, _ in ResurfacingScheduler.settingsChanged(store: store) }
+                }
+            } header: {
+                Text("Reminder")
+            } footer: {
+                Text("The daily reminder fires only on days you haven't written yet — an entry before the reminder time quietly cancels it — and takes a quick line right in the banner. The weekly note resurfaces one entry (starred first, then this day in past years); tapping it opens the entry.")
+            }
+
+            Section {
+                Toggle("Require Face ID / Touch ID", isOn: $appLockOn)
+                    .onChange(of: appLockOn) { _, _ in AppLockManager.shared.preferenceChanged() }
+                    .disabled(!AppLockManager.canAuthenticate() && !appLockOn)
+                if appLockOn {
+                    Picker("Relock", selection: $appLockGrace) {
+                        Text("Immediately").tag(0.0)
+                        Text("After 1 minute").tag(60.0)
+                        Text("After 5 minutes").tag(300.0)
+                        Text("After 15 minutes").tag(900.0)
+                    }
+                }
+                Toggle("Show entries in Spotlight", isOn: $spotlightOn)
+                    .onChange(of: spotlightOn) { _, _ in
+                        SpotlightIndexer.scheduleReindex(source: { store.spotlightSource() })
+                    }
+            } header: {
+                Text("Privacy")
+            } footer: {
+                Text("The lock covers the app only — your files stay plain markdown on disk and remain readable in \(fileBrowserName). Spotlight indexing (off by default) lets system search find entry titles and text; results open the entry in Nook.")
             }
 
             #if os(iOS)
@@ -227,6 +389,41 @@ struct SettingsView: View {
             }
 
             Section {
+                ForEach(templateNames, id: \.self) { name in
+                    HStack {
+                        Label(name, systemImage: "doc.on.doc.fill")
+                        Spacer()
+                        Button(role: .destructive) {
+                            store.deleteTemplate(named: name)
+                            templateNames = store.templateNames()
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.plain)
+                        .destructiveAction()
+                        .help("Delete template")
+                    }
+                }
+                buttonRow {
+                    Button {
+                        store.createTemplate()
+                        templateNames = store.templateNames()
+                    } label: {
+                        Label("New Template", systemImage: "plus")
+                    }
+                    #if os(macOS)
+                    Button { store.revealTemplates() } label: {
+                        Label("Show in Finder", systemImage: "magnifyingglass")
+                    }
+                    #endif
+                }
+            } header: {
+                Text("Templates")
+            } footer: {
+                Text("Plain markdown files in <folder>/.nook/templates/ — edit them here or in any editor; they sync with the journal. Insert one from the composer's ⋯ menu; {{date}}, {{time}} and {{weekday}} fill in on insert.")
+            }
+
+            Section {
                 LabeledContent("Storage", value: store.storageMode.label)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Location").foregroundStyle(.secondary)
@@ -261,6 +458,7 @@ struct SettingsView: View {
                 buttonRow {
                     chooseBackupButton
                     backupNowButton
+                    restoreButton
                     #if os(macOS)
                     showBackupInFinderButton
                     #endif
@@ -306,15 +504,19 @@ struct SettingsView: View {
                 buttonRow {
                     cleanUpButton
                     compressMediaButton
+                    transcribeAllButton
                     mergeExSplitButton
                     tagReviewButton
                     clearOrphanButton
                     exportButton
+                    exportPDFButton
+                    importDayOneButton
+                    importFolderButton
                 }
             } header: {
                 Text("Maintenance")
             } footer: {
-                Text("Export combines all filed entries into one markdown file. Drafts still in the Inbox aren't included until you file them.")
+                Text("Export combines all filed entries into one markdown file (Export PDF typesets them instead). Import brings a Day One JSON export or a folder of dated markdown/text files in as ordinary filed entries — photos and tags included; re-running an import never duplicates. Drafts still in the Inbox aren't included in exports until you file them.")
             }
 
             Section("Keyboard shortcuts") {
@@ -370,6 +572,7 @@ struct SettingsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .task(id: store.revision) { templateNames = store.templateNames() }
         .alert("Backup", isPresented: Binding(
             get: { backupMessage != nil },
             set: { if !$0 { backupMessage = nil } }
@@ -383,6 +586,32 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showingChangelog) {
             ChangelogView()
+        }
+        .sheet(isPresented: $showingPDFSheet) {
+            PDFExportSheet()
+                .environmentObject(store)
+        }
+        .sheet(isPresented: $showingRestore) {
+            RestoreSheet()
+                .environmentObject(store)
+        }
+        .alert("Notifications are off", isPresented: $showingReminderDenied) {
+            Button("OK") { }
+        } message: {
+            Text("Allow notifications for Nook in System Settings to use the daily reminder.")
+        }
+        .alert("Import \(pendingImport?.entries.count ?? 0) entries?", isPresented: $showingImportConfirm) {
+            Button("Import") { runImport() }
+            Button("Cancel", role: .cancel) { pendingImport = nil; endImportAccess() }
+        } message: {
+            if let p = pendingImport {
+                Text("\(p.entries.count) entr\(p.entries.count == 1 ? "y" : "ies")\(p.mediaCount > 0 ? " and \(p.mediaCount) media file\(p.mediaCount == 1 ? "" : "s")" : ""), \(p.firstDate ?? "?") to \(p.lastDate ?? "?"). They'll be filed straight into the journal by date; entries already there are skipped.")
+            }
+        }
+        .alert("Nothing to import", isPresented: $showingNothingToImport) {
+            Button("OK") { }
+        } message: {
+            Text("No entries were found there. For Day One, pick the unzipped export folder or its Journal.json; for a folder import, files need a YYYY-MM-DD in their name or a creation date.")
         }
         .alert("Clear orphan media?", isPresented: $showingOrphanConfirm) {
             Button("Delete \(orphanCount)", role: .destructive) {
@@ -494,6 +723,12 @@ struct SettingsView: View {
         }
         .disabled(store.backupFolderName == nil || store.backupRunning)
     }
+    private var restoreButton: some View {
+        Button { showingRestore = true } label: {
+            Label("Restore…", systemImage: "clock.arrow.circlepath")
+        }
+        .disabled(store.backupFolderName == nil || store.backupRunning)
+    }
     private var cleanUpButton: some View {
         Button {
             let r = store.cleanup()
@@ -536,6 +771,20 @@ struct SettingsView: View {
     private var tagReviewButton: some View {
         Button { showingTagReview = true } label: { Label("Tag Review", systemImage: "checkmark.seal") }
     }
+    private var transcribeAllButton: some View {
+        Button {
+            Task {
+                let r = await store.transcribeAllMemos()
+                cleanupMessage = r.done == 0 && r.failed == 0
+                    ? "No untranscribed voice memos."
+                    : "Transcribed \(r.done) memo\(r.done == 1 ? "" : "s")\(r.failed > 0 ? "; \(r.failed) failed" : "")."
+                showingCleanup = true
+            }
+        } label: {
+            Label("Transcribe All Voice Memos", systemImage: "text.quote")
+        }
+        .disabled(store.mediaProgress != nil)
+    }
     private var clearOrphanButton: some View {
         Button {
             orphanCount = store.orphanAssets().count
@@ -562,6 +811,102 @@ struct SettingsView: View {
                       contentType: .plainText,
                       defaultFilename: "nook-export.md") { _ in }
     }
+
+    // MARK: Import / PDF export
+
+    /// Root of the folder being imported. Security-scoped access is held from
+    /// pick to commit, so the media copy can still read the export's photos.
+    @State private var importRoot: URL?
+
+    private func endImportAccess() {
+        importRoot?.stopAccessingSecurityScopedResource()
+        importRoot = nil
+    }
+
+    private var exportPDFButton: some View {
+        Button { showingPDFSheet = true } label: {
+            Label("Export PDF…", systemImage: "doc.richtext")
+        }
+    }
+
+    private var importDayOneButton: some View {
+        Button { showingDayOnePicker = true } label: {
+            Label("Import from Day One…", systemImage: "square.and.arrow.down")
+        }
+        .fileImporter(isPresented: $showingDayOnePicker,
+                      allowedContentTypes: [.json, .folder],
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                importRoot = url.startAccessingSecurityScopedResource() ? url : nil
+                prepareImport(JournalImporter.prepareDayOne(at: url))
+            }
+        }
+    }
+
+    private var importFolderButton: some View {
+        Button { showingFolderPicker = true } label: {
+            Label("Import Markdown Folder…", systemImage: "square.and.arrow.down.on.square")
+        }
+        .fileImporter(isPresented: $showingFolderPicker,
+                      allowedContentTypes: [.folder],
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                importRoot = url.startAccessingSecurityScopedResource() ? url : nil
+                prepareImport(JournalImporter.prepareMarkdownFolder(at: url))
+            }
+        }
+    }
+
+    private func prepareImport(_ preview: ImportPreview?) {
+        if let preview {
+            pendingImport = preview
+            showingImportConfirm = true
+        } else {
+            endImportAccess()
+            showingNothingToImport = true
+        }
+    }
+
+    private func runImport() {
+        guard let preview = pendingImport else { return }
+        pendingImport = nil
+        let r = store.commitImport(preview)
+        endImportAccess()
+        cleanupMessage = "Imported \(r.entries) entr\(r.entries == 1 ? "y" : "ies")"
+            + (r.media > 0 ? " and \(r.media) media file\(r.media == 1 ? "" : "s")" : "")
+            + (r.skipped > 0 ? "; skipped \(r.skipped) already present" : "")
+            + "."
+        showingCleanup = true
+    }
+
+    // MARK: Reminder helpers
+
+    private func refreshReminder() {
+        let s = store.stats()
+        ReminderScheduler.refresh(hasEntryToday: s.hasEntryToday, streak: s.currentStreak)
+    }
+
+    private var reminderTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                Calendar.current.date(bySettingHour: reminderHour, minute: reminderMinute,
+                                      second: 0, of: Date()) ?? Date()
+            },
+            set: { date in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+                reminderHour = c.hour ?? ReminderScheduler.defaultHour
+                reminderMinute = c.minute ?? 0
+            }
+        )
+    }
+
+    private var fileBrowserName: String {
+        #if os(macOS)
+        return "Finder"
+        #else
+        return "Files"
+        #endif
+    }
     #if os(macOS)
     private var showInFinderButton: some View {
         Button { store.revealInFinder() } label: { Label("Show in Finder", systemImage: "magnifyingglass") }
@@ -571,6 +916,163 @@ struct SettingsView: View {
             .disabled(store.backupFolderName == nil)
     }
     #endif
+}
+
+/// Settings → Backup → Restore: pick a timestamped copy and swap it in. A
+/// safety copy of the current journal is always taken first, so a restore is
+/// itself restorable.
+struct RestoreSheet: View {
+    @EnvironmentObject private var store: JournalStore
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var backups: [JournalStore.BackupCopy] = []
+    @State private var loaded = false
+    @State private var confirming: JournalStore.BackupCopy?
+    @State private var restoring = false
+    @State private var message: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if !loaded {
+                    ProgressView("Reading backups…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if backups.isEmpty {
+                    ContentUnavailableView(
+                        "No backups yet",
+                        systemImage: "externaldrive.badge.timemachine",
+                        description: Text("Run \u{201C}Back Up Now\u{201D} (or turn on automatic backups) and copies will appear here.")
+                    )
+                } else {
+                    List(backups) { copy in
+                        Button {
+                            confirming = copy
+                        } label: {
+                            HStack {
+                                Label {
+                                    if let date = copy.date {
+                                        Text(date.formatted(date: .abbreviated, time: .shortened))
+                                    } else {
+                                        Text(copy.name)
+                                    }
+                                } icon: {
+                                    Image(systemName: "externaldrive")
+                                }
+                                Spacer()
+                                Image(systemName: "clock.arrow.circlepath")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(restoring)
+                    }
+                }
+            }
+            .navigationTitle("Restore")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar { Button("Done") { dismiss() }.disabled(restoring) }
+        }
+        .task {
+            backups = await store.listBackups()
+            loaded = true
+        }
+        .alert("Restore this backup?", isPresented: Binding(
+            get: { confirming != nil },
+            set: { if !$0 { confirming = nil } }
+        )) {
+            Button("Restore", role: .destructive) {
+                if let copy = confirming { run(copy) }
+            }
+            Button("Cancel", role: .cancel) { confirming = nil }
+        } message: {
+            Text("Your current journal is saved as a new backup first, then replaced by \(confirming?.date?.formatted(date: .abbreviated, time: .shortened) ?? confirming?.name ?? "this copy").")
+        }
+        .alert("Restore", isPresented: Binding(
+            get: { message != nil },
+            set: { if !$0 { message = nil; dismiss() } }
+        )) {
+            Button("OK") { }
+        } message: {
+            Text(message ?? "")
+        }
+        #if os(macOS)
+        .frame(minWidth: 420, minHeight: 360)
+        #endif
+    }
+
+    private func run(_ copy: JournalStore.BackupCopy) {
+        confirming = nil
+        restoring = true
+        Task { @MainActor in
+            defer { restoring = false }
+            message = await store.restoreBackup(named: copy.name).message
+        }
+    }
+}
+
+/// Scope picker for Settings → Export PDF: one year or the whole journal.
+struct PDFExportSheet: View {
+    @EnvironmentObject private var store: JournalStore
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
+    @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
+    @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
+
+    @State private var scope = "all"
+    @State private var making = false
+    @State private var doc: PDFExportDocument?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Picker("Include", selection: $scope) {
+                    Text("Everything").tag("all")
+                    ForEach(store.yearsWithEntries(), id: \.self) { Text($0).tag($0) }
+                }
+                Button {
+                    export()
+                } label: {
+                    Label(making ? "Rendering…" : "Export PDF", systemImage: "doc.richtext")
+                }
+                .disabled(making)
+            }
+            .formStyle(.grouped)
+            .navigationTitle("Export PDF")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar { Button("Done") { dismiss() } }
+            .fileExporter(isPresented: Binding(
+                get: { doc != nil },
+                set: { if !$0 { doc = nil } }
+            ), document: doc, contentType: .pdf,
+               defaultFilename: scope == "all" ? "nook-journal.pdf" : "nook-\(scope).pdf") { _ in
+                dismiss()
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 380, minHeight: 220)
+        #endif
+    }
+
+    private func export() {
+        making = true
+        Task { @MainActor in
+            defer { making = false }
+            var days = store.allEntriesByDay()
+            if scope != "all" { days = days.filter { $0.date.hasPrefix(scope) } }
+            let data = await PDFExporter.makePDF(days: days,
+                                                 store: store,
+                                                 dateStyleRaw: dateStyleRaw,
+                                                 fontRaw: writingFontRaw,
+                                                 fontSize: CGFloat(fontSize))
+            if let data { doc = PDFExportDocument(data: data) }
+        }
+    }
 }
 
 /// A minimal plain-text document for exporting the combined journal.

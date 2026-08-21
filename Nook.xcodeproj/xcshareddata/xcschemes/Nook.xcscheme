@@ -5,7 +5,7 @@
          <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "YES" buildForArchiving = "YES" buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "25801B174A4F4D83A8458A93"
+               BlueprintIdentifier = "F16C1941EE3844ABA37597A5"
                BuildableName = "Nook.app"
                BlueprintName = "Nook"
                ReferencedContainer = "container:Nook.xcodeproj">
@@ -19,6 +19,15 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES">
       <Testables>
+         <TestableReference skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "58C5A3EBB30C49C5B4124A97"
+               BuildableName = "NookTests.xctest"
+               BlueprintName = "NookTests"
+               ReferencedContainer = "container:Nook.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -34,7 +43,7 @@
       <BuildableProductRunnable runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "25801B174A4F4D83A8458A93"
+            BlueprintIdentifier = "F16C1941EE3844ABA37597A5"
             BuildableName = "Nook.app"
             BlueprintName = "Nook"
             ReferencedContainer = "container:Nook.xcodeproj">
@@ -50,7 +59,7 @@
       <BuildableProductRunnable runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "25801B174A4F4D83A8458A93"
+            BlueprintIdentifier = "F16C1941EE3844ABA37597A5"
             BuildableName = "Nook.app"
             BlueprintName = "Nook"
             ReferencedContainer = "container:Nook.xcodeproj">

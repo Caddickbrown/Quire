@@ -30,12 +30,30 @@ swift_files = [
     ('Entry',           'Models/Entry.swift',           'Models'),
     ('JournalParser',   'Models/JournalParser.swift',   'Models'),
     ('Media',           'Models/Media.swift',           'Models'),
+    ('SearchQuery',     'Models/SearchQuery.swift',     'Models'),
+    ('ListContinuation','Models/ListContinuation.swift','Models'),
     ('JournalStore',    'Models/JournalStore.swift',    'Models'),
+    ('Templates',       'Models/Templates.swift',       'Models'),
+    ('Importers',       'Models/Importers.swift',       'Models'),
+    ('Transcription',   'Models/Transcription.swift',   'Models'),
+    ('SpotlightIndexer','Models/SpotlightIndexer.swift','Models'),
+    ('Reminders',       'Models/Reminders.swift',       'Models'),
+    ('AppLock',         'Models/AppLock.swift',         'Models'),
+    ('YearReview',      'Models/YearReview.swift',      'Models'),
+    ('SavedSearches',   'Models/SavedSearches.swift',   'Models'),
+    ('TimerActivity',   'Models/TimerActivity.swift',   'Models'),
     ('RootView',        'Views/RootView.swift',         'Views'),
     ('WritingView',     'Views/WritingView.swift',      'Views'),
     ('WritingTextEditor','Views/WritingTextEditor.swift','Views'),
     ('InboxView',       'Views/InboxView.swift',        'Views'),
     ('ArchiveView',     'Views/ArchiveView.swift',      'Views'),
+    ('StreamView',      'Views/StreamView.swift',       'Views'),
+    ('SearchView',      'Views/SearchView.swift',       'Views'),
+    ('OnThisDayView',   'Views/OnThisDayView.swift',    'Views'),
+    ('YearReviewView',  'Views/YearReviewView.swift',   'Views'),
+    ('TrendsView',      'Views/TrendsView.swift',       'Views'),
+    ('WelcomeView',     'Views/WelcomeView.swift',      'Views'),
+    ('PDFExport',       'Views/PDFExport.swift',        'Views'),
     ('EntryDetailView', 'Views/EntryDetailView.swift',  'Views'),
     ('TagsView',        'Views/TagsView.swift',         'Views'),
     ('TagReviewView',   'Views/TagReviewView.swift',     'Views'),
@@ -67,6 +85,21 @@ widget_swift_files = [
     ('WNookControl',      'NookWidget/NookControlWidget.swift'),
 ]
 
+# Share extension sources (own group; deliberately self-contained — it writes
+# the App Group PendingShare handoff and needs no shared model code).
+share_swift_files = [
+    ('SShareViewController', 'NookShare/ShareViewController.swift'),
+]
+
+# Unit-test sources. The test bundle also compiles the PURE model files
+# (reusing the app's fileRefs, like the widget does with NookShared) so the
+# tests run hostless — plain logic tests, no app launch.
+test_swift_files = [
+    ('TNookTests', 'Tests/NookTests.swift'),
+]
+# Model files compiled into the test bundle alongside the app.
+test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListContinuation']
+
 # Allocate ids
 IDs = {k: new_id() for k in [
     'project', 'mainGroup', 'nookGroup', 'modelsGroup', 'viewsGroup',
@@ -81,6 +114,18 @@ IDs = {k: new_id() for k in [
     'widgetDep', 'widgetProxy',
     'widgetInfoPlist', 'widgetIOSEnt', 'widgetMacEnt',
     'bf_embed_widget', 'wbf_NookShared', 'wbf_Fonts',
+    # Share extension
+    'shareGroup', 'shareTarget', 'shareProduct',
+    'shareSources', 'shareFrameworks',
+    'shareTargetConfigList', 'shareDebugConfig', 'shareReleaseConfig',
+    'shareDep', 'shareProxy',
+    'shareInfoPlist', 'shareIOSEnt', 'shareMacEnt',
+    'bf_embed_share',
+    # Unit tests
+    'testsGroup', 'testsTarget', 'testsProduct',
+    'testsSources', 'testsFrameworks',
+    'testsTargetConfigList', 'testsDebugConfig', 'testsReleaseConfig',
+    'parserChecksRef',
     # CHANGELOG.md lives at the repo root (not under Nook/), so it gets its own
     # fileRef in the project group and is copied into the app's Resources —
     # the in-app "What's New" screen renders it.
@@ -95,6 +140,14 @@ for name, _, _ in resources:
 for name, _ in widget_swift_files:
     IDs[name] = new_id()
     IDs['bf_' + name] = new_id()
+for name, _ in share_swift_files:
+    IDs[name] = new_id()
+    IDs['bf_' + name] = new_id()
+for name, _ in test_swift_files:
+    IDs[name] = new_id()
+    IDs['bf_' + name] = new_id()
+for name in test_shared_models:
+    IDs['tbf_' + name] = new_id()
 
 def base(path):
     return os.path.basename(path)
@@ -124,6 +177,16 @@ def pbxproj():
     a(f'\t\t{IDs["wbf_Fonts"]} /* fonts in Resources */ = {{isa = PBXBuildFile; fileRef = {IDs["Fonts"]} /* fonts */; }};')
     a(f'\t\t{IDs["bf_changelog"]} /* CHANGELOG.md in Resources */ = {{isa = PBXBuildFile; fileRef = {IDs["changelog"]} /* CHANGELOG.md */; }};')
     a(f'\t\t{IDs["bf_embed_widget"]} /* NookWidgetExtension.appex in Embed Foundation Extensions */ = {{isa = PBXBuildFile; fileRef = {IDs["widgetProduct"]} /* NookWidgetExtension.appex */; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy, ); }}; }};')
+    # Share extension build files
+    for name, path in share_swift_files:
+        a(f'\t\t{IDs["bf_"+name]} /* {base(path)} in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs[name]} /* {base(path)} */; }};')
+    a(f'\t\t{IDs["bf_embed_share"]} /* NookShareExtension.appex in Embed Foundation Extensions */ = {{isa = PBXBuildFile; fileRef = {IDs["shareProduct"]} /* NookShareExtension.appex */; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy, ); }}; }};')
+    # Unit-test build files (test sources + the pure model files, reusing refs)
+    for name, path in test_swift_files:
+        a(f'\t\t{IDs["bf_"+name]} /* {base(path)} in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs[name]} /* {base(path)} */; }};')
+    for name in test_shared_models:
+        fname = next(base(p) for k, p, g in swift_files if k == name)
+        a(f'\t\t{IDs["tbf_"+name]} /* {fname} in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs[name]} /* {fname} */; }};')
     a('/* End PBXBuildFile section */')
     a('')
 
@@ -135,6 +198,13 @@ def pbxproj():
     a('\t\t\tproxyType = 1;')
     a(f'\t\t\tremoteGlobalIDString = {IDs["widgetTarget"]};')
     a('\t\t\tremoteInfo = NookWidgetExtension;')
+    a('\t\t};')
+    a(f'\t\t{IDs["shareProxy"]} /* PBXContainerItemProxy */ = {{')
+    a('\t\t\tisa = PBXContainerItemProxy;')
+    a(f'\t\t\tcontainerPortal = {IDs["project"]} /* Project object */;')
+    a('\t\t\tproxyType = 1;')
+    a(f'\t\t\tremoteGlobalIDString = {IDs["shareTarget"]};')
+    a('\t\t\tremoteInfo = NookShareExtension;')
     a('\t\t};')
     a('/* End PBXContainerItemProxy section */')
     a('')
@@ -148,6 +218,7 @@ def pbxproj():
     a('\t\t\tdstSubfolderSpec = 13;')
     a('\t\t\tfiles = (')
     a(f'\t\t\t\t{IDs["bf_embed_widget"]} /* NookWidgetExtension.appex in Embed Foundation Extensions */,')
+    a(f'\t\t\t\t{IDs["bf_embed_share"]} /* NookShareExtension.appex in Embed Foundation Extensions */,')
     a('\t\t\t);')
     a('\t\t\tname = "Embed Foundation Extensions";')
     a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
@@ -172,13 +243,28 @@ def pbxproj():
     a(f'\t\t{IDs["widgetIOSEnt"]} /* NookWidget-iOS.entitlements */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NookWidget-iOS.entitlements"; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["widgetMacEnt"]} /* NookWidget-macOS.entitlements */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NookWidget-macOS.entitlements"; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["widgetProduct"]} /* NookWidgetExtension.appex */ = {{isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NookWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; }};')
+    # Share extension file refs
+    for name, path in share_swift_files:
+        a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {base(path)}; sourceTree = "<group>"; }};')
+    a(f'\t\t{IDs["shareInfoPlist"]} /* NookShare/Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};')
+    a(f'\t\t{IDs["shareIOSEnt"]} /* NookShare-iOS.entitlements */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NookShare-iOS.entitlements"; sourceTree = "<group>"; }};')
+    a(f'\t\t{IDs["shareMacEnt"]} /* NookShare-macOS.entitlements */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NookShare-macOS.entitlements"; sourceTree = "<group>"; }};')
+    a(f'\t\t{IDs["shareProduct"]} /* NookShareExtension.appex */ = {{isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NookShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; }};')
+    # Test file refs (ParserChecks is referenced for visibility; `make check`
+    # compiles it standalone — it's in no Xcode target)
+    for name, path in test_swift_files:
+        a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {base(path)}; sourceTree = "<group>"; }};')
+    a(f'\t\t{IDs["parserChecksRef"]} /* ParserChecks.swift */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParserChecks.swift; sourceTree = "<group>"; }};')
+    a(f'\t\t{IDs["testsProduct"]} /* NookTests.xctest */ = {{isa = PBXFileReference; explicitFileType = "wrapper.cfbundle"; includeInIndex = 0; path = NookTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; }};')
     a('/* End PBXFileReference section */')
     a('')
 
     # ---- PBXFrameworksBuildPhase ----
     a('/* Begin PBXFrameworksBuildPhase section */')
     for fid, label in [(IDs["frameworksBuildPhase"], 'Frameworks'),
-                       (IDs["widgetFrameworks"], 'Frameworks')]:
+                       (IDs["widgetFrameworks"], 'Frameworks'),
+                       (IDs["shareFrameworks"], 'Frameworks'),
+                       (IDs["testsFrameworks"], 'Frameworks')]:
         a(f'\t\t{fid} /* {label} */ = {{')
         a('\t\t\tisa = PBXFrameworksBuildPhase;')
         a('\t\t\tbuildActionMask = 2147483647;')
@@ -197,6 +283,8 @@ def pbxproj():
     a('\t\t\tchildren = (')
     a(f'\t\t\t\t{IDs["nookGroup"]} /* Nook */,')
     a(f'\t\t\t\t{IDs["widgetGroup"]} /* NookWidget */,')
+    a(f'\t\t\t\t{IDs["shareGroup"]} /* NookShare */,')
+    a(f'\t\t\t\t{IDs["testsGroup"]} /* Tests */,')
     a(f'\t\t\t\t{IDs["changelog"]} /* CHANGELOG.md */,')
     a(f'\t\t\t\t{IDs["productsGroup"]} /* Products */,')
     a('\t\t\t);')
@@ -209,6 +297,8 @@ def pbxproj():
     a('\t\t\tchildren = (')
     a(f'\t\t\t\t{IDs["product"]} /* Nook.app */,')
     a(f'\t\t\t\t{IDs["widgetProduct"]} /* NookWidgetExtension.appex */,')
+    a(f'\t\t\t\t{IDs["shareProduct"]} /* NookShareExtension.appex */,')
+    a(f'\t\t\t\t{IDs["testsProduct"]} /* NookTests.xctest */,')
     a('\t\t\t);')
     a('\t\t\tname = Products;')
     a('\t\t\tsourceTree = "<group>";')
@@ -280,6 +370,32 @@ def pbxproj():
     a('\t\t\tsourceTree = "<group>";')
     a('\t\t};')
 
+    # NookShare group
+    a(f'\t\t{IDs["shareGroup"]} /* NookShare */ = {{')
+    a('\t\t\tisa = PBXGroup;')
+    a('\t\t\tchildren = (')
+    for n, p in share_swift_files:
+        a(f'\t\t\t\t{IDs[n]} /* {base(p)} */,')
+    a(f'\t\t\t\t{IDs["shareInfoPlist"]} /* Info.plist */,')
+    a(f'\t\t\t\t{IDs["shareIOSEnt"]} /* NookShare-iOS.entitlements */,')
+    a(f'\t\t\t\t{IDs["shareMacEnt"]} /* NookShare-macOS.entitlements */,')
+    a('\t\t\t);')
+    a('\t\t\tpath = NookShare;')
+    a('\t\t\tsourceTree = "<group>";')
+    a('\t\t};')
+
+    # Tests group
+    a(f'\t\t{IDs["testsGroup"]} /* Tests */ = {{')
+    a('\t\t\tisa = PBXGroup;')
+    a('\t\t\tchildren = (')
+    for n, p in test_swift_files:
+        a(f'\t\t\t\t{IDs[n]} /* {base(p)} */,')
+    a(f'\t\t\t\t{IDs["parserChecksRef"]} /* ParserChecks.swift */,')
+    a('\t\t\t);')
+    a('\t\t\tpath = Tests;')
+    a('\t\t\tsourceTree = "<group>";')
+    a('\t\t};')
+
     a('/* End PBXGroup section */')
     a('')
 
@@ -298,6 +414,7 @@ def pbxproj():
     a('\t\t\tbuildRules = (\n\t\t\t);')
     a('\t\t\tdependencies = (')
     a(f'\t\t\t\t{IDs["widgetDep"]} /* PBXTargetDependency */,')
+    a(f'\t\t\t\t{IDs["shareDep"]} /* PBXTargetDependency */,')
     a('\t\t\t);')
     a('\t\t\tname = Nook;')
     a('\t\t\tproductName = Nook;')
@@ -320,6 +437,36 @@ def pbxproj():
     a(f'\t\t\tproductReference = {IDs["widgetProduct"]} /* NookWidgetExtension.appex */;')
     a('\t\t\tproductType = "com.apple.product-type.app-extension";')
     a('\t\t};')
+    # Share extension target
+    a(f'\t\t{IDs["shareTarget"]} /* NookShareExtension */ = {{')
+    a('\t\t\tisa = PBXNativeTarget;')
+    a(f'\t\t\tbuildConfigurationList = {IDs["shareTargetConfigList"]} /* Build configuration list for PBXNativeTarget "NookShareExtension" */;')
+    a('\t\t\tbuildPhases = (')
+    a(f'\t\t\t\t{IDs["shareSources"]} /* Sources */,')
+    a(f'\t\t\t\t{IDs["shareFrameworks"]} /* Frameworks */,')
+    a('\t\t\t);')
+    a('\t\t\tbuildRules = (\n\t\t\t);')
+    a('\t\t\tdependencies = (\n\t\t\t);')
+    a('\t\t\tname = NookShareExtension;')
+    a('\t\t\tproductName = NookShareExtension;')
+    a(f'\t\t\tproductReference = {IDs["shareProduct"]} /* NookShareExtension.appex */;')
+    a('\t\t\tproductType = "com.apple.product-type.app-extension";')
+    a('\t\t};')
+    # Unit-test target (hostless logic tests over the pure model files)
+    a(f'\t\t{IDs["testsTarget"]} /* NookTests */ = {{')
+    a('\t\t\tisa = PBXNativeTarget;')
+    a(f'\t\t\tbuildConfigurationList = {IDs["testsTargetConfigList"]} /* Build configuration list for PBXNativeTarget "NookTests" */;')
+    a('\t\t\tbuildPhases = (')
+    a(f'\t\t\t\t{IDs["testsSources"]} /* Sources */,')
+    a(f'\t\t\t\t{IDs["testsFrameworks"]} /* Frameworks */,')
+    a('\t\t\t);')
+    a('\t\t\tbuildRules = (\n\t\t\t);')
+    a('\t\t\tdependencies = (\n\t\t\t);')
+    a('\t\t\tname = NookTests;')
+    a('\t\t\tproductName = NookTests;')
+    a(f'\t\t\tproductReference = {IDs["testsProduct"]} /* NookTests.xctest */;')
+    a('\t\t\tproductType = "com.apple.product-type.bundle.unit-test";')
+    a('\t\t};')
     a('/* End PBXNativeTarget section */')
     a('')
 
@@ -338,6 +485,12 @@ def pbxproj():
     a(f'\t\t\t\t\t{IDs["widgetTarget"]} = {{')
     a('\t\t\t\t\t\tCreatedOnToolsVersion = 16.0;')
     a('\t\t\t\t\t};')
+    a(f'\t\t\t\t\t{IDs["shareTarget"]} = {{')
+    a('\t\t\t\t\t\tCreatedOnToolsVersion = 16.0;')
+    a('\t\t\t\t\t};')
+    a(f'\t\t\t\t\t{IDs["testsTarget"]} = {{')
+    a('\t\t\t\t\t\tCreatedOnToolsVersion = 16.0;')
+    a('\t\t\t\t\t};')
     a('\t\t\t\t};')
     a('\t\t\t};')
     a(f'\t\t\tbuildConfigurationList = {IDs["configList"]} /* Build configuration list for PBXProject "Nook" */;')
@@ -352,6 +505,8 @@ def pbxproj():
     a('\t\t\ttargets = (')
     a(f'\t\t\t\t{IDs["target"]} /* Nook */,')
     a(f'\t\t\t\t{IDs["widgetTarget"]} /* NookWidgetExtension */,')
+    a(f'\t\t\t\t{IDs["shareTarget"]} /* NookShareExtension */,')
+    a(f'\t\t\t\t{IDs["testsTarget"]} /* NookTests */,')
     a('\t\t\t);')
     a('\t\t};')
     a('/* End PBXProject section */')
@@ -403,6 +558,29 @@ def pbxproj():
     a('\t\t\t);')
     a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
     a('\t\t};')
+    # Share extension sources
+    a(f'\t\t{IDs["shareSources"]} /* Sources */ = {{')
+    a('\t\t\tisa = PBXSourcesBuildPhase;')
+    a('\t\t\tbuildActionMask = 2147483647;')
+    a('\t\t\tfiles = (')
+    for name, path in share_swift_files:
+        a(f'\t\t\t\t{IDs["bf_"+name]} /* {base(path)} in Sources */,')
+    a('\t\t\t);')
+    a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
+    a('\t\t};')
+    # Test sources
+    a(f'\t\t{IDs["testsSources"]} /* Sources */ = {{')
+    a('\t\t\tisa = PBXSourcesBuildPhase;')
+    a('\t\t\tbuildActionMask = 2147483647;')
+    a('\t\t\tfiles = (')
+    for name, path in test_swift_files:
+        a(f'\t\t\t\t{IDs["bf_"+name]} /* {base(path)} in Sources */,')
+    for name in test_shared_models:
+        fname = next(base(p) for k, p, g in swift_files if k == name)
+        a(f'\t\t\t\t{IDs["tbf_"+name]} /* {fname} in Sources */,')
+    a('\t\t\t);')
+    a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
+    a('\t\t};')
     a('/* End PBXSourcesBuildPhase section */')
     a('')
 
@@ -412,6 +590,11 @@ def pbxproj():
     a('\t\t\tisa = PBXTargetDependency;')
     a('\t\t\ttarget = ' + IDs["widgetTarget"] + ' /* NookWidgetExtension */;')
     a(f'\t\t\ttargetProxy = {IDs["widgetProxy"]} /* PBXContainerItemProxy */;')
+    a('\t\t};')
+    a(f'\t\t{IDs["shareDep"]} /* PBXTargetDependency */ = {{')
+    a('\t\t\tisa = PBXTargetDependency;')
+    a('\t\t\ttarget = ' + IDs["shareTarget"] + ' /* NookShareExtension */;')
+    a(f'\t\t\ttargetProxy = {IDs["shareProxy"]} /* PBXContainerItemProxy */;')
     a('\t\t};')
     a('/* End PBXTargetDependency section */')
     a('')
@@ -516,6 +699,8 @@ def pbxproj():
         a('\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = Nook;')
         a('\t\t\t\tINFOPLIST_KEY_NSMicrophoneUsageDescription = "Nook records voice memos to attach to your journal entries.";')
         a('\t\t\t\tINFOPLIST_KEY_NSCameraUsageDescription = "Nook takes photos and records video to attach to your journal entries.";')
+        a('\t\t\t\tINFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Nook transcribes your voice memos on this device so their words become searchable text.";')
+        a('\t\t\t\tINFOPLIST_KEY_NSFaceIDUsageDescription = "Nook uses Face ID to unlock your journal.";')
         # No INFOPLIST_KEY_UIApplicationSceneManifest_Generation: the iOS
         # Info.plist declares UIApplicationSceneManifest by hand so it can carry
         # the external-display scene (second-screen support). Letting Xcode
@@ -576,12 +761,71 @@ def pbxproj():
         a(f'\t\t\tname = {name};')
         a('\t\t};')
 
+    def share_config(cfg_id, name):
+        a(f'\t\t{cfg_id} /* {name} */ = {{')
+        a('\t\t\tisa = XCBuildConfiguration;')
+        a('\t\t\tbuildSettings = {')
+        a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = NookShare/NookShare-macOS.entitlements;')
+        a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = NookShare/NookShare-iOS.entitlements;')
+        a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = NookShare/NookShare-iOS.entitlements;')
+        a('\t\t\t\tCODE_SIGN_STYLE = Automatic;')
+        a('\t\t\t\tDEAD_CODE_STRIPPING = YES;')
+        a('\t\t\t\tCURRENT_PROJECT_VERSION = 1;')
+        a('\t\t\t\tENABLE_HARDENED_RUNTIME = YES;')
+        a('\t\t\t\tGENERATE_INFOPLIST_FILE = YES;')
+        a('\t\t\t\tINFOPLIST_FILE = NookShare/Info.plist;')
+        a('\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = Nook;')
+        a('\t\t\t\tINFOPLIST_KEY_NSHumanReadableCopyright = "";')
+        a('\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 17.0;')
+        a('\t\t\t\tLD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";')
+        a('\t\t\t\t"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";')
+        a('\t\t\t\tMACOSX_DEPLOYMENT_TARGET = 14.0;')
+        a('\t\t\t\tMARKETING_VERSION = 1.0;')
+        a('\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.nook.NookShare;')
+        a('\t\t\t\tREGISTER_APP_GROUPS = YES;')
+        a('\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";')
+        a('\t\t\t\tSKIP_INSTALL = YES;')
+        a('\t\t\t\tSUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";')
+        a('\t\t\t\tSUPPORTS_MACCATALYST = NO;')
+        a('\t\t\t\tSUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;')
+        a('\t\t\t\tSWIFT_EMIT_LOC_STRINGS = YES;')
+        a('\t\t\t\tSWIFT_VERSION = 5.0;')
+        a('\t\t\t\tTARGETED_DEVICE_FAMILY = "1,2";')
+        a('\t\t\t};')
+        a(f'\t\t\tname = {name};')
+        a('\t\t};')
+
+    def tests_config(cfg_id, name):
+        a(f'\t\t{cfg_id} /* {name} */ = {{')
+        a('\t\t\tisa = XCBuildConfiguration;')
+        a('\t\t\tbuildSettings = {')
+        a('\t\t\t\tCODE_SIGN_STYLE = Automatic;')
+        a('\t\t\t\tCURRENT_PROJECT_VERSION = 1;')
+        a('\t\t\t\tGENERATE_INFOPLIST_FILE = YES;')
+        a('\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 17.0;')
+        a('\t\t\t\tMACOSX_DEPLOYMENT_TARGET = 14.0;')
+        a('\t\t\t\tMARKETING_VERSION = 1.0;')
+        a('\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.nook.NookTests;')
+        a('\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";')
+        a('\t\t\t\tSUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";')
+        a('\t\t\t\tSUPPORTS_MACCATALYST = NO;')
+        a('\t\t\t\tSWIFT_EMIT_LOC_STRINGS = NO;')
+        a('\t\t\t\tSWIFT_VERSION = 5.0;')
+        a('\t\t\t\tTARGETED_DEVICE_FAMILY = "1,2";')
+        a('\t\t\t};')
+        a(f'\t\t\tname = {name};')
+        a('\t\t};')
+
     project_config(IDs['projDebugConfig'], 'Debug', True)
     project_config(IDs['projReleaseConfig'], 'Release', False)
     target_config(IDs['debugConfig'], 'Debug')
     target_config(IDs['releaseConfig'], 'Release')
     widget_config(IDs['widgetDebugConfig'], 'Debug')
     widget_config(IDs['widgetReleaseConfig'], 'Release')
+    share_config(IDs['shareDebugConfig'], 'Debug')
+    share_config(IDs['shareReleaseConfig'], 'Release')
+    tests_config(IDs['testsDebugConfig'], 'Debug')
+    tests_config(IDs['testsReleaseConfig'], 'Release')
     a('/* End XCBuildConfiguration section */')
     a('')
 
@@ -610,6 +854,24 @@ def pbxproj():
     a('\t\t\tbuildConfigurations = (')
     a(f'\t\t\t\t{IDs["widgetDebugConfig"]} /* Debug */,')
     a(f'\t\t\t\t{IDs["widgetReleaseConfig"]} /* Release */,')
+    a('\t\t\t);')
+    a('\t\t\tdefaultConfigurationIsVisible = 0;')
+    a('\t\t\tdefaultConfigurationName = Release;')
+    a('\t\t};')
+    a(f'\t\t{IDs["shareTargetConfigList"]} /* Build configuration list for PBXNativeTarget "NookShareExtension" */ = {{')
+    a('\t\t\tisa = XCConfigurationList;')
+    a('\t\t\tbuildConfigurations = (')
+    a(f'\t\t\t\t{IDs["shareDebugConfig"]} /* Debug */,')
+    a(f'\t\t\t\t{IDs["shareReleaseConfig"]} /* Release */,')
+    a('\t\t\t);')
+    a('\t\t\tdefaultConfigurationIsVisible = 0;')
+    a('\t\t\tdefaultConfigurationName = Release;')
+    a('\t\t};')
+    a(f'\t\t{IDs["testsTargetConfigList"]} /* Build configuration list for PBXNativeTarget "NookTests" */ = {{')
+    a('\t\t\tisa = XCConfigurationList;')
+    a('\t\t\tbuildConfigurations = (')
+    a(f'\t\t\t\t{IDs["testsDebugConfig"]} /* Debug */,')
+    a(f'\t\t\t\t{IDs["testsReleaseConfig"]} /* Release */,')
     a('\t\t\t);')
     a('\t\t\tdefaultConfigurationIsVisible = 0;')
     a('\t\t\tdefaultConfigurationName = Release;')
@@ -665,6 +927,15 @@ def app_scheme():
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES">
       <Testables>
+         <TestableReference skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "{IDs['testsTarget']}"
+               BuildableName = "NookTests.xctest"
+               BlueprintName = "NookTests"
+               ReferencedContainer = "container:Nook.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -724,7 +995,10 @@ def scheme_management():
              '\t\t\t<key>orderHint</key>',
              '\t\t\t<integer>0</integer>',
              '\t\t</dict>']
-    suppressed = []
+    # The share extension and test bundle never earn a scheme of their own
+    # (tests run through the Nook scheme's Test action); the widget's is
+    # opt-in via GENERATE_WIDGET_SCHEME.
+    suppress_targets = [IDs["shareTarget"], IDs["testsTarget"]]
     if GENERATE_WIDGET_SCHEME:
         shown += ['\t\t<key>NookWidgetExtension.xcscheme_^#shared#^_</key>',
                   '\t\t<dict>',
@@ -734,14 +1008,15 @@ def scheme_management():
                   '\t\t\t<integer>1</integer>',
                   '\t\t</dict>']
     else:
-        suppressed = ['\t<key>SuppressBuildableAutocreation</key>',
-                      '\t<dict>',
-                      f'\t\t<key>{IDs["widgetTarget"]}</key>',
-                      '\t\t<dict>',
-                      '\t\t\t<key>primary</key>',
-                      '\t\t\t<true/>',
-                      '\t\t</dict>',
-                      '\t</dict>']
+        suppress_targets.insert(0, IDs["widgetTarget"])
+    suppressed = ['\t<key>SuppressBuildableAutocreation</key>', '\t<dict>']
+    for tid in suppress_targets:
+        suppressed += [f'\t\t<key>{tid}</key>',
+                       '\t\t<dict>',
+                       '\t\t\t<key>primary</key>',
+                       '\t\t\t<true/>',
+                       '\t\t</dict>']
+    suppressed.append('\t</dict>')
     lines = ['<?xml version="1.0" encoding="UTF-8"?>',
              '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
              '<plist version="1.0">',

@@ -4,6 +4,7 @@
 
 mod media;
 mod parser;
+mod search;
 mod store;
 
 use parser::Entry;
@@ -71,6 +72,63 @@ fn search(query: String) -> Vec<DatedEntry> {
 }
 
 #[tauri::command]
+fn global_search(query: String) -> Vec<SourcedEntry> {
+    resolve_store().global_search(&query)
+}
+
+#[tauri::command]
+fn saved_searches() -> Value {
+    resolve_store().saved_searches()
+}
+
+#[tauri::command]
+fn add_saved_search(name: String, query: String) {
+    resolve_store().add_saved_search(&name, &query);
+}
+
+#[tauri::command]
+fn remove_saved_search(name: String) {
+    resolve_store().remove_saved_search(&name);
+}
+
+#[tauri::command]
+fn on_this_day() -> Vec<Value> {
+    resolve_store().on_this_day()
+}
+
+#[tauri::command]
+fn year_review(year: String) -> Value {
+    resolve_store().year_review(&year)
+}
+
+#[tauri::command]
+fn years_with_entries() -> Vec<String> {
+    resolve_store().years_with_entries()
+}
+
+// ---- Templates ----
+
+#[tauri::command]
+fn template_names() -> Vec<String> {
+    resolve_store().template_names()
+}
+
+#[tauri::command]
+fn template_body(name: String) -> Option<String> {
+    resolve_store().template_body(&name)
+}
+
+#[tauri::command]
+fn create_template() -> Option<String> {
+    resolve_store().create_template()
+}
+
+#[tauri::command]
+fn delete_template(name: String) {
+    resolve_store().delete_template(&name);
+}
+
+#[tauri::command]
 fn random_entry() -> Option<DatedEntry> {
     resolve_store().random_entry()
 }
@@ -78,8 +136,13 @@ fn random_entry() -> Option<DatedEntry> {
 // ---- Composer / drafts ----
 
 #[tauri::command]
-fn upsert_draft(previous: Option<String>, timestamp: String, title: String, body: String) {
-    resolve_store().upsert_draft(previous.as_deref(), &timestamp, &title, &body);
+fn upsert_draft(
+    previous: Option<String>,
+    timestamp: String,
+    title: String,
+    body: String,
+) -> Option<String> {
+    resolve_store().upsert_draft(previous.as_deref(), &timestamp, &title, &body)
 }
 
 #[tauri::command]
@@ -305,6 +368,55 @@ fn backup_now() -> Value {
 }
 
 #[tauri::command]
+fn list_backups() -> Vec<String> {
+    resolve_store().list_backups()
+}
+
+#[tauri::command]
+async fn restore_backup(name: String) -> Value {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (ok, message) = resolve_store().restore_backup(&name);
+        json!({ "ok": ok, "message": message })
+    })
+    .await
+    .unwrap_or_else(|_| json!({ "ok": false, "message": "Restore failed." }))
+}
+
+// ---- Importers ----
+
+/// Pick a Day One Journal.json (or the export folder) / a markdown folder.
+#[tauri::command]
+async fn pick_import_path(app: tauri::AppHandle, folder: bool) -> Option<String> {
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
+    if folder {
+        app.dialog().file().pick_folder(move |f| {
+            let _ = tx.blocking_send(f);
+        });
+    } else {
+        app.dialog().file().add_filter("Day One export", &["json"]).pick_file(move |f| {
+            let _ = tx.blocking_send(f);
+        });
+    }
+    let picked = rx.recv().await.flatten()?;
+    let path = picked.into_path().ok()?;
+    Some(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn import_day_one(path: String, commit: bool) -> Value {
+    tauri::async_runtime::spawn_blocking(move || resolve_store().import_day_one(&path, commit))
+        .await
+        .unwrap_or_else(|_| json!({ "ok": false, "message": "Import failed." }))
+}
+
+#[tauri::command]
+async fn import_md_folder(path: String, commit: bool) -> Value {
+    tauri::async_runtime::spawn_blocking(move || resolve_store().import_md_folder(&path, commit))
+        .await
+        .unwrap_or_else(|_| json!({ "ok": false, "message": "Import failed." }))
+}
+
+#[tauri::command]
 async fn pick_media_files(app: tauri::AppHandle) -> Vec<String> {
     let (tx, mut rx) = tauri::async_runtime::channel(1);
     app.dialog()
@@ -414,6 +526,17 @@ pub fn run() {
             entries_in_journal,
             starred_entries,
             search,
+            global_search,
+            saved_searches,
+            add_saved_search,
+            remove_saved_search,
+            on_this_day,
+            year_review,
+            years_with_entries,
+            template_names,
+            template_body,
+            create_template,
+            delete_template,
             random_entry,
             upsert_draft,
             remove_draft,
@@ -452,6 +575,11 @@ pub fn run() {
             pick_backup_folder,
             backup_folder_info,
             backup_now,
+            list_backups,
+            restore_backup,
+            pick_import_path,
+            import_day_one,
+            import_md_folder,
             pick_media_files,
             export_to_file,
             reveal_path,

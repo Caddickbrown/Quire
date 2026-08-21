@@ -56,6 +56,11 @@ final class AudioRecorder: ObservableObject {
         recorder?.stop()
         recorder = nil
         isRecording = false
+        #if os(iOS)
+        // Hand the audio session back — leaving it active kept other apps'
+        // audio ducked long after the memo ended.
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
         defer { tempURL = nil }
         guard let url = tempURL, let data = try? Data(contentsOf: url) else { return nil }
         try? FileManager.default.removeItem(at: url)

@@ -49,11 +49,15 @@ star button / context menus add/remove the marker; the **Starred** sidebar secti
 
 ## Architecture
 
-Two **multiplatform targets** (`platform: [iOS, macOS]`), deployment iOS 17 /
-macOS 14: the **Nook** app and the **NookWidgetExtension** WidgetKit extension
-(embedded into the app). There is **no hand-maintained `project.pbxproj`** — it
-is generated (both targets, the embed phase, and the app→widget dependency all
-come out of `gen_pbxproj.py`):
+Four **multiplatform targets** (`platform: [iOS, macOS]`), deployment iOS 17 /
+macOS 14: the **Nook** app, the **NookWidgetExtension** WidgetKit extension,
+the **NookShareExtension** share extension (both embedded into the app), and
+**NookTests** — a hostless XCTest bundle compiling the pure model files
+(parser parity, search grammar, list continuation; run via the Nook scheme's
+Test action: `xcodebuild test -scheme Nook -destination 'platform=macOS'`).
+There is **no hand-maintained `project.pbxproj`** — it is generated (all
+targets, the embed phase, and the app→extension dependencies all come out of
+`gen_pbxproj.py`):
 
 ```
 make project   # runs gen_pbxproj.py → Nook.xcodeproj/project.pbxproj
@@ -72,21 +76,58 @@ Nook/
     Entry.swift          the entry value type + tag/preview helpers
     JournalParser.swift  PURE port of jnl parse/render/sort/tags (no I/O; unit-tested)
     Media.swift          PURE media-link paths + MediaKind (used by Entry; in `make check`)
-    JournalStore.swift   @MainActor ObservableObject: iCloud base dir, load/file/sort, atomic writes
+    SearchQuery.swift    PURE global-search grammar (tag:/before:/after:/has:/is:starred/
+                         "phrases") + entry matching; cases in ParserChecks / `make check`
+    ListContinuation.swift  PURE ↩-in-a-list rules (continue bullet/ordered/checkbox,
+                         end on empty item); shared by both platform editors; in `make check`
+    JournalStore.swift   @MainActor ObservableObject: iCloud base dir, load/file/sort, atomic
+                         writes; also the share-extension drain, appendFiledEntries (imports),
+                         onThisDay, and the live-sync watcher (NSMetadataQuery on iCloud,
+                         DispatchSource dir watchers otherwise; inbox conflicts merge keep-both)
+    Templates.swift      entry templates (<base>/.nook/templates/*.md, {{date}} substitution)
+                         + the PromptDeck of composer prompts
+    Importers.swift      Day One JSON + dated-markdown-folder importers (prepare → confirm →
+                         commitImport; media through saveAsset; dedupe by raw on re-run)
+    Transcription.swift  on-device voice-memo transcription (Speech framework)
+    SpotlightIndexer.swift  opt-in Core Spotlight indexing + deep-link resolve
+    Reminders.swift      notifications: streak-aware daily reminder with an inline
+                         "Write a line…" text action (→ quickAddDraft), the weekly
+                         "From your journal" resurfacing note, and the
+                         UNUserNotificationCenter delegate wiring both
+    SavedSearches.swift  pinned queries (<base>/.nook/searches.json, synced; sidebar rows)
+    TimerActivity.swift  the writing-timer Live Activity's app side (iOS; attributes in
+                         NookShared.swift, rendering in NookWidget.swift)
+    AppLock.swift        Face ID/Touch ID app lock (LocalAuthentication) — app-only, files
+                         stay plain markdown by design
+    YearReview.swift     per-year retrospective computation (off-main)
   Views/
-    RootView.swift       NavigationSplitView (path-based); sidebar = Write/Inbox/Journal/Starred/
-                         Split/Tags/Assets + mini calendar + timer/Stats/Settings footer. NavigationModel
+    RootView.swift       NavigationSplitView (path-based); sidebar = Write/Inbox/Journal/
+                         Starred/Stream/Split/Tags/Assets + mini calendar + timer/Stats/Settings footer. NavigationModel
                          owns section, NavigationPath (mouse Back / ⌘[), focus mode, timer.
     WritingView.swift     composer: title + date picker + body; continuous autosave; Import;
                           attach/record media; drag-drop
     InboxView.swift       macOS email-style (list + open draft); iOS push. Search / sort / File All
+    SearchView.swift      global search section (⌘⇧F) over inbox + archive + splits,
+                          using Models/SearchQuery
+    OnThisDayView.swift   the Journal's "On this day" banner + years sheet
+    YearReviewView.swift  Stats → Year in Review sheet + the shareable ImageRenderer card
+    TrendsView.swift      Stats → Trends (Swift Charts: words/month, tag lines) +
+                          HeatStripView, the Canvas year heat strip shared with the
+                          Year in Review card
+    WelcomeView.swift     the one-screen first-run sheet (shown once; "welcomeShown")
+    PDFExport.swift       typeset PDF export (one page per day, vector text via
+                          ImageRenderer into a CGContext PDF) + PDFExportDocument
+    StreamView.swift      "Stream": the whole corpus on one page, oldest first — pinned day
+                          headers, times in a narrow margin (a bottom-to-top spine on iPhone),
+                          full prose, tap-to-edit in place; drafts foldable into the flow
     ArchiveView.swift     "Journal": days by year with previews; search; sort; Random; DayView;
                           SplitJournalsView; JournalFileView; StarredView; StatsView
     EntryDetailView.swift edit a draft/filed/split entry; autosaves; Edit/Preview modes (drafts
                           open in Edit, filed entries in Preview); star toggle; inline controls;
                           attach/record media; drag-drop
     TagsView.swift        tag cloud (coloured, searchable) → entries per tag; random tag
-    CalendarView.swift    MiniCalendarView (sidebar) — days with entries, media-typed dots
+    CalendarView.swift    MiniCalendarView (sidebar) + MonthYearPicker — days with entries,
+                          media-typed dots; grey draft-days open the Inbox
     AssetsView.swift      photo-gallery grid (video poster frames); tap → AssetViewer
                           (Photos-style zoom); sort + group by day/month/year;
                           Reveal / Delete / Go to Entry
@@ -99,8 +140,11 @@ Nook/
                           iOS uses UIKeyCommand, NOT SwiftUI onKeyPress — see
                           the file header for why
     ChangelogView.swift   "What's New" — parses the bundled CHANGELOG.md resource
-    MediaPreview.swift    render body markdown + inline images/video/audio
-    WritingTextEditor.swift  NSTextView/UITextView wrapper: zero insets, no scrollbar, @tag colour
+    MediaPreview.swift    MediaBody renders body markdown + inline images/video/audio;
+                          MediaPreview wraps it in a scroll view (Stream renders the body
+                          directly, inside its own scroll)
+    WritingTextEditor.swift  NSTextView/UITextView wrapper: zero insets, no scrollbar, @tag colour;
+                          `sizeToFit` makes it non-scrolling and self-measuring (Stream)
     AudioRecorder.swift   voice memo (AVAudioRecorder) + RecordingBanner
     VideoRecorderView.swift  camera capture — video + stills; iOS camera controller /
                           macOS AVCaptureSession (movie + photo output)
@@ -116,6 +160,11 @@ NookWidget/          WidgetKit extension (own target, embedded in the app)
   NookWidgetBundle.swift @main WidgetBundle; registers bundled Lato fonts
   Info.plist             NSExtension point `com.apple.widgetkit-extension`
   NookWidget-{iOS,macOS}.entitlements   App Group (macOS also sandboxed)
+NookShare/           share extension (own target, embedded in the app)
+  ShareViewController.swift  captures shared text/URLs/media into the App Group
+                     PendingShare/ handoff (self-contained; no shared model code)
+  Info.plist         NSExtension point `com.apple.share-services` + activation rule
+  NookShare-{iOS,macOS}.entitlements    App Group (macOS also sandboxed)
 gen_pbxproj.py   tools/make_icon.swift   Tests/ParserChecks.swift   Makefile
 _parked/video/   ← freewrite's video views, excluded from the build
 ```
@@ -144,6 +193,19 @@ bundled into the widget and registered at runtime in `NookWidgetBundle.init`
 > account; Xcode automatic signing normally registers it on first build. If the
 > widget doesn't appear, confirm it was actually built + embedded (it's in
 > `Nook.app/PlugIns/NookWidgetExtension.appex`).
+
+### Share extension (NookShareExtension)
+
+A second embedded extension (`NookShare/`, point
+`com.apple.share-services`): sharing text, a URL, or media from any app writes
+a jnl-format draft into the App Group's `PendingShare/pending.md` (media into
+`PendingShare/assets/<uuid>.<ext>`, already linked as `![](assets/…)` so the
+paths are correct once moved). The extension is deliberately self-contained —
+it can't resolve a custom journal folder's security-scoped bookmark, so it
+never touches the journal; `JournalStore.drainPendingShares()` (called at the
+top of every `reload()`) moves the media into `<base>/assets/` and appends the
+drafts to the inbox. Like the widget, it gets no Xcode scheme (autocreation
+suppressed); building `Nook` builds it.
 
 ### External display (iOS second screen)
 
@@ -265,17 +327,31 @@ recreates every view. Backend prefs live in `~/.config/Nook/settings.json`;
 default data folder is `~/Documents/Nook`. Build/run: `cd linux/src-tauri &&
 cargo run` (needs `libwebkit2gtk-4.1-dev` + Rust + `ffmpeg`; see `linux/README.md`).
 
-**Not ported** (no Linux equivalent): iCloud Documents sync — point Nook at a
-synced folder instead; and App Intents/Shortcuts/Siri. The parser passes the same
-jnl-parity cases the Swift `ParserChecks` do. Keep `parser.rs`/`store.rs` faithful
-to jnl when touching either side.
+The 2026-08 parity wave added `search.rs` (the SearchQuery grammar,
+unit-tested with the same cases as the Swift port — keep them in step), plus
+store/commands/frontend for global search, saved-search pins, templates +
+prompts, On This Day, words-today/word goal, Year in Review, the Day One /
+markdown-folder importers, and backup Restore.
+
+**Not ported** (no Linux equivalent, or deliberately skipped): iCloud
+Documents sync — point Nook at a synced folder instead; App
+Intents/Shortcuts/Siri; widgets/Live Activity/notifications/share extension;
+transcription (offer via a `whisper` CLI shell-out if ever wanted); PDF export
+(the webview can print); the Trends charts. The parser passes the same
+jnl-parity cases the Swift `ParserChecks` do. Keep `parser.rs`/`store.rs`
+faithful to jnl when touching either side.
 
 ## Deferred (explicit follow-ups)
 
-PDF export; AI-chat; live `NSMetadataQuery` sync refresh; iPhone Live Activity for
-the timer (could reuse the `NookWidgetExtension` target); extend the macOS
-email-style list+detail beyond Inbox; an XCTest target (parser verified via
-`make check`).
+AI-chat ("Ask Your Journal" — deserves its own spec; on-device only via Apple
+Foundation Models is the shape worth speccing, and explicitly not before 1.0);
+extend the macOS email-style list+detail beyond Inbox; Apple Watch quick
+capture (parked — no device to verify against); Linux gaps that are deliberate
+(transcription via a whisper CLI shell-out, PDF via webview print, the Trends
+charts/heat strip). Shipped and no longer deferred: PDF export, live
+`NSMetadataQuery` sync refresh, the timer Live Activity, the XCTest target,
+and the Linux parity wave (search/templates/importers/On This Day/word
+goal/Year in Review/saved searches/restore).
 
 ## Conventions
 

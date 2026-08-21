@@ -84,5 +84,60 @@ do {
     check(tags == ["@work", "@health-check"], "tags: whole tokens, leading-letter rule")
 }
 
+// SearchQuery: tokenizing, operators, matching
+do {
+    let tokens = SearchQuery.tokenize(#"plain "two words" tag:work"#)
+    check(tokens == ["plain", "two words", "tag:work"], "search: quoted phrases tokenize whole")
+
+    let q = SearchQuery.parse(#"coffee tag:Work before:2026-03 after:2025 has:image is:starred"#)
+    check(q.terms == ["coffee"], "search: plain term")
+    check(q.tags == ["@work"], "search: tag lowercased, @ added")
+    check(q.before == "2026-03" && q.after == "2025", "search: date bounds")
+    check(q.has == ["image"] && q.starred, "search: has/is clauses")
+    check(SearchQuery.parse("").isEmpty, "search: empty query is empty")
+    check(!SearchQuery.isPartialDate("26-03"), "search: bad partial date rejected")
+
+    func entry(_ date: String, _ suffix: String, _ body: String) -> Entry {
+        let ts = date + " 08:00:00"
+        let raw = suffix.isEmpty ? "[\(ts)]\n\(body)" : "[\(ts)] \(suffix)\n\(body)"
+        return Entry(date: date, ts: ts, suffix: suffix, body: body, raw: raw)
+    }
+    let starredHit = entry("2026-02-10", "Morning *", "coffee @work ![](assets/a.png)")
+    check(q.matches(starredHit), "search: all clauses match")
+    check(!q.matches(entry("2026-02-10", "Morning *", "coffee @work")), "search: has:image requires image")
+    check(!q.matches(entry("2026-03-01", "Morning *", "coffee @work ![](assets/a.png)")), "search: before: excludes")
+    check(!q.matches(entry("2024-12-31", "Morning *", "coffee @work ![](assets/a.png)")), "search: after: excludes")
+
+    let phrase = SearchQuery.parse(#""exact phrase""#)
+    check(phrase.matches(entry("2026-01-01", "", "an exact phrase here")), "search: phrase matches")
+    check(!phrase.matches(entry("2026-01-01", "", "exact other phrase")), "search: phrase is contiguous")
+
+    // after: includes the bound itself (prefix match)
+    let after = SearchQuery.parse("after:2026-03")
+    check(after.matches(entry("2026-03-01", "", "x")), "search: after: inclusive of its own month")
+}
+
+// ListContinuation: what ↩ does at the end of a list line
+do {
+    check(ListContinuation.action(for: "- milk") == .continueList(prefix: "- "), "lists: bullet continues")
+    check(ListContinuation.action(for: "1. first") == .continueList(prefix: "2. "), "lists: ordered increments")
+    check(ListContinuation.action(for: "- [x] done") == .continueList(prefix: "- [ ] "), "lists: next checkbox unchecked")
+    check(ListContinuation.action(for: "- ") == .endList(prefixLength: 2), "lists: empty item ends the list")
+    check(ListContinuation.action(for: "plain prose") == .none, "lists: prose untouched")
+}
+
+// normalizePunctuation: jnl cleanup's punctuation pass, media links untouched
+do {
+    check(JournalParser.normalizePunctuation("wait... what") == "wait\u{2026} what",
+          "punctuation: ... becomes an ellipsis")
+    check(JournalParser.normalizePunctuation("\u{2019}tis \u{201C}quoted\u{201D}") == "'tis \"quoted\"",
+          "punctuation: curly quotes straighten")
+    check(JournalParser.normalizePunctuation("see... ![dots](assets/a...b.png) end...") ==
+          "see\u{2026} ![dots](assets/a...b.png) end\u{2026}",
+          "punctuation: link targets are never rewritten")
+    check(JournalParser.normalizePunctuation("![alt...](a.png)") == "![alt...](a.png)",
+          "punctuation: alt text inside a link is untouched too")
+}
+
 print(failures == 0 ? "\nALL PASSED" : "\n\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

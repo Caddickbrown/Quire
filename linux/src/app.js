@@ -100,7 +100,36 @@ const DEFAULTS = {
   colorScheme: "auto", writingFont: "lato", fontSize: 18, accentColor: "blue",
   dateStyle: "weekday", highlightTags: true, firstWeekday: 1, showWeekNumbers: false,
   splitTags: "", dataSaver: false, inboxSort: "newest", archiveSort: "newest", timerMinutes: 15,
+  wordGoalEnabled: false, wordGoal: 750, writingPrompts: false,
 };
+
+/* Writing prompts — same deck as the Swift app's PromptDeck, stable per day. */
+const PROMPTS = [
+  "What surprised you today?",
+  "What would you tell yourself a year ago?",
+  "Describe where you are right now — all five senses.",
+  "What's the smallest thing that made you smile lately?",
+  "What are you avoiding writing about?",
+  "Who did you last have a real conversation with?",
+  "What did you almost do today?",
+  "What's changed since this time last month?",
+  "Write about something you're looking forward to.",
+  "What's a question you can't answer yet?",
+  "What did you notice on the way somewhere today?",
+  "What would you do with a free afternoon tomorrow?",
+  "What's worth remembering about this week?",
+  "Describe today in exactly three sentences.",
+  "What are you carrying that you could put down?",
+  "What did you learn the hard way recently?",
+  "Write the first paragraph of the story of today.",
+  "What sound, smell, or taste took you somewhere else?",
+  "What do you want more of? Less of?",
+  "Who deserves a thank-you you haven't sent?",
+];
+function promptOfDay(offset = 0) {
+  const day = Math.floor(Date.now() / 86400000);
+  return PROMPTS[((day + offset) % PROMPTS.length + PROMPTS.length) % PROMPTS.length];
+}
 function pref(k) { const v = S.prefs[k]; return v === undefined || v === null ? DEFAULTS[k] : v; }
 async function setPref(k, v) { S.prefs[k] = v; await invoke("set_pref", { key: k, value: v }); }
 
@@ -158,6 +187,7 @@ const SECTIONS = [
   ["split", "Split Journals", "bookmark"],
   ["tags", "Tags", "number"],
   ["assets", "Assets", "photo.on.rectangle"],
+  ["search", "Search", "search"],
 ];
 
 /* ------------------------------------------------------------------ */
@@ -237,6 +267,7 @@ function toast(msg) {
 /* ------------------------------------------------------------------ */
 async function refresh(rerender = true) {
   S.snap = await invoke("reload");
+  S.savedSearches = await invoke("saved_searches").catch(() => []) || [];
   renderSidebar();
   renderMiniCal();
   if (rerender) renderView();
@@ -252,6 +283,18 @@ function renderSidebar() {
     const b = el(`<button class="nav-item ${S.sec === key ? "active" : ""}"><span class="ic">${icon(ic)}</span><span>${label}</span>${badge}</button>`);
     b.onclick = () => setSection(key);
     nav.appendChild(b);
+  }
+  // Pinned queries from the Search view — smart folders.
+  if (S.savedSearches && S.savedSearches.length) {
+    nav.appendChild(el(`<div class="menu-label" style="padding:10px 12px 2px">Saved Searches</div>`));
+    for (const s of S.savedSearches) {
+      const b = el(`<button class="nav-item"><span class="ic">${icon("search")}</span><span>${esc(s.name)}</span></button>`);
+      b.onclick = () => { S.searchQuery = s.query; setSection("search"); };
+      b.oncontextmenu = e => { e.preventDefault(); openMenuAt(e.clientX, e.clientY, [
+        { label: "Remove Pin", icon: "x", danger: true, action: async () => { await invoke("remove_saved_search", { name: s.name }); refresh(false); } },
+      ]); };
+      nav.appendChild(b);
+    }
   }
   renderFooterControls();
 }
@@ -368,6 +411,7 @@ function renderView() {
     case "split": return renderSplit(main);
     case "tags": return renderTags(main);
     case "assets": return renderAssets(main);
+    case "search": return renderSearch(main);
     case "stats": return renderStats(main);
     case "settings": return renderSettings(main);
   }
@@ -397,7 +441,7 @@ function renderWrite(main) {
   async function commit(reindex) {
     const ts = inputToTs(tsToInput(st.date));
     if (!st.text.trim() && !st.title.trim()) { if (st.activeTS) { await invoke("remove_draft", { timestamp: st.activeTS }); st.activeTS = null; } }
-    else { await invoke("upsert_draft", { previous: st.activeTS, timestamp: ts, title: st.title, body: st.text }); st.activeTS = ts; }
+    else { st.activeTS = (await invoke("upsert_draft", { previous: st.activeTS, timestamp: ts, title: st.title, body: st.text })) ?? ts; }
     if (reindex) refresh(false).then(renderSidebar);
   }
   // toolbar buttons
@@ -416,6 +460,10 @@ function renderWrite(main) {
     <div class="compose-body-wrap"><textarea class="body-editor" spellcheck="true"></textarea><div class="placeholder-overlay">Begin writing</div></div>
   </div></div>`);
   const titleI = $(".title-input", composer), dateI = $(".date-wrap input", composer), bodyI = $(".body-editor", composer), ph = $(".placeholder-overlay", composer);
+  // Writing prompts: the empty composer asks a question (stable per day).
+  let promptOffset = 0;
+  const syncPrompt = () => { ph.textContent = pref("writingPrompts") ? promptOfDay(promptOffset) : "Begin writing"; };
+  syncPrompt();
   dateI.value = tsToInput(st.date);
   const syncPh = () => (ph.style.display = bodyI.value ? "none" : "block");
   titleI.oninput = () => { st.title = titleI.value; save(); };
@@ -436,14 +484,25 @@ function renderWrite(main) {
   async function reset() { save.cancel(); await commit(true); st.title = ""; st.text = ""; st.date = jsNowTs(); st.activeTS = null; titleI.value = ""; bodyI.value = ""; dateI.value = tsToInput(st.date); syncPh(); bodyI.focus(); }
   newBtn.onclick = async () => { const had = st.text.trim() || st.title.trim(); await reset(); if (had) toast("Saved to inbox"); };
   recBtn.onclick = () => toggleRecord(recBtn, composer);
-  moreBtn.onclick = () => menuFromButton(moreBtn, [
+  moreBtn.onclick = async () => {
+    const templates = await invoke("template_names").catch(() => []);
+    menuFromButton(moreBtn, [
     { label: "Attach Media", icon: "paperclip", action: attachMedia },
     { label: "Record Video", icon: "video", action: () => recordVideo() },
     { label: "Promote first line to title", icon: "promote", disabled: !st.text.trim(), action: () => { const lines = st.text.split("\n"); const i = lines.findIndex(l => l.trim()); if (i < 0) return; st.title = lines[i].trim(); titleI.value = st.title; lines.splice(i, 1); st.text = lines.join("\n").replace(/^\n+/, ""); bodyI.value = st.text; syncPh(); save(); } },
+    ...(templates.length ? [{ label: "Insert Template", header: true }] : []),
+    ...templates.map(n => ({ label: n, icon: "copy", action: async () => {
+      const body = await invoke("template_body", { name: n });
+      if (!body) return;
+      st.text = st.text ? st.text + "\n\n" + body : body;
+      bodyI.value = st.text; syncPh(); save(); bodyI.focus();
+    } })),
+    ...(pref("writingPrompts") ? [{ label: "New Prompt", icon: "shuffle", action: () => { promptOffset++; syncPrompt(); } }] : []),
     { sep: true },
     { label: "Discard", icon: "trash", danger: true, disabled: !st.text.trim() && !st.title.trim() && !st.activeTS, action: async () => { save.cancel(); if (st.activeTS) await invoke("remove_draft", { timestamp: st.activeTS }); st.title = ""; st.text = ""; st.activeTS = null; titleI.value = ""; bodyI.value = ""; syncPh(); toast("Discarded"); refresh(false).then(renderSidebar); } },
     { label: "Import as separate entries", icon: "split.import", disabled: !st.text.trim(), action: async () => { save.cancel(); if (st.activeTS) { await invoke("remove_draft", { timestamp: st.activeTS }); st.activeTS = null; } const n = await invoke("import_drafts", { text: st.text }); st.title = ""; st.text = ""; titleI.value = ""; bodyI.value = ""; syncPh(); toast(`Imported ${plural(n, "entry").replace("entrys", "entries")}`); refresh(false).then(renderSidebar); } },
   ]);
+  };
   syncPh();
 }
 
@@ -668,6 +727,28 @@ async function renderArchive(main) {
   const bodyWrap = el(`<div style="flex:1;overflow:hidden;display:flex"></div>`); view.appendChild(bodyWrap);
   main.appendChild(view);
 
+  // "On this day" — a banner whenever this calendar day has entries in past years.
+  const otd = await invoke("on_this_day").catch(() => []);
+  if (otd.length) {
+    const count = otd.reduce((n, d) => n + d.entries.length, 0);
+    const banner = el(`<button class="tbtn" style="margin:8px 12px 0;justify-content:flex-start">${icon("clock")}<span style="margin-left:6px">On this day — ${plural(count, "entry").replace("entrys", "entries")} from ${plural(otd.length, "past year")}</span></button>`);
+    banner.onclick = () => {
+      const body = el(`<div style="max-height:60vh;overflow-y:auto"></div>`);
+      const thisYear = Number(jsNowTs().slice(0, 4));
+      for (const d of otd) {
+        const ago = thisYear - Number(d.date.slice(0, 4));
+        body.appendChild(el(`<div class="list-section-header">${esc(sectionDate(d.date))} — ${plural(ago, "year")} ago</div>`));
+        for (const e of d.entries) {
+          const row = entryRow(e, { showTime: true });
+          row.onclick = () => { mo.close(); showEntrySheet(e, { kind: "archive", arg: d.date }, d.date); };
+          body.appendChild(row);
+        }
+      }
+      const mo = modal({ title: "On This Day", bodyEl: body });
+    };
+    view.appendChild(banner);
+  }
+
   const days = await invoke("all_entries_by_day");
   let all = [];
   for (const d of days) for (const e of d.entries) all.push({ entry: e, date: d.date, source: { kind: "archive", arg: d.date } });
@@ -691,6 +772,65 @@ function showEntrySheet(entry, source, date) {
   const body = el(`<div style="height:60vh;display:flex;flex-direction:column"></div>`);
   body.appendChild(entryEditor(entry, source, { onChange: () => refresh() }));
   modal({ title: date ? displayDate(date) : "Entry", bodyEl: body });
+}
+
+/* ------------------------------------------------------------------ */
+/* SEARCH (global, with the SearchQuery operator grammar)              */
+/* ------------------------------------------------------------------ */
+async function renderSearch(main) {
+  const view = el(`<div class="view"></div>`);
+  const h = header("Search");
+  let query = S.searchQuery || "";
+  S.searchQuery = null;
+  const search = searchBox('tag:work before:2026-03 "phrase"', debounce(v => { query = v; run(); }, 250));
+  const pinBtn = el(`<button class="tbtn icon" title="Pin this search to the sidebar">${icon("star")}</button>`);
+  h.append(search, pinBtn); view.appendChild(h);
+  const bodyWrap = el(`<div style="flex:1;overflow:hidden;display:flex;flex-direction:column"></div>`);
+  view.appendChild(bodyWrap); main.appendChild(view);
+  const input = $("input", search);
+  input.value = query;
+
+  async function run() {
+    bodyWrap.innerHTML = "";
+    if (!query.trim()) {
+      const pins = S.savedSearches || [];
+      if (pins.length) {
+        const listWrap = el(`<div style="flex:1;overflow-y:auto;padding:8px"></div>`);
+        for (const s of pins) {
+          const r = el(`<button class="nav-item" style="width:100%"><span class="ic">${icon("search")}</span><span>${esc(s.name)}</span><span class="sub" style="margin-left:auto;font-family:ui-monospace,monospace;font-size:11px">${esc(s.query)}</span></button>`);
+          r.onclick = () => { query = s.query; input.value = s.query; run(); };
+          r.oncontextmenu = e => { e.preventDefault(); openMenuAt(e.clientX, e.clientY, [
+            { label: "Remove Pin", icon: "x", danger: true, action: async () => { await invoke("remove_saved_search", { name: s.name }); await refresh(false); run(); } },
+          ]); };
+          listWrap.appendChild(r);
+        }
+        bodyWrap.appendChild(listWrap);
+      } else {
+        bodyWrap.appendChild(emptyState("search", "Search everything",
+          'Searches the inbox, journal and split journals together. Operators: tag:work · before:2026-03 · after:2025 · has:image · is:starred · "exact phrase". Pin a query to keep it in the sidebar.'));
+      }
+      return;
+    }
+    const hits = await invoke("global_search", { query });
+    if (!hits.length) { bodyWrap.appendChild(emptyState("search", "No matches", "Nothing matches that query.")); return; }
+    const items = hits.map(x => ({
+      entry: x.entry,
+      source: x.source,
+      date: x.source.kind === "archive" ? x.source.arg : x.entry.date,
+    }));
+    const inner = el(`<div style="flex:1;overflow:hidden;display:flex"></div>`);
+    inner.appendChild(twoPane({ entries: items, fullDate: true, ctxKey: "gsearch", onDelete: () => renderView() }).wrap);
+    bodyWrap.appendChild(inner);
+  }
+  pinBtn.onclick = async () => {
+    if (!query.trim()) return;
+    const name = await promptModal("Pin this search", query.slice(0, 30), "Shows up under Saved Searches in the sidebar.");
+    if (!name || !name.trim()) return;
+    await invoke("add_saved_search", { name: name.trim(), query });
+    await refresh(false);
+    toast("Pinned");
+  };
+  run();
 }
 
 /* DAY view */
@@ -989,8 +1129,40 @@ async function renderStats(main) {
     ...(s.entries ? [["Avg per entry", Math.round(s.words / s.entries) + " words"]] : []),
     ["Archive size", fmtBytes(s.archive_bytes)],
   ]));
+  box.appendChild(card("Today", [
+    ["Words today", s.words_today],
+    ...(pref("wordGoalEnabled") ? [["Daily goal", `${s.words_today} / ${pref("wordGoal")}${s.words_today >= pref("wordGoal") ? " — met" : ""}`]] : []),
+  ]));
   box.appendChild(card("Streaks", [["Current", plural(s.current_streak, "day")], ["Best", plural(s.best_streak, "day")]]));
   if (s.longest_day) box.appendChild(card("Highlights", [["Longest day", `${displayDate(s.longest_day)} · ${s.longest_day_words} words`]]));
+
+  // Year in review.
+  const years = await invoke("years_with_entries").catch(() => []);
+  if (years.length) {
+    const yr = el(`<div class="card"><h3>Year in review</h3></div>`);
+    const row = el(`<div class="btnrow"></div>`);
+    for (const y of years) {
+      const b = btn(y, { icon: "book.closed" });
+      b.onclick = async () => {
+        const r = await invoke("year_review", { year: y });
+        const lines = [
+          ["Days written", r.days_written], ["Entries", r.entries], ["Words", Number(r.words).toLocaleString()],
+          ["Longest streak", plural(r.longest_streak, "day")],
+          ...(r.busiest_day ? [["Busiest day", `${displayDate(r.busiest_day)} · ${r.busiest_day_words} words`]] : []),
+          ...(r.starred ? [["Starred", r.starred]] : []),
+          ...(r.top_tags.length ? [["Top tags", r.top_tags.map(t => `${t.tag} (${t.count})`).join("  ")]] : []),
+          ...((r.photos + r.videos + r.audios) ? [["Media", `${r.photos} photos · ${r.videos} videos · ${r.audios} voice memos`]] : []),
+          ...(r.first_line ? [["First line", `\u{201C}${r.first_line}\u{201D}`]] : []),
+        ];
+        const body = el(`<div style="padding:8px 0"></div>`);
+        lines.forEach(([l, v]) => body.appendChild(el(`<div class="field" style="padding:6px 18px"><div class="lbl">${esc(l)}</div><div class="sub">${esc(String(v))}</div></div>`)));
+        modal({ title: `${y} in review`, bodyEl: body });
+      };
+      row.appendChild(b);
+    }
+    yr.appendChild(row);
+    box.appendChild(yr);
+  }
   view.appendChild(scroll); main.appendChild(view);
 }
 
@@ -1020,6 +1192,40 @@ async function renderSettings(main) {
   appearance.appendChild(field("Start week on", selectCtl("firstWeekday", [[1, "Sunday"], [2, "Monday"], [7, "Saturday"]], renderMiniCal)));
   appearance.appendChild(field("Show week numbers", toggleCtl("showWeekNumbers", renderMiniCal)));
   box.appendChild(appearance);
+
+  // Writing (prompts + word goal)
+  const writing = el(`<div class="card"><h3>Writing</h3></div>`);
+  writing.appendChild(field("Writing prompts", toggleCtl("writingPrompts"), "A question in the empty composer."));
+  writing.appendChild(field("Daily word goal", toggleCtl("wordGoalEnabled", renderView)));
+  if (pref("wordGoalEnabled")) {
+    writing.appendChild(field("Goal", selectCtl("wordGoal", [100, 250, 500, 750, 1000, 1500, 2000].map(n => [n, n + " words"]))));
+  }
+  writing.appendChild(el(`<div class="field"><div class="sub">The goal counts everything dated today; progress shows in Stats.</div></div>`));
+  box.appendChild(writing);
+
+  // Templates (<folder>/.nook/templates/*.md, shared with the Apple apps)
+  const tmplCard = el(`<div class="card"><h3>Templates</h3></div>`);
+  const tmplList = el(`<div></div>`);
+  async function renderTemplates() {
+    const names = await invoke("template_names");
+    tmplList.innerHTML = "";
+    for (const n of names) {
+      const r = el(`<div class="field"><div class="lbl">${icon("copy", 13)} ${esc(n)}</div></div>`);
+      const del = el(`<button class="tbtn icon danger" title="Delete template">${icon("trash", 14)}</button>`);
+      del.onclick = async () => { await invoke("delete_template", { name: n }); renderTemplates(); };
+      r.appendChild(del);
+      tmplList.appendChild(r);
+    }
+  }
+  renderTemplates();
+  tmplCard.appendChild(tmplList);
+  const trow = el(`<div class="btnrow"></div>`);
+  const newTmpl = btn("New Template", { icon: "square.and.pencil" });
+  newTmpl.onclick = async () => { await invoke("create_template"); renderTemplates(); };
+  trow.appendChild(newTmpl);
+  tmplCard.appendChild(trow);
+  tmplCard.appendChild(el(`<div class="field"><div class="sub">Plain markdown files in &lt;folder&gt;/.nook/templates/ — insert one from the composer's ⋯ menu; {{date}}, {{time}} and {{weekday}} fill in on insert. They sync with the journal and the macOS/iOS apps.</div></div>`));
+  box.appendChild(tmplCard);
 
   // Split tags
   const splitCard = el(`<div class="card"><h3>Split tags</h3></div>`);
@@ -1057,7 +1263,25 @@ async function renderSettings(main) {
   const brow = el(`<div class="btnrow"></div>`);
   const chooseB = btn("Choose Backup Folder…", { icon: "folder" }); chooseB.onclick = async () => { const p = await invoke("pick_backup_folder"); if (p) { toast("Backup folder set"); renderView(); } };
   const backupNow = btn("Back Up Now", { icon: "drive" }); backupNow.disabled = !bInfo.path; backupNow.onclick = async () => { const r = await invoke("backup_now"); alertModal("Backup", r.message); };
-  brow.append(chooseB, backupNow); backupCard.appendChild(brow);
+  const restoreB = btn("Restore…", { icon: "clock" }); restoreB.disabled = !bInfo.path;
+  restoreB.onclick = async () => {
+    const names = await invoke("list_backups");
+    if (!names.length) return alertModal("Restore", "No backups yet — run Back Up Now first.");
+    const body = el(`<div style="max-height:50vh;overflow-y:auto;padding:6px"></div>`);
+    const mo = modal({ title: "Restore", bodyEl: body });
+    for (const n of names) {
+      const r = el(`<button class="menu-item">${icon("drive", 15)}<span>${esc(n.replace("Nook-Backup-", ""))}</span></button>`);
+      r.onclick = async () => {
+        mo.close();
+        if (!(await confirmModal("Restore this backup?", "Your current journal is saved as a new backup first, then replaced.", "Restore", true))) return;
+        const res = await invoke("restore_backup", { name: n });
+        await alertModal("Restore", res.message);
+        refresh();
+      };
+      body.appendChild(r);
+    }
+  };
+  brow.append(chooseB, backupNow, restoreB); backupCard.appendChild(brow);
   box.appendChild(backupCard);
 
   // Media / Data Saver
@@ -1076,7 +1300,20 @@ async function renderSettings(main) {
   const tagReview = btn("Tag Review", { icon: "seal" }); tagReview.onclick = openTagReview;
   const orphan = btn("Clear Orphan Media", { icon: "trash" }); orphan.onclick = async () => { const o = await invoke("orphan_assets"); if (!o.length) return alertModal("Orphan media", "No orphan media."); if (await confirmModal("Clear orphan media?", `Delete ${plural(o.length, "unused file")}?`, "Delete", true)) { const n = await invoke("delete_orphan_assets"); alertModal("Done", `Cleared ${plural(n, "file")}.`); refresh(); } };
   const exp = btn("Export…", { icon: "square.and.arrow.up" }); exp.onclick = async () => { const r = await invoke("export_to_file"); if (r.message) alertModal("Export", r.message); };
-  mrow.append(clean, compress, merge, tagReview, orphan, exp); maint.appendChild(mrow);
+  async function runImport(cmd, path) {
+    const preview = await invoke(cmd, { path, commit: false });
+    if (!preview.ok) return alertModal("Nothing to import", preview.message);
+    const what = `${plural(preview.entries, "entry").replace("entrys", "entries")}${preview.media ? ` and ${plural(preview.media, "media file")}` : ""}, ${preview.first} to ${preview.last}`;
+    if (!(await confirmModal("Import?", `${what}. They'll be filed straight into the journal by date; entries already there are skipped.`, "Import"))) return;
+    const r = await invoke(cmd, { path, commit: true });
+    alertModal("Import", `Imported ${plural(r.entries, "entry").replace("entrys", "entries")}${r.media ? ` and ${plural(r.media, "media file")}` : ""}${r.skipped ? `; skipped ${r.skipped} already present` : ""}.`);
+    refresh();
+  }
+  const impDO = btn("Import from Day One…", { icon: "download" });
+  impDO.onclick = async () => { const p = await invoke("pick_import_path", { folder: false }); if (p) runImport("import_day_one", p); };
+  const impMD = btn("Import Markdown Folder…", { icon: "download" });
+  impMD.onclick = async () => { const p = await invoke("pick_import_path", { folder: true }); if (p) runImport("import_md_folder", p); };
+  mrow.append(clean, compress, merge, tagReview, orphan, exp, impDO, impMD); maint.appendChild(mrow);
   box.appendChild(maint);
 
   // Shortcuts

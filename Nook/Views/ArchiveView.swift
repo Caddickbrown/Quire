@@ -8,6 +8,10 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
+#if os(macOS)
+import PDFKit
+#endif
 
 enum ArchiveSort: String, CaseIterable, Identifiable {
     case newest, oldest
@@ -31,6 +35,8 @@ struct ArchiveView: View {
     @State private var searchText = ""
     @State private var randomHit: Hit?
     @State private var loaded: [Entry] = []
+    @State private var onThisDayDays: [(date: String, entries: [Entry])] = []
+    @State private var showingOnThisDay = false
 
     struct Hit: Identifiable { let id = UUID(); let date: String; let entry: Entry }
 
@@ -48,7 +54,13 @@ struct ArchiveView: View {
     }
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            if !onThisDayDays.isEmpty {
+                OnThisDayBanner(years: onThisDayDays.count,
+                                count: onThisDayDays.reduce(0) { $0 + $1.entries.count }) {
+                    showingOnThisDay = true
+                }
+            }
             if loaded.isEmpty {
                 ContentUnavailableView(
                     "No entries yet",
@@ -94,12 +106,19 @@ struct ArchiveView: View {
                 Label("Sort", systemImage: "arrow.up.arrow.down")
             }
         }
-        .task(id: store.revision) { loaded = store.allEntriesByDay().flatMap(\.entries) }
+        .task(id: store.revision) {
+            loaded = store.allEntriesByDay().flatMap(\.entries)
+            onThisDayDays = store.onThisDay()
+        }
         .sheet(item: $randomHit) { hit in
             NavigationStack {
                 EntryDetailView(entry: hit.entry, source: .archive(date: hit.date))
             }
             .environmentObject(store)
+        }
+        .sheet(isPresented: $showingOnThisDay) {
+            OnThisDaySheet(days: onThisDayDays)
+                .environmentObject(store)
         }
     }
 }
@@ -202,6 +221,26 @@ struct EntryTwoPane: View {
     /// Hardware-keyboard selection (↑/↓), mirrored to the external display.
     @State private var kbIndex: Int?
 
+    /// Stable per-row keys: the timestamp, disambiguated by occurrence for the
+    /// rare same-second twins (`ts`, `ts#1`, …). Keying rows on the bare ts
+    /// gave twin rows identical view identity — the list drew the first twin
+    /// twice and opened the wrong one.
+    /// Rebuilt only when the entries array actually changes — as a computed
+    /// property this was rebuilt per `key()` call, i.e. per row render, which
+    /// made a 4,000-entry list O(n²) and visibly slow.
+    @State private var rowKeys: [UUID: String] = [:]
+
+    private static func makeRowKeys(_ entries: [Entry]) -> [UUID: String] {
+        var seen: [String: Int] = [:], out: [UUID: String] = [:]
+        for e in entries {
+            let n = seen[e.ts, default: 0]
+            seen[e.ts] = n + 1
+            out[e.id] = n == 0 ? e.ts : "\(e.ts)#\(n)"
+        }
+        return out
+    }
+    private func key(_ e: Entry) -> String { rowKeys[e.id] ?? e.ts }
+
     var body: some View {
         #if os(macOS)
         HStack(spacing: 0) {
@@ -209,18 +248,19 @@ struct EntryTwoPane: View {
             Divider()
             Group {
                 // Render the retained selection, so filtering it out of the list
-                // (e.g. editing out a search term) doesn't kick you out mid-edit.
-                if let e = openEntry, e.ts == selectedTS {
-                    EntryDetailView(entry: e, source: sourceFor(e)).id(e.ts)
+                // (e.g. editing out a search term) doesn't kick you out mid-edit
+                // — cleared only when the selection itself is cleared.
+                if let e = openEntry {
+                    EntryDetailView(entry: e, source: sourceFor(e)).id(key(e))
                 } else {
                     ContentUnavailableView("Select an entry", systemImage: "book.closed")
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onChange(of: selectedTS) { _, ts in
-            if let ts, let e = entries.first(where: { $0.ts == ts }) { openEntry = e }
-            else if ts == nil { openEntry = nil }
+        .onChange(of: selectedTS) { _, sel in
+            if let sel, let e = entries.first(where: { key($0) == sel }) { openEntry = e }
+            else if sel == nil { openEntry = nil }
         }
         #else
         list
@@ -256,7 +296,7 @@ struct EntryTwoPane: View {
             }
             .onChange(of: kbIndex) { _, i in
                 guard let i, entries.indices.contains(i) else { return }
-                withAnimation { proxy.scrollTo(entries[i].ts, anchor: .center) }
+                withAnimation { proxy.scrollTo(key(entries[i]), anchor: .center) }
             }
         }
         #if os(iOS)
@@ -266,12 +306,14 @@ struct EntryTwoPane: View {
         .entryListNavigation(entries: entries, index: $kbIndex, listTitle: listTitle) { entry in
             open(entry)
         }
+        .onAppear { rowKeys = Self.makeRowKeys(entries) }
+        .onChange(of: entries.map(\.id)) { _, _ in rowKeys = Self.makeRowKeys(entries) }
     }
 
     /// Open the keyboard-selected entry: the side pane on macOS, a push on iOS.
     private func open(_ entry: Entry) {
         #if os(macOS)
-        selectedTS = entry.ts
+        selectedTS = key(entry)
         openEntry = entry
         #else
         nav.path.append(Route.entry(entry, sourceFor(entry)))
@@ -279,10 +321,10 @@ struct EntryTwoPane: View {
     }
 
     private func entryRow(_ entry: Entry) -> some View {
-        let keyboardSelected = kbIndex.map { entries.indices.contains($0) && entries[$0].ts == entry.ts } ?? false
+        let keyboardSelected = kbIndex.map { entries.indices.contains($0) && entries[$0].id == entry.id } ?? false
         return rowLabel(entry)
-            .tag(entry.ts)
-            .id(entry.ts)
+            .tag(key(entry))
+            .id(key(entry))
             .keyboardSelectedRow(keyboardSelected, accent: accent)
             .contextMenu {
                 Button { store.toggleStar(entry, source: sourceFor(entry)) } label: {
@@ -344,7 +386,12 @@ struct EntryTwoPane: View {
 struct DayView: View {
     @EnvironmentObject private var store: JournalStore
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
+    @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
+    @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
     let date: String
+
+    @State private var pdfDoc: PDFExportDocument?
+    @State private var makingPDF = false
 
     var body: some View {
         EntryTwoPane(entries: store.entries(for: date),
@@ -355,7 +402,61 @@ struct DayView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+            .toolbar {
+                Button {
+                    exportPDF()
+                } label: {
+                    Label("Export PDF", systemImage: "doc.richtext")
+                }
+                .disabled(makingPDF)
+                .help("Export this day as a typeset PDF")
+                #if os(macOS)
+                Button {
+                    printDay()
+                } label: {
+                    Label("Print", systemImage: "printer")
+                }
+                .disabled(makingPDF)
+                .help("Print this day")
+                #endif
+            }
+            .fileExporter(isPresented: Binding(
+                get: { pdfDoc != nil },
+                set: { if !$0 { pdfDoc = nil } }
+            ), document: pdfDoc, contentType: .pdf, defaultFilename: "nook-\(date).pdf") { _ in }
     }
+
+    private func exportPDF() {
+        makingPDF = true
+        Task { @MainActor in
+            defer { makingPDF = false }
+            let data = await PDFExporter.makePDF(days: [(date, store.entries(for: date))],
+                                                 store: store,
+                                                 dateStyleRaw: dateStyleRaw,
+                                                 fontRaw: writingFontRaw,
+                                                 fontSize: CGFloat(fontSize))
+            if let data { pdfDoc = PDFExportDocument(data: data) }
+        }
+    }
+
+    #if os(macOS)
+    /// Same render path as Export PDF, straight into the print panel.
+    private func printDay() {
+        makingPDF = true
+        Task { @MainActor in
+            defer { makingPDF = false }
+            guard let data = await PDFExporter.makePDF(days: [(date, store.entries(for: date))],
+                                                       store: store,
+                                                       dateStyleRaw: dateStyleRaw,
+                                                       fontRaw: writingFontRaw,
+                                                       fontSize: CGFloat(fontSize)),
+                  let doc = PDFDocument(data: data),
+                  let op = doc.printOperation(for: .shared, scalingMode: .pageScaleDownToFit, autoRotate: true)
+            else { return }
+            op.run()
+        }
+    }
+    #endif
 }
 
 /// Sidebar section listing all tag-routed split journals.
@@ -533,7 +634,13 @@ struct StarredView: View {
 /// inbox, tags, and split journals.
 struct StatsView: View {
     @EnvironmentObject private var store: JournalStore
+    @AppStorage("wordGoalEnabled") private var wordGoalEnabled = false
+    @AppStorage("wordGoal") private var wordGoal = 750
     @State private var stats = JournalStore.Stats()
+    @State private var reviewYear: ReviewYear?
+    @State private var showingTrends = false
+
+    struct ReviewYear: Identifiable { let year: String; var id: String { year } }
 
     private static func size(_ bytes: Int) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
@@ -546,6 +653,17 @@ struct StatsView: View {
                 LabeledContent("Tags", value: "\(stats.tags)")
                 if stats.splitJournals > 0 {
                     LabeledContent("Split journals", value: "\(stats.splitJournals)")
+                }
+            }
+            Section("Today") {
+                LabeledContent("Words today", value: "\(stats.wordsToday)")
+                if wordGoalEnabled {
+                    LabeledContent("Daily goal") {
+                        Text(stats.wordsToday >= max(wordGoal, 1)
+                             ? "Met — \(stats.wordsToday) / \(max(wordGoal, 1))"
+                             : "\(stats.wordsToday) / \(max(wordGoal, 1))")
+                            .foregroundStyle(stats.wordsToday >= max(wordGoal, 1) ? .green : .secondary)
+                    }
                 }
             }
             Section("Archive") {
@@ -580,12 +698,61 @@ struct StatsView: View {
                     LabeledContent("Longest day", value: "\(stats.longestDay) · \(stats.longestDayWords) words")
                 }
             }
+            let years = store.yearsWithEntries()
+            if !years.isEmpty {
+                Section {
+                    Button {
+                        showingTrends = true
+                    } label: {
+                        HStack {
+                            Label("Trends", systemImage: "chart.xyaxis.line")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                } footer: {
+                    Text("The year day by day, words per month, and the top tags over time.")
+                }
+                Section {
+                    ForEach(years, id: \.self) { year in
+                        Button {
+                            reviewYear = ReviewYear(year: year)
+                        } label: {
+                            HStack {
+                                Text("\(year) in review")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } header: {
+                    Text("Year in review")
+                } footer: {
+                    Text("Words, streaks, top tags and the busiest day — with a shareable card.")
+                }
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Stats")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .task { stats = store.stats() }
+        .task(id: store.revision) { stats = store.stats() }
+        .sheet(item: $reviewYear) { item in
+            YearReviewSheet(year: item.year)
+                .environmentObject(store)
+        }
+        .sheet(isPresented: $showingTrends) {
+            TrendsView()
+                .environmentObject(store)
+        }
     }
 }

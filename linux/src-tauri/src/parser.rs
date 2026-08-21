@@ -231,3 +231,40 @@ pub fn media_paths(content: &str) -> Vec<String> {
 pub fn trim_right_newlines(s: &str) -> String {
     s.trim_end_matches('\n').to_string()
 }
+
+/// jnl cmdCleanup's punctuation pass (… and straight quotes), applied only
+/// outside `![alt](path)` media links — a filename or URL containing "..."
+/// must never be rewritten into an ellipsis and the link broken.
+pub fn normalize_punctuation(s: &str) -> String {
+    fn fix(t: &str) -> String {
+        t.replace("...", "\u{2026}")
+            .replace('\u{2019}', "'")
+            .replace('\u{201C}', "\"")
+            .replace('\u{201D}', "\"")
+    }
+    let re = regex::Regex::new(r"!\[[^\]]*\]\([^)]+\)").unwrap();
+    let mut out = String::new();
+    let mut cursor = 0;
+    for m in re.find_iter(s) {
+        out.push_str(&fix(&s[cursor..m.start()]));
+        out.push_str(m.as_str()); // the link, verbatim
+        cursor = m.end();
+    }
+    out.push_str(&fix(&s[cursor..]));
+    out
+}
+
+#[cfg(test)]
+mod punctuation_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_masks_media_links() {
+        assert_eq!(normalize_punctuation("wait... what"), "wait\u{2026} what");
+        assert_eq!(
+            normalize_punctuation("see... ![dots](assets/a...b.png) end..."),
+            "see\u{2026} ![dots](assets/a...b.png) end\u{2026}"
+        );
+        assert_eq!(normalize_punctuation("![alt...](a.png)"), "![alt...](a.png)");
+    }
+}

@@ -15,6 +15,9 @@
 import WidgetKit
 import SwiftUI
 import AppIntents
+#if canImport(ActivityKit)
+import ActivityKit
+#endif
 
 // MARK: - Timeline
 
@@ -173,10 +176,22 @@ private struct MediumWidgetView: View {
                         .foregroundColor(.secondary)
                         .textCase(.uppercase)
                         .tracking(0.5)
+                    if let goal = entry.snap.wordGoal, goal > 0 {
+                        let today = entry.snap.wordsToday ?? 0
+                        Text(today >= goal ? "goal met · \(today) words" : "today \(today) / \(goal)")
+                            .font(.custom("Lato-Regular", size: 10))
+                            .foregroundColor(today >= goal ? .green : .secondary)
+                    }
                     Spacer()
                     // New draft deep-link
                     Link(destination: URL(string: "nook://write")!) {
                         Label("New Draft", systemImage: "square.and.pencil")
+                            .font(.custom("Lato-Regular", size: 12))
+                            .foregroundColor(accent)
+                    }
+                    // Starts a writing session in-app (nook://timer).
+                    Link(destination: URL(string: "nook://timer")!) {
+                        Label("Start Timer", systemImage: "timer")
                             .font(.custom("Lato-Regular", size: 12))
                             .foregroundColor(accent)
                     }
@@ -281,9 +296,43 @@ private struct LargeWidgetView: View {
                     StatCell(value: "\(entry.snap.totalEntries)", label: "Entries", accent: accent)
                     StatCell(value: formatWords(entry.snap.totalWords), label: "Words", accent: accent)
                     StatCell(value: "\(entry.snap.inboxDrafts)",  label: "Drafts",  accent: accent)
+                    if let goal = entry.snap.wordGoal, goal > 0 {
+                        StatCell(value: "\(entry.snap.wordsToday ?? 0)/\(goal)",
+                                 label: "Today", accent: accent)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 16)
+
+                if let preview = entry.snap.onThisDayPreview, !preview.isEmpty,
+                   let ago = entry.snap.onThisDayYearsAgo {
+                    Divider().opacity(0.2)
+                    let line = HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 11))
+                            .foregroundColor(accent)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("on this day, \(ago) year\(ago == 1 ? "" : "s") ago")
+                                .font(.custom("Lato-Regular", size: 9))
+                                .foregroundColor(.secondary)
+                                .textCase(.uppercase)
+                                .tracking(0.5)
+                            Text(preview)
+                                .font(.custom("Lato-Regular", size: 12))
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    // Tapping the memory opens the memory — not the composer.
+                    if let date = entry.snap.onThisDayDate, let ts = entry.snap.onThisDayTS,
+                       let url = NookSnapshot.entryURL(date: date, ts: ts) {
+                        Link(destination: url) { line }
+                    } else {
+                        line
+                    }
+                }
 
                 Spacer()
             }
@@ -324,3 +373,78 @@ struct NookWidgetEntryView: View {
         }
     }
 }
+
+// MARK: - Writing-timer Live Activity (iOS)
+
+#if os(iOS)
+/// The Lock Screen / Dynamic Island countdown for a writing session. The
+/// system counts down to `endDate` itself; nothing here ticks.
+struct NookTimerLiveActivity: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: NookTimerAttributes.self) { context in
+            lockScreen(context)
+                .activityBackgroundTint(Color.black.opacity(0.6))
+        } dynamicIsland: { context in
+            let accent = nookAccentColor(for: context.attributes.accentRaw)
+            return DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    Label("Writing", systemImage: "timer")
+                        .font(.custom("Lato-Regular", size: 14))
+                        .foregroundColor(accent)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    Text(timerInterval: Date()...context.state.endDate, countsDown: true)
+                        .font(.custom("Lato-Bold", size: 22))
+                        .monospacedDigit()
+                        .foregroundColor(accent)
+                        .frame(maxWidth: 80)
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    if context.state.wordGoal > 0 {
+                        Text(context.state.wordsToday >= context.state.wordGoal
+                             ? "Goal met — \(context.state.wordsToday) words today"
+                             : "\(context.state.wordsToday) of \(context.state.wordGoal) words today")
+                            .font(.custom("Lato-Regular", size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            } compactLeading: {
+                Image(systemName: "timer").foregroundColor(accent)
+            } compactTrailing: {
+                Text(timerInterval: Date()...context.state.endDate, countsDown: true)
+                    .monospacedDigit()
+                    .foregroundColor(accent)
+                    .frame(maxWidth: 44)
+            } minimal: {
+                Image(systemName: "timer").foregroundColor(accent)
+            }
+        }
+    }
+
+    private func lockScreen(_ context: ActivityViewContext<NookTimerAttributes>) -> some View {
+        let accent = nookAccentColor(for: context.attributes.accentRaw)
+        return HStack(spacing: 12) {
+            Image(systemName: "timer")
+                .font(.title2)
+                .foregroundColor(accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Writing session")
+                    .font(.custom("Lato-Regular", size: 13))
+                    .foregroundColor(.white.opacity(0.85))
+                if context.state.wordGoal > 0 {
+                    Text("\(context.state.wordsToday) of \(context.state.wordGoal) words today")
+                        .font(.custom("Lato-Regular", size: 11))
+                        .foregroundColor(.white.opacity(0.6))
+                }
+            }
+            Spacer()
+            Text(timerInterval: Date()...context.state.endDate, countsDown: true)
+                .font(.custom("Lato-Bold", size: 28))
+                .monospacedDigit()
+                .foregroundColor(accent)
+                .frame(maxWidth: 90)
+        }
+        .padding(14)
+    }
+}
+#endif

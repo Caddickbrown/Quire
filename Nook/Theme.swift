@@ -130,15 +130,30 @@ extension Theme {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
         f.locale = Locale(identifier: "en_US_POSIX"); return f
     }()
-    private static let displayFormatter = DateFormatter()
+    /// One formatter per style, rebuilt if the locale changes — this runs per
+    /// visible row, and mutating a shared formatter's format on every call was
+    /// measurable churn.
+    private static var displayFormatters: [String: DateFormatter] = [:]
+    private static var formatterLocaleID = Locale.current.identifier
 
     /// Format an ISO "YYYY-MM-DD" date string in the user's chosen style.
     static func displayDate(_ isoDate: String, style raw: String) -> String {
         let style = DateStyle(rawValue: raw) ?? .weekday
         guard let d = isoParser.date(from: isoDate) else { return isoDate }
-        displayFormatter.locale = .current
-        displayFormatter.dateFormat = style.format
-        return displayFormatter.string(from: d)
+        if formatterLocaleID != Locale.current.identifier {
+            displayFormatters = [:]
+            formatterLocaleID = Locale.current.identifier
+        }
+        let f: DateFormatter
+        if let cached = displayFormatters[style.rawValue] {
+            f = cached
+        } else {
+            f = DateFormatter()
+            f.locale = .current
+            f.dateFormat = style.format
+            displayFormatters[style.rawValue] = f
+        }
+        return f.string(from: d)
     }
 
     /// Like `displayDate`, but always carries the year — used for list section

@@ -31,6 +31,17 @@ section is dated development history rather than versioned releases.
 ## [Unreleased]
 
 ### Added
+- **Stream**: full keyboard navigation — ↑/↓ walk the page, ↩ opens the
+  selected entry's in-place editor, ⎋ closes it — with the selection mirrored
+  to the external display like every other list; rows also expose VoiceOver
+  actions for File and Delete.
+- **Tags**: a rendered `@tag` in Preview or the Stream is now a link — tapping
+  it opens that tag's page.
+- **Calendar**: grey days (unfiled drafts only) are tappable and open the
+  Inbox; day cells carry VoiceOver labels.
+- **Timer**: finishing plays a soft cue (haptic on iOS, a chime on macOS), and
+  in Focus Mode a small countdown pill keeps the session visible while the
+  sidebar is hidden.
 - **Assets**: tap an asset to view it full size — images open fitted and zoom
   like the Photos app (pinch, pan, double-tap), video and audio play — plus
   **sort by date, size, kind, or name**.
@@ -95,8 +106,151 @@ section is dated development history rather than versioned releases.
 - **Preview**: `@tag` highlighting now renders in reading mode, not just the
   editor.
 - **Starred**: the same dice + sort toolbar as the Inbox and Journal.
+- **Stream**: a new sidebar section below Starred — the whole corpus on one
+  scrolling page, oldest first, like reading straight down a paper journal. Times sit in a narrow margin — rotated bottom-to-top along
+  the edge on iPhone, the way a book spine reads — with a star and a draft
+  pencil beneath them, prose runs full-length with no previews and no
+  truncation, and the day's date stays pinned at the top of the page while its
+  entries scroll underneath.
+  Tapping an entry edits it in place — title and body, autosaved, no push and
+  no modal. The tray button chooses what's on the page: filed entries only,
+  filed entries and unfiled drafts interleaved by time, or drafts only; drafts
+  read at reduced opacity so they're clearly unfiled. Swipe left to delete,
+  swipe right to file a draft (iOS); right-click for File, Star, Reveal in
+  Finder and Delete.
+- **App lock** (`Settings → Privacy`): Face ID / Touch ID / passcode gates the
+  app, with a relock delay (immediately / 1 / 5 / 15 minutes) and a veil that
+  hides entry text in the app switcher. The lock covers the app only — the
+  files stay plain markdown on disk, and the setting says so.
+- **Composer**: **writing prompts** (`Settings → Writing`) — the empty composer
+  shows a question ("What surprised you today?"), stable per day, with a
+  New Prompt reroll in the ⋯ menu.
+- **Composer**: **templates** — plain markdown files in
+  `<folder>/.nook/templates/` (managed in `Settings → Templates`, synced with
+  the journal, hand-editable), inserted from the ⋯ menu with `{{date}}`,
+  `{{time}}` and `{{weekday}}` filled in.
+- **Editor**: **typewriter scrolling** (the line you're typing stays centred)
+  and **focus mode for paragraphs** (everything but the current paragraph
+  dims), both off by default in `Settings → Writing`.
+- **Editor**: `**bold**` and `` `code` `` now render live while editing (as
+  `_italic_` already did); ⌘B/⌘I wrap the selection in the markers; and ↩
+  inside a `- `, `1. ` or `- [ ]` line continues the list (↩ on an empty item
+  ends it).
+- **Preview**: `- [ ]` task lines draw as real checkboxes — tappable wherever
+  the entry is editable, writing the `x` back into the markdown.
+- **Entries**: **Transcribe Voice Memos** in the composer's and entry editor's
+  ⋯ menu — on-device speech recognition (nothing uploaded) inserts each
+  memo's transcript beneath its audio link as ordinary searchable text.
+- **Journal**: **On This Day** — a banner above the list whenever this
+  calendar day has entries in past years, opening them grouped by year. The
+  large widget and the external display's idle screen carry a one-line teaser.
+- **Search**: a new sidebar section (⌘⇧F) searching the inbox, journal and
+  split journals together, with an operator grammar — `tag:work`,
+  `before:2026-03`, `after:2025`, `has:image|video|audio|media`, `is:starred`,
+  and `"exact phrases"` (verified in `make check`).
+- **Settings → Privacy**: opt-in **Spotlight indexing** — entries appear in
+  system search (title, text, tags) and open in Nook; off by default.
+- **Reminder** (`Settings → Reminder`): one daily notification at a chosen
+  time, streak-aware — writing an entry cancels that day's nudge, and the copy
+  carries the streak.
+- **Word goal** (`Settings → Writing`, off by default): a daily target with a
+  quiet progress ring next to the sidebar timer, a Today section in Stats, and
+  progress on the medium/large widgets.
+- **Stats**: **Year in Review** — per-year words, days, entries, longest
+  streak, busiest day, top tags, media counts, plus a shareable card
+  (stats-only unless you include the year's first line).
+- **Export**: **PDF export** — a typeset PDF (entries, inline photos, the
+  writing font) of a year or the whole journal from `Settings → Maintenance`,
+  or one day from the day view's toolbar.
+- **Import** (`Settings → Maintenance`): **Day One** JSON exports (dates,
+  text, tags → `@tags`, photos/videos into `assets/`) and **folders of dated
+  markdown/text files** (Obsidian daily notes work) become ordinary filed
+  entries, with a count-and-confirm step; re-running an import skips entries
+  already present.
+- **Share extension**: share text, links, photos or video from any app and it
+  becomes an inbox draft (media attached the usual `![](assets/…)` way). A new
+  `NookShareExtension` target embedded next to the widget; shares land via an
+  App Group handoff the app drains on next launch/foreground.
+- **Sync**: **live refresh** — on iCloud an `NSMetadataQuery` reloads the
+  store when another device changes a journal file (no relaunch); local and
+  custom folders get a directory watcher on the base and journal folders.
+  iCloud conflict versions of `inbox.md` merge as "keep both" (Clean Up
+  removes exact duplicates), never last-writer-wins.
+- **Widget**: the medium widget shows word-goal progress and the large one
+  adds a today cell and the On This Day line.
+- **Backup**: **Restore** — `Settings → Backup → Restore…` lists the
+  timestamped copies and swaps one in; a safety copy of the current journal is
+  always taken first, so a restore is itself restorable. (Also Linux.)
+- **Composer / entry editor**: **tag autocompletion** — typing `@` offers your
+  existing tags (frequency-ordered): a native completion list on macOS, a chip
+  bar above the keyboard on iOS. Fixes near-duplicate tags at the source.
+- **Editor** (iOS): the writing font follows **Dynamic Type** — the system
+  text-size setting scales the px preference, so accessibility sizes reach the
+  editor (SwiftUI text already scaled).
+- **Media**: **auto-transcribe** (`Settings → Writing`, off by default) — a
+  just-recorded voice memo transcribes itself, the words landing beneath the
+  link; and **Transcribe All Voice Memos** (`Settings → Maintenance`) sweeps
+  existing memos, with a merged per-device record in `<base>/.nook/` so no
+  memo is transcribed twice across devices.
+- **Print** (macOS): an entry (from its ⋯ menu) or a whole day (from the day
+  view) prints through the PDF renderer's typeset layout.
+- **Reminder**: **write from the banner** — the daily reminder carries a
+  "Write a line…" text action that lands straight in the inbox, no app launch;
+  and an opt-in **weekly "From your journal"** note resurfaces one entry
+  (starred first, then this day in past years), tap-through to the entry.
+- **Search**: **saved searches** — pin a query and it appears under Saved
+  Searches in the sidebar, stored as `<base>/.nook/searches.json` so pins sync
+  across devices and stay hand-editable. (Also Linux.)
+- **Stats**: **Trends** — a GitHub-style year heat strip (words per day, also
+  on the Year in Review sheet and its shareable card), words per month, and
+  the top tags' monthly counts, drawn with Swift Charts.
+- **Timer** (iOS): a **Live Activity** — the writing session counts down in
+  the Dynamic Island and on the Lock Screen (word-goal progress alongside when
+  the goal is on), ending itself with the timer.
+- **Welcome**: a one-screen first-run sheet — where the words live, the
+  inbox→journal flow, the import pointer, the privacy stance — skippable and
+  never seen again.
+- **Widget**: the On This Day line now **opens that entry** (via the new
+  `nook://entry` deep link, which notifications share) instead of the
+  composer, and the medium widget gains a Start Timer link (`nook://timer`).
+- **Linux**: the parity wave — global search with the full operator grammar
+  (ported to `search.rs`, unit-tested), saved-search pins in the sidebar,
+  templates + writing prompts, On This Day banner, words-today + word goal in
+  Stats, Year in Review, Day One / markdown-folder importers with the same
+  count-and-confirm step, and backup Restore. (Linux)
 
 ### Changed
+- **Performance** (large journals): section switches and edits no longer wait
+  on background work — every mutation patches the on-screen lists instantly
+  from the file it just wrote, and the full re-index runs debounced behind it;
+  the index, corpus cache, and stats all come from a single read of each file
+  (it was two full passes, three with Spotlight on — Spotlight now indexes
+  from the cache instead of re-reading the journal); returning to the app
+  only reloads when a cheap stat-walk fingerprint says something on disk
+  actually changed; and a per-row identity rebuild that made 4,000-entry lists
+  O(n²) is computed once per list change. iCloud download checks are skipped
+  entirely for local folders.
+- **Export**: the combined markdown export now includes the split journals
+  after the dated days — they're filed entries too, and were silently left
+  out. (Also Linux.)
+- **Performance**: the parsed journal is cached alongside the index (built
+  off-main), so the Journal, Starred, Stream, Search, Tags, Random, and
+  asset-usage lookups no longer re-read every file on the main thread; the
+  editor re-styles only the edited paragraph per keystroke instead of the
+  whole document; date formatters are cached per style; entry-row thumbnails
+  decode off the main thread; and "File All" writes each destination file
+  once instead of once per draft. (File All batching also Linux.)
+- **Inbox / Stream** (iOS): filing or deleting by swipe confirms with a light
+  haptic.
+- **Stats**: the streak no longer reads 0 all morning — until today's entry is
+  written, the current streak counts back from yesterday, in the app, the
+  Stats sheet, and the widget. (Also Linux.)
+- **Performance**: the full-corpus stats pass (word counts, streaks, size
+  breakdowns) runs off the main thread alongside the index rebuild instead of
+  re-reading every journal file on the main thread after every change; the
+  Tags pane loads a tag's entries once per change instead of on every
+  keystroke; and the widget snapshot is only written (and WidgetKit only asked
+  to reload) when a number the widget shows actually changed.
 - **Assets**: the grid is a photo gallery — uniform square tiles with hairline
   gaps, capped so they stay thumbnail-sized on a wide window, and no uuid
   filename captions.
@@ -104,6 +258,8 @@ section is dated development history rather than versioned releases.
   the file landed on disk — so a photo imported today into a back-dated entry
   sorts and groups under that entry's day. Media no entry references still
   falls back to the file's own date.
+- **Inbox**: the right-click menu says "File", matching the swipe action, the
+  entry editor's button, and jnl's own vocabulary — it used to say "Archive".
 - **Destructive actions** are red everywhere — Delete in the inbox, journal,
   entry editor and assets menus, Discard in the composer, and Clear Orphan
   Media. `role: .destructive` alone left several of them looking ordinary.
@@ -116,6 +272,24 @@ section is dated development history rather than versioned releases.
   project-level `DEVELOPMENT_TEAM` both targets inherit — so Xcode stops
   offering to update them. They live in `gen_pbxproj.py`; accepting Xcode's
   sheet instead would be undone by the next `make project`.
+- **Build**: `gen_pbxproj.py` now emits a third target, `NookShareExtension`
+  (the share extension), embedded into the app beside the widget; its scheme
+  autocreation is suppressed like the widget's, so the selector still shows
+  just `Nook`.
+- **Check**: `make check` also compiles `Models/SearchQuery.swift` and
+  `Models/ListContinuation.swift`, running the search-grammar and
+  list-continuation cases alongside the jnl-parity ones.
+- **Build**: a real **XCTest target** (`NookTests`, generated like the rest) —
+  hostless logic tests over the pure model files (parser parity, the search
+  grammar, list continuation), run via the Nook scheme's Test action
+  (`xcodebuild test -scheme Nook -destination 'platform=macOS'`).
+- **Editor**: list-continuation rules moved to `Models/ListContinuation.swift`
+  (pure) so both platforms share one tested implementation.
+- **Linux**: the portable features are now ported (see the Linux bullet under
+  Added); still Apple-only by nature or by choice: transcription (would go via
+  a whisper CLI), PDF export (use the webview's print instead), Spotlight, app
+  lock, widgets/Live Activity, notifications, and the share extension. The
+  on-disk format is unchanged throughout.
 - **Build**: Xcode's scheme selector shows one scheme, `Nook`, instead of also
   offering `NookWidgetExtension`. The widget was never separate to ship — the
   app depends on it and embeds the `.appex`, so building `Nook` builds it — and
@@ -146,9 +320,53 @@ section is dated development history rather than versioned releases.
   you spin them and the popover closes on a tap outside.
 
 ### Fixed
+- **Reminders**: tapping the daily writing reminder now opens the composer
+  instead of just launching the app where you left it, and a tap that launches
+  the app cold is no longer dropped — the resurfacing note's entry link lands
+  reliably too.
 - **Write** (iOS): the composer no longer shows two back chevrons on iPhone —
   the collapsed navigation stack already supplies one, so its own Done arrow now
   appears only at regular width (iPad), where there is no system back button.
+- **Backup**: choosing a backup folder inside the journal folder (or the
+  reverse) is refused — backing up would recurse, and restoring would delete
+  its own source partway. (Also Linux.)
+- **Sync**: iCloud version conflicts on day files and split journals now merge
+  as keep-both, like the inbox — a two-device day used to resolve silently to
+  whichever version won; Data Saver's in-place media swap is coordinated
+  through NSFileCoordinator so it can't race a sync of the same file.
+- **Spotlight**: two entries sharing a second no longer collide in the index
+  (occurrence-suffixed identifiers, resolved back to the right twin).
+- **Data safety**: journal writes are truly atomic now (an in-place
+  `replaceItemAt` swap instead of remove-then-move), so a crash mid-save can no
+  longer leave an entry file existing only as a hidden temp file; stale
+  `.nook-*.tmp` strays are swept on launch. (Also Linux.)
+- **Inbox**: "File All" removes only the drafts that actually filed — a draft
+  whose write failed stays in the inbox instead of being deleted with it, and
+  drafts added by Siri or jnl since the last load are never touched. (Also
+  Linux.)
+- **Entries**: two entries sharing the same second can no longer be edited or
+  deleted as one — edits and deletes match on the entry's full text first, a
+  delete removes exactly one entry, and the composer nudges a new draft off an
+  already-taken second instead of overwriting an unrelated draft. Lists render
+  same-second twins as their own rows too. (Also Linux.)
+- **Lists**: filing, deleting, starring, and in-place edits refresh the
+  Journal, Starred, and Stream immediately — a deleted or renamed entry could
+  previously linger in a list until the next full reload.
+- **Tags** (Linux): renaming or merging tags did nothing — the rename pattern
+  never compiled (the regex engine has no lookahead). Rewritten so whole-token
+  renames work.
+- **Maintenance**: Clean Up's punctuation pass no longer reaches inside
+  `![](…)` media links, so a filename or URL containing "..." can't be
+  rewritten into an ellipsis and broken. (Also Linux.)
+- **Media**: a voice memo still recording when its editor closes is stopped and
+  attached instead of silently lost, and the microphone session is released
+  afterwards so other apps' audio un-ducks. (iOS)
+- **Media**: videos picked from the Photos library or dropped onto an editor
+  stream to disk as files instead of being buffered whole in memory.
+- **Sync**: the app reloads on foreground/activation, picking up edits from
+  another device, the jnl CLI, or a Siri quick-add; not-yet-downloaded iCloud
+  files (`.icloud` placeholders) now trigger a download instead of reading as
+  missing days.
 - **Assets**: opening the gallery was very slow. Working out which entries use
   an asset reads every journal file, and that was being done up front for each
   visible tile; it now happens only when "Go to Entry" is pressed. Listing the

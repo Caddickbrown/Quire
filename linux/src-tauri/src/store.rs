@@ -2,10 +2,12 @@
 //! UI performs. Filing / sorting / atomic writes are ported from ~/Code/jnl/main.go
 //! (via the Swift `JournalStore`), so the on-disk layout stays byte-compatible:
 //!
-//!     <base>/inbox.md                     — unsorted drafts
-//!     <base>/journal/YYYY/MM/DD.md         — filed entries, one file per day
-//!     <base>/<tag>.md                      — split-tag journals (JNL_SPLIT_TAGS)
-//!     <base>/assets/<uuid>.<ext>           — media, Obsidian-style links
+//! ```text
+//! <base>/inbox.md                     — unsorted drafts
+//! <base>/journal/YYYY/MM/DD.md         — filed entries, one file per day
+//! <base>/<tag>.md                      — split-tag journals (JNL_SPLIT_TAGS)
+//! <base>/assets/<uuid>.<ext>           — media, Obsidian-style links
+//! ```
 
 use crate::media;
 use crate::parser::{self, Entry};
@@ -194,6 +196,9 @@ pub struct Stats {
     pub inbox_drafts: usize,
     pub tags: usize,
     pub split_journals: usize,
+    /// Words dated today (filed + drafts) — drives the word goal.
+    pub words_today: usize,
+    pub has_entry_today: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -278,19 +283,31 @@ fn write_file(path: &Path, content: &str) -> std::io::Result<()> {
         f.write_all(content.as_bytes())?;
         f.sync_all()?;
     }
-    if path.exists() {
-        let _ = fs::remove_file(path);
-    }
+    // rename(2) replaces the destination atomically on POSIX — no pre-remove,
+    // which would open a window where a crash leaves only the temp file.
     fs::rename(&tmp, path)?;
     Ok(())
 }
 
-/// Find an entry in a list by timestamp, falling back to raw text.
+/// The jnl timestamp one second after `ts` (the input itself on parse failure —
+/// callers bound their retry loops, so this can never spin).
+fn timestamp_after(ts: &str) -> String {
+    match chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S") {
+        Ok(t) => (t + chrono::Duration::seconds(1))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string(),
+        Err(_) => ts.to_string(),
+    }
+}
+
+/// Find an entry by raw text first, timestamp second — raw is the sharper
+/// identity when two entries share a second, so an edit or delete can't land
+/// on the wrong twin.
 fn find_entry(entries: &[Entry], ts: &str, raw: &str) -> Option<usize> {
     entries
         .iter()
-        .position(|e| e.ts == ts)
-        .or_else(|| entries.iter().position(|e| e.raw == raw))
+        .position(|e| e.raw == raw)
+        .or_else(|| entries.iter().position(|e| e.ts == ts))
 }
 
 impl Store {
@@ -600,7 +617,16 @@ impl Store {
             })
     }
 
-    pub fn upsert_draft(&self, previous: Option<&str>, timestamp: &str, title: &str, body: &str) {
+    /// Returns the timestamp actually used: a brand-new draft landing on a
+    /// second that is already taken is nudged forward until free, so the
+    /// composer can never overwrite an unrelated same-second draft.
+    pub fn upsert_draft(
+        &self,
+        previous: Option<&str>,
+        timestamp: &str,
+        title: &str,
+        body: &str,
+    ) -> Option<String> {
         let inbox = self.inbox_path();
         let t = title.trim();
         let b = parser::trim_right_newlines(body);
@@ -609,23 +635,32 @@ impl Store {
             if let Some(prev) = previous {
                 self.remove_draft(prev);
             }
-            return;
+            return None;
         }
         let content = read_string(&inbox);
         let preamble = parser::leading_preamble(&content);
         let mut drafts = parser::parse_entries(&content);
-        if let Some(prev) = previous {
-            if prev != timestamp {
-                drafts.retain(|e| e.ts != prev);
+        let mut ts = timestamp.to_string();
+        if previous == Some(timestamp) {
+            if let Some(idx) = drafts.iter().position(|e| e.ts == timestamp) {
+                drafts[idx] = Self::make_entry(&ts, title, body);
+                let _ = write_file(&inbox, &parser::render_entries(&preamble, &drafts));
+                return Some(ts);
             }
         }
-        let entry = Self::make_entry(timestamp, title, body);
-        if let Some(idx) = drafts.iter().position(|e| e.ts == timestamp) {
-            drafts[idx] = entry;
-        } else {
-            drafts.push(entry);
+        if let Some(prev) = previous {
+            if let Some(idx) = drafts.iter().position(|e| e.ts == prev) {
+                drafts.remove(idx);
+            }
         }
+        let mut attempts = 0;
+        while attempts < 3600 && drafts.iter().any(|e| e.ts == ts) {
+            ts = timestamp_after(&ts);
+            attempts += 1;
+        }
+        drafts.push(Self::make_entry(&ts, title, body));
         let _ = write_file(&inbox, &parser::render_entries(&preamble, &drafts));
+        Some(ts)
     }
 
     pub fn remove_draft(&self, timestamp: &str) {
@@ -633,11 +668,12 @@ impl Store {
         let content = read_string(&inbox);
         let preamble = parser::leading_preamble(&content);
         let mut drafts = parser::parse_entries(&content);
-        let before = drafts.len();
-        drafts.retain(|e| e.ts != timestamp);
-        if drafts.len() == before {
+        // One draft only — with two entries sharing a second, retain() by
+        // timestamp deleted both.
+        let Some(idx) = drafts.iter().position(|e| e.ts == timestamp) else {
             return;
-        }
+        };
+        drafts.remove(idx);
         let _ = write_file(&inbox, &parser::render_entries(&preamble, &drafts));
     }
 
@@ -766,6 +802,34 @@ impl Store {
         Ok(label)
     }
 
+    /// Append several entries to one file in a single read + write.
+    fn append_entries(&self, entries: &[&Entry], dest: &Path) -> bool {
+        if entries.is_empty() {
+            return false;
+        }
+        if let Some(dir) = dest.parent() {
+            let _ = fs::create_dir_all(dir);
+        }
+        let mut out = String::new();
+        let existing = read_string(dest);
+        if !existing.trim().is_empty() {
+            out = format!("{}\n", parser::trim_right_newlines(&existing));
+        }
+        for e in entries {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            if !e.suffix.is_empty() && !e.body.is_empty() {
+                out.push_str(&format!("[{}] {}\n{}\n", e.ts, e.suffix, e.body));
+            } else if !e.suffix.is_empty() {
+                out.push_str(&format!("[{}] {}\n", e.ts, e.suffix));
+            } else {
+                out.push_str(&format!("[{}]\n{}\n", e.ts, e.body));
+            }
+        }
+        write_file(dest, &out).is_ok()
+    }
+
     fn dated_dest(&self, e: &Entry) -> Result<(PathBuf, String), String> {
         let date = if e.date.is_empty() { now_date() } else { e.date.clone() };
         let url = self.journal_file(&date).ok_or("bad path")?;
@@ -795,15 +859,54 @@ impl Store {
         let _ = write_file(&inbox, &parser::render_entries(&preamble, &drafts));
     }
 
+    /// Only drafts that actually filed are removed: one whose write failed
+    /// stays in the inbox instead of being lost with it.
     pub fn file_all_drafts(&self) -> usize {
-        let drafts = parser::parse_entries(&read_string(&self.inbox_path()));
+        let content = read_string(&self.inbox_path());
+        let preamble = parser::leading_preamble(&content);
+        let drafts = parser::parse_entries(&content);
+        let mut filed_raws: HashMap<String, usize> = HashMap::new();
         let mut filed = 0;
+        // Group by destination first, so ten drafts from one day rewrite that
+        // day's file once, not ten times (mirrors JournalStore.fileAllDrafts).
+        let mut order: Vec<PathBuf> = vec![];
+        let mut by_dest: HashMap<PathBuf, Vec<&Entry>> = HashMap::new();
         for d in &drafts {
-            if self.file_entry(d, true).is_ok() {
-                filed += 1;
+            if d.body.is_empty() && d.suffix.is_empty() {
+                continue;
+            }
+            let dest = match self.split_tag_target(&d.raw) {
+                Some((_, url)) => url,
+                None => match self.dated_dest(d) {
+                    Ok((url, _)) => url,
+                    Err(_) => continue,
+                },
+            };
+            if !by_dest.contains_key(&dest) {
+                order.push(dest.clone());
+            }
+            by_dest.entry(dest).or_default().push(d);
+        }
+        for dest in order {
+            let group = by_dest.get(&dest).cloned().unwrap_or_default();
+            if !self.append_entries(&group, &dest) {
+                continue;
+            }
+            filed += group.len();
+            for d in group {
+                *filed_raws.entry(d.raw.clone()).or_insert(0) += 1;
             }
         }
-        let _ = write_file(&self.inbox_path(), "");
+        if filed > 0 {
+            let mut remaining: Vec<Entry> = vec![];
+            for e in drafts {
+                match filed_raws.get_mut(&e.raw) {
+                    Some(n) if *n > 0 => *n -= 1, // counted, so a duplicate only vanishes once
+                    _ => remaining.push(e),
+                }
+            }
+            let _ = write_file(&self.inbox_path(), &parser::render_entries(&preamble, &remaining));
+        }
         filed
     }
 
@@ -830,7 +933,12 @@ impl Store {
         let content = read_string(&url);
         let preamble = parser::leading_preamble(&content);
         let mut entries = parser::parse_entries(&content);
-        entries.retain(|e| e.ts != ts && e.raw != raw);
+        // Single, raw-first removal — retain() deleted both twins of a
+        // same-second pair.
+        let Some(idx) = find_entry(&entries, ts, raw) else {
+            return;
+        };
+        entries.remove(idx);
         let _ = write_file(&url, &parser::render_entries(&preamble, &entries));
     }
 
@@ -851,7 +959,12 @@ impl Store {
         let content = read_string(&url);
         let preamble = parser::leading_preamble(&content);
         let mut entries = parser::parse_entries(&content);
-        entries.retain(|e| e.ts != ts && e.raw != raw);
+        // Single, raw-first removal — retain() deleted both twins of a
+        // same-second pair.
+        let Some(idx) = find_entry(&entries, ts, raw) else {
+            return;
+        };
+        entries.remove(idx);
         let _ = write_file(&url, &parser::render_entries(&preamble, &entries));
     }
 
@@ -928,20 +1041,24 @@ impl Store {
         } else {
             format!("@{}", new)
         };
+        // The regex crate has no lookahead — `(?!…)` failed to compile and the
+        // whole rename silently did nothing. Capture the boundary (or end)
+        // instead and put it back in the replacement.
         let re = match regex::Regex::new(&format!(
-            r"@{}(?![A-Za-z0-9_-])",
+            r"@{}($|[^A-Za-z0-9_-])",
             regex::escape(old_name)
         )) {
             Ok(r) => r,
             Err(_) => return 0,
         };
+        let replacement = format!("{}$1", new_tok);
         let mut changed = 0;
         for url in self.tag_rewrite_files() {
             let s = read_string(&url);
             if s.is_empty() {
                 continue;
             }
-            let r = re.replace_all(&s, new_tok.as_str()).to_string();
+            let r = re.replace_all(&s, replacement.as_str()).to_string();
             if r != s {
                 let _ = write_file(&url, &r);
                 changed += 1;
@@ -960,9 +1077,11 @@ impl Store {
                 } else {
                     format!("@{}", to)
                 };
-                regex::Regex::new(&format!(r"@{}(?![A-Za-z0-9_-])", regex::escape(old_name)))
+                // Same boundary-capture trick as rename_tag — lookahead is
+                // unsupported, and the old pattern never compiled.
+                regex::Regex::new(&format!(r"@{}($|[^A-Za-z0-9_-])", regex::escape(old_name)))
                     .ok()
-                    .map(|re| (re, new_tok))
+                    .map(|re| (re, format!("{}$1", new_tok)))
             })
             .collect();
         if rules.is_empty() {
@@ -1340,11 +1459,7 @@ impl Store {
         let mut res = CleanupResult::default();
         for url in self.all_journal_files() {
             let orig = read_string(&url);
-            let fixed = orig
-                .replace("...", "\u{2026}")
-                .replace('\u{2019}', "'")
-                .replace('\u{201C}', "\"")
-                .replace('\u{201D}', "\"");
+            let fixed = parser::normalize_punctuation(&orig);
             if fixed != orig {
                 res.formatted += 1;
             }
@@ -1431,14 +1546,24 @@ impl Store {
         res
     }
 
+    /// Dated days oldest first, then the split journals — they're filed
+    /// entries too, and leaving them out made "Export" quietly incomplete.
     pub fn export_markdown(&self) -> String {
         let mut files = self.all_journal_files();
         files.sort_by(|a, b| Self::file_to_date(a).cmp(&Self::file_to_date(b)));
-        let parts: Vec<String> = files
+        let mut parts: Vec<String> = files
             .iter()
             .map(|u| parser::trim_right_newlines(&read_string(u)))
             .filter(|s| !s.is_empty())
             .collect();
+        let mut split_names: Vec<String> = self.snapshot().split_journals.iter().map(|j| j.name.clone()).collect();
+        split_names.sort();
+        for name in split_names {
+            let text = parser::trim_right_newlines(&read_string(&self.split_journal_path(&name)));
+            if !text.is_empty() {
+                parts.push(text);
+            }
+        }
         if parts.is_empty() {
             String::new()
         } else {
@@ -1498,11 +1623,17 @@ impl Store {
             }
             s.best_streak = s.best_streak.max(run);
         }
-        // Current streak (back from today).
+        // Current streak — counted back from today, or from yesterday when
+        // today is still unwritten, so a live streak doesn't read as 0 all
+        // morning just because today's entry isn't in yet.
         let today = Local::now().date_naive();
+        let anchor = match dates.last() {
+            Some(&last) if last != today => today.pred_opt().unwrap_or(today),
+            _ => today,
+        };
         let mut cur = 0;
         for i in (0..dates.len()).rev() {
-            let expected = today - chrono::Duration::days(cur as i64);
+            let expected = anchor - chrono::Duration::days(cur as i64);
             if dates[i] == expected {
                 cur += 1;
             } else if dates[i] < expected {
@@ -1518,10 +1649,35 @@ impl Store {
         s.inbox_drafts = snap.inbox_drafts.len();
         s.tags = snap.tag_counts.len();
         s.split_journals = snap.split_journals.len();
+        // Today's words: today's day file plus drafts dated today.
+        let today_iso = now_date();
+        for e in self.entries_for_day(&today_iso) {
+            s.has_entry_today = true;
+            s.words_today += e.word_count;
+        }
+        for e in &snap.inbox_drafts {
+            if e.date == today_iso {
+                s.words_today += e.word_count;
+            }
+        }
         s
     }
 
     // ---- Backup ----
+
+    /// A backup folder inside the journal (or the reverse) turns backup into
+    /// recursion and restore into deleting its own source — refuse both.
+    fn nesting_problem(&self, backup_base: &Path) -> Option<String> {
+        let b = format!("{}/", self.base.to_string_lossy());
+        let k = format!("{}/", backup_base.to_string_lossy());
+        if k.starts_with(&b) {
+            return Some("The backup folder is inside the journal folder — choose one outside it.".into());
+        }
+        if b.starts_with(&k) {
+            return Some("The journal folder is inside the backup folder — choose a separate backup location.".into());
+        }
+        None
+    }
 
     pub fn backup_now(&self) -> (bool, String) {
         let Some(backup_base) = pref_str("backupFolder").map(PathBuf::from) else {
@@ -1530,12 +1686,541 @@ impl Store {
         if !backup_base.is_dir() {
             return (false, "Backup folder is not available.".into());
         }
+        if let Some(clash) = self.nesting_problem(&backup_base) {
+            return (false, clash);
+        }
         let name = format!("Nook-Backup-{}", Local::now().format("%Y-%m-%d-%H-%M-%S"));
         let dest = backup_base.join(&name);
         match copy_dir(&self.base, &dest) {
             Ok(_) => (true, format!("Backed up to {}.", name)),
             Err(e) => (false, format!("Backup failed: {}", e)),
         }
+    }
+
+    /// Timestamped copies in the backup folder, newest first.
+    pub fn list_backups(&self) -> Vec<String> {
+        let Some(backup_base) = pref_str("backupFolder").map(PathBuf::from) else {
+            return vec![];
+        };
+        let mut names: Vec<String> = fs::read_dir(&backup_base)
+            .map(|items| {
+                items
+                    .filter_map(|i| i.ok())
+                    .map(|i| i.file_name().to_string_lossy().to_string())
+                    .filter(|n| n.starts_with("Nook-Backup-"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort_by(|a, b| b.cmp(a));
+        names
+    }
+
+    /// Replace the journal with a backup copy. A safety copy of the current
+    /// folder is taken first, so a restore is itself restorable.
+    pub fn restore_backup(&self, name: &str) -> (bool, String) {
+        let Some(backup_base) = pref_str("backupFolder").map(PathBuf::from) else {
+            return (false, "Choose a backup folder first.".into());
+        };
+        if let Some(clash) = self.nesting_problem(&backup_base) {
+            return (false, clash);
+        }
+        let source = backup_base.join(name);
+        if !source.join("inbox.md").exists() && !source.join("journal").exists() {
+            return (false, "That folder doesn't look like a Nook backup — nothing was changed.".into());
+        }
+        let (ok, msg) = self.backup_now();
+        if !ok {
+            return (false, format!("Couldn't take a safety copy first — nothing was changed. {}", msg));
+        }
+        // Empty the base, then copy the backup's contents in.
+        if let Ok(items) = fs::read_dir(&self.base) {
+            for item in items.filter_map(|i| i.ok()) {
+                let p = item.path();
+                let _ = if p.is_dir() { fs::remove_dir_all(&p) } else { fs::remove_file(&p) };
+            }
+        }
+        match copy_dir(&source, &self.base) {
+            Ok(_) => (true, format!("Restored {}. The pre-restore journal was saved as a new backup.", name)),
+            Err(e) => (false, format!("Restore failed partway: {}. A safety copy of the pre-restore journal is in the backup folder.", e)),
+        }
+    }
+
+    // ---- Global search (SearchQuery grammar over the whole corpus) ----
+
+    pub fn global_search(&self, query: &str) -> Vec<SourcedEntry> {
+        let q = crate::search::Query::parse(query);
+        if q.is_empty() {
+            return vec![];
+        }
+        let mut out = vec![];
+        for e in parser::parse_entries(&read_string(&self.inbox_path())) {
+            if q.matches(&e) {
+                out.push(SourcedEntry { entry: e, source: Source { kind: "inbox".into(), arg: None } });
+            }
+        }
+        for u in self.all_journal_files() {
+            let date = Self::file_to_date(&u);
+            for e in parser::parse_entries(&read_string(&u)) {
+                if q.matches(&e) {
+                    out.push(SourcedEntry {
+                        entry: e,
+                        source: Source { kind: "archive".into(), arg: Some(date.clone()) },
+                    });
+                }
+            }
+        }
+        for j in self.snapshot().split_journals {
+            for e in self.entries_in_journal(&j.name) {
+                if q.matches(&e) {
+                    out.push(SourcedEntry {
+                        entry: e,
+                        source: Source { kind: "journal".into(), arg: Some(j.name.clone()) },
+                    });
+                }
+            }
+        }
+        out.sort_by(|a, b| b.entry.ts.cmp(&a.entry.ts));
+        out
+    }
+
+    // ---- Saved searches (<base>/.nook/searches.json, shared with the apps) ----
+
+    fn saved_searches_path(&self) -> PathBuf {
+        self.base.join(".nook").join("searches.json")
+    }
+
+    pub fn saved_searches(&self) -> Value {
+        fs::read_to_string(self.saved_searches_path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| json!([]))
+    }
+
+    pub fn add_saved_search(&self, name: &str, query: &str) {
+        let mut list: Vec<Value> = self
+            .saved_searches()
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|v| v.get("name").and_then(|n| n.as_str()) != Some(name))
+            .collect();
+        list.push(json!({ "name": name, "query": query }));
+        let _ = fs::create_dir_all(self.base.join(".nook"));
+        if let Ok(s) = serde_json::to_string_pretty(&list) {
+            let _ = fs::write(self.saved_searches_path(), s);
+        }
+    }
+
+    pub fn remove_saved_search(&self, name: &str) {
+        let list: Vec<Value> = self
+            .saved_searches()
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|v| v.get("name").and_then(|n| n.as_str()) != Some(name))
+            .collect();
+        if list.is_empty() {
+            let _ = fs::remove_file(self.saved_searches_path());
+        } else if let Ok(s) = serde_json::to_string_pretty(&list) {
+            let _ = fs::write(self.saved_searches_path(), s);
+        }
+    }
+
+    // ---- Templates (<base>/.nook/templates/*.md, shared with the apps) ----
+
+    fn templates_dir(&self) -> PathBuf {
+        self.base.join(".nook").join("templates")
+    }
+
+    pub fn template_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(self.templates_dir())
+            .map(|items| {
+                items
+                    .filter_map(|i| i.ok())
+                    .map(|i| i.path())
+                    .filter(|p| p.extension().map(|x| x == "md").unwrap_or(false))
+                    .filter_map(|p| p.file_stem().and_then(|s| s.to_str()).map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    /// A template's content with {{date}}, {{time}} and {{weekday}} filled in.
+    pub fn template_body(&self, name: &str) -> Option<String> {
+        let raw = fs::read_to_string(self.templates_dir().join(format!("{}.md", name))).ok()?;
+        let now = Local::now();
+        Some(
+            raw.replace("{{date}}", &now.format("%Y-%m-%d").to_string())
+                .replace("{{time}}", &now.format("%H:%M").to_string())
+                .replace("{{weekday}}", &now.format("%A").to_string()),
+        )
+    }
+
+    pub fn create_template(&self) -> Option<String> {
+        let dir = self.templates_dir();
+        let _ = fs::create_dir_all(&dir);
+        let mut name = "New Template".to_string();
+        let mut n = 2;
+        while dir.join(format!("{}.md", name)).exists() {
+            name = format!("New Template {}", n);
+            n += 1;
+        }
+        let starter = "What made today worth writing about?\n\n- One thing to remember\n- One thing to let go\n\n{{weekday}} {{date}}\n";
+        fs::write(dir.join(format!("{}.md", name)), starter).ok()?;
+        Some(name)
+    }
+
+    pub fn delete_template(&self, name: &str) {
+        let _ = fs::remove_file(self.templates_dir().join(format!("{}.md", name)));
+    }
+
+    // ---- On This Day ----
+
+    /// Filed entries from this calendar day in previous years, newest year first.
+    pub fn on_this_day(&self) -> Vec<Value> {
+        let today = now_date();
+        let month_day = &today[4..]; // "-MM-DD"
+        let this_year = &today[..4];
+        let mut dates: Vec<String> = self
+            .all_journal_files()
+            .iter()
+            .map(|u| Self::file_to_date(u))
+            .filter(|d| d.len() == 10 && d.ends_with(month_day) && &d[..4] < this_year)
+            .collect();
+        dates.sort_by(|a, b| b.cmp(a));
+        dates.dedup();
+        dates
+            .into_iter()
+            .map(|d| {
+                let entries = self.entries_for_day(&d);
+                json!({ "date": d, "entries": entries })
+            })
+            .filter(|v| !v["entries"].as_array().map(|a| a.is_empty()).unwrap_or(true))
+            .collect()
+    }
+
+    // ---- Year in Review ----
+
+    pub fn year_review(&self, year: &str) -> Value {
+        let mut entries_n = 0usize;
+        let mut words = 0usize;
+        let mut days_written = 0usize;
+        let mut busiest = (String::new(), 0usize);
+        let mut starred = 0usize;
+        let mut first_line = String::new();
+        let mut tag_map: HashMap<String, usize> = HashMap::new();
+        let mut photos = 0usize;
+        let mut videos = 0usize;
+        let mut audios = 0usize;
+        let mut dates: Vec<NaiveDate> = vec![];
+
+        let mut files: Vec<PathBuf> = self
+            .all_journal_files()
+            .into_iter()
+            .filter(|u| Self::file_to_date(u).starts_with(year))
+            .collect();
+        files.sort_by(|a, b| Self::file_to_date(a).cmp(&Self::file_to_date(b)));
+
+        for u in &files {
+            let content = read_string(u);
+            let es = parser::parse_entries(&content);
+            if es.is_empty() {
+                continue;
+            }
+            let date = Self::file_to_date(u);
+            let day_words: usize = es.iter().map(|e| e.word_count).sum();
+            days_written += 1;
+            entries_n += es.len();
+            words += day_words;
+            if day_words > busiest.1 {
+                busiest = (date.clone(), day_words);
+            }
+            if first_line.is_empty() {
+                if let Some(e) = es.first() {
+                    first_line = e.preview.clone();
+                }
+            }
+            starred += es.iter().filter(|e| e.is_starred).count();
+            for t in parser::split_tags(&content) {
+                *tag_map.entry(t).or_insert(0) += 1;
+            }
+            for p in parser::media_paths(&content) {
+                let ext = p.rsplit('.').next().unwrap_or("").to_lowercase();
+                match ext.as_str() {
+                    "mov" | "mp4" | "m4v" | "webm" | "mkv" => videos += 1,
+                    "m4a" | "mp3" | "wav" | "aac" | "aiff" | "caf" | "ogg" | "opus" | "flac" => audios += 1,
+                    _ => photos += 1,
+                }
+            }
+            if let Ok(d) = NaiveDate::parse_from_str(&date, "%Y-%m-%d") {
+                dates.push(d);
+            }
+        }
+        let mut longest_streak = 0usize;
+        let mut run = 0usize;
+        for i in 0..dates.len() {
+            if i > 0 && dates[i - 1].succ_opt() == Some(dates[i]) {
+                run += 1;
+            } else {
+                run = 1;
+            }
+            longest_streak = longest_streak.max(run);
+        }
+        let mut top_tags: Vec<(String, usize)> = tag_map.into_iter().collect();
+        top_tags.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        top_tags.truncate(5);
+
+        json!({
+            "year": year,
+            "entries": entries_n,
+            "words": words,
+            "days_written": days_written,
+            "longest_streak": longest_streak,
+            "busiest_day": busiest.0,
+            "busiest_day_words": busiest.1,
+            "starred": starred,
+            "first_line": first_line,
+            "top_tags": top_tags.iter().map(|(t, c)| json!({ "tag": t, "count": c })).collect::<Vec<_>>(),
+            "photos": photos, "videos": videos, "audios": audios,
+        })
+    }
+
+    pub fn years_with_entries(&self) -> Vec<String> {
+        let mut years: Vec<String> = self
+            .all_journal_files()
+            .iter()
+            .map(|u| Self::file_to_date(u)[..4].to_string())
+            .collect();
+        years.sort_by(|a, b| b.cmp(a));
+        years.dedup();
+        years
+    }
+
+    // ---- Importers (Day One JSON, dated markdown folders) ----
+
+    /// Append filed entries to their day files (no split routing), skipping any
+    /// whose exact text is already there. Returns how many were written.
+    fn append_filed_entries(&self, entries: Vec<Entry>) -> (usize, usize) {
+        let mut added = 0usize;
+        let mut skipped = 0usize;
+        for e in parser::sorted_by_timestamp(&entries) {
+            let Some(url) = self.journal_file(&e.date) else {
+                skipped += 1;
+                continue;
+            };
+            if read_string(&url).contains(&e.raw) {
+                skipped += 1;
+                continue;
+            }
+            if self.file_entry(&e, false).is_ok() {
+                added += 1;
+            } else {
+                skipped += 1;
+            }
+        }
+        (added, skipped)
+    }
+
+    /// Import a Day One JSON export (the Journal.json or its unzipped folder).
+    /// `commit=false` only counts. Returns {entries, media, skipped, first, last}.
+    pub fn import_day_one(&self, path: &str, commit: bool) -> Value {
+        let p = PathBuf::from(path);
+        let (json_path, folder) = if p.is_dir() {
+            let jsons: Vec<PathBuf> = fs::read_dir(&p)
+                .map(|it| {
+                    it.filter_map(|i| i.ok())
+                        .map(|i| i.path())
+                        .filter(|x| x.extension().map(|e| e == "json").unwrap_or(false))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let pick = jsons
+                .iter()
+                .find(|x| x.file_name().map(|n| n == "Journal.json").unwrap_or(false))
+                .or_else(|| {
+                    jsons.iter().find(|x| {
+                        x.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| n.to_lowercase() != "metadata.json")
+                            .unwrap_or(false)
+                    })
+                })
+                .or(jsons.first());
+            match pick {
+                Some(j) => (j.clone(), p.clone()),
+                None => return json!({ "ok": false, "message": "No Journal.json found in that folder." }),
+            }
+        } else {
+            (p.clone(), p.parent().map(PathBuf::from).unwrap_or_default())
+        };
+
+        #[derive(Deserialize)]
+        struct DOMedia {
+            identifier: Option<String>,
+            md5: Option<String>,
+            #[serde(rename = "type")]
+            kind: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct DOEntry {
+            #[serde(rename = "creationDate")]
+            creation_date: Option<String>,
+            text: Option<String>,
+            tags: Option<Vec<String>>,
+            starred: Option<bool>,
+            photos: Option<Vec<DOMedia>>,
+            videos: Option<Vec<DOMedia>>,
+            audios: Option<Vec<DOMedia>>,
+        }
+        #[derive(Deserialize)]
+        struct DOJson {
+            entries: Option<Vec<DOEntry>>,
+        }
+
+        let Ok(data) = fs::read_to_string(&json_path) else {
+            return json!({ "ok": false, "message": "Couldn't read that file." });
+        };
+        let Ok(decoded) = serde_json::from_str::<DOJson>(&data) else {
+            return json!({ "ok": false, "message": "That doesn't look like a Day One JSON export." });
+        };
+        let mut prepared: Vec<Entry> = vec![];
+        let mut media_count = 0usize;
+        let mut media_copied = 0usize;
+        for e in decoded.entries.unwrap_or_default() {
+            let Some(created) = e.creation_date else { continue };
+            let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&created) else { continue };
+            let ts = dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string();
+            let mut body = e.text.unwrap_or_default().trim().to_string();
+            for ch in ["!", ".", "(", ")", "[", "]", "#", "-", "*", "_"] {
+                body = body.replace(&format!("\\{}", ch), ch);
+            }
+            for (dir_name, list, fallback_ext) in [
+                ("photos", &e.photos, "jpeg"),
+                ("videos", &e.videos, "mov"),
+                ("audios", &e.audios, "m4a"),
+            ] {
+                for m in list.as_deref().unwrap_or_default() {
+                    let (Some(id), Some(md5)) = (&m.identifier, &m.md5) else { continue };
+                    let ext = m.kind.clone().unwrap_or_else(|| fallback_ext.to_string());
+                    let file = folder.join(dir_name).join(format!("{}.{}", md5, ext));
+                    if !file.exists() {
+                        continue;
+                    }
+                    media_count += 1;
+                    if commit {
+                        if let Some(rel) = self.import_asset(&file.to_string_lossy()) {
+                            media_copied += 1;
+                            let link = format!("![]({})", rel);
+                            let moment = format!("![](dayone-moment://{})", id);
+                            if body.contains(&moment) {
+                                body = body.replace(&moment, &link);
+                            } else {
+                                if !body.is_empty() {
+                                    body.push_str("\n\n");
+                                }
+                                body.push_str(&link);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(tags) = &e.tags {
+                let cleaned: Vec<String> = tags
+                    .iter()
+                    .filter_map(|t| sanitize_tag(t))
+                    .map(|t| format!("@{}", t))
+                    .collect();
+                if !cleaned.is_empty() {
+                    if !body.is_empty() {
+                        body.push_str("\n\n");
+                    }
+                    body.push_str(&cleaned.join(" "));
+                }
+            }
+            if body.is_empty() {
+                continue;
+            }
+            let title = if e.starred.unwrap_or(false) { "*" } else { "" };
+            prepared.push(Self::make_entry(&ts, title, &body));
+        }
+        if prepared.is_empty() {
+            return json!({ "ok": false, "message": "No entries were found in that export." });
+        }
+        let first = prepared.iter().map(|e| e.date.clone()).min();
+        let last = prepared.iter().map(|e| e.date.clone()).max();
+        if !commit {
+            return json!({ "ok": true, "entries": prepared.len(), "media": media_count,
+                           "first": first, "last": last });
+        }
+        let (added, skipped) = self.append_filed_entries(prepared);
+        json!({ "ok": true, "entries": added, "skipped": skipped, "media": media_copied })
+    }
+
+    /// Import a folder of dated markdown/text files (Obsidian daily notes work).
+    pub fn import_md_folder(&self, path: &str, commit: bool) -> Value {
+        let date_re = regex::Regex::new(r"(\d{4}-\d{2}-\d{2})").unwrap();
+        let mut prepared: Vec<Entry> = vec![];
+        let mut per_date: HashMap<String, usize> = HashMap::new();
+        for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+            let p = entry.path();
+            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+            if ext != "md" && ext != "txt" {
+                continue;
+            }
+            let content = read_string(p);
+            if content.trim().is_empty() {
+                continue;
+            }
+            // Files already in the jnl shape import entry-by-entry, verbatim.
+            let parsed = parser::parse_entries(&content);
+            if !parsed.is_empty() {
+                prepared.extend(parsed);
+                continue;
+            }
+            let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let date = date_re
+                .captures(&name)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string())
+                .filter(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok());
+            let Some(date) = date else { continue };
+            // Fan out +1s from noon per same-date file, so order stays stable.
+            let offset = *per_date.entry(date.clone()).or_insert(0);
+            per_date.insert(date.clone(), offset + 1);
+            let ts = format!("{} 12:{:02}:{:02}", date, offset / 60, offset % 60);
+            let title = if name == date { "" } else { &name };
+            prepared.push(Self::make_entry(&ts, title, content.trim()));
+        }
+        if prepared.is_empty() {
+            return json!({ "ok": false, "message": "No dated markdown/text files were found there." });
+        }
+        let first = prepared.iter().map(|e| e.date.clone()).min();
+        let last = prepared.iter().map(|e| e.date.clone()).max();
+        if !commit {
+            return json!({ "ok": true, "entries": prepared.len(), "media": 0,
+                           "first": first, "last": last });
+        }
+        let (added, skipped) = self.append_filed_entries(prepared);
+        json!({ "ok": true, "entries": added, "skipped": skipped, "media": 0 })
+    }
+}
+
+/// "Deep Thoughts" → "deep-thoughts"; a tag must start with a letter.
+fn sanitize_tag(raw: &str) -> Option<String> {
+    let lowered: String = raw
+        .to_lowercase()
+        .replace(' ', "-")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if lowered.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
+        Some(lowered)
+    } else {
+        None
     }
 }
 

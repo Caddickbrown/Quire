@@ -102,10 +102,15 @@ struct AssetsView: View {
         let items: [JournalStore.AssetItem]
     }
 
+    /// Cached — these are asked for per render pass, and DateFormatter
+    /// construction is one of Foundation's pricier calls.
+    private static var formatters: [String: DateFormatter] = [:]
     private static func formatter(_ format: String) -> DateFormatter {
+        if let f = formatters[format] { return f }
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = format
+        formatters[format] = f
         return f
     }
 
@@ -326,6 +331,10 @@ struct AssetViewer: View {
     @EnvironmentObject private var nav: NavigationModel
     @Environment(\.dismiss) private var dismiss
     let item: JournalStore.AssetItem
+    /// Loaded once on appear — `usages(ofAsset:)` walks the whole journal, and
+    /// calling it inside the toolbar menu re-ran that walk per body pass (the
+    /// same trap the grid's context menu already dodges).
+    @State private var uses: [(entry: Entry, source: EntrySource)] = []
 
     private var subtitle: String {
         let size = ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file)
@@ -346,7 +355,7 @@ struct AssetViewer: View {
                     }
                     ToolbarItem {
                         Menu {
-                            ForEach(Array(store.usages(ofAsset: item.name).enumerated()), id: \.offset) { _, use in
+                            ForEach(Array(uses.enumerated()), id: \.offset) { _, use in
                                 Button(use.entry.preview.isEmpty ? use.entry.ts : use.entry.preview) {
                                     dismiss()
                                     nav.open(use.entry, source: use.source)
@@ -368,6 +377,7 @@ struct AssetViewer: View {
         #if os(macOS)
         .frame(minWidth: 560, minHeight: 420)
         #endif
+        .task { uses = store.usages(ofAsset: item.name) }
     }
 
     @ViewBuilder

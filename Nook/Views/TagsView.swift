@@ -13,6 +13,8 @@ struct TagsView: View {
     @EnvironmentObject private var store: JournalStore
     @State private var searchText = ""
     @State private var selectedTag: String?
+    @State private var taggedEntries: [Entry] = []
+    @State private var taggedSources: [UUID: EntrySource] = [:]
 
     private var tags: [(tag: String, count: Int)] {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -49,6 +51,27 @@ struct TagsView: View {
             .disabled(tags.isEmpty)
         }
         .onAppear { if selectedTag == nil { selectedTag = store.tagCounts.first?.tag } }
+        // Load once per (tag, revision) — reading inside `body` re-read the
+        // whole journal on every render, i.e. on every search keystroke.
+        .task(id: TagLoadKey(tag: selectedTag, revision: store.revision)) { loadTagged() }
+    }
+
+    private struct TagLoadKey: Equatable { let tag: String?; let revision: Int }
+
+    private func loadTagged() {
+        guard let tag = selectedTag else {
+            taggedEntries = []; taggedSources = [:]
+            return
+        }
+        let inboxHits = store.inboxDrafts.filter { $0.tags.contains(tag) }
+        let journalHits = store.entries(taggedWith: tag)
+        // Keyed by the entry's in-memory id, not its timestamp — a draft and a
+        // filed entry sharing a second must not share a source.
+        var sources: [UUID: EntrySource] = [:]
+        for hit in journalHits { sources[hit.entry.id] = .archive(date: hit.date) }
+        for draft in inboxHits { sources[draft.id] = .inbox }
+        taggedEntries = inboxHits + journalHits.map(\.entry)
+        taggedSources = sources
     }
 
     private var rail: some View {
@@ -71,27 +94,15 @@ struct TagsView: View {
     @ViewBuilder
     private var entriesPane: some View {
         if let tag = selectedTag {
-            let data = tagged(tag)
             EntryTwoPane(
-                entries: data.entries,
-                sourceFor: { data.sources[$0.ts] ?? .archive(date: "") },
+                entries: taggedEntries,
+                sourceFor: { taggedSources[$0.id] ?? .archive(date: $0.date) },
                 fullDate: true
             )
             .id(tag)
         } else {
             ContentUnavailableView("Select a tag", systemImage: "number")
         }
-    }
-
-    /// Entries carrying a tag — inbox drafts first, then filed entries — with a
-    /// per-entry source so the two-pane can open each correctly.
-    private func tagged(_ tag: String) -> (entries: [Entry], sources: [String: EntrySource]) {
-        let inboxHits = store.inboxDrafts.filter { $0.tags.contains(tag) }
-        let journalHits = store.entries(taggedWith: tag)
-        var sources: [String: EntrySource] = [:]
-        for hit in journalHits { sources[hit.entry.ts] = .archive(date: hit.date) }
-        for draft in inboxHits { sources[draft.ts] = .inbox }
-        return (inboxHits + journalHits.map(\.entry), sources)
     }
 
     private func chip(_ item: (tag: String, count: Int), selected: Bool) -> some View {

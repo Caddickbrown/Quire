@@ -13,8 +13,14 @@
 
 import SwiftUI
 import CoreText
+#if canImport(CoreSpotlight)
+import CoreSpotlight
+#endif
 #if canImport(UIKit)
 import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
 #endif
 
 enum AppColorScheme: String, CaseIterable, Identifiable {
@@ -120,6 +126,7 @@ extension Notification.Name {
 struct NookApp: App {
     @StateObject private var store = JournalStore()
     @StateObject private var nav   = NavigationModel()
+    @ObservedObject private var router = NotificationRouter.shared
     @AppStorage("colorScheme") private var colorSchemeRaw: String = AppColorScheme.auto.rawValue
     @AppStorage("accentColor") private var accentRaw: String = AccentTheme.blue.rawValue
     @Environment(\.scenePhase) private var scenePhase
@@ -128,7 +135,12 @@ struct NookApp: App {
     @UIApplicationDelegateAdaptor(NookAppDelegate.self) private var delegate
     #endif
 
-    init() { Self.registerBundledFonts() }
+    init() {
+        Self.registerBundledFonts()
+        // Before any notification can arrive: the delegate handles the
+        // reminder's inline "Write a line…" action and resurfacing taps.
+        NotificationResponder.shared.install()
+    }
 
     var body: some Scene {
         let accent = AccentTheme.color(forRaw: accentRaw)
@@ -136,25 +148,95 @@ struct NookApp: App {
             RootView()
                 .environmentObject(store)
                 .environmentObject(nav)
-                // Take the scheduled backup if one came due while we were closed.
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { store.autoBackupIfDue() }
+                    switch phase {
+                    case .active:
+                        // Relock check first, so entry text isn't up while the
+                        // Face ID sheet decides.
+                        AppLockManager.shared.didBecomeActive()
+                        // Pick up edits made while we were away — another device,
+                        // the jnl CLI, a Siri quick-add — and take the scheduled
+                        // backup if one came due while we were closed.
+                        store.reloadIfChanged()
+                        store.autoBackupIfDue()
+                        // Plan the next weekly resurfacing note if none is pending.
+                        Task { await ResurfacingScheduler.ensureScheduled(store: store) }
+                    case .background:
+                        AppLockManager.shared.didEnterBackground()
+                    default:
+                        break
+                    }
                 }
+                #if os(macOS)
+                // scenePhase stays .active across app switches on macOS, so
+                // returning from the jnl CLI or Finder never refreshed — this
+                // notification is what actually fires there.
+                .onReceive(NotificationCenter.default.publisher(
+                    for: NSApplication.didBecomeActiveNotification)) { _ in
+                    store.reloadIfChanged()
+                    store.autoBackupIfDue()
+                }
+                #endif
                 .tint(accent)
                 .environment(\.accent, accent)
                 .preferredColorScheme(
                     AppColorScheme(rawValue: colorSchemeRaw)?.resolved
                 )
-                // Widget / Siri deep link: nook://write
+                // Deep links: nook://write (composer), nook://timer (start a
+                // session), nook://entry?date=…&ts=… (open one entry — the
+                // widget's On This Day line and notifications land here).
                 .onOpenURL { url in
-                    if url.scheme == "nook", url.host == "write" {
+                    guard url.scheme == "nook" else { return }
+                    switch url.host {
+                    case "write":
                         nav.requestNewEntry()
+                    case "timer":
+                        if !nav.timerRunning {
+                            if nav.timerRemaining <= 0 {
+                                let minutes = UserDefaults.standard.integer(forKey: "timerMinutes")
+                                nav.timerRemaining = max(minutes, 1) * 60
+                            }
+                            nav.timerRunning = true
+                        }
+                    case "entry":
+                        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+                        openEntry(date: items?.first(where: { $0.name == "date" })?.value,
+                                  ts: items?.first(where: { $0.name == "ts" })?.value)
+                    default:
+                        break
                     }
+                }
+                // Notification taps: the daily reminder opens the composer, the
+                // weekly resurfacing note opens the entry it teased. These come
+                // through NotificationRouter rather than a NotificationCenter
+                // post so a tap that launched the app cold isn't missed.
+                .onReceive(router.$pending.compactMap { $0 }) { action in
+                    // Async so clearing doesn't publish inside a view update.
+                    DispatchQueue.main.async { router.pending = nil }
+                    switch action {
+                    case .write:
+                        nav.requestNewEntry()
+                    case .entry(let date, let ts):
+                        openEntry(date: date, ts: ts)
+                    }
+                }
+                // A draft was added outside the UI (notification quick-write).
+                .onReceive(NotificationCenter.default.publisher(for: .nookJournalChangedExternally)) { _ in
+                    store.reloadIfChanged()
                 }
                 // OpenNewDraftIntent notification (when app already running)
                 .onReceive(NotificationCenter.default.publisher(for: .nookOpenWrite)) { _ in
                     nav.requestNewEntry()
                 }
+                #if canImport(CoreSpotlight)
+                // A tapped Spotlight result (Settings → Privacy → Spotlight).
+                .onContinueUserActivity(CSSearchableItemActionType) { activity in
+                    guard let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
+                          let (entry, source) = SpotlightIndexer.resolve(identifier: id, store: store)
+                    else { return }
+                    nav.open(entry, source: source)
+                }
+                #endif
                 #if canImport(UIKit)
                 // Quick action notification (app foregrounded via shortcut)
                 .onReceive(NotificationCenter.default.publisher(for: .nookHandleShortcut)) { note in
@@ -175,6 +257,20 @@ struct NookApp: App {
         .defaultSize(width: 1100, height: 680)
         #endif
         .commands { AppCommands(nav: nav) }
+    }
+
+    /// Resolve an entry reference (from a deep link or notification) and open
+    /// it: dated → its day file, otherwise the inbox.
+    private func openEntry(date: String?, ts: String?) {
+        guard let ts, !ts.isEmpty else { return }
+        if let date, !date.isEmpty,
+           let entry = store.entries(for: date).first(where: { $0.ts == ts }) {
+            nav.open(entry, source: .archive(date: date))
+            return
+        }
+        if let draft = store.inboxDrafts.first(where: { $0.ts == ts }) {
+            nav.open(draft, source: .inbox)
+        }
     }
 
     private static func registerBundledFonts() {
@@ -200,11 +296,20 @@ struct AppCommands: Commands {
             Button(nav.focusMode ? "Exit Focus Mode" : "Focus Mode") { nav.focusMode.toggle() }
                 .keyboardShortcut("f", modifiers: [.command, .option])
         }
+        // ⌘B/⌘I wrap the selection in **/_ in whichever editor is focused —
+        // the editors listen for these (WritingTextEditor.Coordinator).
+        CommandGroup(replacing: .textFormatting) {
+            Button("Bold") { NotificationCenter.default.post(name: .nookFormatBold, object: nil) }
+                .keyboardShortcut("b", modifiers: .command)
+            Button("Italic") { NotificationCenter.default.post(name: .nookFormatItalic, object: nil) }
+                .keyboardShortcut("i", modifiers: .command)
+        }
         CommandMenu("Go") {
             Button("Write")    { nav.section = .write }.keyboardShortcut("1", modifiers: .command)
             Button("Inbox")    { nav.section = .inbox }.keyboardShortcut("2", modifiers: .command)
             Button("Journal")  { nav.section = .archive }.keyboardShortcut("3", modifiers: .command)
             Button("Tags")     { nav.section = .tags }.keyboardShortcut("4", modifiers: .command)
+            Button("Search")   { nav.section = .search }.keyboardShortcut("f", modifiers: [.command, .shift])
             Divider()
             Button("Stats")    { nav.section = .stats }
             Button("Settings") { nav.section = .settings }.keyboardShortcut(",", modifiers: .command)

@@ -51,6 +51,24 @@ struct InboxView: View {
     /// Hardware-keyboard selection (↑/↓), mirrored to the external display.
     @State private var kbIndex: Int?
 
+    /// Stable per-row keys: the timestamp, disambiguated by occurrence for
+    /// same-second twins — bare-ts identity drew a twin's row twice and opened
+    /// the wrong one (see EntryTwoPane.rowKeys).
+    /// Rebuilt only when the drafts array changes — as a computed property this
+    /// ran per row render, making an 800-draft inbox O(n²).
+    @State private var rowKeys: [UUID: String] = [:]
+
+    private static func makeRowKeys(_ drafts: [Entry]) -> [UUID: String] {
+        var seen: [String: Int] = [:], out: [UUID: String] = [:]
+        for d in drafts {
+            let n = seen[d.ts, default: 0]
+            seen[d.ts] = n + 1
+            out[d.id] = n == 0 ? d.ts : "\(d.ts)#\(n)"
+        }
+        return out
+    }
+    private func key(_ d: Entry) -> String { rowKeys[d.id] ?? d.ts }
+
     private var drafts: [Entry] {
         var d = store.inboxDrafts
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -77,7 +95,7 @@ struct InboxView: View {
     private func selectRandom() {
         guard let draft = store.inboxDrafts.randomElement() else { return }
         #if os(macOS)
-        selectedTS = draft.ts
+        selectedTS = key(draft)
         #else
         nav.path.append(Route.entry(draft, .inbox))
         #endif
@@ -100,8 +118,10 @@ struct InboxView: View {
                 Group {
                     // Look the draft up in the full inbox (not the search-filtered
                     // list) so editing out the search term doesn't kick you out.
-                    if let ts = selectedTS, let draft = store.inboxDrafts.first(where: { $0.ts == ts }) {
-                        EntryDetailView(entry: draft, source: .inbox).id(ts)
+                    if let sel = selectedTS,
+                       let draft = store.inboxDrafts.first(where: { key($0) == sel })
+                            ?? store.inboxDrafts.first(where: { $0.ts == sel }) {
+                        EntryDetailView(entry: draft, source: .inbox).id(sel)
                     } else {
                         ContentUnavailableView("Select a draft", systemImage: "tray")
                     }
@@ -147,7 +167,7 @@ struct InboxView: View {
             }
             .onChange(of: kbIndex) { _, i in
                 guard let i, drafts.indices.contains(i) else { return }
-                withAnimation { proxy.scrollTo(drafts[i].ts, anchor: .center) }
+                withAnimation { proxy.scrollTo(key(drafts[i]), anchor: .center) }
             }
         }
         #if os(iOS)
@@ -155,9 +175,11 @@ struct InboxView: View {
         .refreshable { selectRandom() }
         .background { DiceRefreshDecorator() }
         #endif
+        .onAppear { rowKeys = Self.makeRowKeys(drafts) }
+        .onChange(of: drafts.map(\.id)) { _, _ in rowKeys = Self.makeRowKeys(drafts) }
         .entryListNavigation(entries: drafts, index: $kbIndex, listTitle: "Inbox") { draft in
             #if os(macOS)
-            selectedTS = draft.ts
+            selectedTS = key(draft)
             #else
             nav.path.append(Route.entry(draft, .inbox))
             #endif
@@ -165,10 +187,10 @@ struct InboxView: View {
     }
 
     private func draftRow(_ draft: Entry) -> some View {
-        let keyboardSelected = kbIndex.map { drafts.indices.contains($0) && drafts[$0].ts == draft.ts } ?? false
+        let keyboardSelected = kbIndex.map { drafts.indices.contains($0) && drafts[$0].id == draft.id } ?? false
         return row(for: draft)
-            .tag(draft.ts)
-            .id(draft.ts)
+            .tag(key(draft))
+            .id(key(draft))
             .keyboardSelectedRow(keyboardSelected, accent: accent)
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                 swipeButton(SwipeAction(rawValue: swipeRightRaw) ?? .delete, draft)
@@ -177,7 +199,7 @@ struct InboxView: View {
                 swipeButton(SwipeAction(rawValue: swipeLeftRaw) ?? .file, draft)
             }
             .contextMenu {
-                Button { store.fileDraft(draft) } label: { Label("Archive", systemImage: "archivebox") }
+                Button { store.fileDraft(draft) } label: { Label("File", systemImage: "archivebox") }
                 Button { store.toggleStar(draft, source: .inbox) } label: {
                     Label(draft.isStarred ? "Unstar" : "Star",
                           systemImage: draft.isStarred ? "star.slash" : "star")
@@ -196,15 +218,23 @@ struct InboxView: View {
     private func swipeButton(_ action: SwipeAction, _ draft: Entry) -> some View {
         switch action {
         case .file:
-            Button { store.fileDraft(draft) } label: { Label("File", systemImage: "archivebox") }
+            Button { swipeHaptic(); store.fileDraft(draft) } label: { Label("File", systemImage: "archivebox") }
                 .tint(.green)
         case .delete:
             // Explicitly red: a destructive role alone doesn't tint the leading edge.
-            Button(role: .destructive) { store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
+            Button(role: .destructive) { swipeHaptic(); store.deleteDraft(draft) } label: { Label("Delete", systemImage: "trash") }
                 .tint(.red)
         case .none:
             EmptyView()
         }
+    }
+
+    /// A firm little confirmation under the finger — a swipe that files or
+    /// deletes shouldn't feel weightless.
+    private func swipeHaptic() {
+        #if os(iOS)
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        #endif
     }
 
     /// On macOS the list drives the side pane; on iOS rows push via NavigationLink.

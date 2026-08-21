@@ -116,4 +116,30 @@ enum JournalParser {
         }
         return String(s[s.startIndex..<end])
     }
+
+    /// jnl cmdCleanup's punctuation pass (… and straight quotes), applied only
+    /// outside `![alt](path)` media links — a filename or URL containing "..."
+    /// must never be rewritten into an ellipsis and the link broken.
+    static func normalizePunctuation(_ s: String) -> String {
+        func fix(_ t: String) -> String {
+            t.replacingOccurrences(of: "...", with: "\u{2026}")
+                .replacingOccurrences(of: "\u{2019}", with: "'")
+                .replacingOccurrences(of: "\u{201C}", with: "\"")
+                .replacingOccurrences(of: "\u{201D}", with: "\"")
+        }
+        let regex = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\([^)]+\)"#)
+        let ns = s as NSString
+        var out = ""
+        var cursor = 0
+        for m in regex.matches(in: s, range: NSRange(location: 0, length: ns.length)) {
+            if m.range.location > cursor {
+                out += fix(ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor)))
+            }
+            out += ns.substring(with: m.range)   // the link, verbatim
+            cursor = m.range.location + m.range.length
+        }
+        if cursor < ns.length { out += fix(ns.substring(from: cursor)) }
+        return out
+    }
+
 }

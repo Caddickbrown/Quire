@@ -2,7 +2,8 @@
 //  RootView.swift
 //  Nook
 //
-//  Top-level shell. A sidebar of sections (Write / Inbox / Archive / Tags) with
+//  Top-level shell. A sidebar of sections (Write / Inbox / Archive / Starred /
+//  Stream / Tags) with
 //  Settings pinned to the bottom, and a detail pane on macOS & iPad; on iPhone
 //  the same NavigationSplitView collapses to push navigation automatically.
 //
@@ -10,6 +11,9 @@
 import SwiftUI
 #if canImport(AppKit)
 import AppKit
+#endif
+#if canImport(UIKit)
+import UIKit
 #endif
 
 /// A pushable detail destination, so navigation is programmatic (enables the
@@ -45,9 +49,11 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case inbox = "Inbox"
     case archive = "Journal"
     case starred = "Starred"
+    case stream = "Stream"
     case splitJournals = "Split Journals"
     case tags = "Tags"
     case assets = "Assets"
+    case search = "Search"
     case stats = "Stats"
     case settings = "Settings"
 
@@ -58,16 +64,18 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .inbox:         return "tray"
         case .archive:       return "book.closed"
         case .starred:       return "star"
+        case .stream:        return "scroll"
         case .splitJournals: return "bookmark"
         case .tags:          return "number"
         case .assets:        return "photo.on.rectangle"
+        case .search:        return "magnifyingglass"
         case .stats:         return "chart.bar"
         case .settings:      return "gearshape"
         }
     }
 
     /// The journal sections shown in the main sidebar list (Settings sits apart).
-    static let primary: [AppSection] = [.write, .inbox, .archive, .starred, .splitJournals, .tags, .assets]
+    static let primary: [AppSection] = [.write, .inbox, .archive, .starred, .stream, .splitJournals, .tags, .assets, .search]
 }
 
 /// Shared navigation state so keyboard-shortcut commands (defined at the App
@@ -83,6 +91,9 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     @Published var path = NavigationPath()
     @Published var newEntrySignal = 0
     @Published var focusMode = false
+    /// A query for SearchView to adopt on its next appearance — how the
+    /// sidebar's saved-search pins (and deep links) open a pre-filled search.
+    @Published var pendingSearchQuery: String?
     @Published var timerRemaining = 15 * 60
     @Published var timerRunning = false
     var backMonitorInstalled = false
@@ -105,12 +116,22 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         section = .archive
         Task { @MainActor in path.append(Route.day(date)) }
     }
+
+    /// Open the Search section pre-filled with a query.
+    func openSearch(query: String) {
+        pendingSearchQuery = query
+        section = .search
+    }
 }
 
 struct RootView: View {
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
+    @ObservedObject private var appLock = AppLockManager.shared
     @Environment(\.accent) private var accent
+    @State private var savedSearches: [SavedSearch] = []
+    @AppStorage("welcomeShown") private var welcomeShown = false
+    @State private var showingWelcome = false
     // Resolved appearance (after the app's own preferredColorScheme, so Auto
     // reads as the system's choice) — mirrored to the external display.
     @Environment(\.colorScheme) private var colorScheme
@@ -139,23 +160,46 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView(columnVisibility: columnVisibility) {
-            List(sidebarSections, selection: $nav.section) { section in
-                NavigationLink(value: section) {
-                    Label {
-                        HStack {
-                            Text(section.rawValue)
-                            if section == .inbox, !store.inboxDrafts.isEmpty {
-                                Spacer()
-                                Text("\(store.inboxDrafts.count)")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
+            List(selection: $nav.section) {
+                ForEach(sidebarSections) { section in
+                    NavigationLink(value: section) {
+                        Label {
+                            HStack {
+                                Text(section.rawValue)
+                                if section == .inbox, !store.inboxDrafts.isEmpty {
+                                    Spacer()
+                                    Text("\(store.inboxDrafts.count)")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        } icon: {
+                            Image(systemName: section.systemImage)
+                        }
+                    }
+                }
+                // Pinned queries from the Search screen — smart folders.
+                if !savedSearches.isEmpty {
+                    Section("Saved Searches") {
+                        ForEach(savedSearches) { saved in
+                            Button {
+                                nav.openSearch(query: saved.query)
+                            } label: {
+                                Label(saved.name, systemImage: "magnifyingglass.circle")
+                            }
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    store.removeSavedSearch(named: saved.name)
+                                } label: {
+                                    Label("Remove Pin", systemImage: "pin.slash")
+                                }
+                                .destructiveAction()
                             }
                         }
-                    } icon: {
-                        Image(systemName: section.systemImage)
                     }
                 }
             }
+            .task(id: store.revision) { savedSearches = store.savedSearches() }
             .safeAreaInset(edge: .bottom) { sidebarFooter }
             #if os(iOS)
             // No wordmark in the sidebar bar — the sections speak for themselves
@@ -170,6 +214,7 @@ struct RootView: View {
                         Image(systemName: AppSection.write.systemImage)
                     }
                     .help("Write")
+                    .accessibilityLabel("New entry")
                 }
             }
             #else
@@ -183,6 +228,8 @@ struct RootView: View {
                 detailRoot
                     .nookRoutes()
             }
+            // Rendered @tags anywhere in the detail pane push their tag page.
+            .environment(\.nookOpenTag) { nav.path.append(Route.tag($0)) }
         }
         .onChange(of: nav.section) { _, _ in nav.path = NavigationPath() }
         // Hand the store to the external-display scene, which is built by a
@@ -199,14 +246,70 @@ struct RootView: View {
         }
         .onReceive(ticker) { _ in
             guard nav.timerRunning else { return }
-            if nav.timerRemaining > 0 { nav.timerRemaining -= 1 } else { nav.timerRunning = false }
+            if nav.timerRemaining > 0 {
+                nav.timerRemaining -= 1
+                if nav.timerRemaining == 0 {
+                    nav.timerRunning = false
+                    timerFinished()
+                }
+            } else {
+                nav.timerRunning = false
+            }
         }
+        // In focus mode the sidebar (and its timer) is hidden — a running
+        // countdown keeps a quiet pill in the corner so the session doesn't
+        // end invisibly.
+        .overlay(alignment: .bottomTrailing) {
+            if nav.focusMode && nav.timerRunning {
+                Text(String(format: "%d:%02d", nav.timerRemaining / 60, nav.timerRemaining % 60))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding(14)
+                    .accessibilityLabel("Writing timer, \(nav.timerRemaining / 60) minutes left")
+            }
+        }
+        #if os(iOS)
+        // The Lock Screen / Dynamic Island countdown lives and dies with the
+        // sidebar timer.
+        .onChange(of: nav.timerRunning) { _, running in
+            if running {
+                TimerActivityController.start(
+                    remaining: nav.timerRemaining,
+                    wordsToday: store.stats().wordsToday,
+                    wordGoal: wordGoalEnabled ? max(wordGoal, 1) : 0)
+            } else {
+                TimerActivityController.end()
+            }
+        }
+        #endif
+        .overlay {
+            if appLock.isLocked { AppLockVeil() }
+        }
+        // First run only: one welcome screen, then never again.
+        .sheet(isPresented: $showingWelcome, onDismiss: { welcomeShown = true }) {
+            WelcomeView()
+                .environmentObject(store)
+                .environmentObject(nav)
+        }
+        .onAppear { if !welcomeShown { showingWelcome = true } }
         #if os(macOS)
         .onAppear(perform: installBackButtonMonitor)
         #endif
     }
 
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    /// The session ended — say so. The timer used to just stop, which in a
+    /// hidden sidebar (or mid-flow) meant nobody noticed.
+    private func timerFinished() {
+        #if os(iOS)
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        #else
+        NSSound(named: "Glass")?.play()
+        #endif
+    }
 
     /// Bottom of the key-command stack: what ↑/↓ do when no list is on screen.
     /// The external display's idle screen offers "↑↓ Browse", and from the
@@ -231,9 +334,11 @@ struct RootView: View {
         case .inbox:         InboxView()
         case .archive:       ArchiveView()
         case .starred:       StarredView()
+        case .stream:        StreamView()
         case .splitJournals: SplitJournalsView()
         case .tags:          TagsView()
         case .assets:        AssetsView()
+        case .search:        SearchView()
         case .stats:         StatsView()
         case .settings:      SettingsView()
         }
@@ -266,6 +371,7 @@ struct RootView: View {
                 calendarToggle
                 #endif
                 Spacer()
+                if wordGoalEnabled { wordGoalControl }
                 timerControl
                 iconButton(.stats)
                 iconButton(.settings)
@@ -277,6 +383,42 @@ struct RootView: View {
     }
 
     @AppStorage("timerMinutes") private var timerMinutes: Int = 15
+    @AppStorage("wordGoalEnabled") private var wordGoalEnabled = false
+    @AppStorage("wordGoal") private var wordGoal = 750
+
+    /// Today's progress toward the daily word goal — a quiet ring next to the
+    /// timer, filled from the same cached stats pass the widget uses. Tapping
+    /// it opens Stats. Hidden entirely when the goal is off.
+    private var wordGoalControl: some View {
+        let goal = max(wordGoal, 1)
+        let words = store.stats().wordsToday
+        let progress = min(Double(words) / Double(goal), 1)
+        return Button {
+            nav.section = .stats
+        } label: {
+            ZStack {
+                Circle()
+                    .stroke(Color.secondary.opacity(0.25), lineWidth: 3)
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(progress >= 1 ? Color.green : accent,
+                            style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                if progress >= 1 {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.green)
+                }
+            }
+            .frame(width: 18, height: 18)
+            .padding(6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("\(words) of \(goal) words today")
+        .accessibilityLabel("Word goal")
+        .accessibilityValue("\(words) of \(goal) words today")
+    }
 
     private var timerControl: some View {
         Menu {
@@ -302,6 +444,10 @@ struct RootView: View {
         .fixedSize()
         .onChange(of: timerMinutes) { _, m in if !nav.timerRunning { nav.timerRemaining = m * 60 } }
         .help("Writing timer")
+        .accessibilityLabel("Writing timer")
+        .accessibilityValue(nav.timerRunning
+                            ? String(format: "%d minutes %d seconds left", nav.timerRemaining / 60, nav.timerRemaining % 60)
+                            : "not running")
     }
 
     private var showsMiniCalendar: Bool {
@@ -327,6 +473,7 @@ struct RootView: View {
         }
         .buttonStyle(.plain)
         .help(calendarExpanded ? "Hide calendar" : "Show calendar")
+        .accessibilityLabel(calendarExpanded ? "Hide calendar" : "Show calendar")
     }
     #endif
 
@@ -350,5 +497,30 @@ struct RootView: View {
         }
         .buttonStyle(.plain)
         .help(section.rawValue)
+        .accessibilityLabel(section.rawValue)
+    }
+}
+
+/// Full-screen veil shown while the app lock is engaged (and therefore also in
+/// the app switcher, so entry text never shows there). Auto-attempts Face ID /
+/// Touch ID on appear; the button retries after a cancel.
+struct AppLockVeil: View {
+    @ObservedObject private var appLock = AppLockManager.shared
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.thickMaterial).ignoresSafeArea()
+            VStack(spacing: 16) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.secondary)
+                Text("Nook is locked")
+                    .font(.headline)
+                Button("Unlock") { appLock.unlock() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(appLock.unlocking)
+            }
+        }
+        .onAppear { appLock.unlock() }
     }
 }

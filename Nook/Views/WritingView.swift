@@ -11,6 +11,24 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import PhotosUI
+import CoreTransferable
+
+/// A picked video delivered as a file, never as in-memory `Data` — a Photos
+/// clip can be gigabytes, and `loadTransferable(type: Data.self)` buffers all
+/// of it before a byte reaches disk. Shared by the composer and the entry
+/// editor.
+struct PickedMovie: Transferable {
+    let url: URL
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { SentTransferredFile($0.url) } importing: { received in
+            // The received file dies when this closure returns; copy it out.
+            let dest = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(UUID().uuidString).\(received.file.pathExtension)")
+            try FileManager.default.copyItem(at: received.file, to: dest)
+            return Self(url: dest)
+        }
+    }
+}
 
 struct WritingView: View {
     @EnvironmentObject private var store: JournalStore
@@ -24,7 +42,12 @@ struct WritingView: View {
     @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
     @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
     @AppStorage("highlightTags") private var highlightTags = true
+    @AppStorage("typewriterScroll") private var typewriterScroll = false
+    @AppStorage("focusParagraph") private var focusParagraph = false
+    @AppStorage(PromptDeck.enabledKey) private var promptsOn = false
 
+    @State private var promptOffset = 0
+    @State private var transcribing = false
     @State private var title = ""
     @State private var date = Date()
     @State private var text = ""
@@ -80,11 +103,14 @@ struct WritingView: View {
                               textColor: Theme.bodyText(colorScheme),
                               lineSpacing: Theme.lineSpacing(for: size),
                               highlightTags: highlightTags,
-                              accent: accent)
+                              accent: accent,
+                              typewriter: typewriterScroll,
+                              focusParagraph: focusParagraph,
+                              tagSuggestions: store.tagCounts.map { String($0.tag.dropFirst()) })
                 .focused($bodyFocused)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
-                        Text("Begin writing")
+                        Text(promptsOn ? PromptDeck.prompt(offset: promptOffset) : "Begin writing")
                             .font(font)
                             .foregroundStyle(Theme.placeholder(colorScheme))
                             .allowsHitTesting(false)
@@ -136,6 +162,7 @@ struct WritingView: View {
                         .foregroundStyle(recorder.isRecording ? Color.red : Color.primary)
                 }
                 .help(recorder.isRecording ? "Stop recording" : "Record audio")
+                .accessibilityLabel(recorder.isRecording ? "Stop recording" : "Record audio")
                 Menu {
                     #if os(iOS)
                     Button {
@@ -171,6 +198,32 @@ struct WritingView: View {
                         Label("Promote first line to title", systemImage: "arrow.up.to.line")
                     }
                     .disabled(!hasFirstBodyLine)
+                    Menu {
+                        let names = store.templateNames()
+                        if names.isEmpty {
+                            Text("No templates — add one in Settings")
+                        } else {
+                            ForEach(names, id: \.self) { name in
+                                Button(name) { insertTemplate(name) }
+                            }
+                        }
+                    } label: {
+                        Label("Insert Template", systemImage: "doc.on.doc.fill")
+                    }
+                    if promptsOn {
+                        Button {
+                            promptOffset += 1
+                        } label: {
+                            Label("New Prompt", systemImage: "dice")
+                        }
+                    }
+                    Button {
+                        transcribeAudio()
+                    } label: {
+                        Label(transcribing ? "Transcribing…" : "Transcribe Voice Memos",
+                              systemImage: "text.quote")
+                    }
+                    .disabled(transcribing || Transcriber.audioPaths(in: text).isEmpty)
                     Divider()
                     Button(role: .destructive) {
                         discard()
@@ -188,6 +241,7 @@ struct WritingView: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
+                .accessibilityLabel("More actions")
             }
         }
         .fileImporter(isPresented: $showingImagePicker,
@@ -218,7 +272,7 @@ struct WritingView: View {
         // Put the live text on a connected external display (iOS second screen).
         .externalDisplay(.composing(title: title, date: date, text: text))
         .onAppear { focusStart() }
-        .onDisappear { flush() }
+        .onDisappear { finishRecordingIfNeeded(); flush() }
         .overlay(alignment: .bottom) {
             if recorder.isRecording {
                 RecordingBanner(elapsed: recorder.elapsedString) { toggleRecord() }
@@ -233,19 +287,79 @@ struct WritingView: View {
         }
     }
 
+    /// A recording still running when the view goes away would die with its
+    /// `@StateObject` — stop it and attach the memo instead of losing it.
+    private func finishRecordingIfNeeded() {
+        guard recorder.isRecording else { return }
+        if let data = recorder.stop(), let rel = store.saveAsset(data, ext: "m4a") {
+            appendLink(rel)
+            autoTranscribeIfEnabled(rel)
+        }
+    }
+
     private func toggleRecord() {
         if recorder.isRecording {
             if let data = recorder.stop(), let rel = store.saveAsset(data, ext: "m4a") {
                 let md = "![](\(rel))"
                 text = text.isEmpty ? md : text + "\n\n" + md
+                autoTranscribeIfEnabled(rel)
             }
         } else {
             Task { await recorder.start() }
         }
     }
 
+    /// Settings → Writing → auto-transcribe: a just-recorded memo transcribes
+    /// itself, the words landing beneath the link when recognition finishes.
+    private func autoTranscribeIfEnabled(_ rel: String) {
+        guard UserDefaults.standard.bool(forKey: JournalStore.autoTranscribeKey),
+              let url = store.assetURL(forRelative: rel) else { return }
+        Task { @MainActor in
+            guard let transcript = try? await Transcriber.transcribe(url: url) else { return }
+            text = Transcriber.insert(transcript: transcript, after: rel, in: text)
+            store.markTranscribed(assetID: ((rel as NSString).lastPathComponent as NSString).deletingPathExtension)
+        }
+    }
+
     private var hasFirstBodyLine: Bool {
         text.split(separator: "\n", omittingEmptySubsequences: true).first != nil
+    }
+
+    /// Append a template's body ({{date}}/{{time}}/{{weekday}} filled in).
+    private func insertTemplate(_ name: String) {
+        guard let body = store.templateBody(named: name) else { return }
+        text = text.isEmpty ? body : text + "\n\n" + body
+        bodyFocused = true
+    }
+
+    /// Transcribe every attached voice memo and slot each transcript in
+    /// beneath its audio link.
+    private func transcribeAudio() {
+        let paths = Transcriber.audioPaths(in: text)
+        guard !paths.isEmpty, !transcribing else { return }
+        transcribing = true
+        Task { @MainActor in
+            defer { transcribing = false }
+            var updated = text
+            var done = 0
+            var lastError: String?
+            for path in paths {
+                guard let url = store.assetURL(forRelative: path) else { continue }
+                do {
+                    let transcript = try await Transcriber.transcribe(url: url)
+                    updated = Transcriber.insert(transcript: transcript, after: path, in: updated)
+                    done += 1
+                } catch {
+                    lastError = error.localizedDescription
+                }
+            }
+            text = updated
+            if done > 0 {
+                showToast(done == 1 ? "Transcribed 1 memo" : "Transcribed \(done) memos")
+            } else if let lastError {
+                showToast(lastError)
+            }
+        }
     }
 
     /// Move the first non-empty body line into the title field.
@@ -276,8 +390,10 @@ struct WritingView: View {
             return
         }
         let ts = JournalStore.ts(from: date)
-        store.upsertDraft(previous: activeTS, timestamp: ts, title: title, body: text, reindex: reindex)
-        activeTS = ts
+        // Adopt the timestamp the store actually used — a colliding second is
+        // nudged forward rather than overwriting an unrelated draft.
+        activeTS = store.upsertDraft(previous: activeTS, timestamp: ts,
+                                     title: title, body: text, reindex: reindex) ?? ts
     }
 
     private func flush() {
@@ -344,10 +460,18 @@ struct WritingView: View {
         text = text.isEmpty ? md : text + "\n\n" + md
     }
 
-    /// Load a picked photo/video and attach it (iOS Photos library).
+    /// Load a picked photo/video and attach it (iOS Photos library). Videos
+    /// come across as a file so they never sit in memory whole; images still
+    /// come as data (they're downsampled on save anyway).
     private func loadPhoto(_ item: PhotosPickerItem) {
         Task { @MainActor in
             defer { photoItem = nil }
+            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }),
+               let movie = try? await item.loadTransferable(type: PickedMovie.self) {
+                if let rel = store.importAsset(from: movie.url) { appendLink(rel) }
+                try? FileManager.default.removeItem(at: movie.url)
+                return
+            }
             guard let data = try? await item.loadTransferable(type: Data.self) else { return }
             let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
             insertMedia(data, ext: ext)
@@ -368,10 +492,25 @@ struct WritingView: View {
             } else if let id = provider.registeredTypeIdentifiers.first(where: { isMedia($0) }),
                       let type = UTType(id) {
                 handled = true
-                provider.loadDataRepresentation(forTypeIdentifier: id) { data, _ in
-                    guard let data else { return }
-                    let ext = type.preferredFilenameExtension ?? "dat"
-                    Task { @MainActor in insertMedia(data, ext: ext) }
+                if type.conforms(to: .movie) {
+                    // A dropped video lands as a temp file, not a Data buffer.
+                    provider.loadFileRepresentation(forTypeIdentifier: id) { url, _ in
+                        guard let url else { return }
+                        // The provider deletes its file when this returns; copy first.
+                        let dest = FileManager.default.temporaryDirectory
+                            .appendingPathComponent("\(UUID().uuidString).\(type.preferredFilenameExtension ?? "mov")")
+                        try? FileManager.default.copyItem(at: url, to: dest)
+                        Task { @MainActor in
+                            if let rel = store.importAsset(from: dest) { appendLink(rel) }
+                            try? FileManager.default.removeItem(at: dest)
+                        }
+                    }
+                } else {
+                    provider.loadDataRepresentation(forTypeIdentifier: id) { data, _ in
+                        guard let data else { return }
+                        let ext = type.preferredFilenameExtension ?? "dat"
+                        Task { @MainActor in insertMedia(data, ext: ext) }
+                    }
                 }
             }
         }

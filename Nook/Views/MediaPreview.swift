@@ -46,8 +46,25 @@ func parseMediaSegments(_ s: String) -> [MDSegment] {
 /// Same `@tag` shape the parser and the editor use.
 private let previewTagRegex = try! NSRegularExpression(pattern: #"@[a-zA-Z][a-zA-Z0-9_-]*"#)
 
-struct MediaPreview: View {
+/// The rendered body itself, laid out top-to-bottom with no scroll view of its
+/// own — so it can sit inside one (`MediaPreview`) or inside somebody else's
+/// scroll, as the Stream does for every entry on the page.
+/// How a rendered `@tag` opens its tag page. Optional: the external display
+/// renders the same body with no navigation to push into, so nil means the
+/// tint stays but taps do nothing.
+private struct OpenTagKey: EnvironmentKey {
+    static let defaultValue: ((String) -> Void)? = nil
+}
+extension EnvironmentValues {
+    var nookOpenTag: ((String) -> Void)? {
+        get { self[OpenTagKey.self] }
+        set { self[OpenTagKey.self] = newValue }
+    }
+}
+
+struct MediaBody: View {
     @EnvironmentObject private var store: JournalStore
+    @Environment(\.nookOpenTag) private var openTag
     @Environment(\.accent) private var accent
     @AppStorage("highlightTags") private var highlightTags = true
     let text: String
@@ -62,6 +79,16 @@ struct MediaPreview: View {
     /// When provided, captions become editable: tapping one (or "Add caption")
     /// rewrites the image's alt text and hands the whole updated body back here.
     var onUpdateText: ((String) -> Void)? = nil
+    /// Selectable prose is the right default for reading one entry. Lists of
+    /// them turn it off: on macOS a right-click inside selectable text raises
+    /// the system's own Copy menu instead of the row's context menu.
+    var selectableText = true
+    /// Cap on how tall an inline image draws.
+    var maxImageHeight: CGFloat = 520
+    /// When set, images are decoded through the downsampling thumbnail cache at
+    /// this pixel size rather than loaded at full resolution — what the Stream
+    /// uses so scrolling the whole corpus doesn't decode every photo in full.
+    var thumbnailSide: Int? = nil
 
     @State private var editingIndex: Int?
     @State private var draftCaption = ""
@@ -71,29 +98,43 @@ struct MediaPreview: View {
         Binding(get: { editingIndex != nil }, set: { if !$0 { editingIndex = nil } })
     }
 
+    /// Segments paired with how many checkbox lines precede each one, so a
+    /// tapped checkbox can be located in the *full* body text.
+    private var indexedSegments: [(index: Int, seg: MDSegment, checkboxStart: Int)] {
+        var out: [(Int, MDSegment, Int)] = []
+        var count = 0
+        for (i, seg) in segments.enumerated() {
+            out.append((i, seg, count))
+            if case .text(let t) = seg { count += Self.bodyBlocks(t).filter(\.isCheckbox).count }
+        }
+        return out
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                ForEach(Array(segments.enumerated()), id: \.offset) { index, seg in
-                    switch seg {
-                    case .text(let t):
-                        let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty {
-                            Text(markdown(trimmed))
-                                .font(font)
-                                .foregroundStyle(textColor)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                        }
-                    case .image(let path, let caption):
-                        mediaView(path, caption: caption, index: index)
-                            .padding(.vertical, 4)
+        VStack(alignment: .leading, spacing: 20) {
+            ForEach(indexedSegments, id: \.index) { index, seg, checkboxStart in
+                switch seg {
+                case .text(let t):
+                    let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        textRun(t, checkboxStart: checkboxStart)
                     }
+                case .image(let path, let caption):
+                    mediaView(path, caption: caption, index: index)
+                        .padding(.vertical, 4)
                 }
             }
-            .padding(contentPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(contentPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // A tapped @tag opens its tag page; every other link stays a link.
+        .environment(\.openURL, OpenURLAction { url in
+            guard url.scheme == "nook-tag", let host = url.host, !host.isEmpty else {
+                return .systemAction
+            }
+            openTag?(host)
+            return .handled
+        })
         .alert("Caption", isPresented: editorPresented) {
             TextField("Caption", text: $draftCaption)
             Button("Save") { commitCaption() }
@@ -101,6 +142,122 @@ struct MediaPreview: View {
         } message: {
             Text("Shown beneath the image. Stored as the image's alt text.")
         }
+    }
+
+    // MARK: Checkboxes (- [ ] task lines render as tappable boxes)
+
+    /// A text run broken into prose paragraphs and checkbox lines.
+    enum BodyBlock {
+        case prose(String)
+        case checkbox(done: Bool, label: String)
+        var isCheckbox: Bool { if case .checkbox = self { return true }; return false }
+    }
+
+    private static let checkboxLineRegex = try! NSRegularExpression(
+        pattern: #"^(\s*[-*+] \[)( |x|X)(\] )(.*)$"#)
+
+    /// Split a text run by line, grouping consecutive non-checkbox lines back
+    /// into prose blocks. Order matches the order of checkbox lines on disk.
+    static func bodyBlocks(_ t: String) -> [BodyBlock] {
+        var blocks: [BodyBlock] = []
+        var prose: [String] = []
+        func flushProse() {
+            let joined = prose.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !joined.isEmpty { blocks.append(.prose(joined)) }
+            prose = []
+        }
+        for line in t.components(separatedBy: "\n") {
+            let range = NSRange(line.startIndex..., in: line)
+            if let m = checkboxLineRegex.firstMatch(in: line, range: range),
+               let mark = Range(m.range(at: 2), in: line),
+               let label = Range(m.range(at: 4), in: line) {
+                flushProse()
+                blocks.append(.checkbox(done: line[mark] != " ", label: String(line[label])))
+            } else {
+                prose.append(line)
+            }
+        }
+        flushProse()
+        return blocks
+    }
+
+    /// Flip the `globalIndex`-th checkbox line of the whole body and hand the
+    /// updated text back. The count walks the same per-line regex the renderer
+    /// used, so the tapped box and the flipped line always agree.
+    private func toggleCheckbox(globalIndex: Int) {
+        guard let onUpdateText else { return }
+        var count = 0
+        var lines = text.components(separatedBy: "\n")
+        for (i, line) in lines.enumerated() {
+            let range = NSRange(line.startIndex..., in: line)
+            guard let m = Self.checkboxLineRegex.firstMatch(in: line, range: range) else { continue }
+            if count == globalIndex {
+                guard let head = Range(m.range(at: 1), in: line),
+                      let mark = Range(m.range(at: 2), in: line),
+                      let tail = Range(m.range(at: 3), in: line),
+                      let label = Range(m.range(at: 4), in: line) else { return }
+                let flipped = line[mark] == " " ? "x" : " "
+                lines[i] = line[head] + flipped + line[tail] + line[label]
+                onUpdateText(lines.joined(separator: "\n"))
+                return
+            }
+            count += 1
+        }
+    }
+
+    @ViewBuilder
+    private func textRun(_ t: String, checkboxStart: Int) -> some View {
+        let blocks = Self.bodyBlocks(t)
+        if !blocks.contains(where: \.isCheckbox) {
+            plainRun(t.trimmingCharacters(in: .whitespacesAndNewlines))
+        } else {
+            let indexed: [(offset: Int, block: BodyBlock, checkboxIndex: Int)] = {
+                var out: [(Int, BodyBlock, Int)] = []
+                var n = checkboxStart
+                for (i, block) in blocks.enumerated() {
+                    out.append((i, block, n))
+                    if block.isCheckbox { n += 1 }
+                }
+                return out
+            }()
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(indexed, id: \.offset) { _, block, checkboxIndex in
+                    switch block {
+                    case .prose(let p):
+                        plainRun(p)
+                    case .checkbox(let done, let label):
+                        checkboxRow(done: done, label: label, globalIndex: checkboxIndex)
+                    }
+                }
+            }
+        }
+    }
+
+    private func checkboxRow(done: Bool, label: String, globalIndex: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Button {
+                toggleCheckbox(globalIndex: globalIndex)
+            } label: {
+                Image(systemName: done ? "checkmark.square.fill" : "square")
+                    .font(font)
+                    .foregroundStyle(done ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            }
+            .buttonStyle(.plain)
+            .disabled(onUpdateText == nil)
+            Text(markdown(label))
+                .font(font)
+                .strikethrough(done, color: .secondary)
+                .foregroundStyle(done ? AnyShapeStyle(.secondary) : AnyShapeStyle(textColor))
+        }
+    }
+
+    @ViewBuilder
+    private func plainRun(_ t: String) -> some View {
+        let run = Text(markdown(t))
+            .font(font)
+            .foregroundStyle(textColor)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        if selectableText { run.textSelection(.enabled) } else { run }
     }
 
     private func commitCaption() {
@@ -140,8 +297,10 @@ struct MediaPreview: View {
         return out
     }
 
-    /// Colour every `@tag` in the rendered text. Offsets are converted through
-    /// Character distances so multi-byte text (emoji) doesn't shift the ranges.
+    /// Colour every `@tag` in the rendered text — and link it, so a rendered
+    /// tag is a way into its tag page, not just paint. Offsets are converted
+    /// through Character distances so multi-byte text (emoji) doesn't shift
+    /// the ranges.
     private func tintTags(in attributed: inout AttributedString) {
         let plain = String(attributed.characters)
         let full = NSRange(plain.startIndex..<plain.endIndex, in: plain)
@@ -152,6 +311,9 @@ struct MediaPreview: View {
             let start = attributed.index(attributed.startIndex, offsetByCharacters: lower)
             let end = attributed.index(attributed.startIndex, offsetByCharacters: upper)
             attributed[start..<end].foregroundColor = accent
+            attributed[start..<end].underlineStyle = nil
+            let name = String(plain[r].dropFirst())   // strip the @
+            attributed[start..<end].link = URL(string: "nook-tag://\(name)")
         }
     }
 
@@ -187,12 +349,12 @@ struct MediaPreview: View {
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity, alignment: .center)
         } else if !caption.isEmpty {
-            Text(caption)
+            let text = Text(caption)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
-                .textSelection(.enabled)
+            if selectableText { text.textSelection(.enabled) } else { text }
         }
     }
 
@@ -203,17 +365,17 @@ struct MediaPreview: View {
         case .video:
             if let url {
                 VideoPlayer(player: AVPlayer(url: url))
-                    .frame(height: 300)
+                    .frame(height: min(300, maxImageHeight))
                     .frame(maxWidth: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
             } else { missing(path) }
         case .audio:
             if let url { AudioPlayerView(url: url) } else { missing(path) }
         case .image:
-            if let image = loadImage(url) {
+            if let image = inlineImage(url) {
                 image.resizable().scaledToFit()
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .frame(maxHeight: 520)
+                    .frame(maxHeight: maxImageHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
             } else { missing(path) }
         }
@@ -227,6 +389,14 @@ struct MediaPreview: View {
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
     }
 
+    /// Full-resolution by default; downsampled through `RowThumbnail` when the
+    /// caller asked for thumbnails.
+    private func inlineImage(_ url: URL?) -> Image? {
+        guard let url else { return nil }
+        if let thumbnailSide { return RowThumbnail.load(url, side: thumbnailSide) ?? loadImage(url) }
+        return loadImage(url)
+    }
+
     private func loadImage(_ url: URL?) -> Image? {
         guard let url else { return nil }
         #if os(macOS)
@@ -234,6 +404,27 @@ struct MediaPreview: View {
         #else
         return UIImage(contentsOfFile: url.path).map { Image(uiImage: $0) }
         #endif
+    }
+}
+
+/// Render an entry's body — markdown text with its media inline — in a scroll
+/// view of its own. The entry editor's Preview mode and the external display
+/// use this; the Stream renders `MediaBody` directly inside its own scroll.
+struct MediaPreview: View {
+    let text: String
+    let font: Font
+    let textColor: Color
+    var contentPadding: CGFloat = 16
+    var onUpdateText: ((String) -> Void)? = nil
+
+    var body: some View {
+        ScrollView {
+            MediaBody(text: text,
+                      font: font,
+                      textColor: textColor,
+                      contentPadding: contentPadding,
+                      onUpdateText: onUpdateText)
+        }
     }
 }
 
@@ -246,6 +437,11 @@ enum RowThumbnail {
         init(_ image: Image) { self.image = image }
     }
     private static let cache = NSCache<NSString, Box>()
+
+    /// The cached thumbnail only — nil rather than decoding.
+    static func cached(_ url: URL, side: Int = 96) -> Image? {
+        cache.object(forKey: cacheKey(url, side))?.image
+    }
 
     /// Synchronous still for an image file — cheap enough for a list row.
     static func load(_ url: URL, side: Int = 96) -> Image? {
@@ -321,16 +517,30 @@ struct EntryThumbnail: View {
     var side: CGFloat = 84
     var bleed: CGFloat = 24
 
+    @State private var image: Image?
+
     var body: some View {
-        if let path = entry.firstImagePath,
-           let url = store.assetURL(forRelative: path),
-           let image = RowThumbnail.load(url, side: 200) {
-            image
-                .resizable()
-                .scaledToFill()
-                .frame(width: side, height: side)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .padding(.vertical, -bleed)
+        // Async decode (cache hit stays instant): the synchronous ImageIO call
+        // in `body` cost a stutter per fresh row on first scroll-past.
+        if let path = entry.firstImagePath, let url = store.assetURL(forRelative: path) {
+            Group {
+                if let image {
+                    image
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: side, height: side)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .padding(.vertical, -bleed)
+                } else {
+                    Color.clear.frame(width: 0, height: 0)
+                }
+            }
+            .task(id: url) {
+                if let hit = RowThumbnail.cached(url, side: 200) { image = hit; return }
+                image = await Task.detached(priority: .userInitiated) {
+                    RowThumbnail.load(url, side: 200)
+                }.value
+            }
         }
     }
 }

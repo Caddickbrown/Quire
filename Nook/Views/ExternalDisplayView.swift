@@ -708,6 +708,14 @@ private struct ExternalIdleView: View {
             }
             .lineLimit(1)
             .minimumScaleFactor(0.6)
+            if let preview = snapshot.onThisDayPreview, !preview.isEmpty,
+               let ago = snapshot.onThisDayYearsAgo {
+                Text("On this day, \(ago) year\(ago == 1 ? "" : "s") ago — \(preview)")
+                    .font(.system(size: metrics.caption))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
             Spacer(minLength: 0)
         }
         .padding(metrics.padding)

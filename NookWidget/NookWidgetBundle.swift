@@ -15,9 +15,11 @@ struct NookWidgetBundle: WidgetBundle {
 
     var body: some Widget {
         NookWidget()
-        // Lock Screen accessories and Control Center controls exist on iOS only.
+        // Lock Screen accessories, Live Activities and Control Center controls
+        // exist on iOS only.
         #if os(iOS)
         NookNewEntryWidget()
+        NookTimerLiveActivity()
         if #available(iOS 18.0, *) {
             NookNewDraftControl()
         }

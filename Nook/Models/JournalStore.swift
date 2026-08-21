@@ -60,6 +60,11 @@ final class JournalStore: ObservableObject {
     /// Bumped on every reload so views can cheaply observe "data changed".
     @Published private(set) var revision = 0
     @Published private(set) var archiveDays: [ArchiveDay] = []
+    /// The parsed corpus (dated journal files), newest day first — built
+    /// off-main with the index. The one copy every list reads from.
+    @Published private(set) var archiveEntries: [(date: String, entries: [Entry])] = []
+    /// Parsed split-journal entries, by journal name — same lifecycle.
+    @Published private(set) var splitEntriesCache: [String: [Entry]] = [:]
     /// Total bytes reclaimed by Data Saver, merged across all devices (sum of
     /// every per-device record in `<base>/.nook/`). Recomputed on reload.
     @Published private(set) var dataSaved = 0
@@ -155,6 +160,8 @@ final class JournalStore: ObservableObject {
         storageMode = resolved.mode
         try? fm.createDirectory(at: resolved.url.appendingPathComponent("journal"),
                                 withIntermediateDirectories: true)
+        Self.sweepStaleTempFiles(under: resolved.url)
+        startSyncWatcher()
         reload()
     }
 
@@ -297,6 +304,7 @@ final class JournalStore: ObservableObject {
         guard let backupBase = resolveBackupURL() else {
             return (false, "Choose a backup folder first.")
         }
+        if let clash = Self.nestingProblem(base: base, backupBase: backupBase) { return (false, clash) }
         backupRunning = true
         defer { backupRunning = false }
         let name = "Nook-Backup-\(Self.stampFormatter.string(from: Date()))"
@@ -310,6 +318,16 @@ final class JournalStore: ObservableObject {
             UserDefaults.standard.set(now.timeIntervalSince1970, forKey: lastBackupKey)
         }
         return result
+    }
+
+    /// A backup folder inside the journal (or the reverse) turns backup into
+    /// recursion and restore into deleting its own source — refuse both.
+    nonisolated static func nestingProblem(base: URL, backupBase: URL) -> String? {
+        let b = base.standardizedFileURL.path + "/"
+        let k = backupBase.standardizedFileURL.path + "/"
+        if k.hasPrefix(b) { return "The backup folder is inside the journal folder — choose one outside it." }
+        if b.hasPrefix(k) { return "The journal folder is inside the backup folder — choose a separate backup location." }
+        return nil
     }
 
     /// The copy + prune itself, off-main. Security-scoped access is held around
@@ -327,6 +345,87 @@ final class JournalStore: ObservableObject {
         }
         prune(in: backupBase, keep: keep)
         return (true, "Backed up to \(name).")
+    }
+
+    // MARK: Restore
+
+    struct BackupCopy: Identifiable, Sendable {
+        let name: String       // "Nook-Backup-YYYY-MM-dd-HH-mm-ss"
+        let date: Date?
+        var id: String { name }
+    }
+
+    /// The timestamped copies in the backup folder, newest first.
+    func listBackups() async -> [BackupCopy] {
+        guard let backupBase = resolveBackupURL() else { return [] }
+        return await Task.detached(priority: .userInitiated) {
+            let scoped = backupBase.startAccessingSecurityScopedResource()
+            defer { if scoped { backupBase.stopAccessingSecurityScopedResource() } }
+            let names = ((try? FileManager.default.contentsOfDirectory(
+                at: backupBase, includingPropertiesForKeys: nil)) ?? [])
+                .map(\.lastPathComponent)
+                .filter { $0.hasPrefix("Nook-Backup-") }
+                .sorted(by: >)
+            let f = DateFormatter()
+            f.dateFormat = "yyyy-MM-dd-HH-mm-ss"
+            f.locale = Locale(identifier: "en_US_POSIX")
+            return names.map {
+                BackupCopy(name: $0, date: f.date(from: String($0.dropFirst("Nook-Backup-".count))))
+            }
+        }.value
+    }
+
+    /// Replace the journal with a backup copy. A safety copy of the current
+    /// folder is taken first (never pruned by this call), so a restore is
+    /// itself restorable. Runs off-main; reloads on success.
+    func restoreBackup(named name: String) async -> (ok: Bool, message: String) {
+        guard !backupRunning else { return (false, "A backup is already running.") }
+        guard let base = baseURL else { return (false, "No journal folder to restore into.") }
+        guard let backupBase = resolveBackupURL() else { return (false, "Choose a backup folder first.") }
+        if let clash = Self.nestingProblem(base: base, backupBase: backupBase) { return (false, clash) }
+        backupRunning = true
+        defer { backupRunning = false }
+        let safetyName = "Nook-Backup-\(Self.stampFormatter.string(from: Date()))"
+        let result = await Task.detached(priority: .userInitiated) {
+            // Safety copy first, with keep: 0 so pruning can't delete the very
+            // backup that's about to be restored.
+            let safety = Self.copyTree(from: base, into: backupBase, named: safetyName, keep: 0)
+            guard safety.ok else {
+                return (false, "Couldn't take a safety copy first — nothing was changed. \(safety.message)")
+            }
+            return Self.replaceTree(base: base, from: backupBase.appendingPathComponent(name))
+        }.value
+        if result.0 {
+            let now = Date()
+            lastBackupAt = now   // the safety copy counts
+            UserDefaults.standard.set(now.timeIntervalSince1970, forKey: lastBackupKey)
+            reload()
+        }
+        return (ok: result.0, message: result.1)
+    }
+
+    /// Empty the base folder and copy the backup's contents in. The backup is
+    /// verified to look like a journal (inbox.md or journal/) before anything
+    /// is deleted.
+    private nonisolated static func replaceTree(base: URL, from backup: URL) -> (Bool, String) {
+        let fm = FileManager.default
+        let scoped = backup.deletingLastPathComponent().startAccessingSecurityScopedResource()
+        defer { if scoped { backup.deletingLastPathComponent().stopAccessingSecurityScopedResource() } }
+        guard fm.fileExists(atPath: backup.appendingPathComponent("inbox.md").path)
+                || fm.fileExists(atPath: backup.appendingPathComponent("journal").path) else {
+            return (false, "That folder doesn't look like a Nook backup — nothing was changed.")
+        }
+        do {
+            for item in try fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) {
+                try fm.removeItem(at: item)
+            }
+            for item in try fm.contentsOfDirectory(at: backup, includingPropertiesForKeys: nil) {
+                try fm.copyItem(at: item, to: base.appendingPathComponent(item.lastPathComponent))
+            }
+        } catch {
+            return (false, "Restore failed partway: \(error.localizedDescription). A safety copy of the pre-restore journal is in the backup folder.")
+        }
+        return (true, "Restored \(backup.lastPathComponent). The pre-restore journal was saved as a new backup.")
     }
 
     /// Keep only the newest `keep` backups. The timestamped names sort
@@ -361,14 +460,60 @@ final class JournalStore: ObservableObject {
     // MARK: Loading
 
     func reload() {
-        revision &+= 1
+        drainPendingShares()
         loadInbox()
-        rebuildIndex()
+        rebuildIndex()   // bumps `revision`
         dataSaved = totalDataSaved()
     }
 
+    /// What the journal looked like at the last reload — a stat-only walk
+    /// (count + mtimes + sizes), no file reads.
+    private var lastFingerprint = ""
+
+    /// Foreground/activation path: skip the full reload when nothing on disk
+    /// changed. Every app-switch used to trigger a complete corpus re-read.
+    func reloadIfChanged() {
+        guard let base = baseURL else { return }
+        let previous = lastFingerprint
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let fp = Self.contentFingerprint(base: base)
+            guard fp != previous else { return }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.lastFingerprint = fp
+                self.reload()
+            }
+        }
+    }
+
+    /// Cheap change detector over inbox.md + every journal/split md file.
+    nonisolated static func contentFingerprint(base: URL) -> String {
+        let fm = FileManager.default
+        var count = 0
+        var totalSize = 0
+        var maxMtime = 0.0
+        func stat(_ url: URL) {
+            guard let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            else { return }
+            count += 1
+            totalSize += v.fileSize ?? 0
+            maxMtime = max(maxMtime, v.contentModificationDate?.timeIntervalSince1970 ?? 0)
+        }
+        stat(base.appendingPathComponent("inbox.md"))
+        if let en = fm.enumerator(at: base.appendingPathComponent("journal", isDirectory: true),
+                                  includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) {
+            for case let u as URL in en where u.pathExtension == "md" { stat(u) }
+        }
+        if let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) {
+            for u in items where u.pathExtension == "md" { stat(u) }
+        }
+        return "\(count)|\(totalSize)|\(maxMtime)"
+    }
+
     private func loadInbox() {
-        guard let inboxURL, let content = try? String(contentsOf: inboxURL, encoding: .utf8) else {
+        guard let inboxURL else { inboxDrafts = []; return }
+        Self.ensureDownloaded(inboxURL)
+        guard let content = try? String(contentsOf: inboxURL, encoding: .utf8) else {
             inboxDrafts = []
             return
         }
@@ -379,6 +524,82 @@ final class JournalStore: ObservableObject {
         var days: [ArchiveDay] = []
         var tags: [(tag: String, count: Int)] = []
         var splits: [SplitJournal] = []
+        /// The stats pass, computed from the same file reads as the index.
+        var heavy = HeavyStats()
+        /// The parsed corpus, captured while the index pass is reading every
+        /// file anyway — published so Journal/Starred/Stream/Search/Random
+        /// never walk the disk on the main actor again.
+        var corpus: [(date: String, entries: [Entry])] = []
+        var splitEntries: [String: [Entry]] = [:]
+    }
+
+    /// Coalesce a burst of mutations into one rebuild. The caches were already
+    /// patched synchronously by the mutation, so nothing waits on this — it
+    /// reconciles tags, stats, the widget, and Spotlight in the background.
+    private var rebuildDebounce: Task<Void, Never>?
+    private func scheduleRebuild() {
+        rebuildDebounce?.cancel()
+        rebuildDebounce = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            self?.rebuildIndex()
+        }
+    }
+
+    /// Patch the published corpus + day index for one date, from entries the
+    /// mutation already has in hand — so lists refresh instantly instead of
+    /// waiting for the full-corpus rebuild (which follows, debounced).
+    private func patchArchiveCache(date: String, entries: [Entry]) {
+        var day: ArchiveDay?
+        if !entries.isEmpty {
+            var d = ArchiveDay(date: date, count: entries.count,
+                               preview: entries.first?.preview ?? "")
+            d.hasStarred = entries.contains { $0.isStarred }
+            for e in entries {
+                for path in MediaLinks.paths(in: e.raw) {
+                    switch MediaKind(path: path) {
+                    case .image: d.hasPhoto = true
+                    case .video: d.hasVideo = true
+                    case .audio: d.hasAudio = true
+                    }
+                }
+            }
+            day = d
+        }
+        // archiveEntries and archiveDays are newest-date-first.
+        if let i = archiveEntries.firstIndex(where: { $0.date == date }) {
+            if entries.isEmpty { archiveEntries.remove(at: i) }
+            else { archiveEntries[i] = (date: date, entries: entries) }
+        } else if !entries.isEmpty {
+            let i = archiveEntries.firstIndex(where: { $0.date < date }) ?? archiveEntries.count
+            archiveEntries.insert((date: date, entries: entries), at: i)
+        }
+        if let i = archiveDays.firstIndex(where: { $0.date == date }) {
+            if let day { archiveDays[i] = day } else { archiveDays.remove(at: i) }
+        } else if let day {
+            let i = archiveDays.firstIndex(where: { $0.date < date }) ?? archiveDays.count
+            archiveDays.insert(day, at: i)
+        }
+        revision &+= 1
+        scheduleRebuild()
+    }
+
+    /// Same, for a split journal.
+    private func patchSplitCache(name: String, entries: [Entry]) {
+        if entries.isEmpty {
+            splitEntriesCache[name] = nil
+            splitJournals.removeAll { $0.name == name }
+        } else {
+            splitEntriesCache[name] = entries
+            if let i = splitJournals.firstIndex(where: { $0.name == name }) {
+                splitJournals[i] = SplitJournal(name: name, count: entries.count)
+            } else {
+                splitJournals.append(SplitJournal(name: name, count: entries.count))
+                splitJournals.sort { $0.name < $1.name }
+            }
+        }
+        revision &+= 1
+        scheduleRebuild()
     }
 
     /// Rebuild the archive/tags/split-journal index off the main thread and
@@ -386,55 +607,151 @@ final class JournalStore: ObservableObject {
     private func rebuildIndex() {
         guard let base = baseURL else {
             archiveDays = []; tagCounts = []; splitJournals = []
+            archiveEntries = []; splitEntriesCache = [:]
+            revision &+= 1
             return
         }
         let inboxTags = inboxDrafts.flatMap { $0.tags }
+        // Drafts dated today count toward today's words (the goal is about
+        // writing, not about filing) — computed here so the detached pass
+        // needn't re-read the inbox.
+        let todayISO = Self.nowDate()
+        let inboxWordsToday = inboxDrafts.filter { $0.date == todayISO }
+            .reduce(0) { $0 + $1.wordCount }
+        let triggerDownloads = storageMode == .iCloud
         Task.detached(priority: .userInitiated) {
-            let idx = Self.buildIndex(base: base)
-            await MainActor.run {
+            // ONE pass: the index, the parsed corpus, and the stats all come
+            // out of the same read of each file — this used to be two full
+            // corpus reads per rebuild.
+            var built = Self.buildIndex(base: base, triggerDownloads: triggerDownloads)
+            built.heavy.wordsToday += inboxWordsToday
+            let idx = built
+            let heavy = idx.heavy
+            let fp = Self.contentFingerprint(base: base)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.lastFingerprint = fp
                 self.archiveDays = idx.days
                 var map = Dictionary(uniqueKeysWithValues: idx.tags.map { ($0.tag, $0.count) })
                 for t in inboxTags { map[t, default: 0] += 1 }
                 self.tagCounts = map.map { (tag: $0.key, count: $0.value) }
                     .sorted { $0.count != $1.count ? $0.count > $1.count : $0.tag < $1.tag }
                 self.splitJournals = idx.splits
+                self.archiveEntries = idx.corpus
+                self.splitEntriesCache = idx.splitEntries
+                self.lastHeavyStats = heavy
+                // Announced here, at publication — every mutation funnels into
+                // this rebuild, and views reloading on `.task(id: revision)`
+                // must find the fresh corpus already in place when they fire.
+                self.revision &+= 1
                 self.writeWidgetSnapshot()
+                ReminderScheduler.refresh(hasEntryToday: heavy.hasEntryToday,
+                                          streak: heavy.currentStreak)
+                #if canImport(CoreSpotlight)
+                SpotlightIndexer.scheduleReindex(source: { self.spotlightSource() })
+                #endif
             }
         }
     }
 
+    /// The last full-corpus stats pass, computed off-main alongside the index.
+    private var lastHeavyStats = HeavyStats()
+    /// What the widget was last told, so unchanged rebuilds don't burn
+    /// WidgetKit's reload budget.
+    private var lastSnapshotSent: NookSnapshot?
+
     /// Write a NookSnapshot to the shared App Group so the widget can
     /// display up-to-date stats without accessing the journal directly.
+    /// Skipped entirely when no number the widget shows has moved.
     private func writeWidgetSnapshot() {
         #if os(iOS) || os(macOS)
-        let s = stats()
+        let heavy = lastHeavyStats
         let accentRaw = UserDefaults.standard.string(forKey: "accentColor") ?? "blue"
         var snap = NookSnapshot()
-        snap.currentStreak = s.currentStreak
-        snap.bestStreak    = s.bestStreak
-        snap.totalDays     = s.days
-        snap.totalEntries  = s.entries
-        snap.totalWords    = s.words
-        snap.inboxDrafts   = s.inboxDrafts
+        snap.currentStreak = heavy.currentStreak
+        snap.bestStreak    = heavy.bestStreak
+        snap.totalDays     = heavy.days
+        snap.totalEntries  = heavy.entries
+        snap.totalWords    = heavy.words
+        snap.inboxDrafts   = inboxDrafts.count
         snap.accentRaw     = accentRaw
-        snap.updatedAt     = Date()
+        snap.wordsToday    = heavy.wordsToday
+        let goalEnabled = UserDefaults.standard.bool(forKey: "wordGoalEnabled")
+        let goal = UserDefaults.standard.integer(forKey: "wordGoal")
+        snap.wordGoal = goalEnabled ? max(goal, 1) : 0
+        if heavy.onThisDayCount > 0 {
+            snap.onThisDayPreview  = heavy.onThisDayPreview
+            snap.onThisDayYearsAgo = heavy.onThisDayYearsAgo
+            snap.onThisDayDate     = heavy.onThisDayDate
+            snap.onThisDayTS       = heavy.onThisDayTS
+        }
+        if let last = lastSnapshotSent,
+           last.currentStreak == snap.currentStreak, last.bestStreak == snap.bestStreak,
+           last.totalDays == snap.totalDays, last.totalEntries == snap.totalEntries,
+           last.totalWords == snap.totalWords, last.inboxDrafts == snap.inboxDrafts,
+           last.accentRaw == snap.accentRaw, last.wordsToday == snap.wordsToday,
+           last.wordGoal == snap.wordGoal, last.onThisDayPreview == snap.onThisDayPreview {
+            return
+        }
+        snap.updatedAt = Date()
+        lastSnapshotSent = snap
         snap.save()
         // Tell WidgetKit to reload its timelines.
         WidgetCenter.shared.reloadAllTimelines()
         #endif
     }
 
+    #if canImport(CoreSpotlight)
+    /// The whole journal as index-ready values, straight from the caches —
+    /// occurrence-suffixed ids so same-second twins don't collide.
+    func spotlightSource() -> [SpotlightIndexer.IndexableEntry] {
+        var out: [SpotlightIndexer.IndexableEntry] = []
+        var seen: [String: Int] = [:]
+        func add(_ e: Entry, base: String) {
+            let n = seen[base, default: 0]
+            seen[base] = n + 1
+            out.append(SpotlightIndexer.IndexableEntry(
+                id: n == 0 ? base : "\(base)#\(n)",
+                title: e.preview.isEmpty ? "Journal entry" : e.preview,
+                body: String(e.body.prefix(400)),
+                keywords: e.tags.map { String($0.dropFirst()) },
+                ts: e.ts))
+        }
+        for e in inboxDrafts { add(e, base: "inbox|\(e.ts)") }
+        for day in archiveEntries {
+            for e in day.entries { add(e, base: "archive|\(day.date)|\(e.ts)") }
+        }
+        return out
+    }
+    #endif
+
     nonisolated private static let reservedFiles: Set<String> = ["inbox.md", "transfer.md", "export.md", "nook-export.md"]
 
-    nonisolated static func buildIndex(base: URL) -> BuiltIndex {
+    nonisolated static func buildIndex(base: URL, triggerDownloads: Bool = true) -> BuiltIndex {
         let fm = FileManager.default
         var idx = BuiltIndex()
+
+        let ymd = DateFormatter()
+        ymd.dateFormat = "yyyy-MM-dd"
+        ymd.locale = Locale(identifier: "en_US_POSIX")
+        let todayISO = ymd.string(from: Date())
+        let monthDay = String(todayISO.suffix(5))
+        let currentYear = Int(todayISO.prefix(4)) ?? 0
+        var latestOnThisDayYear = 0
+        var statDates: [Date] = []
 
         // Date journals under journal/.
         var urls: [URL] = []
         let journalDir = base.appendingPathComponent("journal", isDirectory: true)
         if let en = fm.enumerator(at: journalDir, includingPropertiesForKeys: nil) {
-            for case let u as URL in en where u.pathExtension == "md" { urls.append(u) }
+            for case let u as URL in en {
+                if u.pathExtension == "md" { urls.append(u); if triggerDownloads { ensureDownloaded(u) } }
+                // A not-yet-downloaded iCloud file shows up as a
+                // `.<name>.md.icloud` placeholder — invisible to the "md"
+                // filter, so a fresh device silently lost those days. Ask for
+                // the download; the next reload reads the real file.
+                else if u.pathExtension == "icloud" { try? fm.startDownloadingUbiquitousItem(at: u) }
+            }
         }
         urls.sort { staticFileToDate($0) > staticFileToDate($1) }
         var tagMap: [String: Int] = [:]
@@ -453,16 +770,42 @@ final class JournalStore: ObservableObject {
                 }
             }
             idx.days.append(day)
+            if !entries.isEmpty { idx.corpus.append((date: day.date, entries: entries)) }
             for t in JournalParser.splitTags(content) { tagMap[t, default: 0] += 1 }
+
+            // Stats, from the same read.
+            let w = content.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
+            idx.heavy.days += 1; idx.heavy.entries += entries.count; idx.heavy.words += w
+            if w > idx.heavy.longestDayWords { idx.heavy.longestDayWords = w; idx.heavy.longestDay = day.date }
+            if day.date == todayISO {
+                idx.heavy.hasEntryToday = true
+                idx.heavy.wordsToday += entries.reduce(0) { $0 + $1.wordCount }
+            } else if day.date.hasSuffix(monthDay), let y = Int(day.date.prefix(4)), y < currentYear {
+                // Same calendar day, an earlier year — the "On this day" pool.
+                idx.heavy.onThisDayCount += entries.count
+                if y > latestOnThisDayYear, let first = entries.first {
+                    latestOnThisDayYear = y
+                    idx.heavy.onThisDayPreview = first.preview
+                    idx.heavy.onThisDayYearsAgo = currentYear - y
+                    idx.heavy.onThisDayDate = day.date
+                    idx.heavy.onThisDayTS = first.ts
+                }
+            }
+            if let d = ymd.date(from: day.date) { statDates.append(d) }
         }
+        finishHeavyStats(&idx.heavy, base: base, dates: statDates)
 
         // Split-tag journals (top-level <base>/<name>.md).
         if let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) {
+            for u in items where u.pathExtension == "icloud" {
+                try? fm.startDownloadingUbiquitousItem(at: u)
+            }
             for u in items where u.pathExtension == "md" && !reservedFiles.contains(u.lastPathComponent) {
                 let entries = JournalParser.parseEntries((try? String(contentsOf: u, encoding: .utf8)) ?? "")
                 if !entries.isEmpty {
-                    idx.splits.append(SplitJournal(name: u.deletingPathExtension().lastPathComponent,
-                                                   count: entries.count))
+                    let name = u.deletingPathExtension().lastPathComponent
+                    idx.splits.append(SplitJournal(name: name, count: entries.count))
+                    idx.splitEntries[name] = entries
                 }
             }
             idx.splits.sort { $0.name < $1.name }
@@ -470,6 +813,16 @@ final class JournalStore: ObservableObject {
 
         idx.tags = tagMap.map { (tag: $0.key, count: $0.value) }
         return idx
+    }
+
+    /// Kick off a download for an iCloud file that isn't local yet. Reads still
+    /// return whatever is on disk until it lands; the next reload picks it up.
+    nonisolated static func ensureDownloaded(_ url: URL) {
+        let fm = FileManager.default
+        guard fm.isUbiquitousItem(at: url) else { return }
+        let status = (try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]))?
+            .ubiquitousItemDownloadingStatus
+        if status != .current { try? fm.startDownloadingUbiquitousItem(at: url) }
     }
 
     /// Extract the paths from markdown media links in some content.
@@ -503,13 +856,10 @@ final class JournalStore: ObservableObject {
         return "\(year)-\(month)-\(day)"
     }
 
-    /// All filed entries grouped by day, newest day first (each day chronological).
+    /// All filed entries grouped by day, newest day first (each day
+    /// chronological). An alias for the published cache — no disk walk.
     func allEntriesByDay() -> [(date: String, entries: [Entry])] {
-        allJournalFiles()
-            .sorted { fileToDate($0) > fileToDate($1) }
-            .map { (fileToDate($0), JournalParser.parseEntries(readString($0))) }
-            .filter { !$0.1.isEmpty }
-            .map { (date: $0.0, entries: $0.1) }
+        archiveEntries
     }
 
     /// Entries filed on a given day, chronological.
@@ -522,13 +872,13 @@ final class JournalStore: ObservableObject {
     // MARK: Tags (jnl cmdTags / cmdTag)
 
     /// Filed entries containing a tag, newest day first. Mirrors jnl `tag <name>`.
+    /// Served from the cached corpus.
     func entries(taggedWith name: String) -> [(date: String, entry: Entry)] {
         let tag = name.hasPrefix("@") ? name : "@" + name
         var result: [(String, Entry)] = []
-        for url in allJournalFiles().sorted(by: { fileToDate($0) > fileToDate($1) }) {
-            let date = fileToDate(url)
-            for e in JournalParser.parseEntries(readString(url)) where e.raw.contains(tag) {
-                result.append((date, e))
+        for day in archiveEntries {
+            for e in day.entries where e.raw.contains(tag) {
+                result.append((day.date, e))
             }
         }
         return result
@@ -675,9 +1025,10 @@ final class JournalStore: ObservableObject {
         baseURL?.appendingPathComponent("\(name).md")
     }
 
+    /// Served from the cached corpus (the editing paths below re-read disk
+    /// themselves, so this staying cache-backed is safe).
     func entries(inJournal name: String) -> [Entry] {
-        guard let url = splitJournalURL(name) else { return [] }
-        return JournalParser.parseEntries(readString(url))
+        splitEntriesCache[name] ?? []
     }
 
     func updateJournalEntry(name: String, original: Entry, newText: String, reindex: Bool = true) {
@@ -685,10 +1036,10 @@ final class JournalStore: ObservableObject {
         let content = readString(url)
         let preamble = JournalParser.leadingPreamble(content)
         var entries = JournalParser.parseEntries(content)
-        guard let idx = entries.firstIndex(where: { $0.ts == original.ts }) ?? entries.firstIndex(where: { $0.raw == original.raw }) else { return }
+        guard let idx = entries.firstIndex(where: { $0.raw == original.raw }) ?? entries.firstIndex(where: { $0.ts == original.ts }) else { return }
         entries.replaceSubrange(idx...idx, with: JournalParser.parseEntries(newText))
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
-        if reindex { rebuildIndex() }
+        if reindex { patchSplitCache(name: name, entries: entries) }
     }
 
     func deleteJournalEntry(name: String, entry: Entry) {
@@ -696,9 +1047,13 @@ final class JournalStore: ObservableObject {
         let content = readString(url)
         let preamble = JournalParser.leadingPreamble(content)
         var entries = JournalParser.parseEntries(content)
-        entries.removeAll { $0.ts == entry.ts || $0.raw == entry.raw }
+        // Single, raw-first removal — removeAll by ts deleted both twins of a
+        // same-second pair.
+        guard let idx = entries.firstIndex(where: { $0.raw == entry.raw })
+            ?? entries.firstIndex(where: { $0.ts == entry.ts }) else { return }
+        entries.remove(at: idx)
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
-        rebuildIndex()
+        patchSplitCache(name: name, entries: entries)
     }
 
     // MARK: Starred entries (trailing `*` on the title)
@@ -722,15 +1077,15 @@ final class JournalStore: ObservableObject {
     /// with the source it came from so it can be opened/edited in place.
     func starredEntries() -> [(entry: Entry, source: EntrySource)] {
         var out: [(entry: Entry, source: EntrySource)] = []
-        for day in allEntriesByDay() {
+        for day in archiveEntries {
             for e in day.entries where e.isStarred {
                 out.append((e, .archive(date: day.date)))
             }
         }
         for d in inboxDrafts where d.isStarred { out.append((d, .inbox)) }
-        for j in splitJournals {
-            for e in entries(inJournal: j.name) where e.isStarred {
-                out.append((e, .journal(name: j.name)))
+        for (name, entries) in splitEntriesCache.sorted(by: { $0.key < $1.key }) {
+            for e in entries where e.isStarred {
+                out.append((e, .journal(name: name)))
             }
         }
         return out
@@ -754,26 +1109,46 @@ final class JournalStore: ObservableObject {
     /// Create or update the composer's working draft. `previous` is the last
     /// timestamp this draft was saved under (so changing the date picker moves the
     /// same draft rather than orphaning it). Empty title+body removes the draft.
-    func upsertDraft(previous: String?, timestamp: String, title: String, body: String, reindex: Bool = true) {
-        guard let inboxURL else { return }
+    /// Returns the timestamp actually used: a brand-new draft landing on a
+    /// second that is already taken is nudged forward until free, so the
+    /// composer can never overwrite an unrelated same-second draft (an import,
+    /// a Siri quick-add, a second device).
+    @discardableResult
+    func upsertDraft(previous: String?, timestamp: String, title: String, body: String, reindex: Bool = true) -> String? {
+        guard let inboxURL else { return nil }
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let b = JournalParser.trimRightNewlines(body).trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty && b.isEmpty {
             if let previous { removeDraft(timestamp: previous) }
-            return
+            return nil
         }
         let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
         let preamble = JournalParser.leadingPreamble(content)
         var drafts = JournalParser.parseEntries(content)
-        if let previous, previous != timestamp { drafts.removeAll { $0.ts == previous } }
-        let entry = Self.makeEntry(timestamp: timestamp, title: title, body: body)
-        if let idx = drafts.firstIndex(where: { $0.ts == timestamp }) {
-            drafts[idx] = entry
+        var ts = timestamp
+        if previous == timestamp, let idx = drafts.firstIndex(where: { $0.ts == timestamp }) {
+            drafts[idx] = Self.makeEntry(timestamp: ts, title: title, body: body)
         } else {
-            drafts.append(entry)
+            if let previous, let idx = drafts.firstIndex(where: { $0.ts == previous }) {
+                drafts.remove(at: idx)
+            }
+            var attempts = 0
+            while attempts < 3600, drafts.contains(where: { $0.ts == ts }) {
+                ts = Self.timestamp(after: ts)
+                attempts += 1
+            }
+            drafts.append(Self.makeEntry(timestamp: ts, title: title, body: body))
         }
         try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
-        if reindex { loadInbox() }
+        if reindex { loadInbox(); revision &+= 1; scheduleRebuild() }
+        return ts
+    }
+
+    /// The jnl timestamp one second after `ts` (the input itself on parse failure —
+    /// callers bound their retry loops, so this can never spin).
+    private static func timestamp(after ts: String) -> String {
+        guard let d = tsFormatter.date(from: ts) else { return ts }
+        return tsFormatter.string(from: d.addingTimeInterval(1))
     }
 
     func removeDraft(timestamp: String) {
@@ -781,11 +1156,14 @@ final class JournalStore: ObservableObject {
         let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
         let preamble = JournalParser.leadingPreamble(content)
         var drafts = JournalParser.parseEntries(content)
-        let before = drafts.count
-        drafts.removeAll { $0.ts == timestamp }
-        guard drafts.count != before else { return }
+        // One draft only — with two entries sharing a second, removeAll(ts:)
+        // deleted both.
+        guard let idx = drafts.firstIndex(where: { $0.ts == timestamp }) else { return }
+        drafts.remove(at: idx)
         try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
         loadInbox()
+        revision &+= 1
+        scheduleRebuild()
     }
 
     /// Import pasted text as separate inbox drafts (jnl `transfer` parsing): if it
@@ -803,6 +1181,8 @@ final class JournalStore: ObservableObject {
         drafts.append(contentsOf: imported)
         try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
         loadInbox()
+        revision &+= 1
+        scheduleRebuild()
         return imported.count
     }
 
@@ -910,44 +1290,9 @@ final class JournalStore: ObservableObject {
 
     func deleteAsset(_ url: URL) { try? fm.removeItem(at: url) }
 
-    /// Size on disk of the assets folder, split by media kind. A file whose
-    /// extension isn't a known image/video/audio type lands in `other` rather
-    /// than being silently counted as a picture.
-    func assetBytesByKind() -> (image: Int, video: Int, audio: Int, other: Int) {
-        guard let dir = assetsDirURL,
-              let en = fm.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey])
-        else { return (0, 0, 0, 0) }
-        var image = 0, video = 0, audio = 0, other = 0
-        for case let url as URL in en where !url.hasDirectoryPath {
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            let ext = url.pathExtension.lowercased()
-            switch MediaKind(path: url.lastPathComponent) {
-            case .video: video += size
-            case .audio: audio += size
-            case .image:
-                // MediaKind treats anything unrecognised as an image, so check
-                // the extension really is one before counting it there.
-                if Self.imageExtensions.contains(ext) { image += size } else { other += size }
-            }
-        }
-        return (image, video, audio, other)
-    }
-
-    private static let imageExtensions: Set<String> = [
+    nonisolated private static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tiff", "tif", "bmp",
     ]
-
-    /// Total size on disk of everything in the assets folder.
-    func assetsBytes() -> Int {
-        guard let dir = assetsDirURL,
-              let en = fm.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey])
-        else { return 0 }
-        var total = 0
-        for case let url as URL in en where !url.hasDirectoryPath {
-            total += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        }
-        return total
-    }
 
     /// Asset files that no entry references any more (safe to delete).
     func orphanAssets() -> [URL] {
@@ -965,7 +1310,7 @@ final class JournalStore: ObservableObject {
     func deleteOrphanAssets() -> Int {
         let orphans = orphanAssets()
         for url in orphans { deleteAsset(url) }
-        if !orphans.isEmpty { rebuildIndex() }
+        if !orphans.isEmpty { scheduleRebuild() }
         return orphans.count
     }
 
@@ -974,15 +1319,14 @@ final class JournalStore: ObservableObject {
         let needle = "assets/\(fileName)"
         var result: [(Entry, EntrySource)] = []
         for e in inboxDrafts where e.raw.contains(needle) { result.append((e, .inbox)) }
-        for url in allJournalFiles() {
-            let date = fileToDate(url)
-            for e in JournalParser.parseEntries(readString(url)) where e.raw.contains(needle) {
-                result.append((e, .archive(date: date)))
+        for day in archiveEntries {
+            for e in day.entries where e.raw.contains(needle) {
+                result.append((e, .archive(date: day.date)))
             }
         }
-        for sj in splitJournals {
-            for e in entries(inJournal: sj.name) where e.raw.contains(needle) {
-                result.append((e, .journal(name: sj.name)))
+        for (name, entries) in splitEntriesCache {
+            for e in entries where e.raw.contains(needle) {
+                result.append((e, .journal(name: name)))
             }
         }
         return result
@@ -1234,8 +1578,29 @@ final class JournalStore: ObservableObject {
         try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let tmp = url.deletingLastPathComponent().appendingPathComponent(".nook-\(UUID().uuidString).tmp")
         try Data(content.utf8).write(to: tmp, options: .atomic)
-        if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
-        try fm.moveItem(at: tmp, to: url)
+        if fm.fileExists(atPath: url.path) {
+            _ = try fm.replaceItemAt(url, withItemAt: tmp)
+        } else {
+            try fm.moveItem(at: tmp, to: url)
+        }
+    }
+
+    /// Remove leftover `.nook-*.tmp` files from writes that never completed.
+    /// Age-guarded so an in-flight write from another process (the intents
+    /// extension) is never swept out from under it.
+    nonisolated static func sweepStaleTempFiles(under base: URL) {
+        Task.detached(priority: .background) { sweepStaleTempFilesNow(under: base) }
+    }
+
+    nonisolated private static func sweepStaleTempFilesNow(under base: URL) {
+        let fm = FileManager.default
+        guard let en = fm.enumerator(at: base, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let cutoff = Date().addingTimeInterval(-3600)
+        for case let url as URL in en
+        where url.lastPathComponent.hasPrefix(".nook-") && url.pathExtension == "tmp" {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if modified < cutoff { try? fm.removeItem(at: url) }
+        }
     }
 
     private func parseImport(_ text: String) -> [Entry] {
@@ -1256,13 +1621,31 @@ final class JournalStore: ObservableObject {
         guard let label = try? fileEntry(entry) else { return nil }
         removeFromInbox(entry)
         loadInbox()
-        rebuildIndex()
+        patchDestination(label: label)
         return label
+    }
+
+    /// After filing, refresh just the one file it landed in — the label is a
+    /// date ("2026-08-20") or a split tag ("@work").
+    private func patchDestination(label: String) {
+        if label.hasPrefix("@") {
+            let name = String(label.dropFirst())
+            if let url = splitJournalURL(name) {
+                patchSplitCache(name: name, entries: JournalParser.parseEntries(readString(url)))
+            }
+        } else if let url = journalFileURL(for: label) {
+            patchArchiveCache(date: label, entries: JournalParser.parseEntries(readString(url)))
+        } else {
+            revision &+= 1
+            scheduleRebuild()
+        }
     }
 
     func deleteDraft(_ entry: Entry) {
         removeFromInbox(entry)
         loadInbox()
+        revision &+= 1
+        scheduleRebuild()
     }
 
     /// Replace a draft's text (from the editor) and persist the inbox.
@@ -1271,13 +1654,13 @@ final class JournalStore: ObservableObject {
         let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
         let preamble = JournalParser.leadingPreamble(content)
         var drafts = JournalParser.parseEntries(content)
-        guard let idx = drafts.firstIndex(where: { $0.ts == entry.ts })
-                ?? drafts.firstIndex(where: { $0.raw == entry.raw }) else { return }
+        guard let idx = drafts.firstIndex(where: { $0.raw == entry.raw })
+                ?? drafts.firstIndex(where: { $0.ts == entry.ts }) else { return }
         // Re-parse the edited text; it may yield 0..n entries.
         let parsed = JournalParser.parseEntries(newText)
         drafts.replaceSubrange(idx...idx, with: parsed)
         try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
-        if reindex { loadInbox() }
+        if reindex { loadInbox(); revision &+= 1; scheduleRebuild() }
     }
 
     /// Sort the inbox into date order in place (jnl cmdSort).
@@ -1290,6 +1673,8 @@ final class JournalStore: ObservableObject {
         let sorted = JournalParser.sortedByTimestamp(entries)
         try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: sorted))
         loadInbox()
+        revision &+= 1
+        scheduleRebuild()
     }
 
     // MARK: Filed-entry editing (archive)
@@ -1302,10 +1687,10 @@ final class JournalStore: ObservableObject {
         let content = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         let preamble = JournalParser.leadingPreamble(content)
         var entries = JournalParser.parseEntries(content)
-        guard let idx = entries.firstIndex(where: { $0.ts == original.ts }) ?? entries.firstIndex(where: { $0.raw == original.raw }) else { return }
+        guard let idx = entries.firstIndex(where: { $0.raw == original.raw }) ?? entries.firstIndex(where: { $0.ts == original.ts }) else { return }
         entries.replaceSubrange(idx...idx, with: JournalParser.parseEntries(newText))
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
-        if reindex { rebuildIndex() }
+        if reindex { patchArchiveCache(date: date, entries: entries) }
     }
 
     /// Delete a filed entry from its day file (removes the file if now empty).
@@ -1314,12 +1699,47 @@ final class JournalStore: ObservableObject {
         let content = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         let preamble = JournalParser.leadingPreamble(content)
         var entries = JournalParser.parseEntries(content)
-        entries.removeAll { $0.ts == entry.ts || $0.raw == entry.raw }
+        // Single, raw-first removal — removeAll by ts deleted both twins of a
+        // same-second pair.
+        guard let idx = entries.firstIndex(where: { $0.raw == entry.raw })
+            ?? entries.firstIndex(where: { $0.ts == entry.ts }) else { return }
+        entries.remove(at: idx)
         try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
-        rebuildIndex()
+        patchArchiveCache(date: date, entries: entries)
     }
 
     // MARK: Filing internals (jnl fileDraft / splitTagTarget)
+
+    /// Where an entry files to (split-tag file or day file) and the label the
+    /// UI reports for it.
+    private func destination(for e: Entry, routeSplit: Bool = true) -> (url: URL, label: String)? {
+        if routeSplit, let (tag, url) = splitTagTarget(e.raw) { return (url, tag) }
+        let date = e.date.isEmpty ? Self.nowDate() : e.date
+        guard let url = journalFileURL(for: date) else { return nil }
+        return (url, date)
+    }
+
+    /// Append several entries to one file in a single read + write.
+    private func appendEntries(_ entries: [Entry], to dest: URL) -> Bool {
+        guard !entries.isEmpty else { return false }
+        try? fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var out = ""
+        if let existing = try? String(contentsOf: dest, encoding: .utf8),
+           !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            out = JournalParser.trimRightNewlines(existing) + "\n"
+        }
+        for e in entries {
+            if !out.isEmpty { out += "\n" }
+            if !e.suffix.isEmpty && !e.body.isEmpty {
+                out += "[\(e.ts)] \(e.suffix)\n\(e.body)\n"
+            } else if !e.suffix.isEmpty {
+                out += "[\(e.ts)] \(e.suffix)\n"
+            } else {
+                out += "[\(e.ts)]\n\(e.body)\n"
+            }
+        }
+        return (try? writeFile(dest, out)) != nil
+    }
 
     /// Append one entry to its destination file. Throws on empty entry / IO error.
     /// `routeSplit: false` forces the dated journal, ignoring split-tag routing
@@ -1328,16 +1748,10 @@ final class JournalStore: ObservableObject {
         if e.body.isEmpty && e.suffix.isEmpty {
             throw JournalError.nothingToFile
         }
-        let dest: URL
-        let label: String
-        if routeSplit, let (tag, url) = splitTagTarget(e.raw) {
-            dest = url; label = tag
-        } else {
-            let date = e.date.isEmpty ? Self.nowDate() : e.date
-            guard let url = journalFileURL(for: date) else { throw JournalError.badPath }
-            dest = url; label = date
-            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let (dest, label) = destination(for: e, routeSplit: routeSplit) else {
+            throw JournalError.badPath
         }
+        try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         var out = ""
         if let existing = try? String(contentsOf: dest, encoding: .utf8),
@@ -1377,60 +1791,87 @@ final class JournalStore: ObservableObject {
         let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
         let preamble = JournalParser.leadingPreamble(content)
         var drafts = JournalParser.parseEntries(content)
-        if let idx = drafts.firstIndex(where: { $0.ts == entry.ts })
-            ?? drafts.firstIndex(where: { $0.raw == entry.raw }) {
+        // Raw text first, timestamp second: raw is the sharper identity when
+        // two entries share a second, so the removal can't land on the wrong twin.
+        if let idx = drafts.firstIndex(where: { $0.raw == entry.raw })
+            ?? drafts.firstIndex(where: { $0.ts == entry.ts }) {
             drafts.remove(at: idx)
         }
         try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
     }
 
-    // MARK: Search (jnl cmdSearch)
-
-    /// Filed entries whose text contains `query` (case-insensitive), newest first.
-    func search(_ query: String) -> [(date: String, entry: Entry)] {
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return [] }
-        var result: [(String, Entry)] = []
-        for url in allJournalFiles().sorted(by: { fileToDate($0) > fileToDate($1) }) {
-            let date = fileToDate(url)
-            for e in JournalParser.parseEntries(readString(url)) where e.raw.lowercased().contains(q) {
-                result.append((date, e))
-            }
-        }
-        return result
-    }
-
     // MARK: Bulk filing (jnl transfer)
 
     /// File every inbox draft into the archive. Returns how many were filed.
+    /// Only drafts that actually filed are removed: one whose write failed
+    /// stays in the inbox instead of being lost with it, and a draft another
+    /// process added since our last load (Siri, jnl, a second device) is never
+    /// touched.
     @discardableResult
     func fileAllDrafts() -> Int {
+        var filedRaws: [String: Int] = [:]   // raw text → copies filed
         var filed = 0
-        for draft in inboxDrafts where (try? fileEntry(draft)) != nil { filed += 1 }
-        // Clear the inbox (all filed).
-        if let inboxURL { try? writeFile(inboxURL, "") }
+        // Group by destination first, so ten drafts from one day rewrite that
+        // day's file once, not ten times.
+        var order: [URL] = []
+        var byDest: [URL: [Entry]] = [:]
+        for draft in inboxDrafts {
+            guard !(draft.body.isEmpty && draft.suffix.isEmpty),
+                  let dest = destination(for: draft)?.url else { continue }
+            if byDest[dest] == nil { order.append(dest) }
+            byDest[dest, default: []].append(draft)
+        }
+        for dest in order {
+            let group = byDest[dest] ?? []
+            guard appendEntries(group, to: dest) else { continue }
+            filed += group.count
+            for draft in group { filedRaws[draft.raw, default: 0] += 1 }
+        }
+        if filed > 0, let inboxURL {
+            let content = readString(inboxURL)
+            let preamble = JournalParser.leadingPreamble(content)
+            var remaining: [Entry] = []
+            for e in JournalParser.parseEntries(content) {
+                if let n = filedRaws[e.raw], n > 0 {
+                    filedRaws[e.raw] = n - 1     // counted, so an exact duplicate
+                } else {                          // only vanishes once per filing
+                    remaining.append(e)
+                }
+            }
+            try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: remaining))
+        }
         reload()
         return filed
     }
 
     // MARK: Random (jnl cmdRandom)
 
+    /// A uniform pick from the cached corpus — no disk walk.
     func randomEntry() -> (date: String, entry: Entry)? {
-        var all: [(String, Entry)] = []
-        for url in allJournalFiles() {
-            let date = fileToDate(url)
-            for e in JournalParser.parseEntries(readString(url)) { all.append((date, e)) }
+        let total = archiveEntries.reduce(0) { $0 + $1.entries.count }
+        guard total > 0 else { return nil }
+        var n = Int.random(in: 0..<total)
+        for day in archiveEntries {
+            if n < day.entries.count { return (day.date, day.entries[n]) }
+            n -= day.entries.count
         }
-        return all.randomElement()
+        return nil
     }
 
     // MARK: Export (jnl cmdExport)
 
-    /// All filed entries combined into one markdown string, oldest day first.
+    /// All filed entries combined into one markdown string — dated days oldest
+    /// first, then the split journals (they're filed entries too; leaving them
+    /// out made "Export" quietly incomplete).
     func exportMarkdown() -> String {
         let files = allJournalFiles().sorted { fileToDate($0) < fileToDate($1) }
-        let parts = files.map { JournalParser.trimRightNewlines(readString($0)) }
+        var parts = files.map { JournalParser.trimRightNewlines(readString($0)) }
             .filter { !$0.isEmpty }
+        for sj in splitJournals.sorted(by: { $0.name < $1.name }) {
+            guard let url = splitJournalURL(sj.name) else { continue }
+            let text = JournalParser.trimRightNewlines(readString(url))
+            if !text.isEmpty { parts.append(text) }
+        }
         return parts.isEmpty ? "" : parts.joined(separator: "\n\n") + "\n"
     }
 
@@ -1453,11 +1894,7 @@ final class JournalStore: ObservableObject {
         var res = CleanupResult()
         for url in allJournalFiles() {
             let orig = readString(url)
-            let fixed = orig
-                .replacingOccurrences(of: "...", with: "\u{2026}")
-                .replacingOccurrences(of: "\u{2019}", with: "'")
-                .replacingOccurrences(of: "\u{201C}", with: "\"")
-                .replacingOccurrences(of: "\u{201D}", with: "\"")
+            let fixed = JournalParser.normalizePunctuation(orig)
             if fixed != orig { res.formatted += 1 }
 
             let preamble = JournalParser.leadingPreamble(fixed)
@@ -1545,70 +1982,110 @@ final class JournalStore: ObservableObject {
         /// in assets/ that isn't recognisable image, video, or audio.
         var imageBytes = 0, videoBytes = 0, audioBytes = 0, otherMediaBytes = 0
         var inboxDrafts = 0, tags = 0, splitJournals = 0
+        var wordsToday = 0
+        var hasEntryToday = false
     }
 
-    private func fileBytes(_ url: URL?) -> Int {
-        guard let url else { return 0 }
-        return (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+    /// The corpus-derived half of `Stats` — everything that needs a walk over
+    /// the journal and assets folders. Computed off-main in `rebuildIndex` and
+    /// cached, so `stats()` and the widget snapshot are free.
+    struct HeavyStats: Sendable {
+        var days = 0, entries = 0, words = 0
+        var currentStreak = 0, bestStreak = 0
+        var longestDay = "", longestDayWords = 0
+        var journalBytes = 0, inboxBytes = 0
+        var imageBytes = 0, videoBytes = 0, audioBytes = 0, otherMediaBytes = 0
+        /// Words written today (filed + drafts dated today) — drives the word goal.
+        var wordsToday = 0
+        var hasEntryToday = false
+        /// "On this day" — entries from this calendar day in past years.
+        var onThisDayCount = 0
+        var onThisDayPreview = ""
+        var onThisDayYearsAgo = 0
+        /// Where the teased entry lives, so the widget can deep-link to it.
+        var onThisDayDate = ""
+        var onThisDayTS = ""
+    }
+
+    /// Streaks and on-disk sizes — the parts of the stats pass that aren't
+    /// per-file. Called by `buildIndex` after its single read of the corpus.
+    nonisolated static func finishHeavyStats(_ s: inout HeavyStats, base: URL, dates: [Date]) {
+        let fm = FileManager.default
+        var dates = dates
+        dates.sort()
+        let cal = Calendar.current
+        var run = 0
+        for (i, d) in dates.enumerated() {
+            if i > 0, let prev = cal.date(byAdding: .day, value: 1, to: dates[i-1]),
+               cal.isDate(prev, inSameDayAs: d) { run += 1 } else { run = 1 }
+            s.bestStreak = max(s.bestStreak, run)
+        }
+        // Current streak, counted back from today — or from yesterday when
+        // today is still unwritten, so a live streak doesn't read as 0 all
+        // morning (in the app and on the widget) just because today's entry
+        // isn't in yet.
+        let today = cal.startOfDay(for: Date())
+        var anchor = today
+        if let last = dates.last, !cal.isDate(last, inSameDayAs: today),
+           let yesterday = cal.date(byAdding: .day, value: -1, to: today) {
+            anchor = yesterday
+        }
+        var cur = 0
+        for i in stride(from: dates.count - 1, through: 0, by: -1) {
+            guard let expected = cal.date(byAdding: .day, value: -cur, to: anchor) else { break }
+            if cal.isDate(dates[i], inSameDayAs: expected) { cur += 1 } else { break }
+        }
+        s.currentStreak = cur
+
+        // Sizes: markdown under the base (minus scratch files), the inbox,
+        // and assets/ split by kind. Stat-only — no file reads.
+        if let en = fm.enumerator(at: base, includingPropertiesForKeys: [.fileSizeKey]) {
+            for case let url as URL in en
+            where url.pathExtension == "md" && !nonJournalFiles.contains(url.lastPathComponent) {
+                s.journalBytes += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            }
+        }
+        s.inboxBytes = (try? base.appendingPathComponent("inbox.md")
+            .resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let assetsDir = base.appendingPathComponent("assets", isDirectory: true)
+        if let en = fm.enumerator(at: assetsDir, includingPropertiesForKeys: [.fileSizeKey]) {
+            for case let url as URL in en where !url.hasDirectoryPath {
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                let ext = url.pathExtension.lowercased()
+                switch MediaKind(path: url.lastPathComponent) {
+                case .video: s.videoBytes += size
+                case .audio: s.audioBytes += size
+                case .image:
+                    if imageExtensions.contains(ext) { s.imageBytes += size } else { s.otherMediaBytes += size }
+                }
+            }
+        }
     }
 
     /// Non-journal markdown files that live in the folder but aren't journal data
     /// (jnl's transfer scratch file and export outputs). Excluded from size totals.
-    private let nonJournalFiles: Set<String> = ["transfer.md", "export.md", "nook-export.md"]
+    nonisolated private static let nonJournalFiles: Set<String> = ["transfer.md", "export.md", "nook-export.md"]
 
-    /// Total size on disk of all markdown journal files (date journals, split
-    /// journals, and the inbox) under the base folder. Skips transfer/export files.
-    func journalBytes() -> Int {
-        guard let base = baseURL,
-              let en = fm.enumerator(at: base, includingPropertiesForKeys: [.fileSizeKey])
-        else { return 0 }
-        var total = 0
-        for case let url as URL in en
-        where url.pathExtension == "md" && !nonJournalFiles.contains(url.lastPathComponent) {
-            total += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        }
-        return total
-    }
-
+    /// Cheap: assembles the cached off-main corpus pass with the live counts.
     func stats() -> Stats {
+        let heavy = lastHeavyStats
         var s = Stats()
-        var dates: [Date] = []
-        for url in allJournalFiles() {
-            let content = readString(url)
-            let es = JournalParser.parseEntries(content)
-            let w = content.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
-            s.days += 1; s.entries += es.count; s.words += w
-            if w > s.longestDayWords { s.longestDayWords = w; s.longestDay = fileToDate(url) }
-            if let d = Self.dateFormatter.date(from: fileToDate(url)) { dates.append(d) }
-        }
-        dates.sort()
-        // best streak
-        var run = 0
-        for (i, d) in dates.enumerated() {
-            if i > 0, let prev = Calendar.current.date(byAdding: .day, value: 1, to: dates[i-1]),
-               Calendar.current.isDate(prev, inSameDayAs: d) { run += 1 } else { run = 1 }
-            s.bestStreak = max(s.bestStreak, run)
-        }
-        // current streak (back from today)
-        let today = Calendar.current.startOfDay(for: Date())
-        var cur = 0
-        for i in stride(from: dates.count - 1, through: 0, by: -1) {
-            let expected = Calendar.current.date(byAdding: .day, value: -cur, to: today)!
-            if Calendar.current.isDate(dates[i], inSameDayAs: expected) { cur += 1 } else { break }
-        }
-        s.currentStreak = cur
-        s.bytes = journalBytes()
-        s.inboxBytes = fileBytes(inboxURL)
+        s.days = heavy.days; s.entries = heavy.entries; s.words = heavy.words
+        s.currentStreak = heavy.currentStreak; s.bestStreak = heavy.bestStreak
+        s.longestDay = heavy.longestDay; s.longestDayWords = heavy.longestDayWords
+        s.bytes = heavy.journalBytes
+        s.inboxBytes = heavy.inboxBytes
         s.archiveBytes = max(0, s.bytes - s.inboxBytes)
-        let media = assetBytesByKind()
-        s.imageBytes = media.image
-        s.videoBytes = media.video
-        s.audioBytes = media.audio
-        s.otherMediaBytes = media.other
-        s.mediaBytes = media.image + media.video + media.audio + media.other
+        s.imageBytes = heavy.imageBytes
+        s.videoBytes = heavy.videoBytes
+        s.audioBytes = heavy.audioBytes
+        s.otherMediaBytes = heavy.otherMediaBytes
+        s.mediaBytes = heavy.imageBytes + heavy.videoBytes + heavy.audioBytes + heavy.otherMediaBytes
         s.inboxDrafts = inboxDrafts.count
         s.tags = tagCounts.count
         s.splitJournals = splitJournals.count
+        s.wordsToday = heavy.wordsToday
+        s.hasEntryToday = heavy.hasEntryToday
         return s
     }
 
@@ -1631,6 +2108,7 @@ final class JournalStore: ObservableObject {
     /// Write via temp-file + rename so an interrupted write never truncates the
     /// user's only copy of their notes. An empty string removes the file.
     private func writeFile(_ url: URL, _ content: String) throws {
+        lastLocalWriteAt = Date()   // so the sync watcher ignores our own echo
         defer { journalDidChange() }
         if content.isEmpty {
             try? fm.removeItem(at: url)
@@ -1640,8 +2118,236 @@ final class JournalStore: ObservableObject {
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let tmp = dir.appendingPathComponent(".nook-\(UUID().uuidString).tmp")
         try content.data(using: .utf8)!.write(to: tmp, options: .atomic)
-        if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
-        try fm.moveItem(at: tmp, to: url)
+        // replaceItemAt is a true atomic swap; the old remove-then-move left a
+        // window where a crash meant the journal file existed only as a hidden
+        // temp file.
+        if fm.fileExists(atPath: url.path) {
+            _ = try fm.replaceItemAt(url, withItemAt: tmp)
+        } else {
+            try fm.moveItem(at: tmp, to: url)
+        }
+    }
+
+    // MARK: Shared-in drafts (share extension handoff)
+
+    /// Where the share extension leaves what it captured: a `pending.md` of
+    /// jnl-format drafts plus an `assets/` folder of media, inside the App
+    /// Group container — the extension can't reach a custom journal folder's
+    /// security-scoped bookmark, so the app moves everything in from here.
+    nonisolated static var pendingShareDir: URL? {
+        FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: NookSnapshot.suiteName)?
+            .appendingPathComponent("PendingShare", isDirectory: true)
+    }
+
+    /// Move anything the share extension captured into the journal: media into
+    /// `<base>/assets/` (the pending drafts already link them by that path),
+    /// the drafts onto the end of the inbox. Runs on every reload, so shares
+    /// land on the next launch or foreground.
+    private func drainPendingShares() {
+        guard let dir = Self.pendingShareDir, let inboxURL, baseURL != nil else { return }
+        let pendingFile = dir.appendingPathComponent("pending.md")
+        guard let content = try? String(contentsOf: pendingFile, encoding: .utf8) else { return }
+        let shared = JournalParser.parseEntries(content)
+        // Media first, so the links resolve the moment the drafts appear.
+        let pendingAssets = dir.appendingPathComponent("assets", isDirectory: true)
+        if let items = try? fm.contentsOfDirectory(at: pendingAssets, includingPropertiesForKeys: nil),
+           let assetsDir = baseURL?.appendingPathComponent("assets", isDirectory: true) {
+            try? fm.createDirectory(at: assetsDir, withIntermediateDirectories: true)
+            for item in items {
+                let dest = assetsDir.appendingPathComponent(item.lastPathComponent)
+                try? fm.moveItem(at: item, to: dest)
+                scheduleCompression(assetRelPath: "assets/\(item.lastPathComponent)")
+            }
+        }
+        if !shared.isEmpty {
+            let existing = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
+            let preamble = JournalParser.leadingPreamble(existing)
+            var drafts = JournalParser.parseEntries(existing)
+            for e in shared where !drafts.contains(where: { $0.raw == e.raw }) { drafts.append(e) }
+            do {
+                try writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
+            } catch {
+                // Keep pending.md so the capture isn't lost — the next reload
+                // retries (the media moves above are idempotent, and the
+                // dedupe-by-raw guard means a partial success can't double up).
+                return
+            }
+        }
+        try? fm.removeItem(at: pendingFile)
+    }
+
+    // MARK: Import (external journals → filed entries)
+
+    /// Append filed entries directly to their day files (no split routing),
+    /// skipping any whose exact text is already there — so re-running an
+    /// import can't duplicate. Returns how many were written.
+    @discardableResult
+    func appendFiledEntries(_ entries: [Entry]) -> Int {
+        var added = 0
+        var cache: [String: String] = [:]   // date → file content
+        for e in JournalParser.sortedByTimestamp(entries) {
+            guard let url = journalFileURL(for: e.date) else { continue }
+            let content = cache[e.date] ?? readString(url)
+            if content.contains(e.raw) { cache[e.date] = content; continue }
+            if (try? fileEntry(e, routeSplit: false)) != nil {
+                added += 1
+                cache[e.date] = readString(url)
+            }
+        }
+        if added > 0 { reload() }
+        return added
+    }
+
+    // MARK: Cross-file helpers (for feature extensions in other files)
+
+    /// Stable per-device id, shared with Data Saver's record files — feature
+    /// extensions (transcription records) key their `.nook/` files by it too.
+    var deviceRecordID: String {
+        let key = "dataSaverDeviceID"
+        if let id = UserDefaults.standard.string(forKey: key) { return id }
+        let id = UUID().uuidString
+        UserDefaults.standard.set(id, forKey: key)
+        return id
+    }
+
+    /// Every journal content file: the inbox, all day files, all split journals.
+    func allContentFileURLs() -> [URL] {
+        var files: [URL] = []
+        if let inboxURL { files.append(inboxURL) }
+        files.append(contentsOf: allJournalFiles())
+        for sj in splitJournals { if let u = splitJournalURL(sj.name) { files.append(u) } }
+        return files
+    }
+
+    /// Atomic rewrite of one journal content file (feature extensions can't
+    /// reach the private writeFile).
+    func rewriteContentFile(_ url: URL, _ content: String) {
+        try? writeFile(url, content)
+    }
+
+    /// Maintenance progress for extensions that batch over media (mediaProgress
+    /// is otherwise settable only from this file).
+    func setMediaProgress(_ p: (done: Int, total: Int)?) {
+        mediaProgress = p
+    }
+
+    // MARK: On This Day
+
+    /// Filed entries from this calendar day in previous years, newest year
+    /// first. Cheap: the day list is already indexed, so only the handful of
+    /// matching day files are read.
+    func onThisDay(reference: Date = Date()) -> [(date: String, entries: [Entry])] {
+        let iso = Self.ts(from: reference).prefix(10)
+        let monthDay = String(iso.suffix(5))
+        let thisYear = String(iso.prefix(4))
+        return archiveDays
+            .filter { $0.date.hasSuffix(monthDay) && $0.year < thisYear }
+            .sorted { $0.date > $1.date }
+            .map { (date: $0.date, entries: entries(for: $0.date)) }
+            .filter { !$0.entries.isEmpty }
+    }
+
+    // MARK: Live sync refresh
+
+    /// iCloud: an NSMetadataQuery over the ubiquity container fires when
+    /// another device changes a journal file, and the store reloads — no
+    /// relaunch needed. Local/custom folders get a directory watcher on the
+    /// base and journal folders instead (edits deeper in the tree are still
+    /// picked up by the existing reload on foreground).
+    private var metadataQuery: NSMetadataQuery?
+    private var metadataObservers: [NSObjectProtocol] = []
+    private var dirWatchers: [DispatchSourceFileSystemObject] = []
+    private var syncReloadTask: Task<Void, Never>?
+    /// When we last wrote a journal file ourselves — the watcher's echo of our
+    /// own write is suppressed rather than reloaded.
+    private var lastLocalWriteAt = Date.distantPast
+
+    private func startSyncWatcher() {
+        stopSyncWatcher()
+        if storageMode == .iCloud {
+            let query = NSMetadataQuery()
+            query.searchScopes = [NSMetadataQueryUbiquitousDocumentsScope]
+            query.predicate = NSPredicate(format: "%K LIKE '*.md'", NSMetadataItemFSNameKey)
+            let center = NotificationCenter.default
+            for name in [Notification.Name.NSMetadataQueryDidUpdate, .NSMetadataQueryDidFinishGathering] {
+                metadataObservers.append(center.addObserver(forName: name, object: query, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.scheduleSyncReload() }
+                })
+            }
+            query.start()
+            metadataQuery = query
+        } else if let base = baseURL {
+            for url in [base, base.appendingPathComponent("journal", isDirectory: true)] {
+                let fd = open(url.path, O_EVTONLY)
+                guard fd >= 0 else { continue }
+                let source = DispatchSource.makeFileSystemObjectSource(
+                    fileDescriptor: fd, eventMask: .write, queue: .main)
+                source.setEventHandler { [weak self] in
+                    MainActor.assumeIsolated { self?.scheduleSyncReload() }
+                }
+                source.setCancelHandler { close(fd) }
+                source.resume()
+                dirWatchers.append(source)
+            }
+        }
+    }
+
+    private func stopSyncWatcher() {
+        metadataQuery?.stop()
+        metadataQuery = nil
+        for o in metadataObservers { NotificationCenter.default.removeObserver(o) }
+        metadataObservers = []
+        for w in dirWatchers { w.cancel() }
+        dirWatchers = []
+    }
+
+    /// Debounced: sync updates arrive in bursts, and our own writes echo back
+    /// through the watcher — a change landing within 2s of a local write is us.
+    private func scheduleSyncReload() {
+        syncReloadTask?.cancel()
+        syncReloadTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled, let self else { return }
+            if Date().timeIntervalSince(self.lastLocalWriteAt) < 2 { return }
+            self.resolveFileConflicts()
+            self.reload()
+        }
+    }
+
+    /// iCloud file-version conflicts merge as "keep both": any entry a
+    /// conflicting version has that the current file doesn't is appended, then
+    /// the versions are marked resolved. Covers the inbox, every day file, and
+    /// the split journals — a two-device day used to resolve silently to
+    /// whichever version won. With plain text, keeping both is always safe;
+    /// Clean Up removes exact duplicates.
+    private func resolveFileConflicts() {
+        var urls: [URL] = []
+        if let inboxURL { urls.append(inboxURL) }
+        urls.append(contentsOf: allJournalFiles())
+        for sj in splitJournals { if let u = splitJournalURL(sj.name) { urls.append(u) } }
+        for url in urls { resolveConflicts(at: url) }
+    }
+
+    private func resolveConflicts(at url: URL) {
+        guard let versions = NSFileVersion.unresolvedConflictVersionsOfItem(at: url),
+              !versions.isEmpty else { return }
+        let current = readString(url)
+        let preamble = JournalParser.leadingPreamble(current)
+        var entries = JournalParser.parseEntries(current)
+        var changed = false
+        for version in versions {
+            let other = (try? String(contentsOf: version.url, encoding: .utf8)) ?? ""
+            for e in JournalParser.parseEntries(other) where !entries.contains(where: { $0.raw == e.raw }) {
+                entries.append(e)
+                changed = true
+            }
+            version.isResolved = true
+        }
+        if changed {
+            try? writeFile(url, JournalParser.renderEntries(preamble: preamble,
+                                                            entries: JournalParser.sortedByTimestamp(entries)))
+        }
     }
 
     // MARK: Time helpers
@@ -1777,13 +2483,17 @@ enum MediaTranscoder {
             try? fm.removeItem(at: tmp)
             return nil
         }
-        do {
-            _ = try fm.replaceItemAt(url, withItemAt: tmp)   // atomic swap, keeps the name
-            return originalSize - newSize
-        } catch {
-            try? fm.removeItem(at: tmp)
-            return nil
+        // Coordinated, so the swap can't race an iCloud sync of the same file
+        // (the coordinator serialises us against any presenter/daemon writer).
+        var swapped: Int?
+        let coordinator = NSFileCoordinator()
+        coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: nil) { dest in
+            if (try? fm.replaceItemAt(dest, withItemAt: tmp)) != nil {
+                swapped = originalSize - newSize
+            }
         }
+        if swapped == nil { try? fm.removeItem(at: tmp) }
+        return swapped
     }
 
     /// 720p H.264 re-encode. Uses the completion-handler API (async `export()` is
