@@ -3,7 +3,8 @@
 //! NookTests on the Apple side). Keep the two in step.
 //!
 //! Grammar:
-//!     plain terms          case-insensitive substring match on the entry text
+//!     plain terms          case-insensitive substring match on title + body
+//!                          (not the timestamp header — see `matches`)
 //!     "exact phrase"       quoted phrases match as one substring
 //!     tag:name             entry carries @name (leading @ optional)
 //!     before:2026-03       entry date strictly before the (partial) ISO date
@@ -47,11 +48,11 @@ impl Query {
                         format!("@{}", name)
                     });
                 }
-            } else if let Some(d) = token.strip_prefix("before:").or_else(|| token.strip_prefix("Before:")) {
+            } else if let Some(d) = lower.strip_prefix("before:") {
                 if is_partial_date(d) {
                     q.before = Some(d.to_string());
                 }
-            } else if let Some(d) = token.strip_prefix("after:").or_else(|| token.strip_prefix("After:")) {
+            } else if let Some(d) = lower.strip_prefix("after:") {
                 if is_partial_date(d) {
                     q.after = Some(d.to_string());
                 }
@@ -72,9 +73,16 @@ impl Query {
         if self.is_empty() {
             return false;
         }
-        let raw = entry.raw.to_lowercase();
-        if self.terms.iter().any(|t| !raw.contains(t.as_str())) {
-            return false;
+        // Plain terms search what the writer wrote — the title and the body —
+        // and deliberately not `raw`, whose timestamp header made searching
+        // "2025" return every entry written that year. Dates have their own
+        // before:/after: operators. Tags still come from `raw`, since a @tag in
+        // the title counts.
+        if !self.terms.is_empty() {
+            let text = format!("{}\n{}", entry.suffix, entry.body).to_lowercase();
+            if self.terms.iter().any(|t| !text.contains(t.as_str())) {
+                return false;
+            }
         }
         if !self.tags.is_empty() {
             let present: Vec<String> = entry.tags.iter().map(|t| t.to_lowercase()).collect();
@@ -97,11 +105,12 @@ impl Query {
         }
         if !self.has.is_empty() {
             let paths = parser::media_paths(&entry.raw);
+            // Shared with the badges/dots (parser::media_kind); an unrecognised
+            // extension reads as an image, matching the Swift `MediaKind`.
             let kind_of = |p: &str| -> &'static str {
-                let ext = p.rsplit('.').next().unwrap_or("").to_lowercase();
-                match ext.as_str() {
-                    "mov" | "mp4" | "m4v" | "webm" | "mkv" => "video",
-                    "m4a" | "mp3" | "wav" | "aac" | "aiff" | "caf" | "ogg" | "opus" | "flac" => "audio",
+                match parser::media_kind(p) {
+                    parser::MediaKind::Video => "video",
+                    parser::MediaKind::Audio => "audio",
                     _ => "image",
                 }
             };
@@ -196,5 +205,27 @@ mod tests {
         assert!(phrase.matches(&entry("2026-01-01", "", "an exact phrase here")));
         assert!(!phrase.matches(&entry("2026-01-01", "", "exact other phrase")));
         assert!(Query::parse("after:2026-03").matches(&entry("2026-03-01", "", "x")));
+
+        // Operator prefixes are case-insensitive, like the Swift port's
+        // `lower.hasPrefix` checks.
+        assert_eq!(Query::parse("Before:2026-03").before.as_deref(), Some("2026-03"));
+        assert_eq!(Query::parse("AFTER:2025").after.as_deref(), Some("2025"));
+        assert_eq!(Query::parse("TAG:Work").tags, vec!["@work"]);
+        assert!(Query::parse("Is:Starred").starred);
+        assert_eq!(Query::parse("HAS:Image").has, vec!["image"]);
+
+        // A plain term searches title + body, never the timestamp header —
+        // searching "2025" must not return every entry written that year.
+        let dated = entry("2025-06-01", "Morning", "nothing numeric here");
+        assert!(!Query::parse("2025").matches(&dated));
+        assert!(Query::parse("morning").matches(&dated));
+        assert!(Query::parse("numeric").matches(&dated));
+        assert!(Query::parse("2025").matches(&entry("2025-06-01", "", "bought it in 2025")));
+
+        // The Linux recorder's own formats classify like their Apple cousins.
+        let recorded = entry("2026-01-02", "", "![](assets/a.weba) ![](assets/b.webm)");
+        assert!(Query::parse("has:audio").matches(&recorded));
+        assert!(Query::parse("has:video").matches(&recorded));
+        assert!(!Query::parse("has:image").matches(&recorded));
     }
 }

@@ -78,9 +78,17 @@ struct NookKeyHandlers {
 
     private var stack: [(id: UUID, handlers: NookKeyHandlers)] = []
 
+    /// Push a list's handlers, or refresh an already-registered list's in place.
+    /// In place matters: a list re-registers whenever its rows change, which a
+    /// store reload does even while it sits under a pushed view — removing and
+    /// re-appending would float that hidden list back to the top of the stack
+    /// and hand it the arrow keys.
     func register(_ id: UUID, _ handlers: NookKeyHandlers) {
-        stack.removeAll { $0.id == id }
-        stack.append((id, handlers))
+        if let i = stack.firstIndex(where: { $0.id == id }) {
+            stack[i].handlers = handlers
+        } else {
+            stack.append((id, handlers))
+        }
     }
 
     func unregister(_ id: UUID) {

@@ -1,13 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Scheme LastUpgradeVersion = "1600" version = "1.7">
+<Scheme LastUpgradeVersion = "2650" version = "1.7">
    <BuildAction parallelizeBuildables = "YES" buildImplicitDependencies = "YES">
       <BuildActionEntries>
          <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "YES" buildForArchiving = "YES" buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "F16C1941EE3844ABA37597A5"
+               BlueprintIdentifier = "02BD72114BA0536A82CACCC6"
                BuildableName = "Nook.app"
                BlueprintName = "Nook"
+               ReferencedContainer = "container:Nook.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry buildForTesting = "YES" buildForRunning = "NO" buildForProfiling = "NO" buildForArchiving = "NO" buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "88DD75D60D41569BA740C01B"
+               BuildableName = "NookTests.xctest"
+               BlueprintName = "NookTests"
                ReferencedContainer = "container:Nook.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -22,7 +31,7 @@
          <TestableReference skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "58C5A3EBB30C49C5B4124A97"
+               BlueprintIdentifier = "88DD75D60D41569BA740C01B"
                BuildableName = "NookTests.xctest"
                BlueprintName = "NookTests"
                ReferencedContainer = "container:Nook.xcodeproj">
@@ -43,7 +52,7 @@
       <BuildableProductRunnable runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F16C1941EE3844ABA37597A5"
+            BlueprintIdentifier = "02BD72114BA0536A82CACCC6"
             BuildableName = "Nook.app"
             BlueprintName = "Nook"
             ReferencedContainer = "container:Nook.xcodeproj">
@@ -59,7 +68,7 @@
       <BuildableProductRunnable runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F16C1941EE3844ABA37597A5"
+            BlueprintIdentifier = "02BD72114BA0536A82CACCC6"
             BuildableName = "Nook.app"
             BlueprintName = "Nook"
             ReferencedContainer = "container:Nook.xcodeproj">

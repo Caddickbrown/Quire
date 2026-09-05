@@ -7,7 +7,8 @@
 //  into `make check` and stays portable to the Linux port.
 //
 //  Grammar:
-//      plain terms          case-insensitive substring match on the entry text
+//      plain terms          case-insensitive substring match on title + body
+//                           (not the timestamp header — see `matches`)
 //      "exact phrase"       quoted phrases match as one substring
 //      tag:name             entry carries @name (leading @ optional)
 //      before:2026-03       entry date strictly before the (partial) ISO date
@@ -63,8 +64,15 @@ struct SearchQuery: Equatable {
 
     func matches(_ entry: Entry) -> Bool {
         guard !isEmpty else { return false }
-        let raw = entry.raw.lowercased()
-        for term in terms where !raw.contains(term) { return false }
+        // Plain terms search what the writer wrote — the title and the body —
+        // and deliberately not `raw`, whose timestamp header made searching
+        // "2025" return every entry written that year. Dates have their own
+        // `before:`/`after:` operators. Tags still come from `raw`, since a
+        // `@tag` in the title counts.
+        if !terms.isEmpty {
+            let text = (entry.suffix + "\n" + entry.body).lowercased()
+            for term in terms where !text.contains(term) { return false }
+        }
         if !tags.isEmpty {
             let present = Set(entry.tags.map { $0.lowercased() })
             for tag in tags where !present.contains(tag) { return false }

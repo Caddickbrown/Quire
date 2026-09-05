@@ -8,7 +8,8 @@
 //  iOS additions:
 //  - UIApplicationDelegateAdaptor to handle home screen quick actions
 //  - onOpenURL handler for nook://write deep links from the widget
-//  - Notification listener for OpenNewDraftIntent
+//  - NotificationRouter taps (the daily reminder, the weekly resurfacing
+//    note, and OpenNewDraftIntent)
 //
 
 import SwiftUI
@@ -163,7 +164,11 @@ struct NookApp: App {
                         Task { await ResurfacingScheduler.ensureScheduled(store: store) }
                     case .background:
                         AppLockManager.shared.didEnterBackground()
-                    default:
+                    case .inactive:
+                        // The app-switcher snapshot is taken on the way out —
+                        // the veil has to be up before .background arrives.
+                        AppLockManager.shared.willResignActive()
+                    @unknown default:
                         break
                     }
                 }
@@ -193,7 +198,12 @@ struct NookApp: App {
                     case "timer":
                         if !nav.timerRunning {
                             if nav.timerRemaining <= 0 {
-                                let minutes = UserDefaults.standard.integer(forKey: "timerMinutes")
+                                // `object(forKey:)`, not `integer(forKey:)`: an
+                                // untouched setting reads as 0 there, and the
+                                // link started a one-minute session.
+                                let minutes = UserDefaults.standard
+                                    .object(forKey: WritingTimer.minutesKey) as? Int
+                                    ?? WritingTimer.defaultMinutes
                                 nav.timerRemaining = max(minutes, 1) * 60
                             }
                             nav.timerRunning = true
@@ -216,17 +226,13 @@ struct NookApp: App {
                     switch action {
                     case .write:
                         nav.requestNewEntry()
-                    case .entry(let date, let ts):
-                        openEntry(date: date, ts: ts)
+                    case .entry(let date, let ts, let journal):
+                        openEntry(date: date, ts: ts, journal: journal)
                     }
                 }
                 // A draft was added outside the UI (notification quick-write).
                 .onReceive(NotificationCenter.default.publisher(for: .nookJournalChangedExternally)) { _ in
                     store.reloadIfChanged()
-                }
-                // OpenNewDraftIntent notification (when app already running)
-                .onReceive(NotificationCenter.default.publisher(for: .nookOpenWrite)) { _ in
-                    nav.requestNewEntry()
                 }
                 #if canImport(CoreSpotlight)
                 // A tapped Spotlight result (Settings → Privacy → Spotlight).
@@ -260,9 +266,16 @@ struct NookApp: App {
     }
 
     /// Resolve an entry reference (from a deep link or notification) and open
-    /// it: dated → its day file, otherwise the inbox.
-    private func openEntry(date: String?, ts: String?) {
+    /// it: named split journal first, then dated → its day file, otherwise the
+    /// inbox. The weekly resurfacing note draws from all three, so leaving the
+    /// split journals out meant a tap that opened nothing.
+    private func openEntry(date: String?, ts: String?, journal: String? = nil) {
         guard let ts, !ts.isEmpty else { return }
+        if let journal, !journal.isEmpty,
+           let entry = store.entries(inJournal: journal).first(where: { $0.ts == ts }) {
+            nav.open(entry, source: .journal(name: journal))
+            return
+        }
         if let date, !date.isEmpty,
            let entry = store.entries(for: date).first(where: { $0.ts == ts }) {
             nav.open(entry, source: .archive(date: date))

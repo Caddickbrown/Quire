@@ -75,14 +75,13 @@ struct OpenNewDraftIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        // Post a notification the app's NavigationModel listens to.
-        NotificationCenter.default.post(name: .nookOpenWrite, object: nil)
+        // Through NotificationRouter, not a NotificationCenter post: on a cold
+        // launch the intent runs before any view is listening, and a post made
+        // that early is simply dropped. The router replays its value to
+        // whoever subscribes, whichever order the two happen in.
+        NotificationRouter.shared.pending = .write
         return .result()
     }
-}
-
-extension Notification.Name {
-    static let nookOpenWrite = Notification.Name("com.caddickbrown.nook.openWrite")
 }
 
 // MARK: - Siri / Spotlight shortcuts

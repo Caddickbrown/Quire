@@ -36,6 +36,11 @@ fn prefs_path() -> PathBuf {
     config_dir().join("settings.json")
 }
 
+/// One writer at a time. `set_pref` is a read-modify-write and is called from
+/// background threads (the Data Saver's compression bookkeeping), so two
+/// overlapping calls used to drop one another's key.
+static PREFS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn read_prefs() -> Value {
     fs::read_to_string(prefs_path())
         .ok()
@@ -43,13 +48,24 @@ pub fn read_prefs() -> Value {
         .unwrap_or_else(|| json!({}))
 }
 
+/// Temp file + rename, so a crash (or a full disk) mid-write can't leave a
+/// truncated settings.json that reads back as "no preferences at all" — which
+/// would silently forget the custom journal folder.
 pub fn write_prefs(v: &Value) {
-    if let Ok(s) = serde_json::to_string_pretty(v) {
-        let _ = fs::write(prefs_path(), s);
+    let Ok(s) = serde_json::to_string_pretty(v) else { return };
+    let path = prefs_path();
+    let tmp = path.with_file_name(format!(".settings-{}.tmp", uuid::Uuid::new_v4()));
+    let wrote = fs::File::create(&tmp).and_then(|mut f| {
+        f.write_all(s.as_bytes())?;
+        f.sync_all()
+    });
+    if wrote.is_err() || fs::rename(&tmp, &path).is_err() {
+        let _ = fs::remove_file(&tmp);
     }
 }
 
 pub fn set_pref(key: &str, value: Value) {
+    let _guard = PREFS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut p = read_prefs();
     if !p.is_object() {
         p = json!({});
@@ -240,6 +256,12 @@ pub struct Store {
 /// Resolve the journal base directory: a user-chosen custom folder if set and
 /// present, else a local ~/Documents/Nook fallback (so it always works). The
 /// chosen folder is used directly as the base — same as jnl's JNL_DIR.
+///
+/// A custom folder that is *set but gone* (an unmounted drive, a renamed or
+/// not-yet-synced folder) resolves to mode `"missing"`: the app reports it and
+/// blocks writes, rather than quietly recreating the folder — or writing into
+/// ~/Documents/Nook — and stranding today's entries somewhere the real journal
+/// will never see them.
 pub fn resolve_store() -> Store {
     if let Some(p) = pref_str("customFolder") {
         let path = PathBuf::from(&p);
@@ -250,6 +272,10 @@ pub fn resolve_store() -> Store {
                 mode: "custom".into(),
             };
         }
+        return Store {
+            base: path,
+            mode: "missing".into(),
+        };
     }
     let local = dirs::document_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
@@ -289,6 +315,64 @@ fn write_file(path: &Path, content: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Remove leftover `.nook-*.tmp` files from writes that never completed.
+/// Age-guarded (an hour) so an in-flight write from another process — the
+/// macOS app or `jnl` sharing the folder — is never swept out from under it.
+/// Mirrors `JournalStore.sweepStaleTempFiles`.
+pub fn sweep_stale_temp_files(base: &Path) {
+    let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for e in WalkDir::new(base).into_iter().filter_map(|e| e.ok()) {
+        let path = e.path();
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if !name.starts_with(".nook-") || !name.ends_with(".tmp") {
+            continue;
+        }
+        let modified = e.metadata().ok().and_then(|m| m.modified().ok());
+        if modified.map(|m| m < cutoff).unwrap_or(false) {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+/// A name the frontend supplied (a template, a split journal, a backup, an
+/// asset) has to stay one path component inside the folder we mean to touch —
+/// `../../.ssh/id_rsa` is not a template name.
+fn safe_component(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+}
+
+/// The first four characters of an ISO date. Byte-slicing `date[..4]` panicked
+/// on a non-ASCII directory name reached through `file_to_date`.
+fn year_of(date: &str) -> String {
+    date.chars().take(4).collect()
+}
+
+/// What the UI shows when an entry has no usable header timestamp.
+const BAD_TIMESTAMP: &str = "Needs a full date and time (YYYY-MM-DD HH:MM:SS).";
+
+/// True when `ts` composes a header the jnl parser accepts. Checked through the
+/// parser itself so the two can't drift.
+fn valid_timestamp(ts: &str) -> bool {
+    parser::parse_entries(&format!("[{}] x", ts)).len() == 1
+}
+
+/// The entries a replacement body parses to. Text that parses to *nothing*
+/// would splice nothing in — silently deleting the entry it was meant to
+/// replace (a cleared date field composes `[]`, which is not an entry) — so
+/// that is an error rather than a delete.
+fn replacement_entries(new_text: &str) -> Result<Vec<Entry>, String> {
+    let parsed = parser::parse_entries(new_text);
+    if parsed.is_empty() && !new_text.trim().is_empty() {
+        return Err(BAD_TIMESTAMP.into());
+    }
+    Ok(parsed)
+}
+
 /// The jnl timestamp one second after `ts` (the input itself on parse failure —
 /// callers bound their retry loops, so this can never spin).
 fn timestamp_after(ts: &str) -> String {
@@ -322,6 +406,51 @@ impl Store {
     }
     fn split_journal_path(&self, name: &str) -> PathBuf {
         self.base.join(format!("{}.md", name))
+    }
+
+    /// `journal_file`, for callers outside this module (the reveal command).
+    pub fn journal_file_for(&self, date: &str) -> Option<PathBuf> {
+        if date.split('-').any(|p| !p.chars().all(|c| c.is_ascii_digit())) {
+            return None;
+        }
+        self.journal_file(date)
+    }
+
+    /// `checked_split_path`, for callers outside this module.
+    pub fn split_file_for(&self, name: &str) -> Option<PathBuf> {
+        self.checked_split_path(name)
+    }
+
+    /// A split journal named by the frontend. `None` for anything that isn't a
+    /// plain name — the path is joined onto the base folder, so `../inbox` must
+    /// not get through.
+    fn checked_split_path(&self, name: &str) -> Option<PathBuf> {
+        if !safe_component(name) || RESERVED_FILES.contains(&format!("{}.md", name).as_str()) {
+            return None;
+        }
+        Some(self.split_journal_path(name))
+    }
+
+    /// Refuse every write while the chosen journal folder is unavailable. It is
+    /// checked here rather than at each command because `write_file` creates
+    /// missing parents — an unmounted drive would otherwise be *recreated* as an
+    /// empty folder, hiding the real journal when it came back.
+    fn writable(&self) -> Result<(), String> {
+        if self.mode == "missing" {
+            return Err(format!(
+                "The journal folder {} isn't available. Reconnect it, or choose another in Settings.",
+                self.base.display()
+            ));
+        }
+        Ok(())
+    }
+
+    /// `write_file` with the failure kept. Every journal write goes through here
+    /// so a full disk or a read-only folder reaches the UI as an error toast
+    /// instead of being dropped while the app claims it saved.
+    fn write_journal(&self, path: &Path, content: &str) -> Result<(), String> {
+        self.writable()?;
+        write_file(path, content).map_err(|e| format!("Couldn't write {}: {}", path.display(), e))
     }
 
     /// journal/YYYY/MM/DD.md for a "YYYY-MM-DD" date.
@@ -384,7 +513,7 @@ impl Store {
             }
             let date = Self::file_to_date(u);
             let mut day = ArchiveDay {
-                year: date[..4.min(date.len())].to_string(),
+                year: year_of(&date),
                 date: date.clone(),
                 count: entries.len(),
                 preview: entries.first().map(|e| e.preview.clone()).unwrap_or_default(),
@@ -394,15 +523,11 @@ impl Store {
                 has_starred: entries.iter().any(|e| e.is_starred),
             };
             for p in parser::media_paths(&content) {
-                let ext = p.rsplit('.').next().unwrap_or("").to_lowercase();
-                match ext.as_str() {
-                    "mov" | "mp4" | "m4v" | "webm" | "mkv" => day.has_video = true,
-                    "m4a" | "mp3" | "wav" | "aac" | "aiff" | "caf" | "ogg" | "opus" | "flac" => {
-                        day.has_audio = true
-                    }
-                    "png" | "jpg" | "jpeg" | "gif" | "heic" | "heif" | "webp" | "tiff" | "tif"
-                    | "bmp" => day.has_photo = true,
-                    _ => {}
+                match parser::media_kind(&p) {
+                    parser::MediaKind::Video => day.has_video = true,
+                    parser::MediaKind::Audio => day.has_audio = true,
+                    parser::MediaKind::Image => day.has_photo = true,
+                    parser::MediaKind::Other => {}
                 }
             }
             days.push(day);
@@ -498,7 +623,10 @@ impl Store {
     }
 
     pub fn entries_in_journal(&self, name: &str) -> Vec<Entry> {
-        parser::parse_entries(&read_string(&self.split_journal_path(name)))
+        match self.checked_split_path(name) {
+            Some(u) => parser::parse_entries(&read_string(&u)),
+            None => vec![],
+        }
     }
 
     pub fn search(&self, query: &str) -> Vec<DatedEntry> {
@@ -626,16 +754,22 @@ impl Store {
         timestamp: &str,
         title: &str,
         body: &str,
-    ) -> Option<String> {
+    ) -> Result<Option<String>, String> {
         let inbox = self.inbox_path();
         let t = title.trim();
         let b = parser::trim_right_newlines(body);
         let b = b.trim();
         if t.is_empty() && b.is_empty() {
             if let Some(prev) = previous {
-                self.remove_draft(prev);
+                self.remove_draft(prev)?;
             }
-            return None;
+            return Ok(None);
+        }
+        // A cleared or half-typed date composes `[] title`, which parses to no
+        // entry at all — written to the inbox it is absorbed into the draft
+        // above it on the next parse.
+        if !valid_timestamp(timestamp) {
+            return Err(BAD_TIMESTAMP.into());
         }
         let content = read_string(&inbox);
         let preamble = parser::leading_preamble(&content);
@@ -644,8 +778,8 @@ impl Store {
         if previous == Some(timestamp) {
             if let Some(idx) = drafts.iter().position(|e| e.ts == timestamp) {
                 drafts[idx] = Self::make_entry(&ts, title, body);
-                let _ = write_file(&inbox, &parser::render_entries(&preamble, &drafts));
-                return Some(ts);
+                self.write_journal(&inbox, &parser::render_entries(&preamble, &drafts))?;
+                return Ok(Some(ts));
             }
         }
         if let Some(prev) = previous {
@@ -659,11 +793,11 @@ impl Store {
             attempts += 1;
         }
         drafts.push(Self::make_entry(&ts, title, body));
-        let _ = write_file(&inbox, &parser::render_entries(&preamble, &drafts));
-        Some(ts)
+        self.write_journal(&inbox, &parser::render_entries(&preamble, &drafts))?;
+        Ok(Some(ts))
     }
 
-    pub fn remove_draft(&self, timestamp: &str) {
+    pub fn remove_draft(&self, timestamp: &str) -> Result<(), String> {
         let inbox = self.inbox_path();
         let content = read_string(&inbox);
         let preamble = parser::leading_preamble(&content);
@@ -671,26 +805,25 @@ impl Store {
         // One draft only — with two entries sharing a second, retain() by
         // timestamp deleted both.
         let Some(idx) = drafts.iter().position(|e| e.ts == timestamp) else {
-            return;
+            return Ok(());
         };
         drafts.remove(idx);
-        let _ = write_file(&inbox, &parser::render_entries(&preamble, &drafts));
+        self.write_journal(&inbox, &parser::render_entries(&preamble, &drafts))
     }
 
-    pub fn update_draft(&self, ts: &str, raw: &str, new_text: &str) {
+    pub fn update_draft(&self, ts: &str, raw: &str, new_text: &str) -> Result<(), String> {
         let inbox = self.inbox_path();
         let content = read_string(&inbox);
         let preamble = parser::leading_preamble(&content);
         let mut drafts = parser::parse_entries(&content);
         let Some(idx) = find_entry(&drafts, ts, raw) else {
-            return;
+            return Ok(());
         };
-        let parsed = parser::parse_entries(new_text);
-        drafts.splice(idx..idx + 1, parsed);
-        let _ = write_file(&inbox, &parser::render_entries(&preamble, &drafts));
+        drafts.splice(idx..idx + 1, replacement_entries(new_text)?);
+        self.write_journal(&inbox, &parser::render_entries(&preamble, &drafts))
     }
 
-    pub fn delete_draft(&self, ts: &str, raw: &str) {
+    pub fn delete_draft(&self, ts: &str, raw: &str) -> Result<(), String> {
         let inbox = self.inbox_path();
         let content = read_string(&inbox);
         let preamble = parser::leading_preamble(&content);
@@ -698,22 +831,22 @@ impl Store {
         if let Some(idx) = find_entry(&drafts, ts, raw) {
             drafts.remove(idx);
         }
-        let _ = write_file(&inbox, &parser::render_entries(&preamble, &drafts));
+        self.write_journal(&inbox, &parser::render_entries(&preamble, &drafts))
     }
 
-    pub fn import_drafts(&self, text: &str) -> usize {
+    pub fn import_drafts(&self, text: &str) -> Result<usize, String> {
         let inbox = self.inbox_path();
         let imported = self.parse_import(text);
         if imported.is_empty() {
-            return 0;
+            return Ok(0);
         }
         let content = read_string(&inbox);
         let preamble = parser::leading_preamble(&content);
         let mut drafts = parser::parse_entries(&content);
         let n = imported.len();
         drafts.extend(imported);
-        let _ = write_file(&inbox, &parser::render_entries(&preamble, &drafts));
-        n
+        self.write_journal(&inbox, &parser::render_entries(&preamble, &drafts))?;
+        Ok(n)
     }
 
     fn parse_import(&self, text: &str) -> Vec<Entry> {
@@ -729,16 +862,16 @@ impl Store {
         }
     }
 
-    pub fn sort_inbox(&self) {
+    pub fn sort_inbox(&self) -> Result<(), String> {
         let inbox = self.inbox_path();
         let content = read_string(&inbox);
         let preamble = parser::leading_preamble(&content);
         let entries = parser::parse_entries(&content);
         if entries.len() < 2 {
-            return;
+            return Ok(());
         }
         let sorted = parser::sorted_by_timestamp(&entries);
-        let _ = write_file(&inbox, &parser::render_entries(&preamble, &sorted));
+        self.write_journal(&inbox, &parser::render_entries(&preamble, &sorted))
     }
 
     // ---- Filing (jnl fileDraft / splitTagTarget) ----
@@ -798,13 +931,13 @@ impl Store {
         } else {
             out.push_str(&format!("[{}]\n{}\n", e.ts, e.body));
         }
-        write_file(&dest, &out).map_err(|err| err.to_string())?;
+        self.write_journal(&dest, &out)?;
         Ok(label)
     }
 
     /// Append several entries to one file in a single read + write.
     fn append_entries(&self, entries: &[&Entry], dest: &Path) -> bool {
-        if entries.is_empty() {
+        if entries.is_empty() || self.writable().is_err() {
             return false;
         }
         if let Some(dir) = dest.parent() {
@@ -839,16 +972,18 @@ impl Store {
         Ok((url, date))
     }
 
-    pub fn file_draft(&self, ts: &str, raw: &str) -> Option<String> {
+    pub fn file_draft(&self, ts: &str, raw: &str) -> Result<Option<String>, String> {
         let drafts = parser::parse_entries(&read_string(&self.inbox_path()));
-        let idx = find_entry(&drafts, ts, raw)?;
+        let Some(idx) = find_entry(&drafts, ts, raw) else {
+            return Ok(None);
+        };
         let entry = drafts[idx].clone();
-        let label = self.file_entry(&entry, true).ok()?;
-        self.remove_from_inbox(&entry);
-        Some(label)
+        let label = self.file_entry(&entry, true)?;
+        self.remove_from_inbox(&entry)?;
+        Ok(Some(label))
     }
 
-    fn remove_from_inbox(&self, entry: &Entry) {
+    fn remove_from_inbox(&self, entry: &Entry) -> Result<(), String> {
         let inbox = self.inbox_path();
         let content = read_string(&inbox);
         let preamble = parser::leading_preamble(&content);
@@ -856,17 +991,18 @@ impl Store {
         if let Some(idx) = find_entry(&drafts, &entry.ts, &entry.raw) {
             drafts.remove(idx);
         }
-        let _ = write_file(&inbox, &parser::render_entries(&preamble, &drafts));
+        self.write_journal(&inbox, &parser::render_entries(&preamble, &drafts))
     }
 
     /// Only drafts that actually filed are removed: one whose write failed
     /// stays in the inbox instead of being lost with it.
-    pub fn file_all_drafts(&self) -> usize {
+    pub fn file_all_drafts(&self) -> Result<usize, String> {
         let content = read_string(&self.inbox_path());
         let preamble = parser::leading_preamble(&content);
         let drafts = parser::parse_entries(&content);
         let mut filed_raws: HashMap<String, usize> = HashMap::new();
         let mut filed = 0;
+        let mut failed = 0;
         // Group by destination first, so ten drafts from one day rewrite that
         // day's file once, not ten times (mirrors JournalStore.fileAllDrafts).
         let mut order: Vec<PathBuf> = vec![];
@@ -890,6 +1026,7 @@ impl Store {
         for dest in order {
             let group = by_dest.get(&dest).cloned().unwrap_or_default();
             if !self.append_entries(&group, &dest) {
+                failed += group.len();
                 continue;
             }
             filed += group.len();
@@ -905,30 +1042,43 @@ impl Store {
                     _ => remaining.push(e),
                 }
             }
-            let _ = write_file(&self.inbox_path(), &parser::render_entries(&preamble, &remaining));
+            self.write_journal(&self.inbox_path(), &parser::render_entries(&preamble, &remaining))?;
         }
-        filed
+        if failed > 0 {
+            return Err(format!(
+                "Filed {} of {} drafts — the rest could not be written.",
+                filed,
+                filed + failed
+            ));
+        }
+        Ok(filed)
     }
 
     // ---- Filed-entry editing ----
 
-    pub fn update_filed_entry(&self, date: &str, ts: &str, raw: &str, new_text: &str) {
+    pub fn update_filed_entry(
+        &self,
+        date: &str,
+        ts: &str,
+        raw: &str,
+        new_text: &str,
+    ) -> Result<(), String> {
         let Some(url) = self.journal_file(date) else {
-            return;
+            return Err("Bad journal path.".into());
         };
         let content = read_string(&url);
         let preamble = parser::leading_preamble(&content);
         let mut entries = parser::parse_entries(&content);
         let Some(idx) = find_entry(&entries, ts, raw) else {
-            return;
+            return Ok(());
         };
-        entries.splice(idx..idx + 1, parser::parse_entries(new_text));
-        let _ = write_file(&url, &parser::render_entries(&preamble, &entries));
+        entries.splice(idx..idx + 1, replacement_entries(new_text)?);
+        self.write_journal(&url, &parser::render_entries(&preamble, &entries))
     }
 
-    pub fn delete_filed_entry(&self, date: &str, ts: &str, raw: &str) {
+    pub fn delete_filed_entry(&self, date: &str, ts: &str, raw: &str) -> Result<(), String> {
         let Some(url) = self.journal_file(date) else {
-            return;
+            return Err("Bad journal path.".into());
         };
         let content = read_string(&url);
         let preamble = parser::leading_preamble(&content);
@@ -936,52 +1086,60 @@ impl Store {
         // Single, raw-first removal — retain() deleted both twins of a
         // same-second pair.
         let Some(idx) = find_entry(&entries, ts, raw) else {
-            return;
+            return Ok(());
         };
         entries.remove(idx);
-        let _ = write_file(&url, &parser::render_entries(&preamble, &entries));
+        self.write_journal(&url, &parser::render_entries(&preamble, &entries))
     }
 
-    pub fn update_journal_entry(&self, name: &str, ts: &str, raw: &str, new_text: &str) {
-        let url = self.split_journal_path(name);
+    pub fn update_journal_entry(
+        &self,
+        name: &str,
+        ts: &str,
+        raw: &str,
+        new_text: &str,
+    ) -> Result<(), String> {
+        let Some(url) = self.checked_split_path(name) else {
+            return Err("Bad journal name.".into());
+        };
         let content = read_string(&url);
         let preamble = parser::leading_preamble(&content);
         let mut entries = parser::parse_entries(&content);
         let Some(idx) = find_entry(&entries, ts, raw) else {
-            return;
+            return Ok(());
         };
-        entries.splice(idx..idx + 1, parser::parse_entries(new_text));
-        let _ = write_file(&url, &parser::render_entries(&preamble, &entries));
+        entries.splice(idx..idx + 1, replacement_entries(new_text)?);
+        self.write_journal(&url, &parser::render_entries(&preamble, &entries))
     }
 
-    pub fn delete_journal_entry(&self, name: &str, ts: &str, raw: &str) {
-        let url = self.split_journal_path(name);
+    pub fn delete_journal_entry(&self, name: &str, ts: &str, raw: &str) -> Result<(), String> {
+        let Some(url) = self.checked_split_path(name) else {
+            return Err("Bad journal name.".into());
+        };
         let content = read_string(&url);
         let preamble = parser::leading_preamble(&content);
         let mut entries = parser::parse_entries(&content);
         // Single, raw-first removal — retain() deleted both twins of a
         // same-second pair.
         let Some(idx) = find_entry(&entries, ts, raw) else {
-            return;
+            return Ok(());
         };
         entries.remove(idx);
-        let _ = write_file(&url, &parser::render_entries(&preamble, &entries));
+        self.write_journal(&url, &parser::render_entries(&preamble, &entries))
     }
 
     // ---- Starred ----
 
-    pub fn toggle_star(&self, source: &Source, ts: &str, raw: &str) {
+    pub fn toggle_star(&self, source: &Source, ts: &str, raw: &str) -> Result<(), String> {
         let entries = self.entries_for_source(source);
-        let Some(entry) = entries.into_iter().find(|e| e.ts == ts || e.raw == raw) else {
-            return;
+        // raw-first, like every other lookup: matching the timestamp first
+        // starred the wrong twin of a same-second pair.
+        let Some(idx) = find_entry(&entries, ts, raw) else {
+            return Ok(());
         };
-        let base = if entry.suffix.ends_with('*') {
-            let mut s = entry.suffix.clone();
-            s.pop();
-            s.trim().to_string()
-        } else {
-            entry.suffix.trim().to_string()
-        };
+        let entry = entries[idx].clone();
+        // `display_title` already strips the marker (and only a real marker).
+        let base = entry.display_title.trim().to_string();
         let new_title = if entry.is_starred {
             base
         } else if base.is_empty() {
@@ -992,17 +1150,15 @@ impl Store {
         let new_text = Self::make_entry(&entry.ts, &new_title, &entry.body).raw;
         match source.kind.as_str() {
             "inbox" => self.update_draft(&entry.ts, &entry.raw, &new_text),
-            "archive" => {
-                if let Some(d) = &source.arg {
-                    self.update_filed_entry(d, &entry.ts, &entry.raw, &new_text);
-                }
-            }
-            "journal" => {
-                if let Some(n) = &source.arg {
-                    self.update_journal_entry(n, &entry.ts, &entry.raw, &new_text);
-                }
-            }
-            _ => {}
+            "archive" => match &source.arg {
+                Some(d) => self.update_filed_entry(d, &entry.ts, &entry.raw, &new_text),
+                None => Ok(()),
+            },
+            "journal" => match &source.arg {
+                Some(n) => self.update_journal_entry(n, &entry.ts, &entry.raw, &new_text),
+                None => Ok(()),
+            },
+            _ => Ok(()),
         }
     }
 
@@ -1034,7 +1190,7 @@ impl Store {
         files
     }
 
-    pub fn rename_tag(&self, old: &str, new: &str) -> usize {
+    pub fn rename_tag(&self, old: &str, new: &str) -> Result<usize, String> {
         let old_name = old.strip_prefix('@').unwrap_or(old);
         let new_tok = if new.starts_with('@') {
             new.to_string()
@@ -1049,7 +1205,7 @@ impl Store {
             regex::escape(old_name)
         )) {
             Ok(r) => r,
-            Err(_) => return 0,
+            Err(_) => return Ok(0),
         };
         let replacement = format!("{}$1", new_tok);
         let mut changed = 0;
@@ -1060,14 +1216,14 @@ impl Store {
             }
             let r = re.replace_all(&s, replacement.as_str()).to_string();
             if r != s {
-                let _ = write_file(&url, &r);
+                self.write_journal(&url, &r)?;
                 changed += 1;
             }
         }
-        changed
+        Ok(changed)
     }
 
-    pub fn merge_tags(&self, merges: &[(String, String)]) {
+    pub fn merge_tags(&self, merges: &[(String, String)]) -> Result<(), String> {
         let rules: Vec<(regex::Regex, String)> = merges
             .iter()
             .filter_map(|(from, to)| {
@@ -1085,7 +1241,7 @@ impl Store {
             })
             .collect();
         if rules.is_empty() {
-            return;
+            return Ok(());
         }
         for url in self.tag_rewrite_files() {
             let mut s = read_string(&url);
@@ -1097,9 +1253,10 @@ impl Store {
                 s = re.replace_all(&s, tok.as_str()).to_string();
             }
             if s != orig {
-                let _ = write_file(&url, &s);
+                self.write_journal(&url, &s)?;
             }
         }
+        Ok(())
     }
 
     pub fn similar_tag_groups(&self) -> Vec<TagGroup> {
@@ -1159,8 +1316,15 @@ impl Store {
         out
     }
 
+    /// Delete one file out of `assets/`. The path comes from the frontend, so
+    /// it has to be exactly `assets/<one component>` — `assets/../inbox.md`
+    /// would otherwise resolve to the journal itself.
     pub fn delete_asset(&self, rel: &str) {
-        let _ = fs::remove_file(self.base.join(rel));
+        let Some(name) = rel.strip_prefix("assets/") else { return };
+        if !safe_component(name) || self.writable().is_err() {
+            return;
+        }
+        let _ = fs::remove_file(self.assets_dir().join(name));
     }
 
     pub fn assets_bytes(&self) -> u64 {
@@ -1248,6 +1412,7 @@ impl Store {
     /// Save raw bytes into assets/ and return the relative markdown path. When
     /// Data Saver is on, raster images are downsampled/re-compressed first.
     pub fn save_asset(&self, data: &[u8], ext: &str) -> Option<String> {
+        self.writable().ok()?;
         let dir = self.assets_dir();
         let _ = fs::create_dir_all(&dir);
         let id = uuid::Uuid::new_v4().to_string();
@@ -1278,6 +1443,7 @@ impl Store {
 
     /// Copy an existing file into assets/ and return the relative path.
     pub fn import_asset(&self, src: &str) -> Option<String> {
+        self.writable().ok()?;
         let src = PathBuf::from(src);
         let dir = self.assets_dir();
         let _ = fs::create_dir_all(&dir);
@@ -1418,7 +1584,9 @@ impl Store {
             if media::is_compressible_image(&ext) {
                 if let Ok(data) = fs::read(url) {
                     if let Some(shrunk) = media::downsample(&data, &ext) {
-                        if shrunk.len() < data.len() && fs::write(url, &shrunk).is_ok() {
+                        // Temp file + rename: a half-written re-encode would
+                        // otherwise destroy the only copy of the photo.
+                        if shrunk.len() < data.len() && media::write_atomic(url, &shrunk).is_ok() {
                             res.images += 1;
                             res.bytes_saved += (data.len() - shrunk.len()) as u64;
                             self.record_compression(&id, (data.len() - shrunk.len()) as u64);
@@ -1455,7 +1623,7 @@ impl Store {
         entries.into_iter().filter(|e| seen.insert(e.raw.clone())).collect()
     }
 
-    pub fn cleanup(&self) -> CleanupResult {
+    pub fn cleanup(&self) -> Result<CleanupResult, String> {
         let mut res = CleanupResult::default();
         for url in self.all_journal_files() {
             let orig = read_string(&url);
@@ -1484,7 +1652,7 @@ impl Store {
             res.deduped += n_before - deduped.len();
             let rebuilt = parser::render_entries(&preamble, &deduped);
             if rebuilt != orig {
-                let _ = write_file(&url, &rebuilt);
+                self.write_journal(&url, &rebuilt)?;
             }
         }
         // Inbox.
@@ -1503,12 +1671,12 @@ impl Store {
         res.deduped += n_before - deduped.len();
         let rebuilt = parser::render_entries(&preamble, &deduped);
         if rebuilt != content {
-            let _ = write_file(&inbox, &rebuilt);
+            self.write_journal(&inbox, &rebuilt)?;
         }
-        res
+        Ok(res)
     }
 
-    pub fn merge_ex_split_journals(&self) -> MergeResult {
+    pub fn merge_ex_split_journals(&self) -> Result<MergeResult, String> {
         let mut res = MergeResult::default();
         let configured: HashSet<String> = split_tags_pref()
             .into_iter()
@@ -1537,13 +1705,13 @@ impl Store {
                 res.journals += 1;
             } else {
                 let preamble = parser::leading_preamble(&content);
-                let _ = write_file(&url, &parser::render_entries(&preamble, &remaining));
+                self.write_journal(&url, &parser::render_entries(&preamble, &remaining))?;
                 if res.entries > 0 {
                     res.journals += 1;
                 }
             }
         }
-        res
+        Ok(res)
     }
 
     /// Dated days oldest first, then the split journals — they're filed
@@ -1680,6 +1848,9 @@ impl Store {
     }
 
     pub fn backup_now(&self) -> (bool, String) {
+        if let Err(e) = self.writable() {
+            return (false, e);
+        }
         let Some(backup_base) = pref_str("backupFolder").map(PathBuf::from) else {
             return (false, "Choose a backup folder first.".into());
         };
@@ -1718,11 +1889,17 @@ impl Store {
     /// Replace the journal with a backup copy. A safety copy of the current
     /// folder is taken first, so a restore is itself restorable.
     pub fn restore_backup(&self, name: &str) -> (bool, String) {
+        if let Err(e) = self.writable() {
+            return (false, e);
+        }
         let Some(backup_base) = pref_str("backupFolder").map(PathBuf::from) else {
             return (false, "Choose a backup folder first.".into());
         };
         if let Some(clash) = self.nesting_problem(&backup_base) {
             return (false, clash);
+        }
+        if !safe_component(name) {
+            return (false, "That isn't a backup name — nothing was changed.".into());
         }
         let source = backup_base.join(name);
         if !source.join("inbox.md").exists() && !source.join("journal").exists() {
@@ -1797,6 +1974,9 @@ impl Store {
     }
 
     pub fn add_saved_search(&self, name: &str, query: &str) {
+        if self.writable().is_err() {
+            return;
+        }
         let mut list: Vec<Value> = self
             .saved_searches()
             .as_array()
@@ -1851,6 +2031,9 @@ impl Store {
 
     /// A template's content with {{date}}, {{time}} and {{weekday}} filled in.
     pub fn template_body(&self, name: &str) -> Option<String> {
+        if !safe_component(name) {
+            return None;
+        }
         let raw = fs::read_to_string(self.templates_dir().join(format!("{}.md", name))).ok()?;
         let now = Local::now();
         Some(
@@ -1861,6 +2044,7 @@ impl Store {
     }
 
     pub fn create_template(&self) -> Option<String> {
+        self.writable().ok()?;
         let dir = self.templates_dir();
         let _ = fs::create_dir_all(&dir);
         let mut name = "New Template".to_string();
@@ -1875,6 +2059,9 @@ impl Store {
     }
 
     pub fn delete_template(&self, name: &str) {
+        if !safe_component(name) {
+            return;
+        }
         let _ = fs::remove_file(self.templates_dir().join(format!("{}.md", name)));
     }
 
@@ -1889,7 +2076,7 @@ impl Store {
             .all_journal_files()
             .iter()
             .map(|u| Self::file_to_date(u))
-            .filter(|d| d.len() == 10 && d.ends_with(month_day) && &d[..4] < this_year)
+            .filter(|d| d.len() == 10 && d.ends_with(month_day) && year_of(d).as_str() < this_year)
             .collect();
         dates.sort_by(|a, b| b.cmp(a));
         dates.dedup();
@@ -1949,10 +2136,9 @@ impl Store {
                 *tag_map.entry(t).or_insert(0) += 1;
             }
             for p in parser::media_paths(&content) {
-                let ext = p.rsplit('.').next().unwrap_or("").to_lowercase();
-                match ext.as_str() {
-                    "mov" | "mp4" | "m4v" | "webm" | "mkv" => videos += 1,
-                    "m4a" | "mp3" | "wav" | "aac" | "aiff" | "caf" | "ogg" | "opus" | "flac" => audios += 1,
+                match parser::media_kind(&p) {
+                    parser::MediaKind::Video => videos += 1,
+                    parser::MediaKind::Audio => audios += 1,
                     _ => photos += 1,
                 }
             }
@@ -1993,7 +2179,7 @@ impl Store {
         let mut years: Vec<String> = self
             .all_journal_files()
             .iter()
-            .map(|u| Self::file_to_date(u)[..4].to_string())
+            .map(|u| year_of(&Self::file_to_date(u)))
             .collect();
         years.sort_by(|a, b| b.cmp(a));
         years.dedup();
@@ -2069,6 +2255,11 @@ impl Store {
         struct DOEntry {
             #[serde(rename = "creationDate")]
             creation_date: Option<String>,
+            /// The zone the entry was *written* in (an IANA identifier). Day One
+            /// stamps creationDate in UTC, so without this a 23:30 entry written
+            /// in Sydney imports onto the wrong day.
+            #[serde(rename = "timeZone")]
+            time_zone: Option<String>,
             text: Option<String>,
             tags: Option<Vec<String>>,
             starred: Option<bool>,
@@ -2093,11 +2284,18 @@ impl Store {
         for e in decoded.entries.unwrap_or_default() {
             let Some(created) = e.creation_date else { continue };
             let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&created) else { continue };
-            let ts = dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string();
+            // Same rule as the Swift importer: render in the entry's own zone
+            // when it names one, else this machine's.
+            let zone = e.time_zone.as_deref().and_then(|z| z.parse::<chrono_tz::Tz>().ok());
+            let ts = match zone {
+                Some(tz) => dt.with_timezone(&tz).format("%Y-%m-%d %H:%M:%S").to_string(),
+                None => dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string(),
+            };
             let mut body = e.text.unwrap_or_default().trim().to_string();
             for ch in ["!", ".", "(", ")", "[", "]", "#", "-", "*", "_"] {
                 body = body.replace(&format!("\\{}", ch), ch);
             }
+            let mut entry_media = 0usize;
             for (dir_name, list, fallback_ext) in [
                 ("photos", &e.photos, "jpeg"),
                 ("videos", &e.videos, "mov"),
@@ -2111,6 +2309,7 @@ impl Store {
                         continue;
                     }
                     media_count += 1;
+                    entry_media += 1;
                     if commit {
                         if let Some(rel) = self.import_asset(&file.to_string_lossy()) {
                             media_copied += 1;
@@ -2141,7 +2340,10 @@ impl Store {
                     body.push_str(&cleaned.join(" "));
                 }
             }
-            if body.is_empty() {
+            // A photo with no caption is still an entry. Dropping it here made
+            // the preview under-count exactly the entries the import would go
+            // on to write (on a commit run the media link fills the body in).
+            if body.is_empty() && entry_media == 0 {
                 continue;
             }
             let title = if e.starred.unwrap_or(false) { "*" } else { "" };
@@ -2186,7 +2388,11 @@ impl Store {
                 .captures(&name)
                 .and_then(|c| c.get(1))
                 .map(|m| m.as_str().to_string())
-                .filter(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok());
+                .filter(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok())
+                // No date in the filename? Fall back to the file's own date,
+                // like the Swift importer's `.creationDateKey` — skipping these
+                // silently dropped whole folders of undated notes.
+                .or_else(|| file_date(p));
             let Some(date) = date else { continue };
             // Fan out +1s from noon per same-date file, so order stays stable.
             let offset = *per_date.entry(date.clone()).or_insert(0);
@@ -2207,6 +2413,18 @@ impl Store {
         let (added, skipped) = self.append_filed_entries(prepared);
         json!({ "ok": true, "entries": added, "skipped": skipped, "media": 0 })
     }
+}
+
+/// The date a file was created, or failing that last modified — Linux
+/// filesystems don't always carry a birth time.
+fn file_date(path: &Path) -> Option<String> {
+    let md = fs::metadata(path).ok()?;
+    let t = md.created().or_else(|_| md.modified()).ok()?;
+    Some(
+        chrono::DateTime::<Local>::from(t)
+            .format("%Y-%m-%d")
+            .to_string(),
+    )
 }
 
 /// "Deep Thoughts" → "deep-thoughts"; a tag must start with a letter.
@@ -2352,4 +2570,111 @@ pub fn now_date() -> String {
 #[allow(dead_code)]
 fn _use_datelike(d: NaiveDate) -> i32 {
     d.year()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A throwaway journal folder — these tests exercise the file ops, so they
+    /// need a real base directory (never the user's).
+    fn temp_store() -> Store {
+        let base = std::env::temp_dir().join(format!("nook-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(base.join("journal")).unwrap();
+        Store { base, mode: "local".into() }
+    }
+
+    #[test]
+    fn timestamps_are_validated_through_the_parser() {
+        assert!(valid_timestamp("2026-05-10 08:00:00"));
+        assert!(!valid_timestamp(""));
+        assert!(!valid_timestamp("2026-05-10"));
+        assert!(!valid_timestamp("2026-05-10 08:00"));
+    }
+
+    #[test]
+    fn a_headerless_replacement_is_an_error_not_a_delete() {
+        assert!(replacement_entries("[] still typing\nbody").is_err());
+        assert!(replacement_entries("").is_ok()); // blank is a deliberate clear
+        assert_eq!(
+            replacement_entries("[2026-05-10 08:00:00] ok\nbody").unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn clearing_the_date_leaves_the_draft_alone() {
+        let s = temp_store();
+        let before = "[2026-05-10 08:00:00] one\nfirst\n\n[2026-05-11 09:00:00] two\nsecond\n";
+        fs::write(s.inbox_path(), before).unwrap();
+        let drafts = parser::parse_entries(before);
+        let err = s
+            .update_draft(&drafts[1].ts, &drafts[1].raw, "[] two\nsecond")
+            .unwrap_err();
+        assert_eq!(err, BAD_TIMESTAMP);
+        assert_eq!(read_string(&s.inbox_path()), before);
+        // …and the composer refuses the same input.
+        assert!(s.upsert_draft(None, "", "two", "second").is_err());
+        assert_eq!(read_string(&s.inbox_path()), before);
+        fs::remove_dir_all(&s.base).ok();
+    }
+
+    #[test]
+    fn toggle_star_finds_the_same_second_twin_by_raw() {
+        let s = temp_store();
+        let day = s.journal_file("2026-05-10").unwrap();
+        fs::create_dir_all(day.parent().unwrap()).unwrap();
+        fs::write(
+            &day,
+            "[2026-05-10 08:00:00] one\nfirst\n\n[2026-05-10 08:00:00] two\nsecond\n",
+        )
+        .unwrap();
+        let entries = s.entries_for_day("2026-05-10");
+        let target = entries[1].clone();
+        let source = Source { kind: "archive".into(), arg: Some("2026-05-10".into()) };
+        s.toggle_star(&source, &target.ts, &target.raw).unwrap();
+        let after = s.entries_for_day("2026-05-10");
+        assert_eq!(after[0].suffix, "one");
+        assert_eq!(after[1].suffix, "two *");
+        fs::remove_dir_all(&s.base).ok();
+    }
+
+    #[test]
+    fn frontend_names_cannot_escape_the_journal_folder() {
+        assert!(safe_component("Morning Pages"));
+        assert!(!safe_component(""));
+        assert!(!safe_component(".."));
+        assert!(!safe_component("../inbox"));
+        assert!(!safe_component("nested/name"));
+
+        let s = temp_store();
+        let inbox = s.inbox_path();
+        fs::write(&inbox, "[2026-05-10 08:00:00] keep\nbody\n").unwrap();
+        // `assets/../inbox.md` used to resolve straight onto the journal.
+        s.delete_asset("assets/../inbox.md");
+        s.delete_asset("../inbox.md");
+        assert!(inbox.exists());
+        assert!(s.delete_journal_entry("../inbox", "2026-05-10 08:00:00", "x").is_err());
+        assert!(s.entries_in_journal("../inbox").is_empty());
+        fs::remove_dir_all(&s.base).ok();
+    }
+
+    #[test]
+    fn an_unavailable_folder_blocks_writes_instead_of_recreating_itself() {
+        let gone = std::env::temp_dir().join(format!("nook-gone-{}", uuid::Uuid::new_v4()));
+        let s = Store { base: gone.clone(), mode: "missing".into() };
+        assert!(s.upsert_draft(None, &now_ts(), "", "body").is_err());
+        assert!(s.import_drafts("a stray thought").is_err());
+        assert!(s.save_asset(b"x", "png").is_none());
+        assert!(!s.backup_now().0);
+        // Nothing was conjured up where the drive used to be.
+        assert!(!gone.exists());
+    }
+
+    #[test]
+    fn year_of_survives_a_non_ascii_folder_name() {
+        assert_eq!(year_of("2026-05-10"), "2026");
+        assert_eq!(year_of("日本語-05-10"), "日本語-");
+        assert_eq!(year_of("26"), "26");
+    }
 }

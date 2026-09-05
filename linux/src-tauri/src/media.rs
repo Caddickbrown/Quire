@@ -16,22 +16,37 @@ pub fn is_compressible_image(ext: &str) -> bool {
 }
 
 pub fn is_video(ext: &str) -> bool {
-    matches!(ext, "mov" | "mp4" | "m4v" | "webm" | "mkv")
+    crate::parser::media_kind(ext) == crate::parser::MediaKind::Video
 }
 
+/// The audio formats ffmpeg can re-encode for us. Narrower than the parser's
+/// `AUDIO_EXTS` (which is about *classifying* a link): `wav`/`aiff`/`caf` are
+/// left alone, and `weba` is WebM audio — what the recorder falls back to when
+/// the webview can't give us Ogg/Opus.
 pub fn is_audio(ext: &str) -> bool {
-    matches!(ext, "m4a" | "mp3" | "ogg" | "opus" | "oga")
+    matches!(ext, "m4a" | "mp3" | "ogg" | "opus" | "oga" | "weba")
 }
 
 pub fn is_transcodable(ext: &str) -> bool {
     is_video(ext) || is_audio(ext)
 }
 
+/// The longest edge Data Saver downsamples to.
+const MAX_EDGE: u32 = 2048;
+
 /// Downsample to 2048px on the longest edge and re-encode in the same format.
 /// Returns None if the data can't be decoded (caller keeps the original bytes).
 pub fn downsample(data: &[u8], ext: &str) -> Option<Vec<u8>> {
     let img = image::load_from_memory(data).ok()?;
-    let shrunk = img.thumbnail(2048, 2048); // preserves aspect, only downsizes
+    // `thumbnail` scales by a ratio that is *not* clamped to 1, so an image
+    // already smaller than 2048px came back enlarged — a Data Saver that made
+    // files bigger. Only resize when there is something to shrink.
+    let (w, h) = (img.width(), img.height());
+    let shrunk = if w > MAX_EDGE || h > MAX_EDGE {
+        img.thumbnail(MAX_EDGE, MAX_EDGE) // preserves aspect
+    } else {
+        img
+    };
     let mut buf: Vec<u8> = Vec::new();
     match ext {
         "jpg" | "jpeg" => {
@@ -114,10 +129,64 @@ fn ffmpeg_args(ext: &str) -> Option<Vec<String>> {
             s("-c:a"), s("libopus"), s("-b:a"), s("64k"),
         ]),
         "m4a" => Some(vec![s("-c:a"), s("aac"), s("-b:a"), s("48k"), s("-ac"), s("1")]),
+        // WebM audio: ffmpeg won't infer a muxer from ".weba", so name it.
+        "weba" => Some(vec![
+            s("-c:a"), s("libopus"), s("-b:a"), s("48k"), s("-ac"), s("1"), s("-f"), s("webm"),
+        ]),
         "mp3" => Some(vec![s("-c:a"), s("libmp3lame"), s("-b:a"), s("64k"), s("-ac"), s("1")]),
         "ogg" | "opus" | "oga" => {
             Some(vec![s("-c:a"), s("libopus"), s("-b:a"), s("48k"), s("-ac"), s("1")])
         }
         _ => None,
+    }
+}
+
+/// Replace `path`'s contents atomically: write a sibling temp file, fsync it,
+/// then rename over the original. A crash mid-write leaves the old file whole
+/// rather than a truncated one — the same discipline `store::write_file` uses
+/// for journal text.
+pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let tmp = path.with_file_name(format!("._tmp_{}", uuid::Uuid::new_v4()));
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_saver_never_enlarges_a_small_image() {
+        // `thumbnail` scales by an unclamped ratio, so a 120×80 photo used to
+        // come back as 2048×1365 — Data Saver making the file bigger.
+        let small = image::RgbImage::new(120, 80);
+        let mut png: Vec<u8> = Vec::new();
+        image::DynamicImage::ImageRgb8(small)
+            .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .unwrap();
+        let out = downsample(&png, "png").unwrap();
+        let decoded = image::load_from_memory(&out).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (120, 80));
+    }
+
+    #[test]
+    fn a_big_image_still_shrinks_to_the_long_edge() {
+        let big = image::RgbImage::new(4096, 2048);
+        let mut png: Vec<u8> = Vec::new();
+        image::DynamicImage::ImageRgb8(big)
+            .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .unwrap();
+        let out = downsample(&png, "png").unwrap();
+        let decoded = image::load_from_memory(&out).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (2048, 1024));
     }
 }

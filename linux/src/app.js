@@ -13,7 +13,7 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 function el(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; }
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
-function debounce(fn, ms) { let t; const f = (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; f.cancel = () => clearTimeout(t); f.now = (...a) => { clearTimeout(t); fn(...a); }; return f; }
+function debounce(fn, ms) { let t; const f = (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; f.cancel = () => clearTimeout(t); f.now = (...a) => { clearTimeout(t); return fn(...a); }; return f; }
 function fmtBytes(n) { if (n < 1024) return n + " B"; const u = ["KB", "MB", "GB", "TB"]; let i = -1; do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1); return n.toFixed(n < 10 ? 1 : 0) + " " + u[i]; }
 function plural(n, w) { return n + " " + w + (n === 1 ? "" : "s"); }
 
@@ -153,6 +153,18 @@ function jsNowTs() {
   const d = new Date(), p = n => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
+/* A jnl header timestamp. Anything else (a cleared or half-typed date field)
+   composes `[]`, which parses to no entry at all — saving that used to delete
+   the entry it was meant to replace. */
+const TS_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+function validTs(ts) { return TS_RE.test(String(ts || "")); }
+/* Show the refusal on the field itself; returns `ok` so callers can guard. */
+function flagDate(input, ok) {
+  if (!input) return ok;
+  const w = input.closest(".date-wrap"); if (w) w.classList.toggle("invalid", !ok);
+  input.title = ok ? "" : "Needs a full date and time before this entry can save.";
+  return ok;
+}
 function tsToInput(ts) { return ts.replace(" ", "T"); }
 function inputToTs(v) { v = v.replace("T", " "); return v.length === 16 ? v + ":00" : v; }
 function timeOf(ts) { return ts.slice(11, 16); }
@@ -176,7 +188,9 @@ const S = {
   timer: { remaining: 900, running: false, int: null },
   editor: null,            // active EntryEditor (flush on teardown)
   insertMedia: null,       // fn(rel) to append media into the active editor
+  newEntry: null,          // fn() the composer's New button, for Ctrl+N
   recorder: null,
+  onMediaProgress: null,   // fn(done, total) while Compress Existing Media runs
 };
 
 const SECTIONS = [
@@ -257,20 +271,53 @@ function promptModal(title, initial = "", label = "") {
   });
 }
 let toastTimer;
-function toast(msg) {
-  const r = $("#toast-root"); r.innerHTML = ""; r.appendChild(el(`<div class="toast">${esc(msg)}</div>`));
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => (r.innerHTML = ""), 1800);
+function toast(msg, error) {
+  const r = $("#toast-root"); r.innerHTML = ""; r.appendChild(el(`<div class="toast ${error ? "error" : ""}">${esc(msg)}</div>`));
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (r.innerHTML = ""), error ? 4000 : 1800);
 }
+
+/* ------------------------------------------------------------------ */
+/* Disk writes                                                         */
+/* ------------------------------------------------------------------ */
+/* Every write runs on one chain, so a debounced autosave can't overlap itself
+   and fork a draft (two commits passing the same `previous`), and a refresh can
+   wait for the write in flight. Never enqueue from inside an enqueued function
+   — the chain would deadlock. */
+let writeChain = Promise.resolve();
+function enqueue(fn) { const p = writeChain.then(fn, fn); writeChain = p.catch(() => {}); return p; }
+function writesSettled() { return writeChain; }
+/* Writes can fail — a read-only folder, a full disk, an entry whose text no
+   longer parses as one. Say so rather than toasting "Saved" over the failure. */
+function toastError(e) { toast(String((e && e.message) || e || "Couldn't write to disk"), true); }
+async function writeCmd(cmd, args) {
+  try { return { ok: true, value: await enqueue(() => invoke(cmd, args)) }; }
+  catch (e) { toastError(e); return { ok: false }; }
+}
+/* commit() resolves true (saved), "invalid" (refused, the date field is
+   flagged) or false (the write failed and already toasted). */
+function saveOutcome(r) { if (r === "invalid") toast("Fix the date before saving", true); return r === true; }
 
 /* ------------------------------------------------------------------ */
 /* Data refresh                                                        */
 /* ------------------------------------------------------------------ */
 async function refresh(rerender = true) {
+  await writesSettled(); // never reload over a save still in flight
   S.snap = await invoke("reload");
+  renderStorageBanner();
   S.savedSearches = await invoke("saved_searches").catch(() => []) || [];
   renderSidebar();
   renderMiniCal();
   if (rerender) renderView();
+}
+
+/* A chosen journal folder that has gone missing is not a footnote in Settings:
+   every write is refused while it's away, so say so where it can't be missed. */
+function renderStorageBanner() {
+  const existing = $("#storage-banner"); if (existing) existing.remove();
+  if (!S.snap || S.snap.storage_mode !== "missing") return;
+  const b = el(`<div id="storage-banner" class="storage-banner">${icon("x.circle", 15)}<span>Journal folder unavailable — <span class="mono">${esc(S.snap.base_path)}</span>. Nothing can be saved until it's back.</span><button>Settings</button></div>`);
+  $("button", b).onclick = () => setSection("settings");
+  document.body.appendChild(b);
 }
 
 /* ------------------------------------------------------------------ */
@@ -364,7 +411,11 @@ function renderMiniCal() {
     const key = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
     const inMonth = d.getMonth() === m;
     const info = dayInfo[key];
-    const cell = el(`<div class="mc-day ${inMonth ? "inmonth" : ""} ${info ? "has" : ""} ${key === todayKey ? "today" : ""}">${d.getDate()}${info && info.has_starred ? '<span class="mc-star">' + icon("star.fill", 6) + "</span>" : ""}</div>`);
+    // Media-typed dots under the number (photo / video / audio), the way the
+    // Swift mini-calendar marks a day — and what the README has been promising.
+    const dots = info ? ["has_photo", "has_video", "has_audio"].filter(k => info[k]).map(k => `<span class="mc-dot ${k.slice(4)}"></span>`).join("") : "";
+    const cell = el(`<div class="mc-day ${inMonth ? "inmonth" : ""} ${info ? "has" : ""} ${key === todayKey ? "today" : ""}">${d.getDate()}${info && info.has_starred ? '<span class="mc-star">' + icon("star.fill", 6) + "</span>" : ""}${dots ? `<span class="mc-dots">${dots}</span>` : ""}</div>`);
+    if (dots) cell.title = ["photo", "video", "audio"].filter((_, i) => [info.has_photo, info.has_video, info.has_audio][i]).join(" · ");
     if (info) cell.onclick = () => openDay(key);
     grid.appendChild(cell);
   }
@@ -385,18 +436,20 @@ function shiftMonth(delta) { let { y, m } = S.cal; m += delta; if (m < 0) { m = 
 /* ------------------------------------------------------------------ */
 /* Navigation                                                          */
 /* ------------------------------------------------------------------ */
-function teardownEditor() { if (S.editor) { S.editor.flush(); S.editor = null; } S.insertMedia = null; }
-async function setSection(sec) { teardownEditor(); S.sec = sec; S.sub = null; renderSidebar(); renderFooterControls(); await refresh(false); renderView(); }
-function openDay(date) { teardownEditor(); S.sec = "archive"; S.sub = { type: "day", date }; renderSidebar(); renderView(); }
-function openJournalFile(name) { teardownEditor(); S.sec = "split"; S.sub = { type: "journalFile", name }; renderView(); }
-function openTagDetail(tag) { teardownEditor(); S.sec = "tags"; S.sub = { type: "tag", tag }; renderView(); }
+/* Awaited everywhere: the pending autosave has to land before the next view
+   reads the journal, or the edit looks lost until the following reload. */
+async function teardownEditor() { const ed = S.editor; S.editor = null; S.insertMedia = null; if (ed) await ed.flush(); }
+async function setSection(sec) { await teardownEditor(); S.sec = sec; S.sub = null; renderSidebar(); renderFooterControls(); await refresh(false); renderView(); }
+async function openDay(date) { await teardownEditor(); S.sec = "archive"; S.sub = { type: "day", date }; renderSidebar(); renderView(); }
+async function openJournalFile(name) { await teardownEditor(); S.sec = "split"; S.sub = { type: "journalFile", name }; renderView(); }
+async function openTagDetail(tag) { await teardownEditor(); S.sec = "tags"; S.sub = { type: "tag", tag }; renderView(); }
 function goBack() { if (S.sub) { S.sub = null; renderView(); } }
 
 /* ------------------------------------------------------------------ */
 /* View router                                                         */
 /* ------------------------------------------------------------------ */
-function renderView() {
-  teardownEditor();
+async function renderView() {
+  await teardownEditor();
   const main = $("#main"); main.innerHTML = "";
   if (S.sub) {
     if (S.sub.type === "day") return renderDay(main, S.sub.date);
@@ -437,15 +490,23 @@ function renderWrite(main) {
   const view = el(`<div class="view"></div>`);
   const h = header("Write");
   const st = { title: "", date: jsNowTs(), text: "", activeTS: null, recording: false };
+  // Serialised: two overlapping autosaves would both read the same `previous`
+  // and leave the draft forked in two.
+  const commit = reindex => enqueue(() => doCommit(reindex));
   const save = debounce(commit, 500);
-  async function commit(reindex) {
+  const dateOK = () => flagDate(dateI, validTs(st.date));
+  async function doCommit(reindex) {
     const ts = inputToTs(tsToInput(st.date));
-    if (!st.text.trim() && !st.title.trim()) { if (st.activeTS) { await invoke("remove_draft", { timestamp: st.activeTS }); st.activeTS = null; } }
-    else { st.activeTS = (await invoke("upsert_draft", { previous: st.activeTS, timestamp: ts, title: st.title, body: st.text })) ?? ts; }
+    try {
+      if (!st.text.trim() && !st.title.trim()) { if (st.activeTS) { await invoke("remove_draft", { timestamp: st.activeTS }); st.activeTS = null; } }
+      else if (!dateOK()) return "invalid";
+      else st.activeTS = (await invoke("upsert_draft", { previous: st.activeTS, timestamp: ts, title: st.title, body: st.text })) ?? ts;
+    } catch (e) { toastError(e); return false; }
     if (reindex) refresh(false).then(renderSidebar);
+    return true;
   }
   // toolbar buttons
-  const newBtn = el(`<button class="tbtn" title="New (Ctrl+S)">${icon("square.and.pencil")}New</button>`);
+  const newBtn = el(`<button class="tbtn" title="New entry (Ctrl+N)">${icon("square.and.pencil")}New</button>`);
   const recBtn = el(`<button class="tbtn icon" title="Record audio">${icon("mic")}</button>`);
   const moreBtn = el(`<button class="tbtn icon" title="More">${icon("ellipsis")}</button>`);
   h.append(newBtn, recBtn, moreBtn);
@@ -469,20 +530,23 @@ function renderWrite(main) {
   titleI.oninput = () => { st.title = titleI.value; save(); };
   titleI.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); bodyI.focus(); } };
   bodyI.oninput = () => { st.text = bodyI.value; syncPh(); save(); };
-  dateI.onchange = () => { st.date = inputToTs(dateI.value); save(); };
+  dateI.onchange = () => { st.date = inputToTs(dateI.value); if (dateOK()) save(); };
   view.appendChild(composer);
   main.appendChild(view);
   setTimeout(() => bodyI.focus(), 20);
 
   // media insertion target
   S.insertMedia = rel => { bodyI.value += (bodyI.value ? "\n\n" : "") + `![](${rel})`; st.text = bodyI.value; syncPh(); save.now(true); };
-  S.editor = { flush: () => { save.cancel(); commit(true); } };
+  S.editor = { flush: () => { save.cancel(); return commit(true); } };
 
   // IMPORTANT: await the save before clearing, else commit()'s async tail resets
   // st.activeTS to the just-saved entry — and the next entry's autosave would then
   // pass it as `previous` and delete the entry we just filed into the inbox.
-  async function reset() { save.cancel(); await commit(true); st.title = ""; st.text = ""; st.date = jsNowTs(); st.activeTS = null; titleI.value = ""; bodyI.value = ""; dateI.value = tsToInput(st.date); syncPh(); bodyI.focus(); }
-  newBtn.onclick = async () => { const had = st.text.trim() || st.title.trim(); await reset(); if (had) toast("Saved to inbox"); };
+  // A refused save keeps the text on screen — clearing it would throw the entry away.
+  async function reset() { save.cancel(); if (!saveOutcome(await commit(true))) return false; st.title = ""; st.text = ""; st.date = jsNowTs(); st.activeTS = null; titleI.value = ""; bodyI.value = ""; dateI.value = tsToInput(st.date); dateOK(); syncPh(); bodyI.focus(); return true; }
+  newBtn.onclick = async () => { const had = st.text.trim() || st.title.trim(); if (!(await reset())) return; if (had) toast("Saved to inbox"); };
+  // Ctrl+N in the composer means the same thing the button does.
+  S.newEntry = newBtn.onclick;
   recBtn.onclick = () => toggleRecord(recBtn, composer);
   moreBtn.onclick = async () => {
     const templates = await invoke("template_names").catch(() => []);
@@ -499,14 +563,22 @@ function renderWrite(main) {
     } })),
     ...(pref("writingPrompts") ? [{ label: "New Prompt", icon: "shuffle", action: () => { promptOffset++; syncPrompt(); } }] : []),
     { sep: true },
-    { label: "Discard", icon: "trash", danger: true, disabled: !st.text.trim() && !st.title.trim() && !st.activeTS, action: async () => { save.cancel(); if (st.activeTS) await invoke("remove_draft", { timestamp: st.activeTS }); st.title = ""; st.text = ""; st.activeTS = null; titleI.value = ""; bodyI.value = ""; syncPh(); toast("Discarded"); refresh(false).then(renderSidebar); } },
-    { label: "Import as separate entries", icon: "split.import", disabled: !st.text.trim(), action: async () => { save.cancel(); if (st.activeTS) { await invoke("remove_draft", { timestamp: st.activeTS }); st.activeTS = null; } const n = await invoke("import_drafts", { text: st.text }); st.title = ""; st.text = ""; titleI.value = ""; bodyI.value = ""; syncPh(); toast(`Imported ${plural(n, "entry").replace("entrys", "entries")}`); refresh(false).then(renderSidebar); } },
+    { label: "Discard", icon: "trash", danger: true, disabled: !st.text.trim() && !st.title.trim() && !st.activeTS, action: async () => { save.cancel(); if (st.activeTS && !(await writeCmd("remove_draft", { timestamp: st.activeTS })).ok) return; st.title = ""; st.text = ""; st.activeTS = null; titleI.value = ""; bodyI.value = ""; syncPh(); toast("Discarded"); refresh(false).then(renderSidebar); } },
+    { label: "Import as separate entries", icon: "split.import", disabled: !st.text.trim(), action: async () => { save.cancel(); if (st.activeTS) { if (!(await writeCmd("remove_draft", { timestamp: st.activeTS })).ok) return; st.activeTS = null; } const r = await writeCmd("import_drafts", { text: st.text }); if (!r.ok) return; const n = r.value; st.title = ""; st.text = ""; titleI.value = ""; bodyI.value = ""; syncPh(); toast(`Imported ${plural(n, "entry").replace("entrys", "entries")}`); refresh(false).then(renderSidebar); } },
   ]);
   };
   syncPh();
 }
 
 /* Attach / record helpers (shared by composer + entry editor) */
+/* Recordings cross the IPC bridge as the request body, not as JSON: a ten-
+   megabyte take used to be serialised as ten million integers in a JSON array,
+   which froze the window for seconds while both sides chewed through the text. */
+async function saveRecording(blob, ext) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  try { return await invoke("save_asset", bytes, { headers: { ext } }); }
+  catch (e) { toastError(e); return null; }
+}
 async function attachMedia() {
   const paths = await invoke("pick_media_files");
   for (const p of paths) { const rel = await invoke("import_asset", { src: p }); if (rel && S.insertMedia) S.insertMedia(rel); }
@@ -520,7 +592,7 @@ async function recordVideo() {
     const vid = el(`<video autoplay muted playsinline style="width:100%;max-height:50vh;background:#000;border-radius:10px"></video>`); vid.srcObject = stream;
     const body = el(`<div style="padding:16px;display:flex;flex-direction:column;gap:10px"></div>`); body.append(vid);
     const mo = modal({ title: "Record Video", bodyEl: body, foot: [stopBtn] });
-    rec.onstop = async () => { stream.getTracks().forEach(t => t.stop()); mo.close(); const blob = new Blob(chunks, { type: "video/webm" }); const buf = new Uint8Array(await blob.arrayBuffer()); const rel = await invoke("save_asset", { bytes: Array.from(buf), ext: "webm" }); if (rel && S.insertMedia) S.insertMedia(rel); };
+    rec.onstop = async () => { stream.getTracks().forEach(t => t.stop()); mo.close(); const rel = await saveRecording(new Blob(chunks, { type: "video/webm" }), "webm"); if (rel && S.insertMedia) S.insertMedia(rel); };
     stopBtn.onclick = () => rec.stop(); rec.start();
   } catch (e) { alertModal("Camera unavailable", "Could not access the camera: " + e.message); }
 }
@@ -529,7 +601,9 @@ async function toggleRecord(button, container) {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     let mime = "audio/ogg;codecs=opus"; if (!MediaRecorder.isTypeSupported(mime)) mime = "audio/webm";
-    const ext = mime.startsWith("audio/ogg") ? "ogg" : "webm";
+    // A voice memo in a WebM container is `.weba`, not `.webm` — filed as the
+    // latter every list, dot and `has:` filter called it a video.
+    const ext = mime.startsWith("audio/ogg") ? "ogg" : "weba";
     const rec = new MediaRecorder(stream, { mimeType: mime }); const chunks = [];
     rec.ondataavailable = e => chunks.push(e.data);
     let elapsed = 0; const t0 = Date.now();
@@ -538,7 +612,7 @@ async function toggleRecord(button, container) {
     (container || $("#main")).appendChild(banner);
     button.classList.add("rec-on"); button.innerHTML = icon("stop");
     $(".rec-stop", banner).onclick = () => rec.stop();
-    rec.onstop = async () => { clearInterval(tick); banner.remove(); button.classList.remove("rec-on"); button.innerHTML = icon("mic"); stream.getTracks().forEach(t => t.stop()); S.recorder = null; const blob = new Blob(chunks, { type: mime }); const buf = new Uint8Array(await blob.arrayBuffer()); const rel = await invoke("save_asset", { bytes: Array.from(buf), ext }); if (rel && S.insertMedia) S.insertMedia(rel); };
+    rec.onstop = async () => { clearInterval(tick); banner.remove(); button.classList.remove("rec-on"); button.innerHTML = icon("mic"); stream.getTracks().forEach(t => t.stop()); S.recorder = null; const rel = await saveRecording(new Blob(chunks, { type: mime }), ext); if (rel && S.insertMedia) S.insertMedia(rel); };
     rec.start(); S.recorder = rec;
   } catch (e) { alertModal("Microphone unavailable", "Could not access the microphone: " + e.message); }
 }
@@ -592,8 +666,8 @@ function twoPane({ entries, sourceFor, showTime, fullDate, groupByDate, oldestFi
   const key = ctxKey || "pane";
 
   let currentRow = null;
-  function selectDetail(item, row) {
-    teardownEditor();
+  async function selectDetail(item, row) {
+    await teardownEditor();
     S.sel[key] = item.entry.ts + "|" + item.entry.raw;
     const myRow = row || $$(".row", list).find(r => r._key === S.sel[key]) || null;
     currentRow = myRow;
@@ -605,7 +679,11 @@ function twoPane({ entries, sourceFor, showTime, fullDate, groupByDate, oldestFi
       // every save (incl. autosave): keep this item + its list row in sync, so a
       // later reselect shows the edited text rather than the stale original.
       onSaved: (ts, title, body, raw) => {
-        item.entry = patchEntry(item.entry, ts, title, body, raw);
+        // Patched in place: `item.entry` is the same object the caller's list
+        // (for the Inbox, the snapshot itself) holds, so a rebuild after a
+        // search or a sort re-seeds the editor with the edit, not the original.
+        Object.assign(item.entry, patchEntry(item.entry, ts, title, body, raw));
+        if (item.source.kind === "inbox") item.date = item.entry.date;
         const newKey = ts + "|" + raw;
         if (myRow === currentRow) S.sel[key] = newKey;
         if (myRow) {
@@ -627,6 +705,10 @@ function twoPane({ entries, sourceFor, showTime, fullDate, groupByDate, oldestFi
       if (groupByDate && d !== lastDate) { lastDate = d; list.appendChild(el(`<div class="list-section-header">${esc(sectionDate(d))}</div>`)); }
       const row = entryRow(item.entry, { showTime, fullDate, date: item.date, inboxBadge: item.source.kind === "inbox" });
       row._key = item.entry.ts + "|" + item.entry.raw;
+      // The row keeps its item, so a caller replacing the context menu reads
+      // the live entry (patched in place by onSaved) rather than re-deriving it
+      // from a key that an edit has already moved on from.
+      row._item = item;
       row.classList.toggle("selected", S.sel[key] === row._key);
       row.onclick = () => selectDetail(item, row);
       row.oncontextmenu = e => { e.preventDefault(); rowMenu(e.clientX, e.clientY, item, onDelete); };
@@ -643,16 +725,17 @@ function twoPane({ entries, sourceFor, showTime, fullDate, groupByDate, oldestFi
 function rowMenu(x, y, item, onDelete) {
   const src = item.source;
   openMenuAt(x, y, [
-    { label: item.entry.is_starred ? "Unstar" : "Star", icon: item.entry.is_starred ? "star.slash" : "star", action: async () => { await invoke("toggle_star", { source: src, ts: item.entry.ts, raw: item.entry.raw }); (onDelete || (() => refresh()))(); } },
+    { label: item.entry.is_starred ? "Unstar" : "Star", icon: item.entry.is_starred ? "star.slash" : "star", action: async () => { if (!(await writeCmd("toggle_star", { source: src, ts: item.entry.ts, raw: item.entry.raw })).ok) return; (onDelete || (() => refresh()))(); } },
     { label: "Reveal in Files", icon: "folder", action: () => invoke("reveal_entry", { source: src }) },
     { sep: true },
-    { label: "Delete", icon: "trash", danger: true, action: async () => { await deleteEntryBySource(item.entry, src); (onDelete || (() => refresh()))(); } },
+    { label: "Delete", icon: "trash", danger: true, action: async () => { if (!(await deleteEntryBySource(item.entry, src))) return; (onDelete || (() => refresh()))(); } },
   ]);
 }
 async function deleteEntryBySource(entry, src) {
-  if (src.kind === "inbox") await invoke("delete_draft", { ts: entry.ts, raw: entry.raw });
-  else if (src.kind === "archive") await invoke("delete_filed_entry", { date: src.arg, ts: entry.ts, raw: entry.raw });
-  else if (src.kind === "journal") await invoke("delete_journal_entry", { name: src.arg, ts: entry.ts, raw: entry.raw });
+  if (src.kind === "inbox") return (await writeCmd("delete_draft", { ts: entry.ts, raw: entry.raw })).ok;
+  if (src.kind === "archive") return (await writeCmd("delete_filed_entry", { date: src.arg, ts: entry.ts, raw: entry.raw })).ok;
+  if (src.kind === "journal") return (await writeCmd("delete_journal_entry", { name: src.arg, ts: entry.ts, raw: entry.raw })).ok;
+  return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -683,20 +766,18 @@ function renderInbox(main) {
     const items = list.map(e => ({ entry: e, date: e.date, source: { kind: "inbox", arg: null } }));
     bodyWrap.innerHTML = "";
     pane = twoPane({ entries: items, showTime: true, groupByDate: true, oldestFirst: pref("inboxSort") === "oldest", ctxKey: "inbox", onDelete: () => refresh() });
-    // custom row menu: add Archive
-    pane.wrap.querySelectorAll(".row").forEach(() => {});
     bodyWrap.appendChild(pane.wrap);
     // override context menu to include Archive/File
     pane.list.querySelectorAll(".row").forEach((row) => {
       row.oncontextmenu = e => {
         e.preventDefault();
-        const key = row._key; const entry = drafts.find(d => (d.ts + "|" + d.raw) === key); if (!entry) return;
+        const entry = row._item && row._item.entry; if (!entry) return;
         openMenuAt(e.clientX, e.clientY, [
-          { label: "Archive", icon: "archivebox", action: async () => { await invoke("file_draft", { ts: entry.ts, raw: entry.raw }); refresh(); } },
-          { label: entry.is_starred ? "Unstar" : "Star", icon: entry.is_starred ? "star.slash" : "star", action: async () => { await invoke("toggle_star", { source: { kind: "inbox", arg: null }, ts: entry.ts, raw: entry.raw }); refresh(); } },
+          { label: "Archive", icon: "archivebox", action: async () => { if (!(await writeCmd("file_draft", { ts: entry.ts, raw: entry.raw })).ok) return; refresh(); } },
+          { label: entry.is_starred ? "Unstar" : "Star", icon: entry.is_starred ? "star.slash" : "star", action: async () => { if (!(await writeCmd("toggle_star", { source: { kind: "inbox", arg: null }, ts: entry.ts, raw: entry.raw })).ok) return; refresh(); } },
           { label: "Reveal in Files", icon: "folder", action: () => invoke("reveal_entry", { source: { kind: "inbox", arg: null } }) },
           { sep: true },
-          { label: "Delete", icon: "trash", danger: true, action: async () => { await invoke("delete_draft", { ts: entry.ts, raw: entry.raw }); refresh(); } },
+          { label: "Delete", icon: "trash", danger: true, action: async () => { if (!(await writeCmd("delete_draft", { ts: entry.ts, raw: entry.raw })).ok) return; refresh(); } },
         ]);
       };
     });
@@ -707,8 +788,8 @@ function renderInbox(main) {
     { label: "Sort", header: true },
     ...[["newest", "Newest first"], ["oldest", "Oldest first"], ["longest", "Longest first"], ["shortest", "Shortest first"]].map(([k, l]) => ({ label: l, checked: pref("inboxSort") === k, action: () => { setPref("inboxSort", k); rebuild(); } })),
     { sep: true },
-    { label: "File All", icon: "archivebox", disabled: !S.snap.inbox_drafts.length, action: async () => { const n = await invoke("file_all_drafts"); toast(`Filed ${plural(n, "draft")}`); refresh(); } },
-    { label: "Sort file by date", icon: "calendar", action: async () => { await invoke("sort_inbox"); toast("Inbox sorted"); refresh(); } },
+    { label: "File All", icon: "archivebox", disabled: !S.snap.inbox_drafts.length, action: async () => { const r = await writeCmd("file_all_drafts"); if (r.ok) toast(`Filed ${plural(r.value, "draft")}`); refresh(); } },
+    { label: "Sort file by date", icon: "calendar", action: async () => { if (!(await writeCmd("sort_inbox")).ok) return; toast("Inbox sorted"); refresh(); } },
   ]);
   rebuild();
 }
@@ -938,7 +1019,12 @@ async function renderTagDetail(main, tag) {
 /* ------------------------------------------------------------------ */
 /* ASSETS                                                              */
 /* ------------------------------------------------------------------ */
-function assetKind(name) { const e = name.split(".").pop().toLowerCase(); if (["mov", "mp4", "m4v", "webm", "mkv"].includes(e)) return "video"; if (["m4a", "mp3", "wav", "aac", "ogg", "opus", "flac", "aiff", "caf"].includes(e)) return "audio"; return "image"; }
+/* The same extension lists as Rust's `parser::media_kind` and Swift's
+   `MediaKind` — keep the three in step. `.weba` is WebM audio, what the voice
+   recorder falls back to when the webview can't give us Ogg/Opus. */
+const VIDEO_EXTS = ["mov", "mp4", "m4v", "webm", "mkv"];
+const AUDIO_EXTS = ["m4a", "mp3", "wav", "aac", "aiff", "caf", "ogg", "oga", "opus", "flac", "weba"];
+function assetKind(name) { const e = String(name).split(".").pop().toLowerCase(); if (VIDEO_EXTS.includes(e)) return "video"; if (AUDIO_EXTS.includes(e)) return "audio"; return "image"; }
 async function renderAssets(main) {
   const view = el(`<div class="view"></div>`);
   const h = header("Assets");
@@ -987,20 +1073,29 @@ function entryEditor(entry, source, { onChange, onSaved } = {}) {
     baseline: entry.raw, mode: source.kind === "inbox" ? "edit" : "preview",
     activeTS: entry.ts, activeRaw: entry.raw,
   };
+  const commit = reindex => enqueue(() => doCommit(reindex)); // serialised, like the composer
   const save = debounce(commit, 600);
+  let dateInput = null; // the live date field while in edit mode
+  const dateOK = () => flagDate(dateInput, validTs(st.date));
   function composedRaw() {
     const ts = inputToTs(tsToInput(st.date)); const t = st.title.trim(); const b = st.text.replace(/\n+$/, "");
     if (t && b) return `[${ts}] ${t}\n${b}`; if (t) return `[${ts}] ${t}`; return `[${ts}]\n${b}`;
   }
-  async function commit(reindex) {
-    const raw = composedRaw(); if (raw === st.baseline) { if (reindex && onChange) onChange(); return; }
+  async function doCommit(reindex) {
+    // `[]` is not a header: the entry would parse to nothing and the save would
+    // delete it. Refuse, and leave the text on screen.
+    if (!dateOK()) return "invalid";
+    const raw = composedRaw(); if (raw === st.baseline) { if (reindex && onChange) onChange(); return true; }
     const newText = raw;
-    if (source.kind === "inbox") await invoke("update_draft", { ts: st.activeTS, raw: st.activeRaw, newText });
-    else if (source.kind === "archive") await invoke("update_filed_entry", { date: source.arg, ts: st.activeTS, raw: st.activeRaw, newText });
-    else await invoke("update_journal_entry", { name: source.arg, ts: st.activeTS, raw: st.activeRaw, newText });
+    try {
+      if (source.kind === "inbox") await invoke("update_draft", { ts: st.activeTS, raw: st.activeRaw, newText });
+      else if (source.kind === "archive") await invoke("update_filed_entry", { date: source.arg, ts: st.activeTS, raw: st.activeRaw, newText });
+      else await invoke("update_journal_entry", { name: source.arg, ts: st.activeTS, raw: st.activeRaw, newText });
+    } catch (e) { toastError(e); return false; } // baseline untouched: still dirty, retried on the next save
     st.baseline = raw; st.activeRaw = raw; st.activeTS = inputToTs(tsToInput(st.date));
     if (onSaved) onSaved(st.activeTS, st.title, st.text, raw);
     if (reindex && onChange) onChange();
+    return true;
   }
 
   // control bar
@@ -1037,14 +1132,16 @@ function entryEditor(entry, source, { onChange, onSaved } = {}) {
     </div></div>`);
     const ti = $(".title-input", p), di = $(".date-wrap input", p), bi = $(".body-editor", p), ph = $(".placeholder-overlay", p);
     ti.value = st.title; di.value = tsToInput(st.date); bi.value = st.text; ph.style.display = st.text ? "none" : "block";
+    dateInput = di; dateOK();
     ti.oninput = () => { st.title = ti.value; updateStar(); save(); };
     bi.oninput = () => { st.text = bi.value; ph.style.display = bi.value ? "none" : "block"; save(); };
-    di.onchange = () => { st.date = inputToTs(di.value); save(); };
+    di.onchange = () => { st.date = inputToTs(di.value); if (dateOK()) save(); };
     S.insertMedia = rel => { bi.value += (bi.value ? "\n\n" : "") + `![](${rel})`; st.text = bi.value; ph.style.display = "none"; save.now(false); };
     setTimeout(() => bi.focus(), 20);
     return p;
   }
   function previewPane() {
+    dateInput = null; // no date field in preview
     S.insertMedia = rel => { st.text += (st.text ? "\n\n" : "") + `![](${rel})`; save.now(false); renderMode(); };
     return mediaPreview(st.text, st.title, st.date, newBody => { st.text = newBody; save.now(false); renderMode(); });
   }
@@ -1053,9 +1150,9 @@ function entryEditor(entry, source, { onChange, onSaved } = {}) {
   modeBtn.onclick = () => { st.mode = st.mode === "edit" ? "preview" : "edit"; renderMode(); };
   starBtn.onclick = () => { const base = isStarred() ? st.title.trim().replace(/\*$/, "").trim() : st.title.trim(); st.title = isStarred() ? base : (base ? base + " *" : "*"); if (st.mode === "edit") { const ti = $(".title-input", bodyArea); if (ti) ti.value = st.title; } updateStar(); save.now(false); onChange && setTimeout(onChange, 50); };
   recBtn.onclick = () => toggleRecord(recBtn, container);
-  saveBtn.onclick = () => { save.now(true); toast("Saved"); };
-  fileBtn.onclick = async () => { save.cancel(); await commit(false); await invoke("file_draft", { ts: st.activeTS, raw: st.activeRaw }); toast("Filed"); refresh(); };
-  delBtn.onclick = async () => { if (await confirmModal("Delete entry?", "This cannot be undone.", "Delete", true)) { save.cancel(); await deleteEntryBySource({ ts: st.activeTS, raw: st.activeRaw }, source); onChange ? onChange() : refresh(); } };
+  saveBtn.onclick = async () => { if (saveOutcome(await save.now(true))) toast("Saved"); };
+  fileBtn.onclick = async () => { save.cancel(); if (!saveOutcome(await commit(false))) return; if (!(await writeCmd("file_draft", { ts: st.activeTS, raw: st.activeRaw })).ok) return; toast("Filed"); refresh(); };
+  delBtn.onclick = async () => { if (await confirmModal("Delete entry?", "This cannot be undone.", "Delete", true)) { save.cancel(); if (!(await deleteEntryBySource({ ts: st.activeTS, raw: st.activeRaw }, source))) return; onChange ? onChange() : refresh(); } };
   moreBtn.onclick = () => menuFromButton(moreBtn, [
     { label: "Attach Media", icon: "paperclip", action: attachMedia },
     { label: "Record Video", icon: "video", action: recordVideo },
@@ -1064,7 +1161,7 @@ function entryEditor(entry, source, { onChange, onSaved } = {}) {
   ]);
 
   // register editor teardown
-  S.editor = { flush: () => { save.cancel(); commit(true); } };
+  S.editor = { flush: () => { save.cancel(); return commit(true); } };
   return container;
 }
 
@@ -1245,12 +1342,14 @@ async function renderSettings(main) {
 
   // Journal folder
   const folderCard = el(`<div class="card"><h3>Journal folder</h3></div>`);
-  folderCard.appendChild(el(`<div class="field"><div class="lbl">Storage</div><div class="sub">${S.snap.storage_mode === "custom" ? "Custom folder" : "On this device"}</div></div>`));
+  const MODE_LABEL = { custom: "Custom folder", local: "On this device", missing: "Unavailable" };
+  folderCard.appendChild(el(`<div class="field"><div class="lbl">Storage</div><div class="sub">${MODE_LABEL[S.snap.storage_mode] || "On this device"}</div></div>`));
+  if (S.snap.storage_mode === "missing") folderCard.appendChild(el(`<div class="field"><div class="sub" style="color:var(--danger)">This folder isn't there right now — an unmounted drive, or one that's been renamed. Nook won't write until it's back, so nothing lands in the wrong place. Reconnect it, or choose another folder below.</div></div>`));
   folderCard.appendChild(el(`<div class="field"><div class="lbl">Location</div><div class="mono">${esc(S.snap.base_path)}</div></div>`));
   const frow = el(`<div class="btnrow"></div>`);
-  const choose = btn("Choose Folder…", { icon: "folder" }); choose.onclick = async () => { const snap = await invoke("pick_journal_folder"); if (snap) { S.snap = snap; toast("Folder changed"); renderView(); renderMiniCal(); renderSidebar(); } };
+  const choose = btn("Choose Folder…", { icon: "folder" }); choose.onclick = async () => { const snap = await invoke("pick_journal_folder"); if (snap) { S.snap = snap; renderStorageBanner(); toast("Folder changed"); renderView(); renderMiniCal(); renderSidebar(); } };
   frow.appendChild(choose);
-  if (S.snap.storage_mode === "custom") { const def = btn("Use Default", { icon: "arrow.uturn.backward", danger: true }); def.onclick = async () => { S.snap = await invoke("use_default_folder"); toast("Using default folder"); renderView(); renderMiniCal(); renderSidebar(); }; frow.appendChild(def); }
+  if (S.snap.storage_mode !== "local") { const def = btn("Use Default", { icon: "arrow.uturn.backward", danger: true }); def.onclick = async () => { S.snap = await invoke("use_default_folder"); renderStorageBanner(); toast("Using default folder"); renderView(); renderMiniCal(); renderSidebar(); }; frow.appendChild(def); }
   const showF = btn("Show in Files", { icon: "folder" }); showF.onclick = () => invoke("reveal_base"); frow.appendChild(showF);
   folderCard.appendChild(frow);
   folderCard.appendChild(el(`<div class="field"><div class="sub">Data is plain markdown: inbox.md + journal/YYYY/MM/DD.md — shareable with the jnl CLI.</div></div>`));
@@ -1294,9 +1393,21 @@ async function renderSettings(main) {
   // Maintenance
   const maint = el(`<div class="card"><h3>Maintenance</h3></div>`);
   const mrow = el(`<div class="btnrow"></div>`);
-  const clean = btn("Clean Up", { icon: "wand" }); clean.onclick = async () => { const r = await invoke("cleanup"); alertModal("Cleanup complete", `Formatted ${r.formatted}, reordered ${r.reordered}, removed ${plural(r.deduped, "duplicate")}, extracted ${r.extracted} to split journals.`); refresh(); };
-  const compress = btn("Compress Existing Media", { icon: "photo.badge.down" }); compress.onclick = async () => { compress.disabled = true; compress.textContent = "Compressing…"; const r = await invoke("compress_existing_media"); compress.disabled = false; compress.innerHTML = icon("photo.badge.down", 14) + "Compress Existing Media"; alertModal("Compression complete", `${r.images} image(s), ${r.videos} video(s), ${r.audios} audio — saved ${fmtBytes(r.bytes_saved)}.`); refresh(); };
-  const merge = btn("Merge Ex-Split Journals", { icon: "merge" }); merge.onclick = async () => { const r = await invoke("merge_ex_split_journals"); alertModal("Merge complete", `Merged ${plural(r.journals, "journal")} (${plural(r.entries, "entry").replace("entrys", "entries")}) back into the main journal.`); refresh(); };
+  const clean = btn("Clean Up", { icon: "wand" }); clean.onclick = async () => { const { ok, value: r } = await writeCmd("cleanup"); if (!ok) return; alertModal("Cleanup complete", `Formatted ${r.formatted}, reordered ${r.reordered}, removed ${plural(r.deduped, "duplicate")}, extracted ${r.extracted} to split journals.`); refresh(); };
+  const compress = btn("Compress Existing Media", { icon: "photo.badge.down" });
+  compress.onclick = async () => {
+    compress.disabled = true; compress.textContent = "Compressing…";
+    S.onMediaProgress = (done, total) => { compress.textContent = total ? `Compressing ${done}/${total}…` : "Compressing…"; };
+    try {
+      const r = await invoke("compress_existing_media");
+      alertModal("Compression complete", `${r.images} image(s), ${r.videos} video(s), ${r.audios} audio — saved ${fmtBytes(r.bytes_saved)}.`);
+      refresh();
+    } finally {
+      S.onMediaProgress = null;
+      compress.disabled = false; compress.innerHTML = icon("photo.badge.down", 14) + "Compress Existing Media";
+    }
+  };
+  const merge = btn("Merge Ex-Split Journals", { icon: "merge" }); merge.onclick = async () => { const { ok, value: r } = await writeCmd("merge_ex_split_journals"); if (!ok) return; alertModal("Merge complete", `Merged ${plural(r.journals, "journal")} (${plural(r.entries, "entry").replace("entrys", "entries")}) back into the main journal.`); refresh(); };
   const tagReview = btn("Tag Review", { icon: "seal" }); tagReview.onclick = openTagReview;
   const orphan = btn("Clear Orphan Media", { icon: "trash" }); orphan.onclick = async () => { const o = await invoke("orphan_assets"); if (!o.length) return alertModal("Orphan media", "No orphan media."); if (await confirmModal("Clear orphan media?", `Delete ${plural(o.length, "unused file")}?`, "Delete", true)) { const n = await invoke("delete_orphan_assets"); alertModal("Done", `Cleared ${plural(n, "file")}.`); refresh(); } };
   const exp = btn("Export…", { icon: "square.and.arrow.up" }); exp.onclick = async () => { const r = await invoke("export_to_file"); if (r.message) alertModal("Export", r.message); };
@@ -1318,7 +1429,7 @@ async function renderSettings(main) {
 
   // Shortcuts
   const sc = el(`<div class="card"><h3>Keyboard shortcuts</h3><div class="shortcut-list">
-    <div>New entry</div><div class="k">Ctrl+N</div><div>Save</div><div class="k">Ctrl+S</div>
+    <div>New entry (Write)</div><div class="k">Ctrl+N</div><div>Save</div><div class="k">Ctrl+S</div>
     <div>Write / Inbox / Journal / Tags</div><div class="k">Ctrl+1…4</div><div>Random entry (Journal)</div><div class="k">Ctrl+R</div>
     <div>Focus mode</div><div class="k">Ctrl+Alt+F</div><div>Settings</div><div class="k">Ctrl+,</div>
   </div></div>`);
@@ -1327,7 +1438,7 @@ async function renderSettings(main) {
   // How to
   const howto = el(`<div class="card howto"><h3>How to</h3></div>`);
   const topics = [
-    ["Writing & autosave", "Type freely in Write. Your text saves to the Inbox automatically as one draft. Give it a title or leave it blank. Press Ctrl+S (New) to start a fresh entry."],
+    ["Writing & autosave", "Type freely in Write. Your text saves to the Inbox automatically as one draft. Give it a title or leave it blank. Ctrl+S saves right away; New (Ctrl+N) banks what you've written and starts a fresh entry."],
     ["The Inbox — filing drafts", "The Inbox holds unfiled drafts. Right-click a draft to Archive it (files it into journal/YYYY/MM/DD.md), star it, or delete it. Use File All to file everything."],
     ["The Journal — browsing", "Journal groups every filed entry by day. Search across all entries, sort newest/oldest, or hit Random (Ctrl+R)."],
     ["Tags & Tag Review", "Write @tags anywhere in an entry. The Tags view collects them. Tag Review (Maintenance) finds near-duplicate tags and merges them."],
@@ -1372,7 +1483,7 @@ async function openTagReview() {
     const merges = [];
     for (const g of groups) { const keep = choices[g.id]; if (keep) for (const v of g.variants) if (v.tag !== keep) merges.push([v.tag, keep]); }
     mo.close();
-    if (merges.length) { await invoke("merge_tags", { pairs: merges }); toast(`Merged ${plural(merges.length, "tag")}`); refresh(); }
+    if (merges.length) { if (!(await writeCmd("merge_tags", { pairs: merges })).ok) return; toast(`Merged ${plural(merges.length, "tag")}`); refresh(); }
   };
   render();
 }
@@ -1380,14 +1491,14 @@ async function openTagReview() {
 /* ------------------------------------------------------------------ */
 /* Keyboard shortcuts + global events                                  */
 /* ------------------------------------------------------------------ */
-document.addEventListener("keydown", e => {
+document.addEventListener("keydown", async e => {
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
   if (e.altKey && (e.key === "f" || e.key === "F")) { e.preventDefault(); document.body.classList.toggle("focus"); return; }
   const inField = ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
   switch (e.key) {
-    case "n": case "N": e.preventDefault(); setSection("write"); break;
-    case "s": case "S": if (S.sec === "write" || S.editor) { e.preventDefault(); if (S.editor) S.editor.flush(); toast("Saved"); refresh(false).then(renderSidebar); } break;
+    case "n": case "N": e.preventDefault(); if (S.sec === "write" && S.newEntry) S.newEntry(); else setSection("write"); break;
+    case "s": case "S": if (S.sec === "write" || S.editor) { e.preventDefault(); if (S.editor && !saveOutcome(await S.editor.flush())) break; toast("Saved"); refresh(false).then(renderSidebar); } break;
     case "1": e.preventDefault(); setSection("write"); break;
     case "2": e.preventDefault(); setSection("inbox"); break;
     case "3": e.preventDefault(); setSection("archive"); break;
@@ -1403,7 +1514,10 @@ listen("tauri://drag-drop", async e => {
   if (!paths.length || !S.insertMedia) return;
   for (const p of paths) { const rel = await invoke("import_asset", { src: p }); if (rel) S.insertMedia(rel); }
 });
-listen("media-progress", () => {}); // reserved for progress UI
+/* Compression runs on a worker thread and reports (done, total); whoever
+   started it registers a handler so the button can count up instead of just
+   sitting there saying "Compressing…". */
+listen("media-progress", e => { if (S.onMediaProgress && e.payload) S.onMediaProgress(e.payload.done, e.payload.total); });
 
 /* ------------------------------------------------------------------ */
 /* Boot                                                                */

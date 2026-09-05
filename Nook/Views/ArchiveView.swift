@@ -307,7 +307,54 @@ struct EntryTwoPane: View {
             open(entry)
         }
         .onAppear { rowKeys = Self.makeRowKeys(entries) }
-        .onChange(of: entries.map(\.id)) { _, _ in rowKeys = Self.makeRowKeys(entries) }
+        .onChange(of: entries.map(\.id)) { _, _ in
+            rowKeys = Self.makeRowKeys(entries)
+            resyncOpenEntry()
+        }
+    }
+
+    /// Keep the open pane pointed at something real. The detail is rendered from
+    /// a retained copy so that narrowing the search doesn't close what you're
+    /// editing — but that copy also outlived the entry being deleted (from a row's
+    /// menu, or from the pane itself), leaving a ghost editor writing into a file
+    /// the entry has gone from. So: adopt the store's fresh copy while the entry
+    /// is still there, and clear the selection once it isn't.
+    private func resyncOpenEntry() {
+        guard let open = openEntry else { return }
+        if let live = liveEntry(matching: open) {
+            guard live.id != open.id else { return }
+            openEntry = live
+            if selectedTS != nil { selectedTS = key(live) }
+        } else {
+            openEntry = nil
+            selectedTS = nil
+        }
+    }
+
+    /// The current copy of an entry, or nil if the store no longer holds it.
+    /// Deliberately not identity-based: `Entry.id` is a fresh UUID per parse,
+    /// and an open editor rewrites — and on a re-date moves — the very entry
+    /// being looked for, so the timestamp alone isn't enough either. Falls back
+    /// to the entry itself for same-second twins, which no key can tell apart:
+    /// "still there, don't re-point".
+    private func liveEntry(matching e: Entry) -> Entry? {
+        func find(_ pool: [Entry]) -> Entry? {
+            let sameTS = pool.filter { $0.ts == e.ts }
+            if sameTS.count == 1 { return sameTS[0] }
+            if let exact = sameTS.first(where: { $0.raw == e.raw }) { return exact }
+            if !sameTS.isEmpty { return e }
+            let sameText = pool.filter { $0.suffix == e.suffix && $0.body == e.body }
+            if sameText.count == 1 { return sameText[0] }
+            return sameText.isEmpty ? nil : e
+        }
+        // The visible list first; then the whole source, because `entries` also
+        // narrows as you type in the search field.
+        if let hit = find(entries) { return hit }
+        switch sourceFor(e) {
+        case .inbox:          return find(store.inboxDrafts)
+        case .archive(let d): return find(store.allEntriesByDay().first(where: { $0.date == d })?.entries ?? [])
+        case .journal(let n): return find(store.entries(inJournal: n))
+        }
     }
 
     /// Open the keyboard-selected entry: the side pane on macOS, a push on iOS.
@@ -374,6 +421,12 @@ struct EntryTwoPane: View {
     }
 
     private func delete(_ entry: Entry) {
+        // Close the pane with the row it belongs to — waiting for the reload to
+        // notice would leave an editor open on a deleted entry for a beat.
+        if openEntry?.id == entry.id || selectedTS == key(entry) {
+            openEntry = nil
+            selectedTS = nil
+        }
         switch sourceFor(entry) {
         case .inbox:            store.deleteDraft(entry)
         case .archive(let d):   store.deleteFiledEntry(date: d, entry: entry)
@@ -390,11 +443,15 @@ struct DayView: View {
     @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
     let date: String
 
+    /// Loaded once per store revision. Reading `store.entries(for:)` from `body`
+    /// re-read the day's file on every redraw — including every keystroke in the
+    /// pane beside it.
+    @State private var entries: [Entry] = []
     @State private var pdfDoc: PDFExportDocument?
     @State private var makingPDF = false
 
     var body: some View {
-        EntryTwoPane(entries: store.entries(for: date),
+        EntryTwoPane(entries: entries,
                      sourceFor: { _ in .archive(date: date) },
                      listTitle: Theme.sectionDate(date, style: dateStyleRaw),
                      showTime: true)
@@ -424,13 +481,19 @@ struct DayView: View {
                 get: { pdfDoc != nil },
                 set: { if !$0 { pdfDoc = nil } }
             ), document: pdfDoc, contentType: .pdf, defaultFilename: "nook-\(date).pdf") { _ in }
+            // The cached corpus every other list reads from; only a day that
+            // somehow isn't in it falls back to touching the file.
+            .task(id: store.revision) {
+                entries = store.allEntriesByDay().first(where: { $0.date == date })?.entries
+                    ?? store.entries(for: date)
+            }
     }
 
     private func exportPDF() {
         makingPDF = true
         Task { @MainActor in
             defer { makingPDF = false }
-            let data = await PDFExporter.makePDF(days: [(date, store.entries(for: date))],
+            let data = await PDFExporter.makePDF(days: [(date, entries)],
                                                  store: store,
                                                  dateStyleRaw: dateStyleRaw,
                                                  fontRaw: writingFontRaw,
@@ -445,7 +508,7 @@ struct DayView: View {
         makingPDF = true
         Task { @MainActor in
             defer { makingPDF = false }
-            guard let data = await PDFExporter.makePDF(days: [(date, store.entries(for: date))],
+            guard let data = await PDFExporter.makePDF(days: [(date, entries)],
                                                        store: store,
                                                        dateStyleRaw: dateStyleRaw,
                                                        fontRaw: writingFontRaw,

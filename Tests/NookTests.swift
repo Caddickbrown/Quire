@@ -19,6 +19,30 @@ import XCTest
 // MARK: - jnl parser parity (mirrors ~/Code/jnl/main_test.go)
 
 final class JournalParserTests: XCTestCase {
+    /// The star marker is a standalone token. A bare `hasSuffix("*")` also
+    /// matched a markdown-bold title, which then lost one `*` per un-star.
+    func testStarMarkerIsAStandaloneToken() {
+        func titled(_ suffix: String) -> Entry {
+            JournalParser.parseEntries("[2026-05-10 08:00:00] \(suffix)\nbody\n").first!
+        }
+        XCTAssertTrue(titled("Morning *").isStarred)
+        XCTAssertTrue(titled("*").isStarred, "a bare marker is the whole title")
+        XCTAssertFalse(titled("**bold**").isStarred, "markdown bold is not a star")
+        XCTAssertFalse(titled("2 * 3").isStarred, "a mid-title asterisk is not a marker")
+        XCTAssertFalse(titled("").isStarred)
+        XCTAssertEqual(titled("Morning *").displayTitle, "Morning")
+        XCTAssertEqual(titled("*").displayTitle, "")
+        XCTAssertEqual(titled("**bold**").displayTitle, "**bold**")
+
+        // Round-trip, mirroring JournalStore.toggleStar's title arithmetic.
+        for title in ["Morning", "**bold**", "", "2 * 3"] {
+            let base = titled(title).displayTitle.trimmingCharacters(in: .whitespaces)
+            let starred = titled(base.isEmpty ? "*" : base + " *")
+            XCTAssertTrue(starred.isStarred, "starring \(title)")
+            XCTAssertEqual(starred.displayTitle, base, "un-starring \(title)")
+        }
+    }
+
     func testParseBasicFields() {
         let e = JournalParser.parseEntries("[2026-05-10 08:00:00] A title\nfirst line\nsecond line\n")
         XCTAssertEqual(e.count, 1)
@@ -33,7 +57,9 @@ final class JournalParserTests: XCTestCase {
         let e = JournalParser.parseEntries(src)
         XCTAssertEqual(e.map(\.suffix), ["one", "two"])
         XCTAssertEqual(JournalParser.leadingPreamble(src), "orphan line")
-        XCTAssertEqual(JournalParser.leadingPreamble("\n\n[2026-05-10 08:00:00] x\n"), "")
+        XCTAssertEqual(JournalParser.leadingPreamble("[2026-05-10 08:00:00] x\nbody\n"), "", "none")
+        XCTAssertEqual(JournalParser.leadingPreamble("\n\n[2026-05-10 08:00:00] x\n"), "", "blank only")
+        XCTAssertEqual(JournalParser.leadingPreamble("a\nb\n[2026-05-10 08:00:00] x\n"), "a\nb", "multiline")
         XCTAssertEqual(JournalParser.leadingPreamble("just text\nmore text\n"), "just text\nmore text")
     }
 
@@ -60,11 +86,40 @@ final class JournalParserTests: XCTestCase {
                                                    entries: once)
         XCTAssertEqual(JournalParser.parseEntries(rendered).map(\.raw), once.map(\.raw))
         XCTAssertEqual(JournalParser.renderEntries(preamble: "", entries: []), "")
+
+        // Byte-for-byte, as jnl's rebuildInbox writes it.
+        let e = Entry(date: "2026-05-10", ts: "2026-05-10 08:00:00", suffix: "a",
+                      body: "body", raw: "[2026-05-10 08:00:00] a\nbody")
+        XCTAssertEqual(JournalParser.renderEntries(preamble: "loose note", entries: [e]),
+                       "loose note\n\n[2026-05-10 08:00:00] a\nbody\n")
     }
 
     func testTagsWholeTokens() {
         XCTAssertEqual(JournalParser.splitTags("real @work item and @health-check not @1bad"),
                        ["@work", "@health-check"])
+    }
+
+    /// Why one editor's text is always one entry. Pasting a day's worth of
+    /// entries into the composer used to be written verbatim, so the next parse
+    /// of inbox.md handed back extra drafts — and every autosave added more.
+    /// `JournalStore.makeEntry` escapes the embedded headers (the composer
+    /// offers Import instead); these are the parser facts that rests on.
+    func testEmbeddedHeadersSplitUnlessEscaped() {
+        let pasted = "[2026-05-10 08:00:00] one\nbody1\n\n[2026-05-11 09:00:00] two\nbody2"
+        XCTAssertEqual(JournalParser.parseEntries(pasted).count, 2, "a pasted body is two entries")
+        XCTAssertTrue(JournalParser.parseEntries("just prose\nno headers").isEmpty)
+
+        // The escape the composer applies, line by line: `\[` is no longer a header.
+        let escaped = pasted.components(separatedBy: "\n")
+            .map { JournalParser.parseEntries($0).count == 1 ? "\\" + $0 : $0 }
+            .joined(separator: "\n")
+        XCTAssertTrue(JournalParser.parseEntries(escaped).isEmpty, "escaped headers are body text")
+
+        let parsed = JournalParser.parseEntries("[2026-05-12 07:00:00] kept\n" + escaped + "\n")
+        XCTAssertEqual(parsed.count, 1, "one draft stays one entry")
+        let rendered = JournalParser.renderEntries(preamble: "", entries: parsed)
+        XCTAssertEqual(JournalParser.parseEntries(rendered).map(\.raw), parsed.map(\.raw),
+                       "an escaped body round-trips unchanged")
     }
 }
 
@@ -124,6 +179,14 @@ final class SearchQueryTests: XCTestCase {
         XCTAssertFalse(phrase.matches(entry("2026-01-01", "", "exact other phrase")))
         XCTAssertTrue(SearchQuery.parse("after:2026-03").matches(entry("2026-03-01", "", "x")))
     }
+
+    func testPlainTermsSkipTheTimestampHeader() {
+        // "2025" used to match every entry written that year, via entry.raw.
+        let year = SearchQuery.parse("2025")
+        XCTAssertFalse(year.matches(entry("2025-06-01", "Morning", "nothing about the year here")))
+        XCTAssertTrue(year.matches(entry("2026-01-01", "", "back in 2025 I moved")), "body")
+        XCTAssertTrue(year.matches(entry("2026-01-01", "Trip 2025", "body")), "title")
+    }
 }
 
 // MARK: - Editor list continuation
@@ -146,6 +209,21 @@ final class ListContinuationTests: XCTestCase {
         XCTAssertEqual(ListContinuation.action(for: "- [x] done thing"),
                        .continueList(prefix: "- [ ] "), "next box starts unchecked")
         XCTAssertEqual(ListContinuation.action(for: "- [ ] "), .endList(prefixLength: 6))
+    }
+
+    func testZeroPaddedAndHugeOrderedNumbers() {
+        XCTAssertEqual(ListContinuation.action(for: "007. item"), .continueList(prefix: "8. "))
+        // The prefix is measured from the match, not re-rendered from the Int.
+        XCTAssertEqual(ListContinuation.action(for: "007. "), .endList(prefixLength: 5))
+        XCTAssertEqual(ListContinuation.action(for: "  007) "), .endList(prefixLength: 7))
+        XCTAssertEqual(ListContinuation.action(for: "9223372036854775807. item"),
+                       .continueList(prefix: "9223372036854775807. "), "Int.max must not overflow")
+    }
+
+    func testCRLFLinesBehaveLikeLFOnes() {
+        XCTAssertEqual(ListContinuation.action(for: "- milk\r\n"), .continueList(prefix: "- "))
+        XCTAssertEqual(ListContinuation.action(for: "- \r\n"), .endList(prefixLength: 2))
+        XCTAssertEqual(ListContinuation.action(for: "- [ ] \r\n"), .endList(prefixLength: 6))
     }
 
     func testPlainProseIsUntouched() {

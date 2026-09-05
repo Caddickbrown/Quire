@@ -138,6 +138,11 @@ struct WritingTextEditor: NSViewRepresentable {
         let signature = styleSignature
         if tv.string != text {
             tv.string = text
+            // A wholesale swap (a different entry loaded, a template inserted,
+            // a sync landing) leaves the undo stack holding ranges into text
+            // that no longer exists, so ⌘Z would splice them into the new
+            // document. Nothing here is worth undoing across that boundary.
+            tv.undoManager?.removeAllActions()
             apply(to: tv)
             context.coordinator.lastStyleSignature = signature
         } else if context.coordinator.lastStyleSignature != signature {
@@ -369,7 +374,10 @@ struct WritingTextEditor: NSViewRepresentable {
             guard sel.length == 0 else { return false }
             let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
             var line = ns.substring(with: lineRange)
-            if line.hasSuffix("\n") { line = String(line.dropLast()) }
+            // lineRange takes the terminator with it, and that isn't always a
+            // lone "\n" — a pasted-in CRLF is one Character, so dropping the
+            // last Character strips the pair.
+            while let last = line.last, last.isNewline { line.removeLast() }
             // Only when the caret sits at the end of the line's content.
             let contentEnd = lineRange.location + (line as NSString).length
             guard sel.location == contentEnd else { return false }
@@ -470,6 +478,10 @@ struct WritingTextEditor: UIViewRepresentable {
         let signature = styleSignature
         if tv.text != text {
             tv.text = text
+            // Same reason as the macOS side: a wholesale swap invalidates every
+            // range the undo stack is holding, so drop it rather than let a
+            // shake-to-undo paste the old entry's edits into the new one.
+            tv.undoManager?.removeAllActions()
             apply(to: tv)
             context.coordinator.lastStyleSignature = signature
         } else if context.coordinator.lastStyleSignature != signature {
@@ -732,7 +744,9 @@ struct WritingTextEditor: UIViewRepresentable {
             let ns = textView.text as NSString
             let lineRange = ns.lineRange(for: NSRange(location: range.location, length: 0))
             var line = ns.substring(with: lineRange)
-            if line.hasSuffix("\n") { line = String(line.dropLast()) }
+            // The terminator comes along with lineRange and isn't always a lone
+            // "\n" — a pasted-in CRLF is one Character, so this strips the pair.
+            while let last = line.last, last.isNewline { line.removeLast() }
             let contentEnd = lineRange.location + (line as NSString).length
             guard range.location == contentEnd else { return true }
             switch ListContinuation.action(for: line) {

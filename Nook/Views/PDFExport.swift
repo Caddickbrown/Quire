@@ -13,6 +13,9 @@ import UniformTypeIdentifiers
 
 enum PDFExporter {
     static let pageWidth: CGFloat = 612   // US Letter width in points
+    /// PDF's own ceiling on a page dimension (200 inches). A day long enough to
+    /// exceed it is sliced across several pages rather than silently truncated.
+    static let maxPageHeight: CGFloat = 14_400
 
     /// Render days (oldest first) into a single PDF. Runs on the main actor
     /// (ImageRenderer requires it) but yields between days so a big journal
@@ -38,11 +41,25 @@ enum PDFExporter {
             let renderer = ImageRenderer(content: page)
             renderer.proposedSize = ProposedViewSize(width: pageWidth, height: nil)
             renderer.render { size, draw in
-                var box = CGRect(origin: .zero, size: CGSize(width: pageWidth,
-                                                             height: max(size.height, 100)))
-                ctx.beginPage(mediaBox: &box)
-                draw(ctx)
-                ctx.endPDFPage()
+                let content = max(size.height, 100)
+                // One page per day while the day fits; past the PDF limit the
+                // same rendering is cut into equal slices.
+                let slices = max(1, Int((content / maxPageHeight).rounded(.up)))
+                let pageHeight = slices == 1 ? content : maxPageHeight
+                for slice in 0..<slices {
+                    var box = CGRect(origin: .zero,
+                                     size: CGSize(width: pageWidth, height: pageHeight))
+                    ctx.beginPage(mediaBox: &box)
+                    // The renderer draws the whole day with its top at
+                    // y = content (PDF space is y-up), so shifting it down by a
+                    // page at a time brings each slice into the box; slice 0
+                    // needs pageHeight - content, which is 0 in the common case.
+                    ctx.saveGState()
+                    ctx.translateBy(x: 0, y: pageHeight * CGFloat(slice + 1) - content)
+                    draw(ctx)
+                    ctx.restoreGState()
+                    ctx.endPDFPage()
+                }
             }
             await Task.yield()
         }

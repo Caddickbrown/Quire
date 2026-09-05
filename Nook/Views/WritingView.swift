@@ -35,6 +35,7 @@ struct WritingView: View {
     @EnvironmentObject private var nav: NavigationModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accent) private var accent
+    @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -52,6 +53,10 @@ struct WritingView: View {
     @State private var date = Date()
     @State private var text = ""
     @State private var activeTS: String?
+    /// How many `[timestamp]` headers the working text carries. Non-zero means
+    /// a paste that would split into several drafts: the format has no escape
+    /// for a header line, so nothing is written until Import or Keep as one.
+    @State private var embeddedEntries = 0
     @State private var saveTask: Task<Void, Never>?
     @State private var toast: String?
     @State private var showingImagePicker = false
@@ -65,9 +70,20 @@ struct WritingView: View {
 
     private var size: CGFloat { CGFloat(fontSize) }
     private var font: Font { Theme.font(writingFontRaw, size: size) }
-    private var hasText: Bool {
-        !(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    private func isBlank(_ s: String) -> Bool {
+        s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    private var hasText: Bool { !(isBlank(title) && isBlank(text)) }
+
+    /// `jnl new` stamps an entry when you start writing it, not when the app
+    /// launched. On macOS the Write section lives for the whole app lifetime,
+    /// so a `Date()` fixed at view creation stamped the next morning's first
+    /// entry with yesterday's time — and filed it to yesterday. Re-stamp while
+    /// the composer is still untouched; once there is text (or a draft on
+    /// disk) the date belongs to the user and the DatePicker owns it.
+    private func stampIfUntouched(_ wasBlank: Bool) {
+        guard activeTS == nil, wasBlank else { return }
+        date = Date()
     }
 
     var body: some View {
@@ -96,6 +112,11 @@ struct WritingView: View {
             .padding(.bottom, 10)
 
             Divider()
+
+            if embeddedEntries > 0 {
+                pasteBanner
+                Divider()
+            }
 
             WritingTextEditor(text: $text,
                               fontRaw: writingFontRaw,
@@ -137,12 +158,17 @@ struct WritingView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
                         flush()
-                        nav.section = nil
+                        // Not `nil`: at regular width the sidebar is already on
+                        // screen and the detail pane falls back to the composer,
+                        // so clearing the section left Done doing nothing
+                        // visible. Land on the Inbox instead — where the draft
+                        // it just saved is waiting.
+                        nav.section = .inbox
                     } label: {
-                        Label("Done", systemImage: "chevron.left")
+                        Label("Done", systemImage: "checkmark")
                     }
                     .keyboardShortcut(.escape, modifiers: [])
-                    .help("Save to inbox & back to the menu")
+                    .help("Save to inbox & open it")
                 }
             }
             #endif
@@ -265,8 +291,18 @@ struct WritingView: View {
         .sheet(isPresented: $showingPhotoCapture) {
             PhotoCaptureView { url in attachCaptured(url) }
         }
-        .onChange(of: title) { _, _ in scheduleSave() }
-        .onChange(of: text) { _, _ in scheduleSave() }
+        .onChange(of: title) { old, _ in
+            stampIfUntouched(isBlank(old) && isBlank(text))
+            scheduleSave()
+        }
+        .onChange(of: text) { old, _ in
+            stampIfUntouched(isBlank(title) && isBlank(old))
+            scheduleSave()
+        }
+        // Returning to an untouched composer the next day re-stamps it too.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { stampIfUntouched(!hasText) }
+        }
         .onChange(of: date) { _, _ in scheduleSave() }
         .onChange(of: nav.newEntrySignal) { _, _ in newEntry() }
         // Put the live text on a connected external display (iOS second screen).
@@ -285,6 +321,36 @@ struct WritingView: View {
                     .transition(.opacity)
             }
         }
+    }
+
+    /// Shown when the working text holds `[timestamp]` headers of its own. One
+    /// draft is one entry on disk, so text like this has to become several
+    /// drafts (Import) or stop being headers (Keep as one, which escapes them);
+    /// until then the composer saves nothing rather than writing a body that
+    /// would parse back as extra entries.
+    private var pasteBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+            Text(embeddedEntries == 1
+                 ? "This looks like a pasted entry — nothing is saved until you choose."
+                 : "This looks like \(embeddedEntries) entries — nothing is saved until you choose.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button("Import") { importEntries() }
+            Button("Keep as one") { keepAsOne() }
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    /// Escape the embedded header lines (markdown's `\[`) so the text stays one
+    /// draft — visibly, in the composer, so what saves is what you can see.
+    private func keepAsOne() {
+        text = JournalStore.escapingEmbeddedHeaders(text, skippingFirstLine: false)
+        embeddedEntries = 0
     }
 
     /// A recording still running when the view goes away would die with its
@@ -384,21 +450,37 @@ struct WritingView: View {
         }
     }
 
-    private func commit(reindex: Bool = false) {
-        guard hasText else {
+    /// `body` overrides the live text for the one caller that has just rewritten
+    /// it (`flush`) — a `@State` write isn't readable back reliably in the same
+    /// call, and the save must use the text that's about to be shown.
+    private func commit(reindex: Bool = false, body: String? = nil) {
+        let working = body ?? text
+        let empty = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && working.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !empty else {
             if let ts = activeTS { store.removeDraft(timestamp: ts); activeTS = nil }
+            embeddedEntries = 0
             return
         }
+        // A paste holding its own `[timestamp]` headers would come back out of
+        // the inbox as several drafts, and every later autosave would add more.
+        // Leave it undecided (the banner asks) and write nothing.
+        embeddedEntries = JournalStore.embeddedEntryCount(in: working)
+        guard embeddedEntries == 0 else { return }
         let ts = JournalStore.ts(from: date)
         // Adopt the timestamp the store actually used — a colliding second is
         // nudged forward rather than overwriting an unrelated draft.
         activeTS = store.upsertDraft(previous: activeTS, timestamp: ts,
-                                     title: title, body: text, reindex: reindex) ?? ts
+                                     title: title, body: working, reindex: reindex) ?? ts
     }
 
     private func flush() {
         saveTask?.cancel()
-        commit(reindex: true)
+        // Leaving with an undecided paste keeps it as one draft rather than
+        // dropping it — escaped, so what lands on disk is what reopens.
+        let safe = JournalStore.escapingEmbeddedHeaders(text, skippingFirstLine: false)
+        if safe != text { text = safe }
+        commit(reindex: true, body: safe)
     }
 
     /// Where the cursor lands when the composer opens or resets. On iOS people
@@ -430,8 +512,12 @@ struct WritingView: View {
     }
 
     private func importEntries() {
-        // Drop the single working draft, then split the pasted text into drafts.
+        saveTask?.cancel()
+        // Clear everything this working text has already put in the inbox — the
+        // draft under `activeTS`, plus any entries an earlier build's autosave
+        // split out of the pasted body — or the import would stack on top of them.
         if let ts = activeTS { store.removeDraft(timestamp: ts); activeTS = nil }
+        store.removeDrafts(matching: JournalParser.parseEntries(text))
         let n = store.importDrafts(from: text)
         reset()
         showToast(n == 1 ? "Imported 1 entry" : "Imported \(n) entries")
@@ -487,7 +573,17 @@ struct WritingView: View {
                 handled = true
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
                     guard let url else { return }
-                    Task { @MainActor in attachImage(url) }
+                    Task { @MainActor in
+                        // A dropped file only becomes an `![](assets/…)` link, and
+                        // that renders nothing for a .zip or a .docx — so anything
+                        // that isn't image/video/audio is turned away rather than
+                        // copied in behind a link that can never show it.
+                        guard isMediaFile(url) else {
+                            showToast("Only images, video and audio can be attached")
+                            return
+                        }
+                        attachImage(url)
+                    }
                 }
             } else if let id = provider.registeredTypeIdentifiers.first(where: { isMedia($0) }),
                       let type = UTType(id) {
@@ -522,8 +618,18 @@ struct WritingView: View {
         return t.conforms(to: .image) || t.conforms(to: .movie) || t.conforms(to: .audio)
     }
 
+    /// Same test for a dropped file: its own content type when the file system
+    /// knows one, its extension otherwise.
+    private func isMediaFile(_ url: URL) -> Bool {
+        let type = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+            ?? UTType(filenameExtension: url.pathExtension)
+        guard let type else { return false }
+        return type.conforms(to: .image) || type.conforms(to: .movie) || type.conforms(to: .audio)
+    }
+
     private func reset() {
         activeTS = nil
+        embeddedEntries = 0
         title = ""
         text = ""
         date = Date()

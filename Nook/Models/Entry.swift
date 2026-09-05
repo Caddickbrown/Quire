@@ -28,7 +28,12 @@ struct Entry: Identifiable, Hashable {
     /// Starred entries carry a trailing `*` on their title (the header suffix),
     /// so the flag lives in the plain-markdown file and round-trips through the
     /// jnl CLI. Toggling is add/remove of that marker (see `JournalStore.toggleStar`).
-    var isStarred: Bool { suffix.hasSuffix("*") }
+    ///
+    /// The marker is a standalone token — either the whole title or preceded by
+    /// a space. A bare `hasSuffix("*")` also matched a markdown-bold title like
+    /// `**Important**`, which then showed as starred and lost one `*` per
+    /// un-star.
+    var isStarred: Bool { suffix == "*" || suffix.hasSuffix(" *") }
 
     /// The title with any trailing star marker (and surrounding spaces) removed.
     var displayTitle: String {
@@ -68,16 +73,13 @@ struct Entry: Identifiable, Hashable {
         guard !paths.isEmpty else { return [] }
         var image = false, audio = false, video = false, other = false
         for p in paths {
-            switch (p as NSString).pathExtension.lowercased() {
-            case "mov", "mp4", "m4v":
-                video = true
-            case "m4a", "mp3", "wav", "aac", "aiff", "caf":
-                audio = true
-            case "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tiff", "tif", "bmp":
-                image = true
-            default:
-                other = true
-            }
+            // One list, shared with `MediaKind` — they had drifted, so a `.webm`
+            // recording counted as one kind here and another there.
+            let ext = (p as NSString).pathExtension.lowercased()
+            if MediaKind.videoExtensions.contains(ext) { video = true }
+            else if MediaKind.audioExtensions.contains(ext) { audio = true }
+            else if MediaKind.imageExtensions.contains(ext) { image = true }
+            else { other = true }
         }
         var out: [String] = []
         if image { out.append("photo") }

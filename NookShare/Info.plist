@@ -20,6 +20,8 @@
 				<integer>6</integer>
 				<key>NSExtensionActivationSupportsMovieWithMaxCount</key>
 				<integer>1</integer>
+				<key>NSExtensionActivationSupportsAudioWithMaxCount</key>
+				<integer>1</integer>
 			</dict>
 		</dict>
 	</dict>

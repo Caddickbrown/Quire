@@ -13,9 +13,19 @@ use store::{
     resolve_store, AssetItem, CleanupResult, DatedEntry, MediaCompressionResult, MergeResult,
     Snapshot, Source, SourcedEntry, Stats, TagGroup,
 };
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
+
+/// Let the webview's `asset:` protocol read the journal folder — and nothing
+/// else. `tauri.conf.json` ships an empty scope, so the only readable paths are
+/// the ones added here; the base can change at runtime (Settings → Choose
+/// Folder), hence a function rather than a static config glob.
+fn allow_base_asset_access(app: &tauri::AppHandle) {
+    let _ = app
+        .asset_protocol_scope()
+        .allow_directory(&resolve_store().base, true);
+}
 
 // ---- Preferences ----
 
@@ -36,9 +46,22 @@ fn now_ts() -> String {
 
 // ---- Snapshot / loading ----
 
+/// Run a whole-corpus job on a worker thread. A synchronous Tauri command runs
+/// on the GTK main thread, so anything that walks or rewrites every journal
+/// file froze the window while it worked.
+async fn off_main<T, F>(job: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(job)
+        .await
+        .map_err(|_| "That job stopped unexpectedly.".to_string())
+}
+
 #[tauri::command]
-fn reload() -> Snapshot {
-    resolve_store().snapshot()
+async fn reload() -> Result<Snapshot, String> {
+    off_main(|| resolve_store().snapshot()).await
 }
 
 #[tauri::command]
@@ -141,82 +164,92 @@ fn upsert_draft(
     timestamp: String,
     title: String,
     body: String,
-) -> Option<String> {
+) -> Result<Option<String>, String> {
     resolve_store().upsert_draft(previous.as_deref(), &timestamp, &title, &body)
 }
 
 #[tauri::command]
-fn remove_draft(timestamp: String) {
-    resolve_store().remove_draft(&timestamp);
+fn remove_draft(timestamp: String) -> Result<(), String> {
+    resolve_store().remove_draft(&timestamp)
 }
 
 #[tauri::command]
-fn update_draft(ts: String, raw: String, new_text: String) {
-    resolve_store().update_draft(&ts, &raw, &new_text);
+fn update_draft(ts: String, raw: String, new_text: String) -> Result<(), String> {
+    resolve_store().update_draft(&ts, &raw, &new_text)
 }
 
 #[tauri::command]
-fn delete_draft(ts: String, raw: String) {
-    resolve_store().delete_draft(&ts, &raw);
+fn delete_draft(ts: String, raw: String) -> Result<(), String> {
+    resolve_store().delete_draft(&ts, &raw)
 }
 
 #[tauri::command]
-fn import_drafts(text: String) -> usize {
+fn import_drafts(text: String) -> Result<usize, String> {
     resolve_store().import_drafts(&text)
 }
 
 #[tauri::command]
-fn sort_inbox() {
-    resolve_store().sort_inbox();
+fn sort_inbox() -> Result<(), String> {
+    resolve_store().sort_inbox()
 }
 
 #[tauri::command]
-fn file_draft(ts: String, raw: String) -> Option<String> {
+fn file_draft(ts: String, raw: String) -> Result<Option<String>, String> {
     resolve_store().file_draft(&ts, &raw)
 }
 
 #[tauri::command]
-fn file_all_drafts() -> usize {
-    resolve_store().file_all_drafts()
+async fn file_all_drafts() -> Result<usize, String> {
+    off_main(|| resolve_store().file_all_drafts()).await?
 }
 
 // ---- Filed / journal editing ----
 
 #[tauri::command]
-fn update_filed_entry(date: String, ts: String, raw: String, new_text: String) {
-    resolve_store().update_filed_entry(&date, &ts, &raw, &new_text);
+fn update_filed_entry(
+    date: String,
+    ts: String,
+    raw: String,
+    new_text: String,
+) -> Result<(), String> {
+    resolve_store().update_filed_entry(&date, &ts, &raw, &new_text)
 }
 
 #[tauri::command]
-fn delete_filed_entry(date: String, ts: String, raw: String) {
-    resolve_store().delete_filed_entry(&date, &ts, &raw);
+fn delete_filed_entry(date: String, ts: String, raw: String) -> Result<(), String> {
+    resolve_store().delete_filed_entry(&date, &ts, &raw)
 }
 
 #[tauri::command]
-fn update_journal_entry(name: String, ts: String, raw: String, new_text: String) {
-    resolve_store().update_journal_entry(&name, &ts, &raw, &new_text);
+fn update_journal_entry(
+    name: String,
+    ts: String,
+    raw: String,
+    new_text: String,
+) -> Result<(), String> {
+    resolve_store().update_journal_entry(&name, &ts, &raw, &new_text)
 }
 
 #[tauri::command]
-fn delete_journal_entry(name: String, ts: String, raw: String) {
-    resolve_store().delete_journal_entry(&name, &ts, &raw);
+fn delete_journal_entry(name: String, ts: String, raw: String) -> Result<(), String> {
+    resolve_store().delete_journal_entry(&name, &ts, &raw)
 }
 
 #[tauri::command]
-fn toggle_star(source: Source, ts: String, raw: String) {
-    resolve_store().toggle_star(&source, &ts, &raw);
+fn toggle_star(source: Source, ts: String, raw: String) -> Result<(), String> {
+    resolve_store().toggle_star(&source, &ts, &raw)
 }
 
 // ---- Tags ----
 
 #[tauri::command]
-fn rename_tag(old: String, new: String) -> usize {
-    resolve_store().rename_tag(&old, &new)
+async fn rename_tag(old: String, new: String) -> Result<usize, String> {
+    off_main(move || resolve_store().rename_tag(&old, &new)).await?
 }
 
 #[tauri::command]
-fn merge_tags(pairs: Vec<(String, String)>) {
-    resolve_store().merge_tags(&pairs);
+async fn merge_tags(pairs: Vec<(String, String)>) -> Result<(), String> {
+    off_main(move || resolve_store().merge_tags(&pairs)).await?
 }
 
 #[tauri::command]
@@ -266,9 +299,22 @@ fn asset_abs(rel: String) -> String {
     resolve_store().asset_abs(&rel)
 }
 
+/// Media captured in the webview (audio/video recordings) arrives as the raw
+/// request body, not as JSON. A ten-megabyte take used to cross the IPC bridge
+/// as a JSON array of ten million integers — tens of megabytes of text to
+/// serialise and parse, which stalled the window for seconds.
 #[tauri::command]
-fn save_asset(bytes: Vec<u8>, ext: String) -> Option<String> {
-    resolve_store().save_asset(&bytes, &ext)
+fn save_asset(request: tauri::ipc::Request<'_>) -> Result<Option<String>, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Expected the recording's bytes as the request body.".into());
+    };
+    let ext = request
+        .headers()
+        .get("ext")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("bin")
+        .to_string();
+    Ok(resolve_store().save_asset(bytes, &ext))
 }
 
 #[tauri::command]
@@ -300,13 +346,13 @@ fn stats() -> Stats {
 }
 
 #[tauri::command]
-fn cleanup() -> CleanupResult {
-    resolve_store().cleanup()
+async fn cleanup() -> Result<CleanupResult, String> {
+    off_main(|| resolve_store().cleanup()).await?
 }
 
 #[tauri::command]
-fn merge_ex_split_journals() -> MergeResult {
-    resolve_store().merge_ex_split_journals()
+async fn merge_ex_split_journals() -> Result<MergeResult, String> {
+    off_main(|| resolve_store().merge_ex_split_journals()).await?
 }
 
 #[tauri::command]
@@ -325,13 +371,17 @@ async fn pick_journal_folder(app: tauri::AppHandle) -> Option<Snapshot> {
     let folder = rx.recv().await.flatten()?;
     let path = folder.into_path().ok()?;
     store::set_pref("customFolder", json!(path.to_string_lossy()));
-    Some(resolve_store().snapshot())
+    let snap = off_main(|| resolve_store().snapshot()).await.ok()?;
+    allow_base_asset_access(&app);
+    Some(snap)
 }
 
 #[tauri::command]
-fn use_default_folder() -> Snapshot {
+async fn use_default_folder(app: tauri::AppHandle) -> Result<Snapshot, String> {
     store::set_pref("customFolder", Value::Null);
-    resolve_store().snapshot()
+    let snap = off_main(|| resolve_store().snapshot()).await?;
+    allow_base_asset_access(&app);
+    Ok(snap)
 }
 
 #[tauri::command]
@@ -362,9 +412,13 @@ fn backup_folder_info() -> Value {
 }
 
 #[tauri::command]
-fn backup_now() -> Value {
-    let (ok, message) = resolve_store().backup_now();
-    json!({ "ok": ok, "message": message })
+async fn backup_now() -> Value {
+    off_main(|| {
+        let (ok, message) = resolve_store().backup_now();
+        json!({ "ok": ok, "message": message })
+    })
+    .await
+    .unwrap_or_else(|e| json!({ "ok": false, "message": e }))
 }
 
 #[tauri::command]
@@ -425,7 +479,8 @@ async fn pick_media_files(app: tauri::AppHandle) -> Vec<String> {
             "Media",
             &[
                 "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "heic", "heif", "mov",
-                "mp4", "m4v", "webm", "mkv", "m4a", "mp3", "wav", "aac", "ogg", "opus", "flac",
+                "mp4", "m4v", "webm", "mkv", "m4a", "mp3", "wav", "aac", "ogg", "oga", "opus",
+                "flac", "weba",
             ],
         )
         .pick_files(move |list| {
@@ -469,9 +524,21 @@ async fn export_to_file(app: tauri::AppHandle) -> Value {
     }
 }
 
+/// Paths reaching the file manager come from the frontend, so they are pinned
+/// to the journal folder — the app has no business revealing anything else.
+fn within_base(base: &std::path::Path, path: &std::path::Path) -> bool {
+    let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    canon(path).starts_with(canon(base))
+}
+
 #[tauri::command]
 fn reveal_path(app: tauri::AppHandle, path: String) {
-    let _ = app.opener().reveal_item_in_dir(path);
+    let store = resolve_store();
+    let path = std::path::PathBuf::from(&path);
+    if !within_base(&store.base, &path) {
+        return;
+    }
+    let _ = app.opener().reveal_item_in_dir(path.to_string_lossy().to_string());
 }
 
 #[tauri::command]
@@ -479,27 +546,15 @@ fn reveal_entry(app: tauri::AppHandle, source: Source) {
     let store = resolve_store();
     let path = match source.kind.as_str() {
         "inbox" => Some(store.base.join("inbox.md")),
-        "archive" => source.arg.as_ref().and_then(|d| {
-            let parts: Vec<&str> = d.split('-').collect();
-            if parts.len() == 3 {
-                Some(
-                    store
-                        .base
-                        .join("journal")
-                        .join(parts[0])
-                        .join(parts[1])
-                        .join(format!("{}.md", parts[2])),
-                )
-            } else {
-                None
-            }
-        }),
-        "journal" => source.arg.as_ref().map(|n| store.base.join(format!("{}.md", n))),
+        "archive" => source.arg.as_ref().and_then(|d| store.journal_file_for(d)),
+        "journal" => source.arg.as_ref().and_then(|n| store.split_file_for(n)),
         _ => None,
     };
-    if let Some(p) = path {
-        let _ = app.opener().reveal_item_in_dir(p.to_string_lossy().to_string());
+    let Some(p) = path else { return };
+    if !within_base(&store.base, &p) {
+        return;
     }
+    let _ = app.opener().reveal_item_in_dir(p.to_string_lossy().to_string());
 }
 
 #[tauri::command]
@@ -515,6 +570,13 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            allow_base_asset_access(app.handle());
+            // Leftover `.nook-*.tmp` files from writes that never finished
+            // (a crash, a yanked drive). Off-thread: it walks the folder.
+            std::thread::spawn(|| store::sweep_stale_temp_files(&resolve_store().base));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_prefs,
             set_pref,

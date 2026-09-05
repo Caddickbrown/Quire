@@ -22,8 +22,10 @@ section is dated development history rather than versioned releases.
 - Mark platform-specific entries with a `(macOS)` / `(iOS)` / `(Linux)` suffix.
 - Call out anything that changes the on-disk markdown format explicitly — those
   files are shared with `jnl` and hand-editing users.
-- On release: rename `[Unreleased]` to `## [x.y.z] — YYYY-MM-DD`, bump
-  `MARKETING_VERSION` in `gen_pbxproj.py`, run `make project`, and open a fresh
+- On release: rename `[Unreleased]` to `## [x.y.z] — YYYY-MM-DD`, bump the
+  module-level `MARKETING_VERSION` constant near the top of `gen_pbxproj.py`
+  (and `CURRENT_PROJECT_VERSION` for a new build of the same version) — one
+  edit each, applied to every target — run `make project`, and open a fresh
   empty `[Unreleased]` above it.
 
 ---
@@ -31,6 +33,8 @@ section is dated development history rather than versioned releases.
 ## [Unreleased]
 
 ### Added
+- **App icon**: a dark-appearance variant (iOS 18+) — a green journal on a
+  near-black ground, used when the Home Screen switches to dark or dimmed. (iOS)
 - **Stream**: full keyboard navigation — ↑/↓ walk the page, ↩ opens the
   selected entry's in-place editor, ⎋ closes it — with the selection mirrored
   to the external display like every other list; rows also expose VoiceOver
@@ -218,6 +222,12 @@ section is dated development history rather than versioned releases.
   templates + writing prompts, On This Day banner, words-today + word goal in
   Stats, Year in Review, Day One / markdown-folder importers with the same
   count-and-confirm step, and backup Restore. (Linux)
+- **Calendar**: day cells carry media-typed dots, matching the Apple apps. (Linux)
+- **Settings**: "Compress Existing Media" reports its progress while it runs. (Linux)
+- **Share extension**: audio files can be shared into Nook from other apps.
+- **Storage**: a journal folder Nook can't reach — an unplugged drive, a folder
+  moved or deleted — is now called out in a banner offering **Locate Folder…**
+  and **Use Default**, with the same recovery in Settings → Journal folder.
 
 ### Changed
 - **Performance** (large journals): section switches and edits no longer wait
@@ -318,6 +328,15 @@ section is dated development history rather than versioned releases.
   Inbox rows already did.
 - **Calendar**: the month/year picker has no "Done" button — the wheels apply as
   you spin them and the popover closes on a tap outside.
+- **Build**: the marketing version and build number are defined once at the top
+  of `gen_pbxproj.py` instead of being repeated per target, so a release bump is
+  a single edit.
+- **Media**: `webm`, `weba`, `mkv`, `ogg`, `oga`, `opus` and `flac` are
+  recognised everywhere, so recordings made by the Linux port are shown as video
+  or audio on Apple platforms too rather than as images.
+- **Templates**: `{{date}}` and `{{time}}` always render as an ISO date and
+  24-hour time whatever the device's locale or calendar; `{{weekday}}` stays
+  localised.
 
 ### Fixed
 - **Reminders**: tapping the daily writing reminder now opens the composer
@@ -380,6 +399,150 @@ section is dated development history rather than versioned releases.
 - **`make check`** compiles again: `Entry`'s media helpers referenced
   `JournalStore`, which isn't in the check's compile set. The pure link-parsing
   and media-kind helpers moved to `Models/Media.swift`.
+- **App Lock**: the veil now covers the app on the way to the background, so
+  entry text no longer shows in the app switcher, and it sits above any open
+  sheet instead of underneath it. Returning within the grace period stops
+  asking for Face ID again.
+- **App Lock**: locking blanks a connected external display back to its idle
+  screen instead of leaving the open entry on the monitor.
+- **Assets**: deleting a file asks first and says how many entries still link
+  it — the links break, and nothing else warned about it.
+- **Assets**: inline video no longer restarts from the beginning on every
+  redraw, and stops playing when scrolled away.
+- **Backup**: "On every change" no longer skips the last edit of a burst. An
+  edit inside the five-minute floor was dropped rather than deferred.
+- **Build**: `make project` is reproducible — object ids are derived from their
+  names instead of randomised per run, so regenerating no longer rewrites every
+  line of `project.pbxproj`.
+- **Build**: the generator no longer crashes when Finder leaves a `.DS_Store`
+  in `Nook.xcodeproj/xcuserdata/`.
+- **Build**: the generated scheme is stamped for the current Xcode rather than
+  1600, and builds the `NookTests` bundle as part of its build action.
+- **Build**: the app declares an App Store category, which macOS requires in
+  `Info.plist`. (macOS)
+- **Composer**: the draft's timestamp is taken at the first keystroke rather
+  than when the composer was created. Writing the next morning on a Mac left
+  running stamped the entry with yesterday and filed it to yesterday.
+- **Composer**: pasting text that already carries `[timestamp]` headers
+  multiplied drafts on every autosave — three, then five, then seven. The
+  composer now asks **Import** or **Keep as one** and writes nothing until you
+  choose; "Keep as one" escapes the pasted headers as `\[…]`, which renders as
+  written and stays one entry.
+- **Composer**: dropping a non-media file no longer attaches it as an image
+  link the renderer can't show; it's refused with a note.
+- **Composer**: clearing or half-typing the date deleted the entry it was meant
+  to save. The field now flags itself and the file is left untouched. (Linux)
+- **Composer**: a fast autosave could fork the draft in two; writes are
+  serialised. (Linux)
+- **Composer**: "Done" did nothing. It now saves the draft and opens the Inbox.
+  (iPad)
+- **Data Saver**: photos smaller than 2048px were *enlarged* rather than left
+  alone, and the re-encode wrote over the original in place; it is now atomic.
+  (Linux)
+- **Editor**: changing an entry's date silently dropped every edit made after
+  the change, and left Delete and File doing nothing on that entry.
+- **Editor**: re-dating a filed entry now moves it into the right day's file —
+  it appears under the new day in Journal, Stream and Calendar instead of
+  staying behind under a foreign date header.
+- **Editor**: two entries written in the same second no longer overwrite each
+  other when you edit or delete the second one.
+- **Editor**: opening an entry no longer rewrites its file before you have
+  typed anything.
+- **Editor**: Undo no longer replays edits from a previous entry after the
+  editor's text is swapped (entry switch, template insert, incoming sync).
+- **Editor**: ↩ continues a list correctly on Windows (CRLF) lines and on
+  zero-padded numbers like `007.`.
+- **Editor**: edits made in one section no longer go missing when switching
+  sections — the pending autosave is awaited first. (Linux)
+- **Import**: re-running a Day One import duplicated every entry that had a
+  photo, and re-copied the photos. Imports now skip entries already filed,
+  media included.
+- **Import**: Day One entries honour their own time zone, photo-only entries
+  are counted in the preview, and undated markdown files fall back to the
+  file's own date instead of being skipped. (Linux)
+- **Inbox**: starring an open draft from its row no longer loses the star on
+  the next keystroke.
+- **Inbox**: searching or re-sorting could re-open a just-edited draft from a
+  stale copy, and typing then overwrote the saved edit. (Linux)
+- **Journal**: deleting an entry in the two-pane view no longer leaves an
+  editor open on an entry that is gone, and an entry changed on another device
+  is picked up in place. (macOS)
+- **Journal**: a day's page no longer re-reads its file from disk on every
+  redraw.
+- **Keyboard**: arrow-key list navigation no longer jumps to a list that is off
+  screen behind a pushed view. (iOS)
+- **Maintenance**: leftover `.nook-*.tmp` files from interrupted writes are
+  swept on launch. (Linux)
+- **Navigation**: opening an entry or a day from a link or notification could
+  be wiped by the section-change reset landing after it.
+- **PDF export**: a day whose content exceeds PDF's 14,400 pt page limit is
+  split across pages instead of producing an invalid one.
+- **Performance**: File All, cleanup, tag rename and merge, split-journal
+  merge, backup and reload no longer freeze the window. (Linux)
+- **Recording**: tapping Record twice no longer strands the first recording,
+  and a recording that fails to start no longer shows a running timer.
+- **Recording**: audio and video cross to the backend as raw bytes rather than
+  as a JSON array of integers. (Linux)
+- **Recording**: voice memos captured in a WebM container are saved as `.weba`
+  and treated as audio rather than video. (Linux)
+- **Reminders**: the daily reminder stopped appearing after the first day you
+  wrote before it fired, until Nook was opened again. It now plans a rolling
+  two-week window.
+- **Reminders**: an entry still sitting unfiled in the Inbox counts as having
+  written today, so the reminder doesn't nag.
+- **Reminders**: tapping the weekly "From your journal" note could open nothing
+  when it teased an entry from a split journal.
+- **Search**: a plain term searches an entry's title and body, not its
+  timestamp header — searching `2025` no longer returns every entry written
+  that year. Use `before:` / `after:` for dates.
+- **Search**: `Before:` and `After:` work in any case, matching the Apple
+  apps. (Linux)
+- **Share extension**: sharing to Nook from another Mac app opened an empty
+  sheet and captured nothing. (macOS)
+- **Share extension**: a share captured while Nook was draining shared items is
+  no longer lost.
+- **Shortcuts**: "New Draft" from Siri, Shortcuts or the Control Center control
+  could land on the journal instead of a blank composer when it launched the
+  app.
+- **Shortcuts**: Ctrl+N starts a new entry in the composer, and the button and
+  how-to text match the key that actually works. (Linux)
+- **Starred**: a markdown-bold title like `**Important**` read as starred, and
+  un-starring it dropped one `*` and left the title mangled. The marker is a
+  standalone `*` — either the whole title or preceded by a space.
+- **Starred**: starring an entry that shares its second with another one
+  starred the wrong twin. (Linux)
+- **Stats**: a single future-dated entry no longer resets the current writing
+  streak to zero in Stats, the widget and the daily reminder.
+- **Storage**: a journal file that can't be read — a stray non-UTF-8 byte from
+  a hand edit, an evicted iCloud file — was treated as empty and replaced by
+  the next append. Every append, and Cleanup and tag rename/merge, now refuse
+  and report instead. Cleanup was rebuilding such a file from nothing.
+- **Storage**: a custom folder that can't be resolved silently fell back to
+  iCloud, so entries went into a second journal that seemed to vanish on the
+  next launch. Writes are blocked until it is found again, and a folder that
+  was renamed or moved has its bookmark refreshed automatically.
+- **Storage**: writes that don't reach disk surface a message instead of
+  failing silently and leaving the app showing a change that was never saved.
+- **Storage**: failed writes reported "Saved"; they now show an error and keep
+  the entry unsaved so the next save retries. (Linux)
+- **Storage**: an unavailable journal folder is reported and blocks writes
+  instead of silently writing into `~/Documents/Nook`, and `settings.json` is
+  written atomically under a lock so a crash can't lose the folder. (Linux)
+- **Sync**: updates from another device were discarded for as long as you kept
+  typing, and iCloud conflicts were never resolved.
+- **Timer**: the `nook://timer` link started a one-minute session instead of
+  the default 15 on a fresh install.
+- **Transcription**: "Transcribe All" no longer reverts edits you make while it
+  runs — each file is re-read after recognition finishes.
+- **Video**: recording on a device with no available camera crashed; it falls
+  back to the photo library, as taking a photo already did.
+- **Widget**: a change to the shared snapshot's shape could leave the widget
+  showing blank stats.
+
+### Security
+- **Linux**: file names coming from the UI can no longer escape the journal
+  folder, the webview's file access is scoped to that folder, and a Content
+  Security Policy is enforced.
 
 ---
 

@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -78,43 +79,64 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     static let primary: [AppSection] = [.write, .inbox, .archive, .starred, .stream, .splitJournals, .tags, .assets, .search]
 }
 
+/// The writing timer's length, in one place: the sidebar reads it through
+/// `@AppStorage` (which supplies the default itself) and the `nook://timer`
+/// deep link reads the raw defaults, where an untouched key would otherwise
+/// come back as 0 and start a one-minute session.
+enum WritingTimer {
+    static let minutesKey = "timerMinutes"
+    static let defaultMinutes = 15
+}
+
 /// Shared navigation state so keyboard-shortcut commands (defined at the App
 /// scene level) can drive the sidebar selection and trigger a new entry.
 @MainActor final class NavigationModel: ObservableObject {
     // iPhone collapses the split view, so a non-nil section would push straight
     // into that page on launch; start with no selection so the menu shows first.
+    // Switching section always drops back to that section's root. The reset
+    // lives here rather than in a view `onChange` so that a programmatic
+    // `open` can set the section and push in one synchronous step — an
+    // `onChange` reset could otherwise land after the push and wipe it.
     #if os(iOS)
-    @Published var section: AppSection? = nil
+    @Published var section: AppSection? = nil { didSet { resetPathOnSectionChange(oldValue) } }
     #else
-    @Published var section: AppSection? = .write
+    @Published var section: AppSection? = .write { didSet { resetPathOnSectionChange(oldValue) } }
     #endif
+
+    private func resetPathOnSectionChange(_ oldValue: AppSection?) {
+        if section != oldValue { path = NavigationPath() }
+    }
     @Published var path = NavigationPath()
     @Published var newEntrySignal = 0
     @Published var focusMode = false
     /// A query for SearchView to adopt on its next appearance — how the
     /// sidebar's saved-search pins (and deep links) open a pre-filled search.
     @Published var pendingSearchQuery: String?
-    @Published var timerRemaining = 15 * 60
+    @Published var timerRemaining = WritingTimer.defaultMinutes * 60
     @Published var timerRunning = false
     var backMonitorInstalled = false
     func requestNewEntry() { section = .write; path = NavigationPath(); newEntrySignal += 1 }
     /// Pop one level (mouse Back button / ⌘[).
     func goBack() { if !path.isEmpty { path.removeLast() } }
 
-    /// Programmatically open an entry: switch section, then push it (after the
-    /// section-change path reset has run).
+    /// Programmatically open an entry: switch section, then push it. Both
+    /// steps are synchronous, so the entry is always what ends up on screen.
     func open(_ entry: Entry, source: EntrySource) {
         switch source {
         case .inbox:   section = .inbox
         case .archive: section = .archive
         case .journal: section = .splitJournals
         }
-        Task { @MainActor in path.append(Route.entry(entry, source)) }
+        // Explicit, because `section` may already be the right one, in which
+        // case its `didSet` doesn't fire and a stack could still be pushed.
+        path = NavigationPath()
+        path.append(Route.entry(entry, source))
     }
 
     func openDay(_ date: String) {
         section = .archive
-        Task { @MainActor in path.append(Route.day(date)) }
+        path = NavigationPath()
+        path.append(Route.day(date))
     }
 
     /// Open the Search section pre-filled with a query.
@@ -132,6 +154,8 @@ struct RootView: View {
     @State private var savedSearches: [SavedSearch] = []
     @AppStorage("welcomeShown") private var welcomeShown = false
     @State private var showingWelcome = false
+    /// The banner's "Locate Folder…" picker (Settings has the same one).
+    @State private var showingFolderPicker = false
     // Resolved appearance (after the app's own preferredColorScheme, so Auto
     // reads as the system's choice) — mirrored to the external display.
     @Environment(\.colorScheme) private var colorScheme
@@ -231,7 +255,6 @@ struct RootView: View {
             // Rendered @tags anywhere in the detail pane push their tag page.
             .environment(\.nookOpenTag) { nav.path.append(Route.tag($0)) }
         }
-        .onChange(of: nav.section) { _, _ in nav.path = NavigationPath() }
         // Hand the store to the external-display scene, which is built by a
         // UIKit scene delegate and so can't reach this environment itself.
         // The colour scheme goes the same way: an external scene has its own
@@ -239,6 +262,7 @@ struct RootView: View {
         .onAppear {
             ExternalDisplayModel.shared.store = store
             ExternalDisplayModel.shared.colorScheme = colorScheme
+            AppLockVeilWindow.shared.setVisible(appLock.showsVeil)
             registerRootKeys()
         }
         .onChange(of: colorScheme) { _, new in
@@ -270,6 +294,12 @@ struct RootView: View {
                     .accessibilityLabel("Writing timer, \(nav.timerRemaining / 60) minutes left")
             }
         }
+        // Above everything, and it stays: while the chosen folder is missing
+        // nothing the user writes is being saved anywhere.
+        .safeAreaInset(edge: .top, spacing: 0) { storageBanner }
+        // Transient, at the bottom: a write that didn't reach disk.
+        .overlay(alignment: .bottom) { writeErrorToast }
+        .animation(.easeInOut(duration: 0.2), value: store.lastWriteError)
         #if os(iOS)
         // The Lock Screen / Dynamic Island countdown lives and dies with the
         // sidebar timer.
@@ -284,9 +314,19 @@ struct RootView: View {
             }
         }
         #endif
-        .overlay {
-            if appLock.isLocked { AppLockVeil() }
+        // The veil goes in a window of its own (see AppLockVeilWindow) rather
+        // than only an overlay, so a presented sheet can't stay readable on
+        // top of the lock.
+        .onChange(of: appLock.showsVeil) { _, show in
+            AppLockVeilWindow.shared.setVisible(show)
         }
+        #if os(macOS)
+        // Kept as the base cover on macOS: it is up from the first frame,
+        // before there is a window to hang the veil window off.
+        .overlay {
+            if appLock.showsVeil { AppLockVeil() }
+        }
+        #endif
         // First run only: one welcome screen, then never again.
         .sheet(isPresented: $showingWelcome, onDismiss: { welcomeShown = true }) {
             WelcomeView()
@@ -297,6 +337,69 @@ struct RootView: View {
         #if os(macOS)
         .onAppear(perform: installBackButtonMonitor)
         #endif
+    }
+
+    /// The journal folder the app was pointed at can't be reached — an
+    /// unmounted volume, a folder that moved or went away. Nook blocks writes
+    /// rather than quietly starting a second journal in iCloud, so say so and
+    /// offer both ways out.
+    @ViewBuilder
+    private var storageBanner: some View {
+        if let message = store.storageUnavailableMessage {
+            VStack(alignment: .leading, spacing: 8) {
+                Label {
+                    Text(message).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+                HStack(spacing: 10) {
+                    Button("Locate Folder…") { showingFolderPicker = true }
+                    Button("Use Default") { store.useDefaultFolder() }
+                    Spacer(minLength: 0)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .font(.callout)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.bar)
+            .overlay(alignment: .bottom) { Divider() }
+            .fileImporter(isPresented: $showingFolderPicker,
+                          allowedContentTypes: [.folder],
+                          allowsMultipleSelection: false) { result in
+                if case .success(let urls) = result, let url = urls.first {
+                    store.setCustomFolder(url)
+                }
+            }
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    /// A read or write that didn't happen. Tap to dismiss, and it clears itself
+    /// after a few seconds — the point is that an edit which never reached disk
+    /// is never mistaken for a saved one.
+    @ViewBuilder
+    private var writeErrorToast: some View {
+        if let message = store.lastWriteError {
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.callout)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .shadow(radius: 8, y: 2)
+                .padding(.horizontal, 18)
+                .padding(.bottom, 18)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .onTapGesture { store.lastWriteError = nil }
+                .task(id: message) {
+                    try? await Task.sleep(nanoseconds: 6_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    store.lastWriteError = nil
+                }
+        }
     }
 
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -382,7 +485,7 @@ struct RootView: View {
         .background(.bar)
     }
 
-    @AppStorage("timerMinutes") private var timerMinutes: Int = 15
+    @AppStorage(WritingTimer.minutesKey) private var timerMinutes: Int = WritingTimer.defaultMinutes
     @AppStorage("wordGoalEnabled") private var wordGoalEnabled = false
     @AppStorage("wordGoal") private var wordGoal = 750
 
@@ -501,26 +604,132 @@ struct RootView: View {
     }
 }
 
-/// Full-screen veil shown while the app lock is engaged (and therefore also in
-/// the app switcher, so entry text never shows there). Auto-attempts Face ID /
-/// Touch ID on appear; the button retries after a cancel.
+/// Full-screen veil shown while the app lock is engaged — and while the app is
+/// merely on its way out of the foreground, so entry text never reaches the
+/// app-switcher snapshot. Auto-attempts Face ID / Touch ID once actually
+/// locked; the button retries after a cancel. Covered-but-unlocked shows the
+/// cover alone: there is nothing to authenticate for yet.
 struct AppLockVeil: View {
     @ObservedObject private var appLock = AppLockManager.shared
 
     var body: some View {
         ZStack {
             Rectangle().fill(.thickMaterial).ignoresSafeArea()
-            VStack(spacing: 16) {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 40))
-                    .foregroundStyle(.secondary)
-                Text("Nook is locked")
-                    .font(.headline)
-                Button("Unlock") { appLock.unlock() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(appLock.unlocking)
+            if appLock.isLocked {
+                VStack(spacing: 16) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.secondary)
+                    Text("Nook is locked")
+                        .font(.headline)
+                    Button("Unlock") { appLock.unlock() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(appLock.unlocking)
+                }
             }
         }
         .onAppear { appLock.unlock() }
+        // The veil is often already up (covering the switcher snapshot) when
+        // the lock itself engages, so appearing isn't the only cue to prompt.
+        .onChange(of: appLock.isLocked) { _, locked in
+            if locked { appLock.unlock() }
+        }
     }
+}
+
+/// Presents `AppLockVeil` in a window of its own, above everything.
+///
+/// It used to be only a `.overlay` on the root view, which put it *under*
+/// anything presented as a sheet — Settings, a Year in Review card, an import
+/// preview — so locking the app left that sheet's contents legible. A window
+/// of its own sits over sheets on both platforms.
+@MainActor
+final class AppLockVeilWindow {
+    static let shared = AppLockVeilWindow()
+
+    func setVisible(_ visible: Bool) {
+        if visible { show() } else { hide() }
+    }
+
+    #if os(iOS)
+    private var window: UIWindow?
+
+    private func show() {
+        guard window == nil,
+              let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.session.role == .windowApplication })
+        else { return }
+        let host = UIHostingController(rootView: AppLockVeil())
+        // Opaque under the veil's material: in a window of its own the
+        // material has no backdrop of the app's to thicken.
+        host.view.backgroundColor = .systemBackground
+        let veil = UIWindow(windowScene: scene)
+        veil.rootViewController = host
+        veil.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 1)
+        veil.isHidden = false
+        window = veil
+        // Put the keyboard away with the text it belongs to.
+        _ = UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                            to: nil, from: nil, for: nil)
+    }
+
+    private func hide() {
+        window?.isHidden = true
+        window = nil
+    }
+    #endif
+
+    #if os(macOS)
+    /// Borderless windows refuse key status, which would leave the veil's own
+    /// Unlock button unreachable on top of everything else.
+    private final class VeilWindow: NSWindow {
+        override var canBecomeKey: Bool { true }
+        override var canBecomeMain: Bool { false }
+    }
+
+    private var window: NSWindow?
+    private var resizeObserver: NSObjectProtocol?
+
+    private func show() {
+        guard window == nil, let host = Self.hostWindow else { return }
+        let veil = VeilWindow(contentRect: host.frame, styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        veil.contentView = NSHostingView(rootView: AppLockVeil())
+        veil.backgroundColor = .windowBackgroundColor
+        veil.isReleasedWhenClosed = false
+        // Added last and ordered above, so it covers a sheet that is already up.
+        host.addChildWindow(veil, ordered: .above)
+        veil.setFrame(host.frame, display: true)
+        veil.makeKeyAndOrderFront(nil)
+        window = veil
+        // A child window follows a move on its own, but not a resize.
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification, object: host, queue: .main) { _ in
+                Task { @MainActor in AppLockVeilWindow.shared.followHost() }
+            }
+    }
+
+    private func hide() {
+        if let observer = resizeObserver { NotificationCenter.default.removeObserver(observer) }
+        resizeObserver = nil
+        guard let veil = window else { return }
+        veil.parent?.removeChildWindow(veil)
+        veil.orderOut(nil)
+        window = nil
+        // The veil was key; hand focus back rather than leaving the app with
+        // no key window at all.
+        Self.hostWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    private func followHost() {
+        guard let veil = window, let host = veil.parent else { return }
+        veil.setFrame(host.frame, display: true)
+    }
+
+    private static var hostWindow: NSWindow? {
+        NSApp.windows.first { $0.isVisible && $0.canBecomeMain && $0.isKeyWindow }
+            ?? NSApp.windows.first { $0.isVisible && $0.canBecomeMain }
+    }
+    #endif
 }

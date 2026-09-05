@@ -36,7 +36,9 @@ pub struct Entry {
 
 impl Entry {
     fn build(date: String, ts: String, suffix: String, body: String, raw: String) -> Entry {
-        let is_starred = suffix.ends_with('*');
+        // Standalone token only: `ends_with('*')` also matched a markdown-bold
+        // title like `**Important**`. Mirrors Swift `Entry.isStarred`.
+        let is_starred = suffix == "*" || suffix.ends_with(" *");
         let display_title = if is_starred {
             let mut s = suffix.clone();
             s.pop();
@@ -80,6 +82,40 @@ impl Entry {
     }
 }
 
+/// What kind of media a path points at, decided by its file extension. This is
+/// the *one* place the extension lists live — the badges, the calendar dots,
+/// the `has:` search filter and the Year in Review tally all read it, and they
+/// had drifted apart. Mirrors `Entry.mediaBadges` on the Apple side; keep them
+/// in step. `webm`/`weba`/`ogg`/`opus`/`flac`/`mkv` are here because the Linux
+/// app itself records into them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaKind {
+    Image,
+    Video,
+    Audio,
+    Other,
+}
+
+pub const VIDEO_EXTS: [&str; 5] = ["mov", "mp4", "m4v", "webm", "mkv"];
+pub const AUDIO_EXTS: [&str; 11] =
+    ["m4a", "mp3", "wav", "aac", "aiff", "caf", "ogg", "oga", "opus", "flac", "weba"];
+pub const IMAGE_EXTS: [&str; 11] =
+    ["png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tiff", "tif", "bmp", "svg"];
+
+pub fn media_kind(path: &str) -> MediaKind {
+    let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
+    let ext = ext.as_str();
+    if VIDEO_EXTS.contains(&ext) {
+        MediaKind::Video
+    } else if AUDIO_EXTS.contains(&ext) {
+        MediaKind::Audio
+    } else if IMAGE_EXTS.contains(&ext) {
+        MediaKind::Image
+    } else {
+        MediaKind::Other
+    }
+}
+
 /// SF-Symbol-equivalent badge kinds for the media an entry links.
 fn media_badges(raw: &str) -> Vec<String> {
     let paths = media_paths(raw);
@@ -88,14 +124,11 @@ fn media_badges(raw: &str) -> Vec<String> {
     }
     let (mut image, mut audio, mut video, mut other) = (false, false, false, false);
     for p in paths {
-        let ext = p.rsplit('.').next().unwrap_or("").to_lowercase();
-        match ext.as_str() {
-            "mov" | "mp4" | "m4v" | "webm" | "mkv" => video = true,
-            "m4a" | "mp3" | "wav" | "aac" | "aiff" | "caf" | "ogg" | "opus" | "flac" => audio = true,
-            "png" | "jpg" | "jpeg" | "gif" | "heic" | "heif" | "webp" | "tiff" | "tif" | "bmp" => {
-                image = true
-            }
-            _ => other = true,
+        match media_kind(&p) {
+            MediaKind::Video => video = true,
+            MediaKind::Audio => audio = true,
+            MediaKind::Image => image = true,
+            MediaKind::Other => other = true,
         }
     }
     let mut out = vec![];
@@ -252,6 +285,33 @@ pub fn normalize_punctuation(s: &str) -> String {
     }
     out.push_str(&fix(&s[cursor..]));
     out
+}
+
+#[cfg(test)]
+mod star_tests {
+    use super::*;
+
+    fn titled(suffix: &str) -> Entry {
+        parse_entries(&format!("[2026-05-10 08:00:00] {}\nbody\n", suffix))
+            .into_iter()
+            .next()
+            .unwrap()
+    }
+
+    /// Mirrors the Swift `Entry.isStarred` cases: the marker is a standalone
+    /// token, so a markdown-bold title is not starred (and can't be mangled by
+    /// un-starring it).
+    #[test]
+    fn star_marker_is_a_standalone_token() {
+        assert!(titled("Morning *").is_starred);
+        assert!(titled("*").is_starred);
+        assert!(!titled("**bold**").is_starred);
+        assert!(!titled("2 * 3").is_starred);
+        assert!(!titled("").is_starred);
+        assert_eq!(titled("Morning *").display_title, "Morning");
+        assert_eq!(titled("*").display_title, "");
+        assert_eq!(titled("**bold**").display_title, "**bold**");
+    }
 }
 
 #[cfg(test)]

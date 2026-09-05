@@ -78,14 +78,21 @@ extension JournalStore {
 
     /// Fill `{{date}}` / `{{time}}` / `{{weekday}}` (pure, testable).
     nonisolated static func substitute(_ template: String, date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = .current
-        f.dateFormat = "yyyy-MM-dd"
-        let dateStr = f.string(from: date)
-        f.dateFormat = "HH:mm"
-        let timeStr = f.string(from: date)
-        f.dateFormat = "EEEE"
-        let weekday = f.string(from: date)
+        // `{{date}}`/`{{time}}` are ISO-shaped and match the header format on
+        // disk, so they must not follow the locale: a Japanese or Buddhist
+        // calendar would render a different year, and a 12-hour locale a
+        // different clock.
+        let iso = DateFormatter()
+        iso.locale = Locale(identifier: "en_US_POSIX")
+        iso.dateFormat = "yyyy-MM-dd"
+        let dateStr = iso.string(from: date)
+        iso.dateFormat = "HH:mm"
+        let timeStr = iso.string(from: date)
+        // `{{weekday}}` is prose, so it stays in the reader's language.
+        let display = DateFormatter()
+        display.locale = .current
+        display.dateFormat = "EEEE"
+        let weekday = display.string(from: date)
         return template
             .replacingOccurrences(of: "{{date}}", with: dateStr)
             .replacingOccurrences(of: "{{time}}", with: timeStr)

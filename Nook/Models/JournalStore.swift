@@ -70,6 +70,10 @@ final class JournalStore: ObservableObject {
     @Published private(set) var dataSaved = 0
     /// Non-nil while a batch media compression runs, for a progress indicator.
     @Published private(set) var mediaProgress: (done: Int, total: Int)?
+    /// The last read or write that didn't happen, phrased for a toast. Every
+    /// edit path sets it instead of failing silently, so the UI can never show
+    /// a change that never reached disk. Whoever displays it clears it.
+    @Published var lastWriteError: String?
 
     struct ArchiveDay: Identifiable, Hashable {
         let date: String     // "YYYY-MM-DD"
@@ -93,10 +97,24 @@ final class JournalStore: ObservableObject {
     @Published private(set) var tagCounts: [(tag: String, count: Int)] = []
     /// Tag-routed split journals, cached — built off-main on reload.
     @Published private(set) var splitJournals: [SplitJournal] = []
-    /// Where data actually lives once resolved; nil while still resolving.
+    /// Where data actually lives once resolved; nil while still resolving, and
+    /// nil for as long as `unavailableFolder` is set — a nil base is what stops
+    /// every write path, so an unreachable folder can't be written around.
     @Published private(set) var baseURL: URL?
     /// Where journal data currently lives.
     @Published private(set) var storageMode: StorageMode = .local
+    /// Name of the remembered custom folder when it can't be reached (the
+    /// volume is unmounted, the folder was deleted, the bookmark is dead).
+    /// Nook stops reading and writing until it's found again or the default is
+    /// taken back — falling through to iCloud would quietly start a second
+    /// journal, and the next launch would hide everything written into it.
+    @Published private(set) var unavailableFolder: String?
+
+    /// The unavailable-folder banner's copy, in one place.
+    var storageUnavailableMessage: String? {
+        guard let name = unavailableFolder else { return nil }
+        return "Nook can't reach “\(name)”. Nothing is being saved until you find the folder again."
+    }
 
     enum StorageMode: Equatable {
         case custom, iCloud, local
@@ -122,7 +140,9 @@ final class JournalStore: ObservableObject {
 
     // Passing nil to the ubiquity API uses the app's first/default container.
     private let ubiquityContainerID: String? = nil
-    private let bookmarkKey = "customFolderBookmark"
+    /// Also read by the headless paths (App Intents), which resolve the folder
+    /// themselves without an instance to ask.
+    nonisolated static let bookmarkKey = "customFolderBookmark"
     /// Retained so we can release security-scoped access when the folder changes.
     private var securityScopedURL: URL?
 
@@ -133,13 +153,20 @@ final class JournalStore: ObservableObject {
 
     // MARK: Base directory resolution (custom folder → iCloud → local)
 
-    struct Resolved { let url: URL; let mode: StorageMode; let scoped: Bool }
+    /// `url` is nil only when a custom folder is remembered but unreachable —
+    /// `unavailable` then names it for the banner.
+    struct Resolved {
+        let url: URL?
+        let mode: StorageMode
+        let scoped: Bool
+        var unavailable: String? = nil
+    }
 
     private func resolveBaseAndReload() {
         // Both the bookmark resolve and forUbiquityContainerIdentifier can block,
         // so do them off the main actor.
         let containerID = ubiquityContainerID
-        let bookmark = UserDefaults.standard.data(forKey: bookmarkKey)
+        let bookmark = UserDefaults.standard.data(forKey: Self.bookmarkKey)
         Task { [weak self] in
             let resolved = await Task.detached(priority: .userInitiated) {
                 Self.resolveBase(bookmark: bookmark, containerID: containerID)
@@ -153,14 +180,24 @@ final class JournalStore: ObservableObject {
             old.stopAccessingSecurityScopedResource()
             securityScopedURL = nil
         }
-        if resolved.scoped, resolved.url.startAccessingSecurityScopedResource() {
-            securityScopedURL = resolved.url
-        }
-        baseURL = resolved.url
+        unavailableFolder = resolved.unavailable
         storageMode = resolved.mode
-        try? fm.createDirectory(at: resolved.url.appendingPathComponent("journal"),
+        guard let url = resolved.url else {
+            // Nothing to watch and nothing to write. `reload()` clears the
+            // caches through its nil-base guards, so no view shows entries
+            // from a folder we can't currently reach.
+            baseURL = nil
+            stopSyncWatcher()
+            reload()
+            return
+        }
+        if resolved.scoped, url.startAccessingSecurityScopedResource() {
+            securityScopedURL = url
+        }
+        baseURL = url
+        try? fm.createDirectory(at: url.appendingPathComponent("journal"),
                                 withIntermediateDirectories: true)
-        Self.sweepStaleTempFiles(under: resolved.url)
+        Self.sweepStaleTempFiles(under: url)
         startSyncWatcher()
         reload()
     }
@@ -169,11 +206,23 @@ final class JournalStore: ObservableObject {
     /// else the iCloud ubiquity container's Documents folder, else a local
     /// Documents/Nook folder. The chosen folder is the journal base directly —
     /// same layout as jnl's `JNL_DIR`, so pointing it at an existing jnl notes
-    /// folder just works.
+    /// folder just works. A remembered custom folder that won't resolve stops
+    /// here as `unavailable` rather than falling through — the fallback would
+    /// be a second, empty journal that the folder's return then hides again.
     private nonisolated static func resolveBase(bookmark: Data?, containerID: String?) -> Resolved {
         let fm = FileManager.default
-        if let data = bookmark, let url = FolderAccess.resolve(data) {
-            return Resolved(url: url, mode: .custom, scoped: true)
+        if let data = bookmark {
+            guard let found = FolderAccess.resolve(data) else {
+                return Resolved(url: nil, mode: .custom, scoped: false,
+                                unavailable: FolderAccess.name(inBookmark: data) ?? "your journal folder")
+            }
+            // A stale bookmark still resolves, but only for now — mint a fresh
+            // one from the folder we just found so a move or rename doesn't
+            // turn into an unavailable folder on some later launch.
+            if found.stale, let fresh = FolderAccess.remint(found.url) {
+                UserDefaults.standard.set(fresh, forKey: bookmarkKey)
+            }
+            return Resolved(url: found.url, mode: .custom, scoped: true)
         }
         if let container = fm.url(forUbiquityContainerIdentifier: containerID) {
             let docs = container.appendingPathComponent("Documents", isDirectory: true)
@@ -187,7 +236,11 @@ final class JournalStore: ObservableObject {
     }
 
     /// Human-readable location for display (e.g. "…/Notes" or an iCloud path).
-    var storagePath: String { baseURL?.path ?? "Resolving…" }
+    var storagePath: String {
+        if let baseURL { return baseURL.path }
+        if let name = unavailableFolder { return "“\(name)” — not available" }
+        return "Resolving…"
+    }
 
     /// Dates ("YYYY-MM-DD") that still have unfiled drafts sitting in the inbox.
     /// The calendars shade these differently from filed journal days.
@@ -200,14 +253,19 @@ final class JournalStore: ObservableObject {
     func setCustomFolder(_ url: URL) {
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-        guard let data = FolderAccess.makeBookmark(url) else { return }
-        UserDefaults.standard.set(data, forKey: bookmarkKey)
+        guard let data = FolderAccess.makeBookmark(url) else {
+            // Say so rather than appearing to accept the folder and then
+            // quietly carrying on writing somewhere else.
+            lastWriteError = "Couldn't get lasting access to “\(url.lastPathComponent)” — the journal folder is unchanged."
+            return
+        }
+        UserDefaults.standard.set(data, forKey: Self.bookmarkKey)
         resolveBaseAndReload()
     }
 
     /// Forget the custom folder and fall back to iCloud / local.
     func useDefaultFolder() {
-        UserDefaults.standard.removeObject(forKey: bookmarkKey)
+        UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
         resolveBaseAndReload()
     }
 
@@ -227,8 +285,12 @@ final class JournalStore: ObservableObject {
     }()
 
     private func resolveBackupURL() -> URL? {
-        guard let data = UserDefaults.standard.data(forKey: backupBookmarkKey) else { return nil }
-        return FolderAccess.resolve(data)
+        guard let data = UserDefaults.standard.data(forKey: backupBookmarkKey),
+              let found = FolderAccess.resolve(data) else { return nil }
+        if found.stale, let fresh = FolderAccess.remint(found.url) {
+            UserDefaults.standard.set(fresh, forKey: backupBookmarkKey)
+        }
+        return found.url
     }
 
     /// Display name of the chosen backup folder, or nil if none.
@@ -288,8 +350,16 @@ final class JournalStore: ObservableObject {
         backupDebounce = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 30_000_000_000)
             guard !Task.isCancelled, let self else { return }
-            if let last = self.lastBackupAt,
-               Date().timeIntervalSince(last) < Self.changeBackupFloor { return }
+            // Inside the floor, wait it out rather than giving up: returning
+            // here dropped the last edit of a burst for good, because nothing
+            // else was coming to reschedule it.
+            if let last = self.lastBackupAt {
+                let wait = Self.changeBackupFloor - Date().timeIntervalSince(last)
+                if wait > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                    guard !Task.isCancelled else { return }
+                }
+            }
             await self.runBackup()
         }
     }
@@ -616,8 +686,11 @@ final class JournalStore: ObservableObject {
         // writing, not about filing) — computed here so the detached pass
         // needn't re-read the inbox.
         let todayISO = Self.nowDate()
-        let inboxWordsToday = inboxDrafts.filter { $0.date == todayISO }
-            .reduce(0) { $0 + $1.wordCount }
+        let draftsToday = inboxDrafts.filter { $0.date == todayISO }
+        let inboxWordsToday = draftsToday.reduce(0) { $0 + $1.wordCount }
+        // …and count as having written today, so the daily reminder doesn't
+        // nag someone whose entry is sitting unfiled in the inbox.
+        let hasDraftToday = !draftsToday.isEmpty
         let triggerDownloads = storageMode == .iCloud
         Task.detached(priority: .userInitiated) {
             // ONE pass: the index, the parsed corpus, and the stats all come
@@ -625,6 +698,7 @@ final class JournalStore: ObservableObject {
             // corpus reads per rebuild.
             var built = Self.buildIndex(base: base, triggerDownloads: triggerDownloads)
             built.heavy.wordsToday += inboxWordsToday
+            built.heavy.hasEntryToday = built.heavy.hasEntryToday || hasDraftToday
             let idx = built
             let heavy = idx.heavy
             let fp = Self.contentFingerprint(base: base)
@@ -979,8 +1053,8 @@ final class JournalStore: ObservableObject {
         }
         guard !rules.isEmpty else { return }
         func fix(_ url: URL?) {
-            guard let url else { return }
-            var s = readString(url)
+            // An unreadable file is skipped, never rewritten from "".
+            guard let url, var s = readToRewrite(url) else { return }
             let orig = s
             for (re, tpl) in rules {
                 s = re.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: tpl)
@@ -1006,8 +1080,7 @@ final class JournalStore: ObservableObject {
 
         var changed = 0
         func fix(_ url: URL?) {
-            guard let url else { return }
-            let s = readString(url)
+            guard let url, let s = readToRewrite(url) else { return }
             let r = regex.stringByReplacingMatches(
                 in: s, range: NSRange(s.startIndex..., in: s), withTemplate: template)
             if r != s { try? writeFile(url, r); changed += 1 }
@@ -1031,29 +1104,38 @@ final class JournalStore: ObservableObject {
         splitEntriesCache[name] ?? []
     }
 
-    func updateJournalEntry(name: String, original: Entry, newText: String, reindex: Bool = true) {
-        guard let url = splitJournalURL(name) else { return }
-        let content = readString(url)
+    /// Returns false when the entry couldn't be found or the write failed — the
+    /// editor must not advance its baseline on a write that didn't happen.
+    @discardableResult
+    func updateJournalEntry(name: String, original: Entry, newText: String, reindex: Bool = true) -> Bool {
+        guard let url = splitJournalURL(name), let content = readToRewrite(url) else { return false }
         let preamble = JournalParser.leadingPreamble(content)
         var entries = JournalParser.parseEntries(content)
-        guard let idx = entries.firstIndex(where: { $0.raw == original.raw }) ?? entries.firstIndex(where: { $0.ts == original.ts }) else { return }
+        guard let idx = Self.index(of: original, in: entries) else { return false }
         entries.replaceSubrange(idx...idx, with: JournalParser.parseEntries(newText))
-        try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
+        guard (try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))) != nil else {
+            reportWriteFailure(url)
+            return false
+        }
         if reindex { patchSplitCache(name: name, entries: entries) }
+        return true
     }
 
-    func deleteJournalEntry(name: String, entry: Entry) {
-        guard let url = splitJournalURL(name) else { return }
-        let content = readString(url)
+    @discardableResult
+    func deleteJournalEntry(name: String, entry: Entry) -> Bool {
+        guard let url = splitJournalURL(name), let content = readToRewrite(url) else { return false }
         let preamble = JournalParser.leadingPreamble(content)
         var entries = JournalParser.parseEntries(content)
         // Single, raw-first removal — removeAll by ts deleted both twins of a
         // same-second pair.
-        guard let idx = entries.firstIndex(where: { $0.raw == entry.raw })
-            ?? entries.firstIndex(where: { $0.ts == entry.ts }) else { return }
+        guard let idx = Self.index(of: entry, in: entries) else { return false }
         entries.remove(at: idx)
-        try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
+        guard (try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))) != nil else {
+            reportWriteFailure(url)
+            return false
+        }
         patchSplitCache(name: name, entries: entries)
+        return true
     }
 
     // MARK: Starred entries (trailing `*` on the title)
@@ -1061,9 +1143,10 @@ final class JournalStore: ObservableObject {
     /// Add or remove the trailing `*` star marker on an entry, rewriting it in
     /// whichever file it lives (inbox / archive day / split journal).
     func toggleStar(_ entry: Entry, source: EntrySource) {
-        let base = entry.suffix.hasSuffix("*")
-            ? String(entry.suffix.dropLast()).trimmingCharacters(in: .whitespaces)
-            : entry.suffix.trimmingCharacters(in: .whitespaces)
+        // `displayTitle` strips the marker, and only a real marker — computing
+        // the base with a bare `hasSuffix("*")` turned `**bold**` into
+        // `**bold* *` on the first toggle.
+        let base = entry.displayTitle.trimmingCharacters(in: .whitespaces)
         let newTitle = entry.isStarred ? base : (base.isEmpty ? "*" : base + " *")
         let newText = Self.makeEntry(timestamp: entry.ts, title: newTitle, body: entry.body).raw
         switch source {
@@ -1095,9 +1178,13 @@ final class JournalStore: ObservableObject {
 
     /// Build an Entry from title + timestamp + body in the jnl header format:
     /// title lands on the header line (`[ts] title`), body on the lines below.
+    /// One entry in, one entry out: a body carrying its own `[timestamp]` lines
+    /// (pasted from a day file, say) would parse back as several entries, so
+    /// those lines are escaped — an editor holding one entry can never write
+    /// more than one.
     static func makeEntry(timestamp: String, title: String, body: String) -> Entry {
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let b = JournalParser.trimRightNewlines(body)
+        let b = JournalParser.trimRightNewlines(escapingEmbeddedHeaders(body, skippingFirstLine: false))
         let raw: String
         if !t.isEmpty && !b.isEmpty { raw = "[\(timestamp)] \(t)\n\(b)" }
         else if !t.isEmpty         { raw = "[\(timestamp)] \(t)" }
@@ -1122,7 +1209,7 @@ final class JournalStore: ObservableObject {
             if let previous { removeDraft(timestamp: previous) }
             return nil
         }
-        let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
+        guard let content = readToRewrite(inboxURL) else { return previous }
         let preamble = JournalParser.leadingPreamble(content)
         var drafts = JournalParser.parseEntries(content)
         var ts = timestamp
@@ -1139,7 +1226,10 @@ final class JournalStore: ObservableObject {
             }
             drafts.append(Self.makeEntry(timestamp: ts, title: title, body: body))
         }
-        try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
+        guard (try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))) != nil else {
+            reportWriteFailure(inboxURL)
+            return previous
+        }
         if reindex { loadInbox(); revision &+= 1; scheduleRebuild() }
         return ts
     }
@@ -1152,18 +1242,49 @@ final class JournalStore: ObservableObject {
     }
 
     func removeDraft(timestamp: String) {
-        guard let inboxURL else { return }
-        let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
+        guard let inboxURL, let content = readToRewrite(inboxURL) else { return }
         let preamble = JournalParser.leadingPreamble(content)
         var drafts = JournalParser.parseEntries(content)
         // One draft only — with two entries sharing a second, removeAll(ts:)
         // deleted both.
         guard let idx = drafts.firstIndex(where: { $0.ts == timestamp }) else { return }
         drafts.remove(at: idx)
-        try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
+        guard (try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))) != nil else {
+            reportWriteFailure(inboxURL)
+            return
+        }
         loadInbox()
         revision &+= 1
         scheduleRebuild()
+    }
+
+    /// Remove every inbox draft whose text matches one of `entries` (one draft
+    /// per match). The composer's Import uses it to clear everything the working
+    /// text already put in the inbox before splitting it up — an inbox left
+    /// polluted by an earlier build's autosave would otherwise be imported on
+    /// top of. Returns how many were removed.
+    @discardableResult
+    func removeDrafts(matching entries: [Entry]) -> Int {
+        guard !entries.isEmpty, let inboxURL, let content = readToRewrite(inboxURL) else { return 0 }
+        var wanted: [String: Int] = [:]
+        for e in entries { wanted[JournalParser.trimRightNewlines(e.raw), default: 0] += 1 }
+        var kept: [Entry] = []
+        var removed = 0
+        for d in JournalParser.parseEntries(content) {
+            let key = JournalParser.trimRightNewlines(d.raw)
+            if let n = wanted[key], n > 0 { wanted[key] = n - 1; removed += 1 }
+            else { kept.append(d) }
+        }
+        guard removed > 0 else { return 0 }
+        let preamble = JournalParser.leadingPreamble(content)
+        guard (try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: kept))) != nil else {
+            reportWriteFailure(inboxURL)
+            return 0
+        }
+        loadInbox()
+        revision &+= 1
+        scheduleRebuild()
+        return removed
     }
 
     /// Import pasted text as separate inbox drafts (jnl `transfer` parsing): if it
@@ -1174,12 +1295,14 @@ final class JournalStore: ObservableObject {
     func importDrafts(from text: String) -> Int {
         guard let inboxURL else { return 0 }
         let imported = parseImport(text)
-        guard !imported.isEmpty else { return 0 }
-        let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
+        guard !imported.isEmpty, let content = readToRewrite(inboxURL) else { return 0 }
         let preamble = JournalParser.leadingPreamble(content)
         var drafts = JournalParser.parseEntries(content)
         drafts.append(contentsOf: imported)
-        try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
+        guard (try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))) != nil else {
+            reportWriteFailure(inboxURL)
+            return 0
+        }
         loadInbox()
         revision &+= 1
         scheduleRebuild()
@@ -1543,16 +1666,20 @@ final class JournalStore: ObservableObject {
         let b = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !(t.isEmpty && b.isEmpty) else { return false }
 
-        let resolved = resolveBase(bookmark: UserDefaults.standard.data(forKey: "customFolderBookmark"),
+        let resolved = resolveBase(bookmark: UserDefaults.standard.data(forKey: bookmarkKey),
                                    containerID: nil)
-        let base = resolved.url
+        // Never write around an unreachable custom folder: the draft would go
+        // into a journal the user isn't looking at and can't get back.
+        guard let base = resolved.url else { throw JournalError.journalUnavailable }
         let started = resolved.scoped && base.startAccessingSecurityScopedResource()
         defer { if started { base.stopAccessingSecurityScopedResource() } }
 
         let inbox = base.appendingPathComponent("inbox.md")
         let entry = makeEntry(timestamp: nowTS(), title: t, body: b)
         var out = JournalParser.trimRightNewlines(entry.raw) + "\n"
-        let existing = (try? String(contentsOf: inbox, encoding: .utf8)) ?? ""
+        // Throws rather than appending to "" — an unreadable inbox must not be
+        // replaced by this one draft.
+        let existing = try readForRewrite(inbox)
         if !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             out = JournalParser.trimRightNewlines(existing) + "\n\n" + out
         }
@@ -1562,9 +1689,10 @@ final class JournalStore: ObservableObject {
 
     /// Number of drafts currently in the inbox (headless — for App Intents).
     static func inboxDraftCount() -> Int {
-        let resolved = resolveBase(bookmark: UserDefaults.standard.data(forKey: "customFolderBookmark"),
+        let resolved = resolveBase(bookmark: UserDefaults.standard.data(forKey: bookmarkKey),
                                    containerID: nil)
-        let base = resolved.url
+        // An unreachable folder has no answer — better none than the fallback's.
+        guard let base = resolved.url else { return 0 }
         let started = resolved.scoped && base.startAccessingSecurityScopedResource()
         defer { if started { base.stopAccessingSecurityScopedResource() } }
         let inbox = base.appendingPathComponent("inbox.md")
@@ -1648,30 +1776,37 @@ final class JournalStore: ObservableObject {
         scheduleRebuild()
     }
 
-    /// Replace a draft's text (from the editor) and persist the inbox.
-    func updateDraft(_ entry: Entry, newText: String, reindex: Bool = true) {
-        guard let inboxURL else { return }
-        let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
+    /// Replace a draft's text (from the editor) and persist the inbox. Returns
+    /// false when the draft couldn't be found or the write failed.
+    @discardableResult
+    func updateDraft(_ entry: Entry, newText: String, reindex: Bool = true) -> Bool {
+        guard let inboxURL, let content = readToRewrite(inboxURL) else { return false }
         let preamble = JournalParser.leadingPreamble(content)
         var drafts = JournalParser.parseEntries(content)
-        guard let idx = drafts.firstIndex(where: { $0.raw == entry.raw })
-                ?? drafts.firstIndex(where: { $0.ts == entry.ts }) else { return }
-        // Re-parse the edited text; it may yield 0..n entries.
-        let parsed = JournalParser.parseEntries(newText)
+        guard let idx = Self.index(of: entry, in: drafts) else { return false }
+        // One draft in, one draft out: text carrying its own headers is escaped
+        // rather than split, so an autosave can't multiply a pasted entry.
+        let parsed = JournalParser.parseEntries(Self.escapingEmbeddedHeaders(newText, skippingFirstLine: true))
         drafts.replaceSubrange(idx...idx, with: parsed)
-        try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
+        guard (try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))) != nil else {
+            reportWriteFailure(inboxURL)
+            return false
+        }
         if reindex { loadInbox(); revision &+= 1; scheduleRebuild() }
+        return true
     }
 
     /// Sort the inbox into date order in place (jnl cmdSort).
     func sortInbox() {
-        guard let inboxURL else { return }
-        let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
+        guard let inboxURL, let content = readToRewrite(inboxURL) else { return }
         let preamble = JournalParser.leadingPreamble(content)
         let entries = JournalParser.parseEntries(content)
         guard entries.count >= 2 else { return }
         let sorted = JournalParser.sortedByTimestamp(entries)
-        try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: sorted))
+        guard (try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: sorted))) != nil else {
+            reportWriteFailure(inboxURL)
+            return
+        }
         loadInbox()
         revision &+= 1
         scheduleRebuild()
@@ -1680,32 +1815,64 @@ final class JournalStore: ObservableObject {
     // MARK: Filed-entry editing (archive)
 
     /// Replace a filed entry within its day file. Matches the original entry by
-    /// its raw text. Re-parses `newText` (0..n entries) in its place. Removes the
-    /// day file if it ends up empty.
-    func updateFiledEntry(date: String, original: Entry, newText: String, reindex: Bool = true) {
-        guard let url = journalFileURL(for: date) else { return }
-        let content = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    /// its raw text (falling back to an unambiguous timestamp). Removes the day
+    /// file if it ends up empty. Re-dating an entry moves it to the day file its
+    /// new timestamp belongs to — it used to stay behind under a foreign date
+    /// header, invisible to every list that reads the file by name.
+    /// Returns the source the entry now lives in, or nil if nothing was written.
+    @discardableResult
+    func updateFiledEntry(date: String, original: Entry, newText: String, reindex: Bool = true) -> EntrySource? {
+        guard let url = journalFileURL(for: date), let content = readToRewrite(url) else { return nil }
         let preamble = JournalParser.leadingPreamble(content)
         var entries = JournalParser.parseEntries(content)
-        guard let idx = entries.firstIndex(where: { $0.raw == original.raw }) ?? entries.firstIndex(where: { $0.ts == original.ts }) else { return }
-        entries.replaceSubrange(idx...idx, with: JournalParser.parseEntries(newText))
-        try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
+        guard let idx = Self.index(of: original, in: entries) else { return nil }
+        let parsed = JournalParser.parseEntries(Self.escapingEmbeddedHeaders(newText, skippingFirstLine: true))
+
+        // Moved to another day: take it out of this file, then file it into the
+        // new one (no split routing — an archive edit stays in the archive).
+        if parsed.count == 1, let moved = parsed.first, !moved.date.isEmpty, moved.date != date {
+            // Write the new day first: if the second write then fails, the entry
+            // exists twice (visible, fixable) instead of nowhere. An entry with
+            // nothing in it throws here and never leaves its file.
+            guard let label = try? fileEntry(moved, routeSplit: false) else {
+                reportWriteFailure(url)
+                return nil
+            }
+            entries.remove(at: idx)
+            if (try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))) != nil {
+                patchArchiveCache(date: date, entries: entries)
+            } else {
+                reportWriteFailure(url)
+            }
+            patchDestination(label: label)
+            return .archive(date: moved.date)
+        }
+
+        entries.replaceSubrange(idx...idx, with: parsed)
+        guard (try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))) != nil else {
+            reportWriteFailure(url)
+            return nil
+        }
         if reindex { patchArchiveCache(date: date, entries: entries) }
+        return .archive(date: date)
     }
 
     /// Delete a filed entry from its day file (removes the file if now empty).
-    func deleteFiledEntry(date: String, entry: Entry) {
-        guard let url = journalFileURL(for: date) else { return }
-        let content = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    @discardableResult
+    func deleteFiledEntry(date: String, entry: Entry) -> Bool {
+        guard let url = journalFileURL(for: date), let content = readToRewrite(url) else { return false }
         let preamble = JournalParser.leadingPreamble(content)
         var entries = JournalParser.parseEntries(content)
         // Single, raw-first removal — removeAll by ts deleted both twins of a
         // same-second pair.
-        guard let idx = entries.firstIndex(where: { $0.raw == entry.raw })
-            ?? entries.firstIndex(where: { $0.ts == entry.ts }) else { return }
+        guard let idx = Self.index(of: entry, in: entries) else { return false }
         entries.remove(at: idx)
-        try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))
+        guard (try? writeFile(url, JournalParser.renderEntries(preamble: preamble, entries: entries))) != nil else {
+            reportWriteFailure(url)
+            return false
+        }
         patchArchiveCache(date: date, entries: entries)
+        return true
     }
 
     // MARK: Filing internals (jnl fileDraft / splitTagTarget)
@@ -1722,10 +1889,12 @@ final class JournalStore: ObservableObject {
     /// Append several entries to one file in a single read + write.
     private func appendEntries(_ entries: [Entry], to dest: URL) -> Bool {
         guard !entries.isEmpty else { return false }
+        // An unreadable destination aborts the append — appending to "" would
+        // replace the day's entries with just these.
+        guard let existing = readToRewrite(dest) else { return false }
         try? fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
         var out = ""
-        if let existing = try? String(contentsOf: dest, encoding: .utf8),
-           !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             out = JournalParser.trimRightNewlines(existing) + "\n"
         }
         for e in entries {
@@ -1751,11 +1920,13 @@ final class JournalStore: ObservableObject {
         guard let (dest, label) = destination(for: e, routeSplit: routeSplit) else {
             throw JournalError.badPath
         }
+        // Throws rather than appending to "": an unreadable day file must not be
+        // replaced by the single entry being filed into it.
+        let existing = try Self.readForRewrite(dest)
         try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         var out = ""
-        if let existing = try? String(contentsOf: dest, encoding: .utf8),
-           !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             out = existing
             if !out.hasSuffix("\n\n") {
                 out += out.hasSuffix("\n") ? "\n" : "\n\n"
@@ -1787,17 +1958,17 @@ final class JournalStore: ObservableObject {
     }
 
     private func removeFromInbox(_ entry: Entry) {
-        guard let inboxURL else { return }
-        let content = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
+        guard let inboxURL, let content = readToRewrite(inboxURL) else { return }
         let preamble = JournalParser.leadingPreamble(content)
         var drafts = JournalParser.parseEntries(content)
         // Raw text first, timestamp second: raw is the sharper identity when
         // two entries share a second, so the removal can't land on the wrong twin.
-        if let idx = drafts.firstIndex(where: { $0.raw == entry.raw })
-            ?? drafts.firstIndex(where: { $0.ts == entry.ts }) {
+        if let idx = Self.index(of: entry, in: drafts) {
             drafts.remove(at: idx)
         }
-        try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
+        if (try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))) == nil {
+            reportWriteFailure(inboxURL)
+        }
     }
 
     // MARK: Bulk filing (jnl transfer)
@@ -1827,8 +1998,7 @@ final class JournalStore: ObservableObject {
             filed += group.count
             for draft in group { filedRaws[draft.raw, default: 0] += 1 }
         }
-        if filed > 0, let inboxURL {
-            let content = readString(inboxURL)
+        if filed > 0, let inboxURL, let content = readToRewrite(inboxURL) {
             let preamble = JournalParser.leadingPreamble(content)
             var remaining: [Entry] = []
             for e in JournalParser.parseEntries(content) {
@@ -1838,7 +2008,9 @@ final class JournalStore: ObservableObject {
                     remaining.append(e)
                 }
             }
-            try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: remaining))
+            if (try? writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: remaining))) == nil {
+                reportWriteFailure(inboxURL)
+            }
         }
         reload()
         return filed
@@ -1893,7 +2065,8 @@ final class JournalStore: ObservableObject {
     func cleanup() -> CleanupResult {
         var res = CleanupResult()
         for url in allJournalFiles() {
-            let orig = readString(url)
+            // Skip anything unreadable: rebuilding it from "" would delete it.
+            guard let orig = readToRewrite(url) else { continue }
             let fixed = JournalParser.normalizePunctuation(orig)
             if fixed != orig { res.formatted += 1 }
 
@@ -1919,8 +2092,7 @@ final class JournalStore: ObservableObject {
             if rebuilt != orig { try? writeFile(url, rebuilt) }
         }
         // Inbox: reorder by timestamp and drop exact duplicates too.
-        if let inboxURL {
-            let content = readString(inboxURL)
+        if let inboxURL, let content = readToRewrite(inboxURL) {
             let preamble = JournalParser.leadingPreamble(content)
             let entries = JournalParser.parseEntries(content)
             let sorted = JournalParser.sortedByTimestamp(entries)
@@ -1947,8 +2119,7 @@ final class JournalStore: ObservableObject {
         var res = MergeResult()
         let configured = Set(splitTags.map { $0.hasPrefix("@") ? String($0.dropFirst()) : $0 })
         for sj in splitJournals where !configured.contains(sj.name) {
-            guard let url = splitJournalURL(sj.name) else { continue }
-            let content = readString(url)
+            guard let url = splitJournalURL(sj.name), let content = readToRewrite(url) else { continue }
             let entries = JournalParser.parseEntries(content)
             guard !entries.isEmpty else { continue }
             var remaining: [Entry] = []
@@ -2023,17 +2194,20 @@ final class JournalStore: ObservableObject {
         // Current streak, counted back from today — or from yesterday when
         // today is still unwritten, so a live streak doesn't read as 0 all
         // morning (in the app and on the widget) just because today's entry
-        // isn't in yet.
+        // isn't in yet. Days after today are dropped first: one future-dated
+        // entry (a typo, a note written ahead) used to anchor the walk past
+        // today and read the whole streak as 0.
         let today = cal.startOfDay(for: Date())
+        let upToToday = dates.filter { cal.startOfDay(for: $0) <= today }
         var anchor = today
-        if let last = dates.last, !cal.isDate(last, inSameDayAs: today),
+        if let last = upToToday.last, !cal.isDate(last, inSameDayAs: today),
            let yesterday = cal.date(byAdding: .day, value: -1, to: today) {
             anchor = yesterday
         }
         var cur = 0
-        for i in stride(from: dates.count - 1, through: 0, by: -1) {
+        for i in stride(from: upToToday.count - 1, through: 0, by: -1) {
             guard let expected = cal.date(byAdding: .day, value: -cur, to: anchor) else { break }
-            if cal.isDate(dates[i], inSameDayAs: expected) { cur += 1 } else { break }
+            if cal.isDate(upToToday[i], inSameDayAs: expected) { cur += 1 } else { break }
         }
         s.currentStreak = cur
 
@@ -2103,6 +2277,78 @@ final class JournalStore: ObservableObject {
     }
     #endif
 
+    // MARK: Read-modify-write safety
+
+    /// Read a file that is about to be rewritten. "" when it doesn't exist yet;
+    /// a throw when it exists but can't be decoded. The old
+    /// `(try? String(contentsOf:)) ?? ""` couldn't tell those two apart, so a
+    /// single non-UTF-8 byte (a hand edit, a jnl write, an evicted iCloud file,
+    /// a transient permission error) read as an empty file — and the atomic
+    /// replace that followed threw the original away.
+    nonisolated static func readForRewrite(_ url: URL) throws -> String {
+        guard FileManager.default.fileExists(atPath: url.path) else { return "" }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// `readForRewrite` with the failure surfaced: nil means "don't write",
+    /// never "the file was empty".
+    private func readToRewrite(_ url: URL) -> String? {
+        do { return try Self.readForRewrite(url) }
+        catch {
+            lastWriteError = "Couldn't read \(url.lastPathComponent) — it was left untouched."
+            return nil
+        }
+    }
+
+    /// Note a write that didn't happen, so the caller can skip its cache patch
+    /// rather than showing an edit that isn't on disk.
+    private func reportWriteFailure(_ url: URL) {
+        lastWriteError = "Couldn't save \(url.lastPathComponent) — your last change wasn't written."
+    }
+
+    /// Locate an entry inside a file's parsed entries for a rewrite. Exact raw
+    /// text first; the timestamp only when that second is unambiguous — with
+    /// two entries sharing a second the old fallback silently landed on the
+    /// first twin, so editing the second overwrote the first.
+    nonisolated static func index(of entry: Entry, in entries: [Entry]) -> Int? {
+        // Trimmed raw: the last entry in a file parses back carrying the file's
+        // own trailing newline, so a bare == misses it.
+        let want = JournalParser.trimRightNewlines(entry.raw)
+        if let i = entries.firstIndex(where: { JournalParser.trimRightNewlines($0.raw) == want }) { return i }
+        let sameTS = entries.indices.filter { entries[$0].ts == entry.ts }
+        return sameTS.count == 1 ? sameTS[0] : nil
+    }
+
+    // MARK: Embedded headers (one editor's text is always one entry)
+
+    /// How many `[timestamp]` headers a piece of body text carries. The on-disk
+    /// format has no escape for a header line, so a body holding its own
+    /// headers would parse back as several entries — the composer offers to
+    /// import such a paste rather than writing it as one draft.
+    nonisolated static func embeddedEntryCount(in body: String) -> Int {
+        JournalParser.parseEntries(body).count
+    }
+
+    /// True when this single line would parse as a jnl entry header.
+    nonisolated static func isEntryHeader(_ line: String) -> Bool {
+        JournalParser.parseEntries(line).count == 1
+    }
+
+    /// Backslash-escape every line that would parse as an entry header, so the
+    /// text stays one entry. `skippingFirstLine` spares an entry's own header.
+    /// A markdown `\[` is the standard literal-bracket escape and renders as
+    /// `[`; indenting instead wouldn't survive the parser's body trim.
+    nonisolated static func escapingEmbeddedHeaders(_ text: String, skippingFirstLine: Bool) -> String {
+        // Fast path: nothing in here would split. A whole entry's raw text
+        // legitimately opens with one header of its own.
+        guard embeddedEntryCount(in: text) > (skippingFirstLine ? 1 : 0) else { return text }
+        var lines = text.components(separatedBy: "\n")
+        for i in lines.indices where !(skippingFirstLine && i == 0) {
+            if isEntryHeader(lines[i]) { lines[i] = "\\" + lines[i] }
+        }
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: Atomic write (jnl writeFile)
 
     /// Write via temp-file + rename so an interrupted write never truncates the
@@ -2146,9 +2392,25 @@ final class JournalStore: ObservableObject {
     /// land on the next launch or foreground.
     private func drainPendingShares() {
         guard let dir = Self.pendingShareDir, let inboxURL, baseURL != nil else { return }
+        // Claim the handoff by renaming it *before* reading. The extension only
+        // ever appends to pending.md, so a share captured between our read and
+        // our delete used to land in the file we then threw away. `.processing`
+        // files left behind by a drain that crashed are picked up here too.
         let pendingFile = dir.appendingPathComponent("pending.md")
-        guard let content = try? String(contentsOf: pendingFile, encoding: .utf8) else { return }
-        let shared = JournalParser.parseEntries(content)
+        if fm.fileExists(atPath: pendingFile.path) {
+            try? fm.moveItem(at: pendingFile,
+                             to: dir.appendingPathComponent("\(UUID().uuidString).processing"))
+        }
+        func captured(_ url: URL) -> Date {
+            (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+        }
+        let claimed = ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.creationDateKey])) ?? [])
+            .filter { $0.pathExtension == "processing" }
+            .sorted { captured($0) < captured($1) }
+        guard !claimed.isEmpty else { return }
+        let shared = claimed.flatMap {
+            JournalParser.parseEntries((try? String(contentsOf: $0, encoding: .utf8)) ?? "")
+        }
         // Media first, so the links resolve the moment the drafts appear.
         let pendingAssets = dir.appendingPathComponent("assets", isDirectory: true)
         if let items = try? fm.contentsOfDirectory(at: pendingAssets, includingPropertiesForKeys: nil),
@@ -2161,20 +2423,22 @@ final class JournalStore: ObservableObject {
             }
         }
         if !shared.isEmpty {
-            let existing = (try? String(contentsOf: inboxURL, encoding: .utf8)) ?? ""
+            // An unreadable inbox keeps the claimed files for the next reload
+            // rather than being replaced by the shares alone.
+            guard let existing = readToRewrite(inboxURL) else { return }
             let preamble = JournalParser.leadingPreamble(existing)
             var drafts = JournalParser.parseEntries(existing)
             for e in shared where !drafts.contains(where: { $0.raw == e.raw }) { drafts.append(e) }
             do {
                 try writeFile(inboxURL, JournalParser.renderEntries(preamble: preamble, entries: drafts))
             } catch {
-                // Keep pending.md so the capture isn't lost — the next reload
+                // Keep the claims so the capture isn't lost — the next reload
                 // retries (the media moves above are idempotent, and the
                 // dedupe-by-raw guard means a partial success can't double up).
                 return
             }
         }
-        try? fm.removeItem(at: pendingFile)
+        for url in claimed { try? fm.removeItem(at: url) }
     }
 
     // MARK: Import (external journals → filed entries)
@@ -2304,12 +2568,20 @@ final class JournalStore: ObservableObject {
 
     /// Debounced: sync updates arrive in bursts, and our own writes echo back
     /// through the watcher — a change landing within 2s of a local write is us.
-    private func scheduleSyncReload() {
+    private func scheduleSyncReload(after delay: TimeInterval = 1.5) {
         syncReloadTask?.cancel()
         syncReloadTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
-            if Date().timeIntervalSince(self.lastLocalWriteAt) < 2 { return }
+            // Looks like our own echo — wait out the rest of the window and
+            // look again rather than dropping the update. With continuous
+            // autosave this used to discard every remote change (and never run
+            // conflict resolution) for as long as a writing session lasted.
+            let sinceLocalWrite = Date().timeIntervalSince(self.lastLocalWriteAt)
+            if sinceLocalWrite < 2 {
+                self.scheduleSyncReload(after: 2 - sinceLocalWrite)
+                return
+            }
             self.resolveFileConflicts()
             self.reload()
         }
@@ -2371,7 +2643,18 @@ final class JournalStore: ObservableObject {
     /// Parse a jnl timestamp back into a Date (for the composer's date picker).
     static func date(from ts: String) -> Date? { tsFormatter.date(from: ts) }
 
-    enum JournalError: Error { case nothingToFile, badPath }
+    enum JournalError: Error, LocalizedError {
+        case nothingToFile, badPath, journalUnavailable
+
+        var errorDescription: String? {
+            switch self {
+            case .nothingToFile: return "There was nothing to file."
+            case .badPath:       return "That entry isn't dated, so it has nowhere to go."
+            case .journalUnavailable:
+                return "Nook can't reach your journal folder. Open Nook to find it again."
+            }
+        }
+    }
 }
 
 // MARK: - Security-scoped folder bookmarks (cross-platform)
@@ -2389,15 +2672,34 @@ enum FolderAccess {
         #endif
     }
 
-    static func resolve(_ data: Data) -> URL? {
+    /// Resolve a bookmark. `stale` means the system handed back a usable URL
+    /// but wants a fresh bookmark minted from it — ignoring that is how a
+    /// renamed folder eventually stops resolving at all.
+    static func resolve(_ data: Data) -> (url: URL, stale: Bool)? {
         var stale = false
         #if os(macOS)
         let options: URL.BookmarkResolutionOptions = .withSecurityScope
         #else
         let options: URL.BookmarkResolutionOptions = []
         #endif
-        return try? URL(resolvingBookmarkData: data, options: options,
-                        relativeTo: nil, bookmarkDataIsStale: &stale)
+        guard let url = try? URL(resolvingBookmarkData: data, options: options,
+                                 relativeTo: nil, bookmarkDataIsStale: &stale) else { return nil }
+        return (url, stale)
+    }
+
+    /// Mint a replacement for a bookmark the system reported stale. Making a
+    /// security-scoped bookmark needs access to the folder, so open the scope
+    /// around the call.
+    static func remint(_ url: URL) -> Data? {
+        let started = url.startAccessingSecurityScopedResource()
+        defer { if started { url.stopAccessingSecurityScopedResource() } }
+        return makeBookmark(url)
+    }
+
+    /// The folder's name straight out of the bookmark, without resolving it —
+    /// the only thing left to name a folder we can no longer reach.
+    static func name(inBookmark data: Data) -> String? {
+        URL.resourceValues(forKeys: [.nameKey], fromBookmarkData: data)?.name
     }
 }
 

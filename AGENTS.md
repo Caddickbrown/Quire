@@ -150,9 +150,9 @@ Nook/
                           macOS AVCaptureSession (movie + photo output)
     SettingsView.swift    appearance, accent colour, fonts, date format, tag highlight, split tags (chips),
                           folder, backup, cleanup/merge-ex-split/export, shortcuts + how-to guides
-  iOS/Info.plist  macOS/Info.plist  Nook.entitlements  Assets.xcassets  fonts/
-gen_pbxproj.py   tools/make_icon.swift   Tests/ParserChecks.swift   Makefile
-  Nook/NookShared.swift  `NookSnapshot` — Codable stats shared app↔widget
+  iOS/Info.plist  macOS/Info.plist  Assets.xcassets  fonts/
+  Nook-{iOS,macOS}.entitlements   iCloud + App Group (macOS also sandboxed)
+  NookShared.swift     `NookSnapshot` — Codable stats shared app↔widget
 NookWidget/          WidgetKit extension (own target, embedded in the app)
   NookWidget.swift       small/medium/large widgets; deep-links `nook://write`
   NookLockScreenWidget.swift  iOS-only Lock Screen accessory: a New Draft button
@@ -165,7 +165,8 @@ NookShare/           share extension (own target, embedded in the app)
                      PendingShare/ handoff (self-contained; no shared model code)
   Info.plist         NSExtension point `com.apple.share-services` + activation rule
   NookShare-{iOS,macOS}.entitlements    App Group (macOS also sandboxed)
-gen_pbxproj.py   tools/make_icon.swift   Tests/ParserChecks.swift   Makefile
+gen_pbxproj.py   tools/make_icon.swift   Makefile
+Tests/ParserChecks.swift   Tests/NookTests.swift
 _parked/video/   ← freewrite's video views, excluded from the build
 ```
 
@@ -263,15 +264,16 @@ makes/resolves cross-platform security-scoped bookmarks for the custom folder.
 
 ## iCloud setup (manual, one-time)
 
-The entitlement (`Nook/Nook.entitlements`) references container
-`iCloud.com.caddickbrown.nook`. In Xcode → target → **Signing & Capabilities**,
+The entitlements (`Nook/Nook-iOS.entitlements`, `Nook/Nook-macOS.entitlements`)
+reference container `iCloud.com.caddickbrown.nook`. In Xcode → target → **Signing & Capabilities**,
 enable **iCloud → iCloud Documents** and select/create that container so the
 provisioning profile includes it. Automated builds here use
 `CODE_SIGNING_ALLOWED=NO`, which skips this; a real device/App Store build needs it.
 
 The custom-folder picker relies on the sandbox entitlements
 `com.apple.security.files.user-selected.read-write` and
-`com.apple.security.files.bookmarks.app-scope` (both in `Nook.entitlements`).
+`com.apple.security.files.bookmarks.app-scope` (both in `Nook-macOS.entitlements`;
+they are macOS-only — the iOS document picker needs no sandbox entitlement).
 
 ## jnl feature parity
 
