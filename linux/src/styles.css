@@ -176,11 +176,32 @@ body.focus #sidebar { display: none; }
   font-weight: 700; background: none; border: none; outline: none;
 }
 .title-input::placeholder { color: var(--text-3); font-weight: 400; }
-.date-wrap { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 13px; }
-.date-wrap input {
+.date-wrap { display: flex; align-items: center; color: var(--text-2); font-size: 13px; }
+.date-btn {
+  display: flex; align-items: center; gap: 6px; white-space: nowrap;
   background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px;
-  padding: 4px 7px; font-size: 12px; color: var(--text); outline: none;
+  padding: 4px 8px; font-size: 12px; font-variant-numeric: tabular-nums;
+  color: var(--text); outline: none;
 }
+.date-btn:hover { background: var(--hover); }
+
+/* ---- Date & time popover (in-app; see dateField() in app.js) ---- */
+#menu-root .datepop { width: 236px; min-width: 0; padding: 9px 10px 10px; }
+.datepop .mc-head { margin-bottom: 6px; }
+.dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.mc-day.pick { cursor: pointer; }
+.mc-day.pick:hover { background: var(--hover); color: var(--text); }
+.mc-day.sel { background: var(--accent); color: #fff; }
+.mc-day.sel:hover { background: var(--accent); color: #fff; }
+.dp-time { display: flex; align-items: center; gap: 6px; margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--border); color: var(--text-2); }
+.dp-time input {
+  flex: 1; min-width: 0; background: var(--bg-inset); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 7px; font-size: 12px; font-variant-numeric: tabular-nums;
+  color: var(--text); outline: none;
+}
+.dp-time input:focus { border-color: var(--accent); }
+.dp-now { padding: 4px 8px; border-radius: 6px; font-size: 12px; color: var(--text-2); }
+.dp-now:hover { background: var(--hover); color: var(--text); }
 .compose-body-wrap { flex: 1; position: relative; overflow: hidden; padding: 8px 20px 20px; }
 .body-editor {
   width: 100%; height: 100%; resize: none; border: none; outline: none; background: none;
@@ -191,6 +212,20 @@ body.focus #sidebar { display: none; }
 .placeholder-overlay {
   position: absolute; top: 8px; left: 20px; pointer-events: none;
   font-family: var(--writing-font); font-size: var(--font-size); color: var(--text-3); line-height: 1.5;
+}
+
+/* ---- @tag highlight (editor overlay + preview) ---- */
+.tag-hl { color: var(--accent); }
+/* Backdrop layer sitting behind the textarea, aligned char-for-char, showing the
+   same text with @tags coloured. The textarea text is made transparent (caret kept)
+   so only this layer's colouring shows through. */
+.hl-backdrop { position: absolute; inset: 8px 20px 20px 20px; overflow: hidden; pointer-events: none; z-index: 0; }
+.hl-backdrop .hl-content {
+  font-family: var(--writing-font); font-size: var(--font-size); line-height: 1.5;
+  white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word; color: var(--text);
+}
+.compose-body-wrap.hl-on .body-editor {
+  position: relative; z-index: 1; color: transparent; caret-color: var(--text); background: none;
 }
 
 /* ---- Preview (MediaPreview) ---- */

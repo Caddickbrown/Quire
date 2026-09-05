@@ -153,9 +153,16 @@ function jsNowTs() {
   const d = new Date(), p = n => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
-function tsToInput(ts) { return ts.replace(" ", "T"); }
-function inputToTs(v) { v = v.replace("T", " "); return v.length === 16 ? v + ":00" : v; }
 function timeOf(ts) { return ts.slice(11, 16); }
+/* Coerce anything entry-shaped to a jnl timestamp "YYYY-MM-DD HH:MM:SS". */
+function normTs(ts) {
+  const s = String(ts ?? "").replace("T", " ").trim();
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(s)) return s.slice(0, 19);
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(s)) return s + ":00";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s + " 00:00:00";
+  return jsNowTs();
+}
+function isoOf(d) { const p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
 function displayDate(iso, withYear = false) {
   const style = pref("dateStyle"); if (style === "iso") return iso;
   const d = isoToDate(iso); const o = {};
@@ -165,6 +172,89 @@ function displayDate(iso, withYear = false) {
   return d.toLocaleDateString(undefined, o);
 }
 function sectionDate(iso) { return displayDate(iso, true); }
+
+/* ---- Date & time field ---------------------------------------------
+   Deliberately NOT <input type="datetime-local">: WebKitGTK hands that off to a
+   native UI-process picker whose popup can wedge the whole window (the app looks
+   frozen until it's killed), and it silently truncates the seconds that jnl
+   timestamps carry. This is a plain in-app popover instead — same widget on every
+   platform, seconds preserved.
+   Returns { el, value } where `value` is a "YYYY-MM-DD HH:MM:SS" string. */
+function dateField(initial, onChange) {
+  let cur = normTs(initial);
+  const wrap = el(`<div class="date-wrap"><button class="date-btn" type="button" title="Change date & time">${icon("calendar", 14)}<span class="date-btn-label"></span></button></div>`);
+  const b = $(".date-btn", wrap), lab = $(".date-btn-label", wrap);
+  const paint = () => { lab.textContent = `${displayDate(cur.slice(0, 10))} · ${cur.slice(11, 19)}`; };
+  const set = next => { cur = normTs(next); paint(); onChange(cur); };
+  b.onclick = e => { e.stopPropagation(); openDatePopover(b, cur, set); };
+  paint();
+  return { el: wrap, get value() { return cur; }, set value(v) { cur = normTs(v); paint(); } };
+}
+
+/* Popover anchored under `anchor`; calls pick(ts) on every change. Lives in
+   #menu-root with class "menu" so the global click-away handler dismisses it. */
+function openDatePopover(anchor, cur, pick) {
+  closeMenus();
+  let ymd = cur.slice(0, 10), hms = cur.slice(11, 19);
+  const view = { y: +ymd.slice(0, 4), m: +ymd.slice(5, 7) - 1 };
+  const pop = el(`<div class="menu datepop">
+    <div class="mc-head"><div class="mc-title"></div><div class="mc-nav"></div></div>
+    <div class="dp-grid"></div>
+    <div class="dp-time">${icon("clock", 13)}<input class="dp-t" type="text" inputmode="numeric" maxlength="8" spellcheck="false"/><button class="dp-now" type="button">Now</button></div>
+  </div>`);
+  const nav = $(".mc-nav", pop), timeI = $(".dp-t", pop);
+  const prev = el(`<button type="button" title="Previous month">${icon("chevron.left", 13)}</button>`);
+  const tod = el(`<button class="mc-today" type="button" title="This month">${icon("today", 13)}</button>`);
+  const next = el(`<button type="button" title="Next month">${icon("chevron.right", 13)}</button>`);
+  nav.append(prev, tod, next);
+  prev.onclick = () => { if (--view.m < 0) { view.m = 11; view.y--; } drawGrid(); };
+  next.onclick = () => { if (++view.m > 11) { view.m = 0; view.y++; } drawGrid(); };
+  tod.onclick = () => { const n = new Date(); view.y = n.getFullYear(); view.m = n.getMonth(); drawGrid(); };
+
+  function drawGrid() {
+    $(".mc-title", pop).textContent = new Date(view.y, view.m, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    const grid = $(".dp-grid", pop); grid.innerHTML = "";
+    const offset = (pref("firstWeekday") - 1) % 7;
+    const wds = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+    for (let i = 0; i < 7; i++) grid.appendChild(el(`<div class="mc-wd">${wds[(i + offset) % 7]}</div>`));
+    const lead = (new Date(view.y, view.m, 1).getDay() - offset + 7) % 7;
+    const start = new Date(view.y, view.m, 1 - lead);
+    const todayKey = isoOf(new Date());
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(start); d.setDate(start.getDate() + i);
+      const key = isoOf(d);
+      const cell = el(`<div class="mc-day pick ${d.getMonth() === view.m ? "inmonth" : ""} ${key === todayKey ? "today" : ""}" data-key="${key}">${d.getDate()}</div>`);
+      // Re-class in place rather than redrawing: replacing the clicked node mid-click
+      // detaches it, and the click-away handler then can't see it inside .menu and
+      // would close the popover on every date pick.
+      cell.onclick = () => { ymd = key; markSelected(); pick(`${ymd} ${hms}`); };
+      grid.appendChild(cell);
+    }
+    markSelected();
+  }
+  function markSelected() {
+    $$(".mc-day", pop).forEach(c => c.classList.toggle("sel", c.dataset.key === ymd));
+  }
+  drawGrid();
+
+  timeI.value = hms;
+  const commitTime = () => {
+    const m = timeI.value.trim().match(/^(\d{1,2})(?::(\d{1,2}))?(?::(\d{1,2}))?$/);
+    if (!m) { timeI.value = hms; return; }
+    const cl = (n, hi) => String(Math.min(hi, Math.max(0, +n || 0))).padStart(2, "0");
+    hms = `${cl(m[1], 23)}:${cl(m[2] || 0, 59)}:${cl(m[3] || 0, 59)}`;
+    timeI.value = hms;
+    pick(`${ymd} ${hms}`);
+  };
+  timeI.onchange = commitTime;
+  timeI.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); commitTime(); closeMenus(); } };
+  $(".dp-now", pop).onclick = () => { const n = jsNowTs(); ymd = n.slice(0, 10); hms = n.slice(11, 19); timeI.value = hms; view.y = +ymd.slice(0, 4); view.m = +ymd.slice(5, 7) - 1; drawGrid(); pick(`${ymd} ${hms}`); };
+
+  $("#menu-root").appendChild(pop);
+  const a = anchor.getBoundingClientRect(), r = pop.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(a.left, innerWidth - r.width - 8)) + "px";
+  pop.style.top = (a.bottom + 4 + r.height > innerHeight ? Math.max(8, a.top - r.height - 4) : a.bottom + 4) + "px";
+}
 
 /* ------------------------------------------------------------------ */
 /* Global state                                                        */
@@ -439,7 +529,7 @@ function renderWrite(main) {
   const st = { title: "", date: jsNowTs(), text: "", activeTS: null, recording: false };
   const save = debounce(commit, 500);
   async function commit(reindex) {
-    const ts = inputToTs(tsToInput(st.date));
+    const ts = normTs(st.date);
     if (!st.text.trim() && !st.title.trim()) { if (st.activeTS) { await invoke("remove_draft", { timestamp: st.activeTS }); st.activeTS = null; } }
     else { st.activeTS = (await invoke("upsert_draft", { previous: st.activeTS, timestamp: ts, title: st.title, body: st.text })) ?? ts; }
     if (reindex) refresh(false).then(renderSidebar);
@@ -454,34 +544,35 @@ function renderWrite(main) {
   const composer = el(`<div class="composer"><div class="composer-inner">
     <div class="compose-head">
       <input class="title-input" placeholder="Title"/>
-      <div class="date-wrap">${icon("calendar", 14)}<input type="datetime-local" step="1"/></div>
+      <div class="date-slot"></div>
     </div>
     <div class="divider"></div>
     <div class="compose-body-wrap"><textarea class="body-editor" spellcheck="true"></textarea><div class="placeholder-overlay">Begin writing</div></div>
   </div></div>`);
-  const titleI = $(".title-input", composer), dateI = $(".date-wrap input", composer), bodyI = $(".body-editor", composer), ph = $(".placeholder-overlay", composer);
+  const titleI = $(".title-input", composer), bodyI = $(".body-editor", composer), ph = $(".placeholder-overlay", composer);
   // Writing prompts: the empty composer asks a question (stable per day).
   let promptOffset = 0;
   const syncPrompt = () => { ph.textContent = pref("writingPrompts") ? promptOfDay(promptOffset) : "Begin writing"; };
   syncPrompt();
-  dateI.value = tsToInput(st.date);
+  const dateF = dateField(st.date, ts => { st.date = ts; save(); });
+  $(".date-slot", composer).replaceWith(dateF.el);
+  const hlUpdate = attachTagHighlight($(".compose-body-wrap", composer), bodyI);
   const syncPh = () => (ph.style.display = bodyI.value ? "none" : "block");
   titleI.oninput = () => { st.title = titleI.value; save(); };
   titleI.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); bodyI.focus(); } };
   bodyI.oninput = () => { st.text = bodyI.value; syncPh(); save(); };
-  dateI.onchange = () => { st.date = inputToTs(dateI.value); save(); };
   view.appendChild(composer);
   main.appendChild(view);
   setTimeout(() => bodyI.focus(), 20);
 
   // media insertion target
-  S.insertMedia = rel => { bodyI.value += (bodyI.value ? "\n\n" : "") + `![](${rel})`; st.text = bodyI.value; syncPh(); save.now(true); };
+  S.insertMedia = rel => { bodyI.value += (bodyI.value ? "\n\n" : "") + `![](${rel})`; st.text = bodyI.value; syncPh(); hlUpdate(); save.now(true); };
   S.editor = { flush: () => { save.cancel(); commit(true); } };
 
   // IMPORTANT: await the save before clearing, else commit()'s async tail resets
   // st.activeTS to the just-saved entry — and the next entry's autosave would then
   // pass it as `previous` and delete the entry we just filed into the inbox.
-  async function reset() { save.cancel(); await commit(true); st.title = ""; st.text = ""; st.date = jsNowTs(); st.activeTS = null; titleI.value = ""; bodyI.value = ""; dateI.value = tsToInput(st.date); syncPh(); bodyI.focus(); }
+  async function reset() { save.cancel(); await commit(true); st.title = ""; st.text = ""; st.date = jsNowTs(); st.activeTS = null; titleI.value = ""; bodyI.value = ""; dateF.value = st.date; syncPh(); hlUpdate(); bodyI.focus(); }
   newBtn.onclick = async () => { const had = st.text.trim() || st.title.trim(); await reset(); if (had) toast("Saved to inbox"); };
   recBtn.onclick = () => toggleRecord(recBtn, composer);
   moreBtn.onclick = async () => {
@@ -489,18 +580,18 @@ function renderWrite(main) {
     menuFromButton(moreBtn, [
     { label: "Attach Media", icon: "paperclip", action: attachMedia },
     { label: "Record Video", icon: "video", action: () => recordVideo() },
-    { label: "Promote first line to title", icon: "promote", disabled: !st.text.trim(), action: () => { const lines = st.text.split("\n"); const i = lines.findIndex(l => l.trim()); if (i < 0) return; st.title = lines[i].trim(); titleI.value = st.title; lines.splice(i, 1); st.text = lines.join("\n").replace(/^\n+/, ""); bodyI.value = st.text; syncPh(); save(); } },
+    { label: "Promote first line to title", icon: "promote", disabled: !st.text.trim(), action: () => { const lines = st.text.split("\n"); const i = lines.findIndex(l => l.trim()); if (i < 0) return; st.title = lines[i].trim(); titleI.value = st.title; lines.splice(i, 1); st.text = lines.join("\n").replace(/^\n+/, ""); bodyI.value = st.text; syncPh(); hlUpdate(); save(); } },
     ...(templates.length ? [{ label: "Insert Template", header: true }] : []),
     ...templates.map(n => ({ label: n, icon: "copy", action: async () => {
       const body = await invoke("template_body", { name: n });
       if (!body) return;
       st.text = st.text ? st.text + "\n\n" + body : body;
-      bodyI.value = st.text; syncPh(); save(); bodyI.focus();
+      bodyI.value = st.text; syncPh(); hlUpdate(); save(); bodyI.focus();
     } })),
     ...(pref("writingPrompts") ? [{ label: "New Prompt", icon: "shuffle", action: () => { promptOffset++; syncPrompt(); } }] : []),
     { sep: true },
-    { label: "Discard", icon: "trash", danger: true, disabled: !st.text.trim() && !st.title.trim() && !st.activeTS, action: async () => { save.cancel(); if (st.activeTS) await invoke("remove_draft", { timestamp: st.activeTS }); st.title = ""; st.text = ""; st.activeTS = null; titleI.value = ""; bodyI.value = ""; syncPh(); toast("Discarded"); refresh(false).then(renderSidebar); } },
-    { label: "Import as separate entries", icon: "split.import", disabled: !st.text.trim(), action: async () => { save.cancel(); if (st.activeTS) { await invoke("remove_draft", { timestamp: st.activeTS }); st.activeTS = null; } const n = await invoke("import_drafts", { text: st.text }); st.title = ""; st.text = ""; titleI.value = ""; bodyI.value = ""; syncPh(); toast(`Imported ${plural(n, "entry").replace("entrys", "entries")}`); refresh(false).then(renderSidebar); } },
+    { label: "Discard", icon: "trash", danger: true, disabled: !st.text.trim() && !st.title.trim() && !st.activeTS, action: async () => { save.cancel(); if (st.activeTS) await invoke("remove_draft", { timestamp: st.activeTS }); st.title = ""; st.text = ""; st.activeTS = null; titleI.value = ""; bodyI.value = ""; syncPh(); hlUpdate(); toast("Discarded"); refresh(false).then(renderSidebar); } },
+    { label: "Import as separate entries", icon: "split.import", disabled: !st.text.trim(), action: async () => { save.cancel(); if (st.activeTS) { await invoke("remove_draft", { timestamp: st.activeTS }); st.activeTS = null; } const n = await invoke("import_drafts", { text: st.text }); st.title = ""; st.text = ""; titleI.value = ""; bodyI.value = ""; syncPh(); hlUpdate(); toast(`Imported ${plural(n, "entry").replace("entrys", "entries")}`); refresh(false).then(renderSidebar); } },
   ]);
   };
   syncPh();
@@ -989,7 +1080,7 @@ function entryEditor(entry, source, { onChange, onSaved } = {}) {
   };
   const save = debounce(commit, 600);
   function composedRaw() {
-    const ts = inputToTs(tsToInput(st.date)); const t = st.title.trim(); const b = st.text.replace(/\n+$/, "");
+    const ts = normTs(st.date); const t = st.title.trim(); const b = st.text.replace(/\n+$/, "");
     if (t && b) return `[${ts}] ${t}\n${b}`; if (t) return `[${ts}] ${t}`; return `[${ts}]\n${b}`;
   }
   async function commit(reindex) {
@@ -998,7 +1089,7 @@ function entryEditor(entry, source, { onChange, onSaved } = {}) {
     if (source.kind === "inbox") await invoke("update_draft", { ts: st.activeTS, raw: st.activeRaw, newText });
     else if (source.kind === "archive") await invoke("update_filed_entry", { date: source.arg, ts: st.activeTS, raw: st.activeRaw, newText });
     else await invoke("update_journal_entry", { name: source.arg, ts: st.activeTS, raw: st.activeRaw, newText });
-    st.baseline = raw; st.activeRaw = raw; st.activeTS = inputToTs(tsToInput(st.date));
+    st.baseline = raw; st.activeRaw = raw; st.activeTS = normTs(st.date);
     if (onSaved) onSaved(st.activeTS, st.title, st.text, raw);
     if (reindex && onChange) onChange();
   }
@@ -1031,15 +1122,16 @@ function entryEditor(entry, source, { onChange, onSaved } = {}) {
   }
   function editPane() {
     const p = el(`<div class="composer"><div class="composer-inner">
-      <div class="compose-head"><input class="title-input" placeholder="Title"/><div class="date-wrap">${icon("calendar", 14)}<input type="datetime-local" step="1"/></div></div>
+      <div class="compose-head"><input class="title-input" placeholder="Title"/><div class="date-slot"></div></div>
       <div class="divider"></div>
       <div class="compose-body-wrap"><textarea class="body-editor"></textarea><div class="placeholder-overlay">Begin writing</div></div>
     </div></div>`);
-    const ti = $(".title-input", p), di = $(".date-wrap input", p), bi = $(".body-editor", p), ph = $(".placeholder-overlay", p);
-    ti.value = st.title; di.value = tsToInput(st.date); bi.value = st.text; ph.style.display = st.text ? "none" : "block";
+    const ti = $(".title-input", p), bi = $(".body-editor", p), ph = $(".placeholder-overlay", p);
+    ti.value = st.title; bi.value = st.text; ph.style.display = st.text ? "none" : "block";
+    $(".date-slot", p).replaceWith(dateField(st.date, ts => { st.date = ts; save(); }).el);
+    attachTagHighlight($(".compose-body-wrap", p), bi);
     ti.oninput = () => { st.title = ti.value; updateStar(); save(); };
     bi.oninput = () => { st.text = bi.value; ph.style.display = bi.value ? "none" : "block"; save(); };
-    di.onchange = () => { st.date = inputToTs(di.value); save(); };
     S.insertMedia = rel => { bi.value += (bi.value ? "\n\n" : "") + `![](${rel})`; st.text = bi.value; ph.style.display = "none"; save.now(false); };
     setTimeout(() => bi.focus(), 20);
     return p;
@@ -1077,6 +1169,30 @@ function parseSegments(body) {
   if (last < body.length) segs.push({ type: "text", text: body.slice(last) });
   return segs;
 }
+/* @tags matched exactly as jnl / parser.rs extracts them (@[a-zA-Z][a-zA-Z0-9_-]*),
+   so what's highlighted always equals what's filed. Gated on the "highlightTags" pref. */
+const TAG_HL_RE = /@[a-zA-Z][a-zA-Z0-9_-]*/g;
+function hlTags(text) { return esc(text).replace(TAG_HL_RE, '<span class="tag-hl">$&</span>'); }
+// Highlight @tags in already-built HTML, only in text between tags (never inside
+// tag/attribute markup, so hrefs and code spans stay intact).
+function highlightTagsInHtml(html) {
+  return html.split(/(<[^>]+>)/).map((seg, i) => i % 2 ? seg : seg.replace(TAG_HL_RE, '<span class="tag-hl">$&</span>')).join("");
+}
+// Overlay a colour-highlight layer behind a plain <textarea> (textareas can't
+// colour inline text). Returns an update() fn to call after programmatic edits.
+function attachTagHighlight(wrap, ta) {
+  if (!pref("highlightTags")) return () => {};
+  const backdrop = el(`<div class="hl-backdrop"><div class="hl-content"></div></div>`);
+  const content = backdrop.firstChild;
+  wrap.insertBefore(backdrop, wrap.firstChild);
+  wrap.classList.add("hl-on");
+  const update = () => { content.innerHTML = hlTags(ta.value) + "\n"; };
+  const sync = () => { content.style.transform = `translateY(${-ta.scrollTop}px)`; };
+  ta.addEventListener("input", () => { update(); sync(); });
+  ta.addEventListener("scroll", sync);
+  update();
+  return update;
+}
 function inlineMarkdown(t) {
   t = esc(t);
   t = t.replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -1084,6 +1200,7 @@ function inlineMarkdown(t) {
   t = t.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>");
   t = t.replace(/\b__([^_]+)__\b/g, "<i>$1</i>");
   t = t.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  if (pref("highlightTags")) t = highlightTagsInHtml(t);
   return t;
 }
 function mediaPreview(body, title, date, onUpdate) {
