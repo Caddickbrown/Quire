@@ -30,6 +30,7 @@ were deliberately excluded — this is a fix list, not a wishlist.
 | L1 | Critical | Linux | Clearing the date field deletes the entry | S |
 | E2 | High | Editor | Same-second twins: the `ts` fallback edits or deletes the wrong twin | M |
 | E3 | High | Composer | Draft timestamp frozen at view creation; overnight Mac files to yesterday | S |
+| E15 | High | Composer | Pasting text with `[timestamp]` headers multiplies entries on every autosave | M |
 | D2 | High | Store | Custom folder that fails to resolve silently falls back to another journal | M |
 | D3 | High | Transcription | Batch transcription rewrites files from a stale snapshot | S |
 | S1 | High | Share (macOS) | macOS share extension never runs; sheet is blank | S |
@@ -252,6 +253,42 @@ were deliberately excluded — this is a fix list, not a wishlist.
 - **Fix:** stamp at first keystroke (`activeTS == nil && !hasText` → `date =
   Date()`), matching `jnl new`; also refresh on `scenePhase == .active` when
   the draft is empty.
+
+### E15 · Pasting text with `[timestamp]` headers multiplies entries on every autosave — **High**
+- **Where:** `Nook/Views/WritingView.swift:387-396` (`commit` → `upsertDraft`),
+  `Nook/Models/JournalStore.swift:1117-1148` (`upsertDraft`), `:1098-1108`
+  (`makeEntry`), `:1652-1665` (`updateDraft`, same shape), `:432-437`
+  (`importEntries`).
+- **Cause:** the composer treats its text as *one* draft, but the on-disk
+  format has no way to escape a header line. `makeEntry` writes
+  `[ts]\n<body>` verbatim; if the body contains two pasted entries, the next
+  `parseEntries` of `inbox.md` yields three drafts. On the following autosave
+  `upsertDraft` finds the composer's own draft by `ts`, replaces just that one
+  with a fresh `[ts]\n<body-with-both-headers>` and leaves the two already
+  split-out drafts in place. Each save therefore adds two more copies.
+  Simulated: paste → 3 drafts, then 5, 7, 9, 11 after four keystrokes.
+  "Import as separate entries" afterwards makes it worse: it removes only the
+  composer's own `[ts]` entry, then appends the pasted entries again on top of
+  the copies the autosaves already produced. `EntryDetailView` → `updateDraft`
+  has the same shape (`replaceSubrange(idx...idx, with: parsed)`), so the
+  same paste into an open draft also multiplies.
+- **Repro:** copy two entries from a day file (or from jnl output), paste
+  into Write, type a few characters, open Inbox.
+- **Fix (recommended):** keep the composer's draft a single entry on disk.
+  In `upsertDraft` and `updateDraft`, when the composed text parses to more
+  than one entry, do **not** write it as-is: either (a) detect headers on the
+  text change and surface the existing "Import as separate entries" action
+  as a banner ("This looks like N entries — Import / Keep as one"), writing
+  nothing until the user chooses, or (b) for "keep as one", neutralise the
+  embedded headers on write (e.g. prefix with a zero-width space or indent by
+  one space) so they no longer match the header regex, and strip that on
+  read. (a) is the jnl-faithful option and reuses `importDrafts`; (b) changes
+  bytes the user pasted. Whichever is chosen, `importEntries()` must remove
+  every draft that came from the working text, not just `activeTS`.
+- **Done when:** pasting two entries and typing ten characters leaves the
+  inbox with either exactly one draft (kept as one) or exactly two (imported),
+  never more; a `ParserChecks`/`NookTests` case covers `upsertDraft` with a
+  multi-header body.
 
 ### E4 · Two-pane ghost editor after Delete / reload — **Medium** (macOS)
 - **Where:** `Nook/Views/ArchiveView.swift:220, 253-263, 317, 376-382`.
@@ -631,7 +668,7 @@ committed `project.pbxproj` matches the generator · `CLAUDE.md` = `AGENTS.md`
 
 | Phase | Goal | Bugs | Gate |
 |-------|------|------|------|
-| 1 | Stop silent loss | D1, E1, E2, L1, L4, D3 | `make check` + NookTests green; twin/date-change tests added |
+| 1 | Stop silent loss | D1, E1, E2, E15, L1, L4, D3 | `make check` + NookTests green; twin/date-change tests added |
 | 2 | Platform-dead features | S1, S2, P1, N1, L2, L3 | manual: macOS share, Day One re-import, app switcher, reminder over 3 days |
 | 3 | Correctness | D2, D4–D8, E3–E6, N2–N4, M1–M3, L5–L11 | unit tests for D7, D8, M2 in Swift + Rust |
 | 4 | Hygiene | remaining Low + all B | `make project` idempotent; docs in sync |
@@ -642,7 +679,7 @@ resulting entry; the view tracks it) — implement Swift first, port the shape.
 
 ## Next actions
 
-1. Land Phase 1 as one PR per platform (Swift: D1/E1/E2/D3; Rust+JS: L1/L4),
+1. Land Phase 1 as one PR per platform (Swift: D1/E1/E2/E15/D3; Rust+JS: L1/L4),
    each adding the acceptance tests named above.
 2. Fix S1 in a two-line PR now; it unblocks macOS share testing for S2–S4.
 3. Decide D2's UX (banner + "Locate folder…") before coding; it changes
