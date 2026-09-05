@@ -9,7 +9,7 @@ SCHEME  = Nook
 project:            ## Regenerate Nook.xcodeproj/project.pbxproj
 	python3 gen_pbxproj.py
 
-icon:               ## Re-render the app icon (concept: ribbon) at all sizes
+icon:               ## Re-render the app icon (concept: ribbon, light + iOS dark) at all sizes
 	swift tools/make_icon.swift ribbon
 
 check:              ## Run the JournalParser verification (jnl parity)
