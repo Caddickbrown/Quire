@@ -10,6 +10,7 @@
 //
 
 import AppKit
+import WanderCore
 
 enum MarkdownStyle {
 
@@ -36,7 +37,7 @@ enum MarkdownStyle {
     /// short ones — which is nearly every journal entry — restyle whole, so a
     /// closing `**` finds its opener however far back it sits.
     static func apply(to tv: NSTextView, range: NSRange?, theme: Theme,
-                      size: CGFloat, dimInactive: Bool) {
+                      size: CGFloat, leading: Double, dimInactive: Bool) {
         guard let storage = tv.textStorage else { return }
         let ns = storage.string as NSString
         let full = NSRange(location: 0, length: ns.length)
@@ -48,7 +49,7 @@ enum MarkdownStyle {
         }
 
         let body = Face.nsSerif(size)
-        let bodyParagraph = paragraph(size: size)
+        let bodyParagraph = paragraph(size: size, leading: leading)
         let base: [NSAttributedString.Key: Any] = [
             .font: body,
             .foregroundColor: theme.prose.nsColor,
@@ -77,7 +78,7 @@ enum MarkdownStyle {
             let weight: NSFont.Weight = level <= 2 ? .semibold : .semibold
             set(.font, Face.nsSerif(size * scale, weight: weight), m.range)
             set(.foregroundColor, theme.ink.nsColor, m.range)
-            set(.paragraphStyle, paragraph(size: size, spacingBefore: size * 0.9), m.range)
+            set(.paragraphStyle, paragraph(size: size, leading: leading, spacingBefore: size * 0.9), m.range)
             // The hashes stay, but at body size and hairline grey, so they read
             // as a printer's mark beside the heading rather than part of it.
             set(.font, Face.nsSerif(size * 0.85), m.range(at: 1))
@@ -88,14 +89,14 @@ enum MarkdownStyle {
         each(quote) { m in
             set(.font, Face.nsSerif(size, italic: true), m.range)
             set(.foregroundColor, theme.muted.nsColor, m.range)
-            set(.paragraphStyle, paragraph(size: size, indent: size * 1.1), m.range)
+            set(.paragraphStyle, paragraph(size: size, leading: leading, indent: size * 1.1), m.range)
             set(.font, Face.nsSerif(size * 0.85), m.range(at: 1))
             set(.foregroundColor, marker, m.range(at: 1))
         }
 
         // List markers pick up the accent; the item hangs off the marker.
         each(bullet) { m in
-            set(.paragraphStyle, paragraph(size: size, indent: size * 1.2), m.range)
+            set(.paragraphStyle, paragraph(size: size, leading: leading, indent: size * 1.2), m.range)
             set(.foregroundColor, theme.accent.nsColor, m.range(at: 2))
         }
 
@@ -130,7 +131,7 @@ enum MarkdownStyle {
             set(.font, Face.nsMono(size * 0.88), m.range)
             set(.foregroundColor, theme.prose.nsColor, m.range)
             set(.backgroundColor, theme.rule.opacity(0.35).nsColor, m.range)
-            set(.paragraphStyle, paragraph(size: size, indent: size * 0.6), m.range)
+            set(.paragraphStyle, paragraph(size: size, leading: leading, indent: size * 0.6), m.range)
         }
 
         each(link) { m in
@@ -164,11 +165,12 @@ enum MarkdownStyle {
     }
 
     private static func paragraph(size: CGFloat,
+                                  leading: Double,
                                   spacingBefore: CGFloat = 0,
                                   indent: CGFloat = 0) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = size * 0.42
-        style.paragraphSpacing = size * 0.62
+        style.lineSpacing = size * CGFloat(leading)
+        style.paragraphSpacing = size * CGFloat(leading) * 1.5
         style.paragraphSpacingBefore = spacingBefore
         style.firstLineHeadIndent = indent
         style.headIndent = indent

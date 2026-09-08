@@ -1,10 +1,10 @@
 #!/bin/bash
-# Builds Wander.app into build/. Pass --run to launch it afterwards.
+# Builds wander.app into build/. Pass --run to launch it afterwards.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 CONFIG=${CONFIG:-release}
-APP="build/Wander.app"
+APP="build/wander.app"
 
 swift build -c "$CONFIG"
 BIN=$(swift build -c "$CONFIG" --show-bin-path)/Wander

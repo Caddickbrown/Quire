@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import WanderCore
 
 struct SidebarView: View {
     @ObservedObject var store: JournalStore

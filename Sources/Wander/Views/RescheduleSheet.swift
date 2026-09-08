@@ -8,6 +8,7 @@
 //
 
 import SwiftUI
+import WanderCore
 
 struct RescheduleSheet: View {
     let entry: Entry

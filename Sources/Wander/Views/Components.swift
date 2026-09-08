@@ -8,6 +8,7 @@
 //
 
 import SwiftUI
+import WanderCore
 
 /// 10.5pt semibold, uppercase, widely tracked — every label in the app.
 struct SmallCaps: View {
@@ -211,4 +212,9 @@ struct PageTab: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
     }
+}
+
+/// Shared timing, so every column opens and closes at the same pace.
+enum Motion {
+    static let column: Animation = .easeInOut(duration: 0.22)
 }

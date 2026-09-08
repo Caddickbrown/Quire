@@ -2,10 +2,12 @@
 //  RootView.swift
 //  Wander
 //
-//  Masthead, heavy rule, three columns. Focus mode drops the outer two.
+//  Masthead, heavy rule, then up to four columns: the index, the page being
+//  written, and the two panels — Stats and Options. Each column slides.
 //
 
 import SwiftUI
+import WanderCore
 
 enum Appearance: String, CaseIterable {
     case system, light, dark
@@ -35,21 +37,22 @@ enum Appearance: String, CaseIterable {
 struct RootView: View {
     @ObservedObject var store: JournalStore
     @AppStorage("focusMode") private var focusMode = false
-    @AppStorage("showIndex") private var showIndex = true
-    @AppStorage("showMargin") private var showMargin = true
     @AppStorage("typewriter") private var typewriter = false
     @AppStorage("typeSize") private var typeSize = 17.5
+    @AppStorage("lineSpacing") private var lineSpacing = 0.42
+    @AppStorage("showIndex") private var showIndex = true
+    @AppStorage("showStats") private var showStats = true
+    @AppStorage("showOptions") private var showOptions = false
     @AppStorage("appearance") private var appearanceRaw = Appearance.system.rawValue
     @Environment(\.colorScheme) private var systemScheme
-    @State private var optionsOpen = false
 
     private var appearance: Binding<Appearance> {
         Binding(get: { Appearance(rawValue: appearanceRaw) ?? .system },
                 set: { appearanceRaw = $0.rawValue })
     }
 
-    /// An explicit Light/Dark choice wins over the system's, for this view's
-    /// own colours as well as its children's.
+    /// An explicit Light/Dark choice wins over the system's, for this view's own
+    /// colours as well as its children's.
     private var effectiveScheme: ColorScheme {
         appearance.wrappedValue.colorScheme ?? systemScheme
     }
@@ -62,13 +65,18 @@ struct RootView: View {
             columns
         }
         // A hidden title bar still leaves SwiftUI a 28pt top safe area, which
-        // was stacking on the masthead's own padding and pushing the wordmark
-        // well below the traffic lights.
+        // stacked on the masthead's own padding and pushed the wordmark well
+        // below the traffic lights.
         .ignoresSafeArea(.container, edges: .top)
         .background(theme.paper.color)
         .environment(\.theme, theme)
         .environment(\.colorScheme, effectiveScheme)
         .preferredColorScheme(appearance.wrappedValue.colorScheme)
+        .sheet(item: $store.reschedulingEntry) { entry in
+            RescheduleSheet(entry: entry, store: store)
+                .environment(\.theme, theme)
+                .environment(\.colorScheme, effectiveScheme)
+        }
         .confirmationDialog(
             "Delete this entry?",
             isPresented: Binding(get: { store.deletionCandidate != nil },
@@ -84,11 +92,6 @@ struct RootView: View {
             Text("“\(entry.preview.isEmpty ? "Untitled" : entry.preview)” will be removed from "
                  + "\(entry.source?.lastPathComponent ?? "the journal") on disk.")
         }
-        .sheet(item: $store.reschedulingEntry) { entry in
-            RescheduleSheet(entry: entry, store: store)
-                .environment(\.theme, theme)
-                .environment(\.colorScheme, effectiveScheme)
-        }
         .onAppear { DockIcon.apply(for: effectiveScheme) }
         .onChange(of: effectiveScheme) { _, scheme in DockIcon.apply(for: scheme) }
         .onReceive(NotificationCenter.default.publisher(
@@ -100,6 +103,8 @@ struct RootView: View {
             store.flush()
         }
     }
+
+    // MARK: Masthead
 
     private var masthead: some View {
         VStack(spacing: 0) {
@@ -114,8 +119,7 @@ struct RootView: View {
                 columnToggles
             }
             // The wordmark keeps the page's left margin, so the masthead sits
-            // below the traffic lights rather than beside them — just clear of
-            // the lights' 28pt band, and no further.
+            // below the traffic lights rather than beside them.
             .padding(.leading, 34)
             .padding(.trailing, 34)
             .padding(.top, 22)
@@ -142,8 +146,8 @@ struct RootView: View {
     }
 
     /// Only the inbox carries a count — it is a queue, and the number is the
-    /// thing waiting to be dealt with. A number on Starred would read as a
-    /// badge for work outstanding, which starring isn't.
+    /// thing waiting to be dealt with. A number on Starred would read as a badge
+    /// for work outstanding, which starring isn't.
     private func label(for page: Page) -> String {
         guard page == .inbox else { return page.label }
         let count = store.count(of: .inbox)
@@ -158,68 +162,77 @@ struct RootView: View {
         return parts.joined(separator: " · ")
     }
 
-    /// Focus mode closes both columns; otherwise each is remembered separately.
-    private var indexOpen: Bool { showIndex && !focusMode }
-    private var marginOpen: Bool { showMargin && !focusMode }
+    // MARK: Columns
 
-    /// Two small-caps switches at the end of the running head — the only chrome
-    /// the masthead carries.
+    /// Focus mode closes every column; otherwise each is remembered separately.
+    private var indexOpen: Bool { showIndex && !focusMode }
+    private var statsOpen: Bool { showStats && !focusMode }
+    private var optionsOpen: Bool { showOptions && !focusMode }
+
     private var columnToggles: some View {
         HStack(spacing: 12) {
             Text("\u{2502}")
                 .font(Face.sans(10))
                 .foregroundStyle(theme.rule.color)
-            QuietButton(title: "Index",
-                        tone: indexOpen ? theme.accent : nil) {
-                withAnimation(.easeOut(duration: 0.16)) { showIndex.toggle() }
-            }
-            .opacity(focusMode ? 0.4 : 1)
-            QuietButton(title: "Margin",
-                        tone: marginOpen ? theme.accent : nil) {
-                withAnimation(.easeOut(duration: 0.16)) { showMargin.toggle() }
-            }
-            .opacity(focusMode ? 0.4 : 1)
-            QuietButton(title: "Options", tone: optionsOpen ? theme.accent : nil) {
-                optionsOpen.toggle()
-            }
-            .popover(isPresented: $optionsOpen, arrowEdge: .bottom) {
-                OptionsPopover(store: store,
-                               typeSize: $typeSize,
-                               focusMode: Binding(get: { focusMode }, set: { focusMode = $0 }),
-                               typewriter: Binding(get: { typewriter }, set: { typewriter = $0 }),
-                               appearance: appearance,
-                               showIndex: Binding(get: { showIndex }, set: { showIndex = $0 }),
-                               showMargin: Binding(get: { showMargin }, set: { showMargin = $0 }))
-                    .environment(\.theme, theme)
-                    .environment(\.colorScheme, effectiveScheme)
-            }
+            toggle("Index", open: indexOpen) { showIndex.toggle() }
+            toggle("Stats", open: statsOpen) { showStats.toggle() }
+            toggle("Options", open: optionsOpen) { showOptions.toggle() }
         }
+    }
+
+    private func toggle(_ title: String, open: Bool, action: @escaping () -> Void) -> some View {
+        QuietButton(title: title, tone: open ? theme.accent : nil) {
+            withAnimation(Motion.column) { action() }
+        }
+        .opacity(focusMode ? 0.4 : 1)
+    }
+
+    /// A column that slides rather than appears: the content keeps its width and
+    /// the frame around it closes, so the panel travels off its own edge instead
+    /// of reflowing as it goes.
+    @ViewBuilder
+    private func sliding<V: View>(_ open: Bool, width: CGFloat, ruleOn edge: HorizontalEdge,
+                                  @ViewBuilder content: () -> V) -> some View {
+        HStack(spacing: 0) {
+            if edge == .leading { VRule() }
+            content().frame(width: width)
+            if edge == .trailing { VRule() }
+        }
+        .frame(width: open ? width + 1 : 0,
+               alignment: edge == .trailing ? .trailing : .leading)
+        .clipped()
+        .opacity(open ? 1 : 0)
     }
 
     private var columns: some View {
         HStack(spacing: 0) {
-            if indexOpen {
+            sliding(indexOpen, width: 250, ruleOn: .trailing) {
                 SidebarView(store: store)
-                    .frame(width: 250)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-                VRule()
             }
             EditorView(store: store,
                        typeSize: $typeSize,
+                       leading: $lineSpacing,
                        focusMode: focusMode,
                        typewriter: typewriter)
-            if marginOpen {
-                VRule()
-                MarginView(store: store,
-                           typeSize: $typeSize,
-                           focusMode: Binding(get: { focusMode }, set: { focusMode = $0 }),
-                           typewriter: Binding(get: { typewriter }, set: { typewriter = $0 }),
-                           appearance: appearance)
-                    .frame(width: 252)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                .layoutPriority(1)
+            sliding(statsOpen, width: 252, ruleOn: .leading) {
+                StatsPanel(store: store)
+            }
+            sliding(optionsOpen, width: 252, ruleOn: .leading) {
+                OptionsPanel(store: store,
+                             typeSize: $typeSize,
+                             leading: $lineSpacing,
+                             focusMode: Binding(get: { focusMode }, set: { focusMode = $0 }),
+                             typewriter: Binding(get: { typewriter }, set: { typewriter = $0 }),
+                             appearance: appearance,
+                             showIndex: Binding(get: { showIndex }, set: { showIndex = $0 }),
+                             showStats: Binding(get: { showStats }, set: { showStats = $0 }),
+                             showOptions: Binding(get: { showOptions }, set: { showOptions = $0 }))
             }
         }
         .frame(maxHeight: .infinity)
-        .clipped()
+        .animation(Motion.column, value: indexOpen)
+        .animation(Motion.column, value: statsOpen)
+        .animation(Motion.column, value: optionsOpen)
     }
 }

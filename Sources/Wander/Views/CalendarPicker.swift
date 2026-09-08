@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import WanderCore
 
 struct CalendarPicker: View {
     @Binding var moment: Date

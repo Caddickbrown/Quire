@@ -13,12 +13,15 @@
 
 import SwiftUI
 import AppKit
+import WanderCore
 
 struct ProseEditor: NSViewRepresentable {
     @Binding var text: String
     var theme: Theme
     var scheme: ColorScheme
     var size: CGFloat
+    /// Line spacing as a multiple of the type size, so it holds as type grows.
+    var leading: Double
     var typewriter: Bool
     var dimInactive: Bool
     /// Bumped by the owner to hand the caret to the editor.
@@ -108,7 +111,7 @@ struct ProseEditor: NSViewRepresentable {
 
     /// Everything that changes how the text is drawn but not what it says.
     private var styleKey: String {
-        "\(scheme)-\(size)-\(dimInactive)-\(typewriter)"
+        "\(scheme)-\(size)-\(leading)-\(dimInactive)-\(typewriter)"
     }
 
     // MARK: Coordinator
@@ -128,6 +131,7 @@ struct ProseEditor: NSViewRepresentable {
         func applyAll(_ tv: NSTextView) {
             MarkdownStyle.apply(to: tv, range: nil,
                                 theme: parent.theme, size: parent.size,
+                                leading: parent.leading,
                                 dimInactive: parent.dimInactive)
         }
 
@@ -136,6 +140,7 @@ struct ProseEditor: NSViewRepresentable {
             parent.text = tv.string
             MarkdownStyle.apply(to: tv, range: tv.selectedRange(),
                                 theme: parent.theme, size: parent.size,
+                                leading: parent.leading,
                                 dimInactive: parent.dimInactive)
             parent.onEdit()
         }
@@ -145,6 +150,7 @@ struct ProseEditor: NSViewRepresentable {
             if parent.dimInactive {
                 MarkdownStyle.apply(to: tv, range: nil,
                                     theme: parent.theme, size: parent.size,
+                                    leading: parent.leading,
                                     dimInactive: true)
             }
             if parent.typewriter { Self.centreCaret(tv) }

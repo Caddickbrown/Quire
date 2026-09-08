@@ -12,7 +12,7 @@
 
 import Foundation
 
-enum JournalParser {
+public enum JournalParser {
 
     // Header: [YYYY-MM-DD HH:MM:SS] optional trailing text.
     // Accepts ASCII hyphen or en-dash in the date (jnl normalises to hyphen).
@@ -34,11 +34,11 @@ enum JournalParser {
         return (String(line[dr]), String(line[tr]), String(line[sr]))
     }
 
-    static func isHeaderLine(_ line: String) -> Bool { matchHeader(line) != nil }
+    public static func isHeaderLine(_ line: String) -> Bool { matchHeader(line) != nil }
 
     /// Split file content into entries. Content before the first header is
     /// dropped here — `leadingPreamble` preserves it across a rewrite.
-    static func parseEntries(_ content: String, source: URL? = nil) -> [Entry] {
+    public static func parseEntries(_ content: String, source: URL? = nil) -> [Entry] {
         var entries: [Entry] = []
         var cur: [String] = []
         var curTS = "", curDate = "", curSuffix = ""
@@ -73,7 +73,7 @@ enum JournalParser {
 
     /// Content before the first header (or "" if only blank/absent). Rewrites
     /// must preserve this or a hand-written file header would be lost.
-    static func leadingPreamble(_ content: String) -> String {
+    public static func leadingPreamble(_ content: String) -> String {
         var pre: [String] = []
         for line in content.components(separatedBy: "\n") {
             if matchHeader(line) != nil { break }
@@ -85,7 +85,7 @@ enum JournalParser {
 
     /// Copy ordered by timestamp, oldest first. Stable; input untouched.
     /// ts is fixed-width, so a lexicographic compare is chronological.
-    static func sortedByTimestamp(_ entries: [Entry]) -> [Entry] {
+    public static func sortedByTimestamp(_ entries: [Entry]) -> [Entry] {
         let indexed = Array(entries.enumerated())
         return indexed.sorted { a, b in
             if a.element.ts != b.element.ts { return a.element.ts < b.element.ts }
@@ -95,7 +95,7 @@ enum JournalParser {
 
     /// Rebuild file content from a preamble + entries, preserving the preamble
     /// and each entry's raw text. Returns "" when there is nothing.
-    static func renderEntries(preamble: String, entries: [Entry]) -> String {
+    public static func renderEntries(preamble: String, entries: [Entry]) -> String {
         var parts: [String] = []
         if !preamble.isEmpty { parts.append(trimRightNewlines(preamble)) }
         for e in entries { parts.append(trimRightNewlines(e.raw)) }
@@ -104,7 +104,7 @@ enum JournalParser {
     }
 
     /// All `@tag` tokens in `s`, in order of appearance.
-    static func splitTags(_ s: String) -> [String] {
+    public static func splitTags(_ s: String) -> [String] {
         let range = NSRange(s.startIndex..<s.endIndex, in: s)
         return tagRegex.matches(in: s, range: range).compactMap {
             Range($0.range, in: s).map { String(s[$0]) }
@@ -112,7 +112,7 @@ enum JournalParser {
     }
 
     /// Trim only trailing "\n" (Go's strings.TrimRight(s, "\n")).
-    static func trimRightNewlines(_ s: String) -> String {
+    public static func trimRightNewlines(_ s: String) -> String {
         var end = s.endIndex
         while end > s.startIndex, s[s.index(before: end)] == "\n" {
             end = s.index(before: end)

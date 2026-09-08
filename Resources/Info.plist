@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Wander</string>
+    <string>wander</string>
     <key>CFBundleDisplayName</key>
-    <string>Wander</string>
+    <string>wander</string>
     <key>CFBundleExecutable</key>
     <string>Wander</string>
     <key>CFBundleIconFile</key>

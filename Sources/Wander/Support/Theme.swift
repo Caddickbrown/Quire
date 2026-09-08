@@ -10,6 +10,7 @@
 
 import SwiftUI
 import AppKit
+import WanderCore
 
 struct Tone {
     let hex: UInt32

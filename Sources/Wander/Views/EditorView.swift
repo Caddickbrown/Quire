@@ -8,10 +8,12 @@
 //
 
 import SwiftUI
+import WanderCore
 
 struct EditorView: View {
     @ObservedObject var store: JournalStore
     @Binding var typeSize: Double
+    @Binding var leading: Double
     let focusMode: Bool
     let typewriter: Bool
     @Environment(\.theme) private var theme
@@ -38,6 +40,7 @@ struct EditorView: View {
                         theme: theme,
                         scheme: scheme,
                         size: typeSize,
+                        leading: leading,
                         typewriter: typewriter,
                         dimInactive: focusMode,
                         focusToken: focusToken,

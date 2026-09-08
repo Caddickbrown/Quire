@@ -8,13 +8,15 @@
 
 import SwiftUI
 import AppKit
+import WanderCore
 
 @main
 struct WanderApp: App {
     @StateObject private var store = JournalStore()
     @AppStorage("focusMode") private var focusMode = false
     @AppStorage("showIndex") private var showIndex = true
-    @AppStorage("showMargin") private var showMargin = true
+    @AppStorage("showStats") private var showStats = true
+    @AppStorage("showOptions") private var showOptions = false
     @AppStorage("typewriter") private var typewriter = false
     @AppStorage("typeSize") private var typeSize = 17.5
     @AppStorage("appearance") private var appearanceRaw = Appearance.system.rawValue
@@ -95,10 +97,18 @@ struct WanderApp: App {
                 Button("Starred") { store.show(.starred) }
                     .keyboardShortcut("3")
                 Divider()
-                Button(showIndex ? "Hide Index" : "Show Index") { showIndex.toggle() }
-                    .keyboardShortcut("\\", modifiers: .command)
-                Button(showMargin ? "Hide Margin" : "Show Margin") { showMargin.toggle() }
-                    .keyboardShortcut("\\", modifiers: [.command, .shift])
+                Button(showIndex ? "Hide Index" : "Show Index") {
+                    withAnimation(Motion.column) { showIndex.toggle() }
+                }
+                .keyboardShortcut("\\", modifiers: .command)
+                Button(showStats ? "Hide Stats" : "Show Stats") {
+                    withAnimation(Motion.column) { showStats.toggle() }
+                }
+                .keyboardShortcut("\\", modifiers: [.command, .shift])
+                Button(showOptions ? "Hide Options" : "Show Options") {
+                    withAnimation(Motion.column) { showOptions.toggle() }
+                }
+                .keyboardShortcut("\\", modifiers: [.command, .option])
                 Divider()
                 Button("Larger Type") { typeSize = min(28, typeSize + 0.5) }
                     .keyboardShortcut("+")

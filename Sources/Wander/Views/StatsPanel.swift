@@ -1,28 +1,24 @@
 //
-//  MarginView.swift
+//  StatsPanel.swift
 //  Wander
 //
-//  The right-hand column: what this session amounts to, what the journal
-//  amounts to, the few settings worth reaching for, and a note in the margin.
+//  What this entry and this journal amount to, and the few actions that belong
+//  to the open entry. One of the two right-hand columns; the other is Options.
 //
 
 import SwiftUI
+import WanderCore
 
-struct MarginView: View {
+struct StatsPanel: View {
     @ObservedObject var store: JournalStore
-    @Binding var typeSize: Double
-    @Binding var focusMode: Bool
-    @Binding var typewriter: Bool
-    @Binding var appearance: Appearance
     @Environment(\.theme) private var theme
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                session
-                entry
+                thisEntry
+                filed
                 journal
-                settings
                 actions
                 note
             }
@@ -33,7 +29,7 @@ struct MarginView: View {
         .background(theme.panel.color)
     }
 
-    private var session: some View {
+    private var thisEntry: some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionLabel(text: "This entry")
             FieldRow("Words", "\(Counts.words(store.draftBody))")
@@ -43,7 +39,7 @@ struct MarginView: View {
         }
     }
 
-    private var entry: some View {
+    private var filed: some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionLabel(text: "Filed")
             FieldRow("Number", store.selectedNumber.map { "No. \(Formats.groupNumber($0))" } ?? "—")
@@ -57,8 +53,8 @@ struct MarginView: View {
                     FieldValue(text: "—")
                 }
             }
-            FieldRow("Tags", tagSummary, tint: store.selectedEntry?.tags.isEmpty == false
-                     ? theme.accent : theme.muted)
+            FieldRow("Tags", tagSummary,
+                     tint: store.selectedEntry?.tags.isEmpty == false ? theme.accent : theme.muted)
             FieldRow(label: "Status") {
                 if let entry = store.selectedEntry {
                     ValueButton(text: store.isUnfiled(entry) ? "In the inbox" : "Filed") {
@@ -86,27 +82,19 @@ struct MarginView: View {
         }
     }
 
-    private var settings: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionLabel(text: "Setting")
-            SettingsRows(typeSize: $typeSize,
-                         focusMode: $focusMode,
-                         typewriter: $typewriter,
-                         appearance: $appearance)
-        }
-    }
-
     private var actions: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let entry = store.selectedEntry, store.isUnfiled(entry) {
                 AccentBlock(title: "File") { store.toggleFiling(entry) }
             }
-            AccentBlock(title: "Copy markdown", filled: store.selectedIsUnfiled ? false : true) {
+            AccentBlock(title: "Copy markdown", filled: !store.selectedIsUnfiled) {
                 if let entry = store.selectedEntry { store.copyMarkdown(entry) }
             }
+            #if os(macOS)
             AccentBlock(title: "Reveal file", filled: false) {
                 if let entry = store.selectedEntry { store.reveal(entry) } else { store.revealFolder() }
             }
+            #endif
         }
     }
 
@@ -114,16 +102,6 @@ struct MarginView: View {
         VStack(alignment: .leading, spacing: 12) {
             Rule(tone: theme.rule)
             Marginalia(text: Prompts.today)
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                SmallCaps("Folder")
-                Spacer()
-                QuietButton(title: "Change") { store.chooseFolder() }
-            }
-            Text(store.baseURL.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                .font(Face.sans(10.5))
-                .foregroundStyle(theme.muted.opacity(0.85).color)
-                .lineLimit(2)
-                .truncationMode(.middle)
         }
     }
 

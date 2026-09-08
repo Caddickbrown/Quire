@@ -9,6 +9,7 @@
 
 import AppKit
 import SwiftUI
+import WanderCore
 
 enum DockIcon {
     private static var current: String?
