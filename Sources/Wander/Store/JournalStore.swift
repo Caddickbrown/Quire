@@ -415,12 +415,15 @@ final class JournalStore: ObservableObject {
 
     func adopt(_ url: URL) {
         flush()
+        // Access first, then bookmark: a folder handed over by the iOS document
+        // picker isn't readable — and can't be bookmarked — until the grant is
+        // open.
+        scopedURL?.stopAccessingSecurityScopedResource()
+        scopedURL = url.startAccessingSecurityScopedResource() ? url : nil
         UserDefaults.standard.set(url.path, forKey: Self.folderKey)
         if let bookmark = Self.makeBookmark(for: url) {
             UserDefaults.standard.set(bookmark, forKey: Self.bookmarkKey)
         }
-        scopedURL?.stopAccessingSecurityScopedResource()
-        scopedURL = url.startAccessingSecurityScopedResource() ? url : nil
         library = JournalLibrary(baseURL: url)
         library.ensureFolders()
         draftEntry = nil

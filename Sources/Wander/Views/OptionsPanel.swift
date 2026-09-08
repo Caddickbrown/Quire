@@ -8,6 +8,7 @@
 
 import SwiftUI
 import WanderCore
+import UniformTypeIdentifiers
 
 struct OptionsPanel: View {
     @ObservedObject var store: JournalStore
@@ -20,6 +21,7 @@ struct OptionsPanel: View {
     @Binding var showStats: Bool
     @Binding var showOptions: Bool
     @Environment(\.theme) private var theme
+    @State private var choosingFolder = false
 
     var body: some View {
         ScrollView {
@@ -33,6 +35,15 @@ struct OptionsPanel: View {
             .padding(.bottom, 24)
         }
         .background(theme.panel.color)
+        // iOS has no open panel; a folder comes from the document picker, and
+        // arrives security-scoped — `adopt` opens the grant and bookmarks it.
+        .fileImporter(isPresented: $choosingFolder,
+                      allowedContentTypes: [.folder],
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                store.adopt(url)
+            }
+        }
     }
 
     private var setting: some View {
@@ -84,14 +95,16 @@ struct OptionsPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             SectionLabel(text: "Journal")
             FieldRow("Entries", "\(store.entries.count)")
-            #if os(macOS)
             FieldRow(label: "Folder") {
                 HStack(spacing: 12) {
+                    #if os(macOS)
                     QuietButton(title: "Reveal") { store.revealFolder() }
                     QuietButton(title: "Change") { store.chooseFolder() }
+                    #else
+                    QuietButton(title: "Change") { choosingFolder = true }
+                    #endif
                 }
             }
-            #endif
             Text(store.baseURL.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
                 .font(Face.sans(10.5))
                 .foregroundStyle(theme.muted.opacity(0.85).color)

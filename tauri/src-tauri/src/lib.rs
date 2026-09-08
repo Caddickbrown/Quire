@@ -138,12 +138,18 @@ fn set_folder(state: tauri::State<State>, path: String) -> Journal {
         let mut base = state.base.lock().unwrap();
         *base = PathBuf::from(&path);
     }
+    // Remembered for next launch, the way the Apple builds remember theirs.
+    journal::remember_folder(&PathBuf::from(&path));
     load(state)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let base = journal::resolve_base(std::env::args().nth(1));
+    // A folder named on the command line wins; then the one last chosen in the
+    // app; then $JNL_DIR; then ~/Documents/Wander.
+    let base = journal::resolve_base(
+        std::env::args().nth(1).or_else(journal::remembered_folder),
+    );
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(State {

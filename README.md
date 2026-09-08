@@ -135,7 +135,15 @@ A `[YYYY-MM-DD HH:MM:SS] optional title` header line and its body. A trailing
 listed. Anything before the first header in a file is preserved across writes.
 
 The journal folder is an explicitly chosen one, else `$JNL_DIR` — so an
-existing jnl or Nook journal opens as-is — else `~/Documents/Wander`.
+existing jnl or Nook journal opens as-is — else `~/Documents/Wander`. Change it
+in **Options ▸ Folder ▸ Change** on any of the three: an open panel on macOS,
+the document picker on iOS, and a native folder dialog on Linux and Windows.
+
+The choice is remembered where each platform keeps such things — a
+security-scoped bookmark in UserDefaults on macOS and iOS, so it survives the
+folder being moved or renamed, and `~/.config/wander/folder` on Linux
+(`~/Library/Application Support/wander/folder` on macOS). The Tauri build also
+takes a folder as its first argument: `wander ~/Notes`.
 
 ## Building
 

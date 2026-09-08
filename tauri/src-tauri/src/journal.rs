@@ -303,6 +303,38 @@ fn write_atomically(target: &Path, content: &str) -> std::io::Result<()> {
     fs::rename(&tmp, target)
 }
 
+/// Where the chosen folder is remembered between launches. The Apple builds use
+/// UserDefaults; this is the same idea, in the place each platform keeps its
+/// per-app configuration.
+pub fn config_file() -> PathBuf {
+    let home = dirs_home();
+    #[cfg(target_os = "macos")]
+    let dir = home.join("Library/Application Support/wander");
+    #[cfg(not(target_os = "macos"))]
+    let dir = match std::env::var("XDG_CONFIG_HOME") {
+        Ok(path) if !path.is_empty() => PathBuf::from(path).join("wander"),
+        _ => home.join(".config/wander"),
+    };
+    dir.join("folder")
+}
+
+pub fn remembered_folder() -> Option<String> {
+    let path = fs::read_to_string(config_file()).ok()?;
+    let trimmed = path.trim().to_string();
+    if trimmed.is_empty() || !PathBuf::from(&trimmed).is_dir() {
+        return None;
+    }
+    Some(trimmed)
+}
+
+pub fn remember_folder(path: &Path) {
+    let file = config_file();
+    if let Some(parent) = file.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(file, path.to_string_lossy().as_bytes());
+}
+
 /// An explicit folder, then `JNL_DIR` so an existing jnl or Nook journal opens
 /// as-is, then ~/Documents/Wander.
 pub fn resolve_base(preferred: Option<String>) -> PathBuf {
