@@ -163,13 +163,13 @@ as Nook (`52W73J6V95`); the Mac app also gets the hardened runtime. Signing
 falls back to ad-hoc when no certificate is installed, so `./build.sh` works on
 a machine without the developer account.
 
-`Core/` is the shared Swift core — the model, the jnl parser and
+`WanderCore/` is the shared Swift core — the model, the jnl parser and
 every file operation, Foundation only — used by both Apple builds.
 `tauri/src-tauri/src/journal.rs` is a second, deliberate port of the same
 format in Rust; the two are kept byte-compatible on purpose.
 
 ```
-Core/                  the shared Swift package: model, parser, every read and write
+WanderCore/            the shared Swift package: model, parser, every read and write
 Sources/Wander         macOS app, and the views and store both Apple builds share
 Sources/WanderiOS      the iPhone and iPad shell
 tauri/                 the Tauri app: Rust journal port, HTML/CSS/JS interface
