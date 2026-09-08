@@ -20,7 +20,9 @@
 				<integer>6</integer>
 				<key>NSExtensionActivationSupportsMovieWithMaxCount</key>
 				<integer>1</integer>
-				<key>NSExtensionActivationSupportsAudioWithMaxCount</key>
+				<!-- There is no audio-specific activation key; File admits any single
+			     file, and the controller keeps only image/movie/audio. -->
+			<key>NSExtensionActivationSupportsFileWithMaxCount</key>
 				<integer>1</integer>
 			</dict>
 		</dict>

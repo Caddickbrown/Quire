@@ -34,13 +34,24 @@ final class JournalParserTests: XCTestCase {
         XCTAssertEqual(titled("*").displayTitle, "")
         XCTAssertEqual(titled("**bold**").displayTitle, "**bold**")
 
-        // Round-trip, mirroring JournalStore.toggleStar's title arithmetic.
-        for title in ["Morning", "**bold**", "", "2 * 3"] {
-            let base = titled(title).displayTitle.trimmingCharacters(in: .whitespaces)
-            let starred = titled(base.isEmpty ? "*" : base + " *")
-            XCTAssertTrue(starred.isStarred, "starring \(title)")
-            XCTAssertEqual(starred.displayTitle, base, "un-starring \(title)")
+    }
+
+    /// The editors hold the title as text and toggle through the same helpers
+    /// the store uses, so a round-trip must land back on the original.
+    func testStarMarkerHelpersRoundTrip() {
+        func titled(_ suffix: String) -> Entry {
+            JournalParser.parseEntries("[2026-05-10 08:00:00] \(suffix)\nbody\n").first!
         }
+        for title in ["Morning", "**bold**", "", "2 * 3", "  Trailing \n"] {
+            let on = Entry.togglingStarMarker(title)
+            XCTAssertTrue(Entry.hasStarMarker(on), "starring \(title)")
+            XCTAssertTrue(titled(on).isStarred, "starring \(title), parsed")
+            XCTAssertEqual(Entry.strippingStarMarker(on), Entry.strippingStarMarker(title), "text kept: \(title)")
+            XCTAssertEqual(Entry.togglingStarMarker(on), Entry.strippingStarMarker(title), "round-trip \(title)")
+        }
+        XCTAssertFalse(Entry.hasStarMarker("**bold**"))
+        XCTAssertEqual(Entry.strippingStarMarker("**bold**"), "**bold**")
+        XCTAssertEqual(Entry.togglingStarMarker("*"), "")
     }
 
     func testParseBasicFields() {

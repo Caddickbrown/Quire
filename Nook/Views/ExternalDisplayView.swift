@@ -540,14 +540,8 @@ private struct ExternalEntryView: View {
     private static let bottomAnchor = "nook.external.bottom"
 
     private var writingFont: Font { Theme.font(writingFontRaw, size: metrics.text) }
-    private var displayTitle: String {
-        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard t.hasSuffix("*") else { return t }
-        return String(t.dropLast()).trimmingCharacters(in: .whitespaces)
-    }
-    private var starred: Bool {
-        isStarred || title.trimmingCharacters(in: .whitespaces).hasSuffix("*")
-    }
+    private var displayTitle: String { Entry.strippingStarMarker(title) }
+    private var starred: Bool { isStarred || Entry.hasStarMarker(title) }
     private var tags: [String] { JournalParser.splitTags(title + "\n" + text) }
     private var wordCount: Int {
         text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count

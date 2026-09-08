@@ -51,6 +51,11 @@ struct WritingView: View {
     @State private var transcribing = false
     @State private var title = ""
     @State private var date = Date()
+    /// Set once the user touches the DatePicker; the automatic first-keystroke
+    /// stamp then leaves the date alone. Stamps are recognised by value so
+    /// `onChange(of: date)` can tell the two apart.
+    @State private var datePinned = false
+    @State private var lastAutoStamp: Date?
     @State private var text = ""
     @State private var activeTS: String?
     /// How many `[timestamp]` headers the working text carries. Non-zero means
@@ -82,8 +87,13 @@ struct WritingView: View {
     /// the composer is still untouched; once there is text (or a draft on
     /// disk) the date belongs to the user and the DatePicker owns it.
     private func stampIfUntouched(_ wasBlank: Bool) {
-        guard activeTS == nil, wasBlank else { return }
-        date = Date()
+        guard activeTS == nil, wasBlank, !datePinned else { return }
+        autoStamp()
+    }
+    private func autoStamp() {
+        let now = Date()
+        lastAutoStamp = now
+        date = now
     }
 
     var body: some View {
@@ -303,7 +313,10 @@ struct WritingView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { stampIfUntouched(!hasText) }
         }
-        .onChange(of: date) { _, _ in scheduleSave() }
+        .onChange(of: date) { _, new in
+            if new != lastAutoStamp { datePinned = true }
+            scheduleSave()
+        }
         .onChange(of: nav.newEntrySignal) { _, _ in newEntry() }
         // Put the live text on a connected external display (iOS second screen).
         .externalDisplay(.composing(title: title, date: date, text: text))
@@ -516,10 +529,20 @@ struct WritingView: View {
         // Clear everything this working text has already put in the inbox — the
         // draft under `activeTS`, plus any entries an earlier build's autosave
         // split out of the pasted body — or the import would stack on top of them.
+        // Anything typed above the first pasted header is the user's own note,
+        // not part of the import — `parseEntries` drops it as preamble — so it
+        // stays in the composer (with the title) as the working draft.
+        let preamble = JournalParser.leadingPreamble(text)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if let ts = activeTS { store.removeDraft(timestamp: ts); activeTS = nil }
         store.removeDrafts(matching: JournalParser.parseEntries(text))
         let n = store.importDrafts(from: text)
-        reset()
+        if preamble.isEmpty && isBlank(title) {
+            reset()
+        } else {
+            text = preamble
+            embeddedEntries = 0
+        }
         showToast(n == 1 ? "Imported 1 entry" : "Imported \(n) entries")
     }
 
@@ -632,7 +655,8 @@ struct WritingView: View {
         embeddedEntries = 0
         title = ""
         text = ""
-        date = Date()
+        datePinned = false
+        autoStamp()
     }
 
     private func showToast(_ message: String) {

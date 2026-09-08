@@ -652,31 +652,39 @@ final class AppLockVeilWindow {
     }
 
     #if os(iOS)
-    private var window: UIWindow?
+    private var windows: [UIWindow] = []
 
+    /// One veil per application scene. On iPad a second Nook window (Split
+    /// View, Stage Manager) is a scene of its own, and a veil on whichever
+    /// scene `connectedScenes` yielded first left the other fully readable.
+    /// Every RootView's `onAppear` calls back in, so a window opened while
+    /// locked is covered too.
     private func show() {
-        guard window == nil,
-              let scene = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene })
-                .first(where: { $0.session.role == .windowApplication })
-        else { return }
-        let host = UIHostingController(rootView: AppLockVeil())
-        // Opaque under the veil's material: in a window of its own the
-        // material has no backdrop of the app's to thicken.
-        host.view.backgroundColor = .systemBackground
-        let veil = UIWindow(windowScene: scene)
-        veil.rootViewController = host
-        veil.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 1)
-        veil.isHidden = false
-        window = veil
+        windows.removeAll { $0.windowScene == nil }
+        let covered = Set(windows.compactMap { $0.windowScene.map(ObjectIdentifier.init) })
+        let scenes = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .filter { $0.session.role == .windowApplication && !covered.contains(ObjectIdentifier($0)) }
+        guard !scenes.isEmpty else { return }
+        for scene in scenes {
+            let host = UIHostingController(rootView: AppLockVeil())
+            // Opaque under the veil's material: in a window of its own the
+            // material has no backdrop of the app's to thicken.
+            host.view.backgroundColor = .systemBackground
+            let veil = UIWindow(windowScene: scene)
+            veil.rootViewController = host
+            veil.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 1)
+            veil.isHidden = false
+            windows.append(veil)
+        }
         // Put the keyboard away with the text it belongs to.
         _ = UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                             to: nil, from: nil, for: nil)
     }
 
     private func hide() {
-        window?.isHidden = true
-        window = nil
+        windows.forEach { $0.isHidden = true }
+        windows.removeAll()
     }
     #endif
 
@@ -688,43 +696,54 @@ final class AppLockVeilWindow {
         override var canBecomeMain: Bool { false }
     }
 
-    private var window: NSWindow?
-    private var resizeObserver: NSObjectProtocol?
+    private var veils: [NSWindow] = []
+    private var resizeObservers: [NSObjectProtocol] = []
 
+    /// One veil per journal window (⌘N opens more than one), each a child of
+    /// its host so it covers a sheet that is already up. Called again from
+    /// every RootView's `onAppear`, so a window opened while locked is covered.
     private func show() {
-        guard window == nil, let host = Self.hostWindow else { return }
-        let veil = VeilWindow(contentRect: host.frame, styleMask: .borderless,
-                              backing: .buffered, defer: false)
-        veil.contentView = NSHostingView(rootView: AppLockVeil())
-        veil.backgroundColor = .windowBackgroundColor
-        veil.isReleasedWhenClosed = false
-        // Added last and ordered above, so it covers a sheet that is already up.
-        host.addChildWindow(veil, ordered: .above)
-        veil.setFrame(host.frame, display: true)
-        veil.makeKeyAndOrderFront(nil)
-        window = veil
-        // A child window follows a move on its own, but not a resize.
-        resizeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didResizeNotification, object: host, queue: .main) { _ in
-                Task { @MainActor in AppLockVeilWindow.shared.followHost() }
-            }
+        let veiled = Set(veils.compactMap { $0.parent.map(ObjectIdentifier.init) })
+        let hosts = NSApp.windows.filter {
+            $0.isVisible && $0.canBecomeMain && !veiled.contains(ObjectIdentifier($0))
+        }
+        for host in hosts {
+            let veil = VeilWindow(contentRect: host.frame, styleMask: .borderless,
+                                  backing: .buffered, defer: false)
+            veil.contentView = NSHostingView(rootView: AppLockVeil())
+            veil.backgroundColor = .windowBackgroundColor
+            veil.isReleasedWhenClosed = false
+            host.addChildWindow(veil, ordered: .above)
+            veil.setFrame(host.frame, display: true)
+            // Only the key window's veil takes key status; the rest just cover.
+            if host.isKeyWindow || veils.isEmpty { veil.makeKeyAndOrderFront(nil) }
+            else { veil.orderFront(nil) }
+            veils.append(veil)
+            // A child window follows a move on its own, but not a resize.
+            resizeObservers.append(NotificationCenter.default.addObserver(
+                forName: NSWindow.didResizeNotification, object: host, queue: .main) { _ in
+                    Task { @MainActor in AppLockVeilWindow.shared.followHosts() }
+                })
+        }
     }
 
     private func hide() {
-        if let observer = resizeObserver { NotificationCenter.default.removeObserver(observer) }
-        resizeObserver = nil
-        guard let veil = window else { return }
-        veil.parent?.removeChildWindow(veil)
-        veil.orderOut(nil)
-        window = nil
-        // The veil was key; hand focus back rather than leaving the app with
+        resizeObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        resizeObservers.removeAll()
+        for veil in veils {
+            veil.parent?.removeChildWindow(veil)
+            veil.orderOut(nil)
+        }
+        veils.removeAll()
+        // A veil was key; hand focus back rather than leaving the app with
         // no key window at all.
         Self.hostWindow?.makeKeyAndOrderFront(nil)
     }
 
-    private func followHost() {
-        guard let veil = window, let host = veil.parent else { return }
-        veil.setFrame(host.frame, display: true)
+    private func followHosts() {
+        for veil in veils {
+            if let host = veil.parent { veil.setFrame(host.frame, display: true) }
+        }
     }
 
     private static var hostWindow: NSWindow? {

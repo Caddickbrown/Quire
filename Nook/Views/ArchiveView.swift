@@ -352,7 +352,12 @@ struct EntryTwoPane: View {
         if let hit = find(entries) { return hit }
         switch sourceFor(e) {
         case .inbox:          return find(store.inboxDrafts)
-        case .archive(let d): return find(store.allEntriesByDay().first(where: { $0.date == d })?.entries ?? [])
+        case .archive(let d):
+            let days = store.allEntriesByDay()
+            if let hit = find(days.first(where: { $0.date == d })?.entries ?? []) { return hit }
+            // Re-dating moves the entry to another day's file mid-edit; find it
+            // there rather than closing the pane under the user's cursor.
+            return find(days.filter { $0.date != d }.flatMap(\.entries))
         case .journal(let n): return find(store.entries(inJournal: n))
         }
     }

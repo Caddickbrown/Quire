@@ -101,21 +101,10 @@ struct EntryDetailView: View {
 
     /// Star state is a trailing `*` on the title; toggling edits `title` so the
     /// change flows through the normal autosave (and Preview) path.
-    private var isStarred: Bool { title.trimmingCharacters(in: .whitespaces).hasSuffix("*") }
-    private func toggleStar() {
-        let base = title.trimmingCharacters(in: .whitespaces)
-        if base.hasSuffix("*") {
-            title = String(base.dropLast()).trimmingCharacters(in: .whitespaces)
-        } else {
-            title = base.isEmpty ? "*" : base + " *"
-        }
-    }
+    private var isStarred: Bool { Entry.hasStarMarker(title) }
+    private func toggleStar() { title = Entry.togglingStarMarker(title) }
     /// Title as shown in Preview: the star marker stripped (it's drawn as an icon).
-    private var previewTitle: String {
-        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard t.hasSuffix("*") else { return t }
-        return String(t.dropLast()).trimmingCharacters(in: .whitespaces)
-    }
+    private var previewTitle: String { Entry.strippingStarMarker(title) }
     private var saveHelp: String {
         if case .inbox = source { return "Save draft (keep in Inbox)" }
         return "Save"

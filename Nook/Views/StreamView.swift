@@ -547,7 +547,7 @@ private struct StreamEditor: View {
         JournalStore.makeEntry(timestamp: item.entry.ts, title: title, body: text)
     }
     private var isDirty: Bool { composed.raw != baselineRaw }
-    private var isStarred: Bool { title.trimmingCharacters(in: .whitespaces).hasSuffix("*") }
+    private var isStarred: Bool { Entry.hasStarMarker(title) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -616,14 +616,7 @@ private struct StreamEditor: View {
         .padding(.top, 2)
     }
 
-    private func toggleStar() {
-        let base = title.trimmingCharacters(in: .whitespaces)
-        if base.hasSuffix("*") {
-            title = String(base.dropLast()).trimmingCharacters(in: .whitespaces)
-        } else {
-            title = base.isEmpty ? "*" : base + " *"
-        }
-    }
+    private func toggleStar() { title = Entry.togglingStarMarker(title) }
 
     // MARK: Autosave — same shape as the composer and the entry editor
 

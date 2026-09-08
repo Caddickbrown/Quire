@@ -405,6 +405,9 @@ section is dated development history rather than versioned releases.
   asking for Face ID again.
 - **App Lock**: locking blanks a connected external display back to its idle
   screen instead of leaving the open entry on the monitor.
+- **App Lock**: with more than one Nook window open (Split View or Stage
+  Manager on iPad, ⌘N on the Mac) the lock covered only one of them; every
+  window is veiled now, including one opened while locked.
 - **Assets**: deleting a file asks first and says how many entries still link
   it — the links break, and nothing else warned about it.
 - **Assets**: inline video no longer restarts from the beginning on every
@@ -436,6 +439,11 @@ section is dated development history rather than versioned releases.
   serialised. (Linux)
 - **Composer**: "Done" did nothing. It now saves the draft and opens the Inbox.
   (iPad)
+- **Composer**: a date picked in the composer before typing is kept — the
+  first-keystroke stamp no longer overwrites it with "now".
+- **Composer**: choosing **Import** for a paste that carried `[timestamp]`
+  headers dropped anything typed above them; that note (and the title) now
+  stay in the composer as the working draft.
 - **Data Saver**: photos smaller than 2048px were *enlarged* rather than left
   alone, and the re-encode wrote over the original in place; it is now atomic.
   (Linux)
@@ -454,6 +462,9 @@ section is dated development history rather than versioned releases.
   zero-padded numbers like `007.`.
 - **Editor**: edits made in one section no longer go missing when switching
   sections — the pending autosave is awaited first. (Linux)
+- **Editor**: the ★ button, Preview and the Stream editor use the same star
+  rule as the model — a markdown-bold title like `**Important**` is no longer
+  shown starred or mangled by toggling it there either.
 - **Import**: re-running a Day One import duplicated every entry that had a
   photo, and re-copied the photos. Imports now skip entries already filed,
   media included.
@@ -469,6 +480,8 @@ section is dated development history rather than versioned releases.
   is picked up in place. (macOS)
 - **Journal**: a day's page no longer re-reads its file from disk on every
   redraw.
+- **Journal**: re-dating an entry in the two-pane view no longer closes the
+  editor under you when the entry moves to another day. (macOS)
 - **Keyboard**: arrow-key list navigation no longer jumps to a list that is off
   screen behind a pushed view. (iOS)
 - **Maintenance**: leftover `.nook-*.tmp` files from interrupted writes are
@@ -501,6 +514,10 @@ section is dated development history rather than versioned releases.
   sheet and captured nothing. (macOS)
 - **Share extension**: a share captured while Nook was draining shared items is
   no longer lost.
+- **Share extension**: audio files can actually be shared in — the activation
+  rule now uses the file key, since Apple's dictionary form has no audio key.
+  Nook therefore appears in the share sheet for any single file, and quietly
+  completes for one it can't use.
 - **Shortcuts**: "New Draft" from Siri, Shortcuts or the Control Center control
   could land on the journal instead of a blank composer when it launched the
   app.

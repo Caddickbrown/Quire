@@ -30,13 +30,19 @@ do {
     check(titled("Morning *").displayTitle == "Morning", "star: marker stripped")
     check(titled("*").displayTitle == "", "star: bare marker strips to empty")
     check(titled("**bold**").displayTitle == "**bold**", "star: bold title kept whole")
-    // Round-trip, mirroring JournalStore.toggleStar's title arithmetic.
-    for title in ["Morning", "**bold**", "", "2 * 3"] {
-        let base = titled(title).displayTitle.trimmingCharacters(in: .whitespaces)
-        let starred = titled(base.isEmpty ? "*" : base + " *")
-        check(starred.isStarred, "star: \(title.isEmpty ? "(empty)" : title) stars")
-        check(starred.displayTitle == base, "star: \(title.isEmpty ? "(empty)" : title) round-trips")
+    // The editors hold the title as text and toggle through the same helpers
+    // the store uses, so a round-trip must land back on the original.
+    for title in ["Morning", "**bold**", "", "2 * 3", "  Trailing \n"] {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "(empty)" : title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let on = Entry.togglingStarMarker(title)
+        check(Entry.hasStarMarker(on), "star: \(name) stars")
+        check(titled(on).isStarred, "star: \(name) stars once parsed")
+        check(Entry.strippingStarMarker(on) == Entry.strippingStarMarker(title), "star: \(name) keeps its text")
+        check(Entry.togglingStarMarker(on) == Entry.strippingStarMarker(title), "star: \(name) round-trips")
     }
+    check(!Entry.hasStarMarker("**bold**"), "star helper: bold is not starred")
+    check(Entry.strippingStarMarker("**bold**") == "**bold**", "star helper: bold kept whole")
+    check(Entry.togglingStarMarker("*") == "", "star helper: bare marker toggles to empty")
 }
 
 // parseEntries basic fields

@@ -1143,11 +1143,7 @@ final class JournalStore: ObservableObject {
     /// Add or remove the trailing `*` star marker on an entry, rewriting it in
     /// whichever file it lives (inbox / archive day / split journal).
     func toggleStar(_ entry: Entry, source: EntrySource) {
-        // `displayTitle` strips the marker, and only a real marker — computing
-        // the base with a bare `hasSuffix("*")` turned `**bold**` into
-        // `**bold* *` on the first toggle.
-        let base = entry.displayTitle.trimmingCharacters(in: .whitespaces)
-        let newTitle = entry.isStarred ? base : (base.isEmpty ? "*" : base + " *")
+        let newTitle = Entry.togglingStarMarker(entry.suffix)
         let newText = Self.makeEntry(timestamp: entry.ts, title: newTitle, body: entry.body).raw
         switch source {
         case .inbox:            updateDraft(entry, newText: newText)

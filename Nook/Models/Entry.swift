@@ -41,6 +41,26 @@ struct Entry: Identifiable, Hashable {
         return String(suffix.dropLast()).trimmingCharacters(in: .whitespaces)
     }
 
+    /// The same rule as `isStarred` / `displayTitle`, for editors that hold the
+    /// title as text rather than a parsed entry. Four views each carried their
+    /// own `hasSuffix("*")`, so the model's fix left them mangling `**bold**`.
+    static func hasStarMarker(_ title: String) -> Bool {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t == "*" || t.hasSuffix(" *")
+    }
+    /// The title with the marker (and the space before it) removed.
+    static func strippingStarMarker(_ title: String) -> String {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard hasStarMarker(t) else { return t }
+        return String(t.dropLast()).trimmingCharacters(in: .whitespaces)
+    }
+    /// The title with the marker added, or removed if it was there.
+    static func togglingStarMarker(_ title: String) -> String {
+        let base = strippingStarMarker(title)
+        if hasStarMarker(title) { return base }
+        return base.isEmpty ? "*" : base + " *"
+    }
+
     /// A short one-line preview for list rows: the title (sans star) if present,
     /// else the first non-empty body line.
     var preview: String {
