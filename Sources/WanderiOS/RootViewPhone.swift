@@ -115,7 +115,13 @@ struct RootViewPhone: View {
                 store.deletionCandidate = nil
             }
         }
-        .onAppear { AppIconSwitcher.apply(theme: themeID) }
+        .onAppear {
+            // iOS refuses the swap while the scene is still coming up, so ask
+            // once it has settled.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                AppIconSwitcher.apply(theme: themeID)
+            }
+        }
         .onChange(of: themeID) { _, id in AppIconSwitcher.apply(theme: id) }
         .onChange(of: scenePhase) { _, phase in
             phase == .active ? store.reloadIfChanged() : store.flush()
