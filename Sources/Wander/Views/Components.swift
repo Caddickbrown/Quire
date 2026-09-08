@@ -1,0 +1,214 @@
+//
+//  Components.swift
+//  Wander
+//
+//  The vocabulary the whole interface is built from: small-caps labels, hairline
+//  rules, the label/value field row, one solid accent block, and italic serif
+//  marginalia. Nothing here knows about journals.
+//
+
+import SwiftUI
+
+/// 10.5pt semibold, uppercase, widely tracked — every label in the app.
+struct SmallCaps: View {
+    let text: String
+    var tone: Tone?
+    @Environment(\.theme) private var theme
+
+    init(_ text: String, tone: Tone? = nil) {
+        self.text = text
+        self.tone = tone
+    }
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(Face.sans(10.5, weight: .semibold))
+            .tracking(1.15)
+            .foregroundStyle((tone ?? theme.muted).color)
+            .lineLimit(1)
+    }
+}
+
+/// Horizontal hairline. `weight: 2` with the ink tone is the masthead rule.
+struct Rule: View {
+    var weight: CGFloat = 1
+    var tone: Tone?
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Rectangle()
+            .fill((tone ?? theme.rule).color)
+            .frame(height: weight)
+    }
+}
+
+/// Vertical hairline — the column dividers.
+struct VRule: View {
+    var tone: Tone?
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Rectangle()
+            .fill((tone ?? theme.rule).color)
+            .frame(width: 1)
+            .frame(maxHeight: .infinity)
+    }
+}
+
+/// A ruled label/value line: label left in muted, value right in ink, hairline
+/// underneath. The unit the parameter columns are made of.
+struct FieldRow<Value: View>: View {
+    let label: String
+    @ViewBuilder var value: () -> Value
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(label)
+                    .font(Face.sans(13))
+                    .foregroundStyle(theme.muted.color)
+                Spacer(minLength: 6)
+                value()
+            }
+            .padding(.vertical, 5)
+            Rule()
+        }
+    }
+}
+
+extension FieldRow where Value == FieldValue {
+    init(_ label: String, _ text: String, tint: Tone? = nil) {
+        self.label = label
+        self.value = { FieldValue(text: text, tint: tint) }
+    }
+}
+
+struct FieldValue: View {
+    let text: String
+    var tint: Tone?
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text(text)
+            .font(Face.sans(13, weight: .medium))
+            .monospacedDigit()
+            .foregroundStyle((tint ?? theme.ink).color)
+            .lineLimit(1)
+    }
+}
+
+/// The one solid block of colour on the page.
+struct AccentBlock: View {
+    let title: String
+    var filled: Bool = true
+    let action: () -> Void
+    @Environment(\.theme) private var theme
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(Face.sans(12.5, weight: .semibold))
+                .tracking(0.4)
+                .foregroundStyle(filled ? theme.paper.color : theme.accent.color)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .background(
+                    Group {
+                        if filled {
+                            (hovering ? theme.accentDeep : theme.accent).color
+                        } else {
+                            (hovering ? theme.rule.opacity(0.6) : theme.rule.opacity(0)).color
+                        }
+                    }
+                )
+                .overlay {
+                    if !filled { Rectangle().stroke(theme.rule.color, lineWidth: 1) }
+                }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// Italic serif note in the margin — the aside, never the argument.
+struct Marginalia: View {
+    let text: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text(text)
+            .font(Face.serif(12.5, italic: true))
+            .lineSpacing(3.5)
+            .foregroundStyle(theme.muted.color)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// A small text-only control that reads as part of the page, not a button.
+struct QuietButton: View {
+    let title: String
+    var tone: Tone?
+    let action: () -> Void
+    @Environment(\.theme) private var theme
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            SmallCaps(title, tone: hovering ? (tone ?? theme.accent) : theme.muted)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// Section heading inside a column: small caps over a little air.
+struct SectionLabel: View {
+    let text: String
+    var body: some View {
+        SmallCaps(text)
+            .padding(.bottom, 7)
+    }
+}
+
+/// A field value you can click — same weight as a plain value, accented on
+/// hover so it reads as editable without becoming a button.
+struct ValueButton: View {
+    let text: String
+    let action: () -> Void
+    @Environment(\.theme) private var theme
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(text)
+                .font(Face.sans(13, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle((hovering ? theme.accent : theme.ink).color)
+                .underline(hovering, color: theme.accent.opacity(0.4).color)
+                .lineLimit(1)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// A masthead page switch: accent while it is the page being read, grey
+/// otherwise, ink on hover.
+struct PageTab: View {
+    let title: String
+    let active: Bool
+    let action: () -> Void
+    @Environment(\.theme) private var theme
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            SmallCaps(title, tone: active ? theme.accent : (hovering ? theme.ink : theme.muted))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
