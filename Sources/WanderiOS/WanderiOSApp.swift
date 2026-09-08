@@ -19,6 +19,7 @@ struct WanderiOSApp: App {
     var body: some Scene {
         WindowGroup {
             RootViewPhone(store: store)
+                .background(Theme.resolve(.light).paper.color)
         }
     }
 }

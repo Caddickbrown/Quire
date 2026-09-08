@@ -31,7 +31,11 @@ final class JournalStore: ObservableObject {
     @Published private(set) var entries: [Entry] = []      // newest first
     @Published var selection: Entry.ID?
     @Published var query: String = ""
-    @Published private(set) var page: Page = .journal
+    /// Remembered across launches: reopening on the inbox you left open is the
+    /// behaviour a shelf of notebooks has.
+    @Published private(set) var page: Page = .journal {
+        didSet { UserDefaults.standard.set(page.rawValue, forKey: Self.pageKey) }
+    }
     @Published private(set) var saveState: SaveState = .idle
     @Published private(set) var library: JournalLibrary
 
@@ -53,6 +57,7 @@ final class JournalStore: ObservableObject {
     private var lastFingerprint = ""
 
     private static let folderKey = "journalFolderPath"
+    private static let pageKey = "page"
 
     var baseURL: URL { library.baseURL }
 
@@ -63,6 +68,10 @@ final class JournalStore: ObservableObject {
             baseURL: JournalLibrary.resolveBase(
                 preferred: UserDefaults.standard.string(forKey: Self.folderKey)))
         library.ensureFolders()
+        if let saved = UserDefaults.standard.string(forKey: Self.pageKey),
+           let remembered = Page(rawValue: saved) {
+            page = remembered
+        }
         reload()
         select(firstVisibleID)
     }

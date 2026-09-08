@@ -27,6 +27,7 @@ struct SmallCaps: View {
             .tracking(1.15)
             .foregroundStyle((tone ?? theme.muted).color)
             .lineLimit(1)
+            .minimumScaleFactor(0.75)
     }
 }
 

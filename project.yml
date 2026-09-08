@@ -27,8 +27,29 @@ targets:
     dependencies:
       - package: WanderCore
         product: WanderCore
+    # xcodegen generates this file from the properties below — it owns the path,
+    # so anything hand-written there is overwritten on the next generate.
     info:
       path: Resources/Info-iOS.plist
+      properties:
+        CFBundleName: wander
+        CFBundleDisplayName: wander
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
     settings:
       base:
         PRODUCT_NAME: wander

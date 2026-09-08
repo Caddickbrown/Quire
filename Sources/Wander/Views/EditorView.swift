@@ -56,6 +56,7 @@ struct EditorView: View {
         .frame(maxWidth: .infinity)
         .onChange(of: store.draftTitle) { store.edited() }
         .onChange(of: store.selection) { focusToken += 1 }
+        .onAppear { focusToken += 1 }
     }
 
     private var header: some View {
@@ -63,7 +64,8 @@ struct EditorView: View {
             TextField("", text: $store.draftTitle,
                       prompt: Text("Untitled")
                         .font(Face.serif(30, italic: true))
-                        .foregroundColor(theme.muted.opacity(0.5).color))
+                        .foregroundColor(theme.muted.opacity(0.5).color),
+                      axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(Face.serif(30))
                 .foregroundStyle(theme.ink.color)

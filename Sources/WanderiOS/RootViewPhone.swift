@@ -2,9 +2,10 @@
 //  RootViewPhone.swift
 //  wander (iOS)
 //
-//  Masthead, index, page. On iPad the two sit side by side; on a phone the
-//  index pushes the page. The panels become sheets, because a 390pt window has
-//  no margins to give away.
+//  On iPad the index and the page sit side by side, as they do on the Mac. On a
+//  phone there is only room for one, so the page is the root — you land in what
+//  you were writing — and the index arrives as a sheet. Stats and Options are
+//  sheets on both, because a 390pt window has no margins to give away.
 //
 
 #if os(iOS)
@@ -19,6 +20,10 @@ struct RootViewPhone: View {
     @AppStorage("lineSpacing") private var lineSpacing = 0.42
     @AppStorage("appearance") private var appearanceRaw = Appearance.system.rawValue
     @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var showingIndex = false
+    /// iPad opens with the index showing; a notebook lies open at its contents.
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var showingStats = false
     @State private var showingOptions = false
@@ -35,45 +40,57 @@ struct RootViewPhone: View {
     private var theme: Theme { Theme.resolve(effectiveScheme) }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columns) {
-            VStack(spacing: 0) {
-                masthead
-                SidebarView(store: store)
+        Group {
+            if sizeClass == .compact {
+                NavigationStack {
+                    page
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button { showingIndex = true } label: {
+                                    Image(systemName: "list.bullet")
+                                }
+                            }
+                            toolbar
+                        }
+                }
+            } else {
+                NavigationSplitView(columnVisibility: $columns) {
+                    index.navigationBarTitleDisplayMode(.inline)
+                } detail: {
+                    NavigationStack { page.toolbar { toolbar } }
+                }
+                .navigationSplitViewStyle(.balanced)
             }
-            .background(theme.panel.color)
-            .navigationBarHidden(true)
-        } detail: {
-            VStack(spacing: 0) {
-                EditorView(store: store,
-                           typeSize: $typeSize,
-                           leading: $lineSpacing,
-                           focusMode: focusMode,
-                           typewriter: typewriter)
-            }
-            .background(theme.paper.color)
-            .toolbar { toolbar }
-            .toolbarBackground(theme.paper.color, for: .navigationBar)
-            .navigationBarTitleDisplayMode(.inline)
         }
-        .navigationSplitViewStyle(.balanced)
+        .background(theme.paper.color.ignoresSafeArea())
         .tint(theme.accent.color)
         .environment(\.theme, theme)
         .preferredColorScheme(appearance.wrappedValue.colorScheme)
+        .sheet(isPresented: $showingIndex) {
+            index
+                .environment(\.theme, theme)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showingStats) {
-            panelSheet { StatsPanel(store: store) }
+            StatsPanel(store: store)
+                .environment(\.theme, theme)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showingOptions) {
-            panelSheet {
-                OptionsPanel(store: store,
-                             typeSize: $typeSize,
-                             leading: $lineSpacing,
-                             focusMode: Binding(get: { focusMode }, set: { focusMode = $0 }),
-                             typewriter: Binding(get: { typewriter }, set: { typewriter = $0 }),
-                             appearance: appearance,
-                             showIndex: .constant(true),
-                             showStats: .constant(true),
-                             showOptions: .constant(true))
-            }
+            OptionsPanel(store: store,
+                         typeSize: $typeSize,
+                         leading: $lineSpacing,
+                         focusMode: Binding(get: { focusMode }, set: { focusMode = $0 }),
+                         typewriter: Binding(get: { typewriter }, set: { typewriter = $0 }),
+                         appearance: appearance,
+                         showIndex: .constant(true),
+                         showStats: .constant(true),
+                         showOptions: .constant(true))
+                .environment(\.theme, theme)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(item: $store.reschedulingEntry) { entry in
             RescheduleSheet(entry: entry, store: store)
@@ -88,21 +105,58 @@ struct RootViewPhone: View {
                 store.deletionCandidate = nil
             }
         }
-        .onChange(of: scenePhaseIsActive) { _, active in
-            active ? store.reloadIfChanged() : store.flush()
+        .onChange(of: scenePhase) { _, phase in
+            phase == .active ? store.reloadIfChanged() : store.flush()
         }
     }
 
-    @Environment(\.scenePhase) private var scenePhase
-    private var scenePhaseIsActive: Bool { scenePhase == .active }
+    // MARK: Pieces
 
-    private var masthead: some View {
+    private var page: some View {
+        EditorView(store: store,
+                   typeSize: $typeSize,
+                   leading: $lineSpacing,
+                   focusMode: focusMode,
+                   typewriter: typewriter)
+            .background(theme.paper.color.ignoresSafeArea())
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(theme.paper.color, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .principal) { wordmark }
+            }
+    }
+
+    private var index: some View {
+        VStack(spacing: 0) {
+            pageSwitches
+            SidebarView(store: store)
+        }
+        .background(theme.panel.color.ignoresSafeArea())
+        .onChange(of: store.selection) { _, _ in showingIndex = false }
+    }
+
+    private var wordmark: some View {
+        HStack(spacing: 8) {
+            Text("wander")
+                .font(Face.serif(19, weight: .semibold))
+                .tracking(-0.3)
+                .foregroundStyle(theme.ink.color)
+                .fixedSize()
+            SmallCaps(store.page.label, tone: theme.accent)
+        }
+    }
+
+    /// The masthead, cut down to what a sheet needs: the wordmark and the three
+    /// pages, over the heavy rule.
+    private var pageSwitches: some View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 13) {
                 Text("wander")
                     .font(Face.serif(24, weight: .semibold))
                     .tracking(-0.4)
                     .foregroundStyle(theme.ink.color)
+                    .fixedSize()
                 ForEach(orderedPages, id: \.self) { page in
                     PageTab(title: label(for: page), active: page == store.page) {
                         withAnimation(.easeOut(duration: 0.14)) { store.show(page) }
@@ -111,7 +165,7 @@ struct RootViewPhone: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 10)
+            .padding(.top, 14)
             .padding(.bottom, 8)
             Rule(weight: 2, tone: theme.ink)
                 .padding(.horizontal, 16)
@@ -139,10 +193,10 @@ struct RootViewPhone: View {
                     Button(store.isUnfiled(entry) ? "File" : "Return to Inbox") {
                         store.toggleFiling(entry)
                     }
-                    Button("Date & Time…") { store.reschedulingEntry = entry }
+                    Button("Date & Time\u{2026}") { store.reschedulingEntry = entry }
                     Button("Copy Markdown") { store.copyMarkdown(entry) }
                     Divider()
-                    Button("Delete…", role: .destructive) { store.deletionCandidate = entry }
+                    Button("Delete\u{2026}", role: .destructive) { store.deletionCandidate = entry }
                 }
                 Divider()
                 Button("Stats") { showingStats = true }
@@ -151,13 +205,6 @@ struct RootViewPhone: View {
                 Image(systemName: "ellipsis.circle")
             }
         }
-    }
-
-    private func panelSheet<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .environment(\.theme, theme)
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
     }
 }
 #endif

@@ -141,9 +141,13 @@ struct ProseEditor: NSViewRepresentable {
         func restyle(_ tv: NSTextView, all: Bool) {
             guard let storage = tv.textStorage else { return }
             let style = parent.style
+            // With no caret in the text there is no live paragraph, and focus
+            // mode would grey the entry out entirely — dim only while writing.
+            let writing = tv.window?.firstResponder === tv
             let base = MarkdownStyle.apply(to: storage, caret: tv.selectedRange(), restyleAll: all,
                                            theme: style.theme, size: style.size,
-                                           leading: style.leading, dimInactive: style.dimInactive)
+                                           leading: style.leading,
+                                           dimInactive: style.dimInactive && writing)
             tv.typingAttributes = base
             tv.defaultParagraphStyle = base[.paragraphStyle] as? NSParagraphStyle
         }
@@ -159,6 +163,16 @@ struct ProseEditor: NSViewRepresentable {
             guard let tv = notification.object as? NSTextView else { return }
             if parent.style.dimInactive { restyle(tv, all: true) }
             if parent.style.typewriter { Self.centreCaret(tv) }
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            if parent.style.dimInactive { restyle(tv, all: true) }
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            if parent.style.dimInactive { restyle(tv, all: true) }
         }
 
         /// Keep the caret on the same line of the window as the text grows.
