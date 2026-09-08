@@ -42,6 +42,21 @@ struct RootViewPhone: View {
     private var theme: Theme { Theme.resolve(themeID, effectiveScheme) }
 
     var body: some View {
+        presented
+            .onAppear {
+                // iOS refuses the icon swap while the scene is still coming up,
+                // so ask once it has settled.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    AppIconSwitcher.apply(theme: themeID)
+                }
+            }
+            .onChange(of: themeID) { _, id in AppIconSwitcher.apply(theme: id) }
+            .onChange(of: scenePhase) { _, phase in
+                phase == .active ? store.reloadIfChanged() : store.flush()
+            }
+    }
+
+    private var shell: some View {
         Group {
             if sizeClass == .compact {
                 NavigationStack {
@@ -65,9 +80,17 @@ struct RootViewPhone: View {
             }
         }
         .background(theme.paper.color.ignoresSafeArea())
-        .tint(theme.accent.color)
-        .environment(\.theme, theme)
-        .preferredColorScheme(appearance.wrappedValue.colorScheme)
+    }
+
+    private var styled: some View {
+        shell
+            .tint(theme.accent.color)
+            .environment(\.theme, theme)
+            .preferredColorScheme(appearance.wrappedValue.colorScheme)
+    }
+
+    private var presented: some View {
+        styled
         .sheet(isPresented: $showingIndex) {
             index
                 .environment(\.theme, theme)
@@ -96,8 +119,10 @@ struct RootViewPhone: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showingThemes) {
-            ThemesSheet(themeID: Binding(get: { themeID }, set: { themeID = $0 }),
+        .fullScreenCover(isPresented: $showingThemes) {
+            // On a phone the themes are swiped through full size, not picked
+            // off a grid of thumbnails.
+            ThemeSwiper(themeID: Binding(get: { themeID }, set: { themeID = $0 }),
                         typeSize: $typeSize,
                         leading: $lineSpacing)
                 .environment(\.theme, theme)
@@ -114,17 +139,6 @@ struct RootViewPhone: View {
                 store.delete(entry)
                 store.deletionCandidate = nil
             }
-        }
-        .onAppear {
-            // iOS refuses the swap while the scene is still coming up, so ask
-            // once it has settled.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                AppIconSwitcher.apply(theme: themeID)
-            }
-        }
-        .onChange(of: themeID) { _, id in AppIconSwitcher.apply(theme: id) }
-        .onChange(of: scenePhase) { _, phase in
-            phase == .active ? store.reloadIfChanged() : store.flush()
         }
     }
 

@@ -89,7 +89,8 @@ Light, or Dark; the Dock icon follows.
 ## On iPhone and iPad
 
 The phone opens on the page you were writing, with the index a tap away. The
-iPad lays it out as the Mac does.
+iPad lays it out as the Mac does. Themes are swiped through full size rather
+than picked off a grid, and the home-screen icon follows the one you choose.
 
 <table>
 <tr>
