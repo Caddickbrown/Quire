@@ -15,6 +15,7 @@ struct ThemeSwiper: View {
     @Binding var themeID: String
     @Binding var typeSize: Double
     @Binding var leading: Double
+    @Binding var appearance: Appearance
     @Environment(\.theme) private var host
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
@@ -26,7 +27,8 @@ struct ThemeSwiper: View {
         ZStack(alignment: .bottom) {
             TabView(selection: $index) {
                 ForEach(Array(themes.enumerated()), id: \.offset) { position, entry in
-                    ThemeSpread(theme: Theme.resolve(entry.id, scheme))
+                    ThemeSpread(theme: Theme.resolve(entry.id, previewScheme),
+                                size: typeSize, leading: leading)
                         .tag(position)
                         .ignoresSafeArea(edges: .bottom)
                 }
@@ -41,6 +43,12 @@ struct ThemeSwiper: View {
     }
 
     private var current: Theme { themes[min(index, themes.count - 1)] }
+
+    /// The spreads are drawn in the appearance the picker is set to, so
+    /// switching Light/Dark here shows what you would actually get.
+    private var previewScheme: ColorScheme {
+        appearance.colorScheme ?? scheme
+    }
 
     /// The only chrome over the spread: which one this is, whether it wants
     /// light or dark, and the one button that commits.
@@ -61,6 +69,7 @@ struct ThemeSwiper: View {
                     .foregroundStyle(host.ink.color)
                 if current.id == themeID { SmallCaps("In use", tone: host.accent) }
                 Spacer(minLength: 0)
+                paperPicker
             }
 
             Text(current.note)
@@ -101,10 +110,33 @@ struct ThemeSwiper: View {
         .overlay(alignment: .top) { Rule(tone: host.rule) }
     }
 
+    /// Light, dark or auto, right here — a theme is half its appearance, and
+    /// deciding between them means seeing both.
+    private var paperPicker: some View {
+        HStack(spacing: 0) {
+            ForEach(Appearance.allCases, id: \.self) { option in
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { appearance = option }
+                } label: {
+                    SmallCaps(option.label,
+                              tone: option == appearance ? host.paper : host.muted)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(option == appearance ? host.accent.color : Color.clear)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: host.corner, style: .continuous)
+                .stroke(host.rule.color, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: host.corner, style: .continuous))
+    }
+
     private func apply(_ entry: Theme) {
+        // Type size and leading stay as the reader set them.
         themeID = entry.id
-        typeSize = Double(entry.proseSize)
-        leading = Double(entry.lineHeight) - 1
         dismiss()
     }
 }
@@ -114,6 +146,8 @@ struct ThemeSwiper: View {
 /// on the same words.
 private struct ThemeSpread: View {
     let theme: Theme
+    let size: Double
+    let leading: Double
 
     var body: some View {
         VStack(spacing: 0) {
@@ -176,8 +210,7 @@ private struct ThemeSpread: View {
 
     private var pages: some View {
         HStack(spacing: 12) {
-            SmallCaps("Journal", tone: onBand
-                      ? theme.accent.readable(theme.accent, theme.tint) : theme.accent)
+            SmallCaps("Journal", tone: onBand ? theme.accentOnBand : theme.accentInk)
             SmallCaps("Inbox 1", tone: onBand ? theme.paper.opacity(0.7) : theme.muted)
             SmallCaps("Starred", tone: onBand ? theme.paper.opacity(0.7) : theme.muted)
         }
@@ -198,7 +231,7 @@ private struct ThemeSpread: View {
             }
             VStack(alignment: theme.centred ? .center : .leading, spacing: 0) {
                 if theme.kicker {
-                    SmallCaps("Tuesday · @morning", tone: theme.accent)
+                    SmallCaps("Tuesday · @morning", tone: theme.accentInk)
                         .padding(.bottom, 7)
                 }
                 Text("The long way round the reservoir")
@@ -215,8 +248,8 @@ private struct ThemeSpread: View {
                      + "twenty minutes and, this morning, was worth every one of them. Low and "
                      + "flat off the water, the kind that makes the far bank look printed "
                      + "rather than grown.")
-                    .font(theme.prose(theme.proseSize * 0.92))
-                    .lineSpacing(theme.proseSize * (theme.lineHeight - 1) * 0.8)
+                    .font(theme.prose(size * 0.92))
+                    .lineSpacing(size * leading * 0.8)
                     .foregroundStyle(theme.prose.color)
                     .multilineTextAlignment(theme.centred ? .center : .leading)
                     .padding(.top, 14)
@@ -278,7 +311,7 @@ private struct ThemeSpread: View {
     }
 
     private func figure(_ label: String, _ value: String, _ position: Int) -> some View {
-        let fills: [Tone] = [theme.green, theme.ink, theme.tint]
+        let fills = theme.figureFills
         let fill = fills[position % fills.count]
         let onFill = theme.figureBlocks ? fill.readable(theme.paper, theme.ink) : theme.ink
         return VStack(alignment: .leading, spacing: 2) {
@@ -291,6 +324,12 @@ private struct ThemeSpread: View {
         .padding(theme.figureBlocks ? 12 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.figureBlocks ? fill.color : Color.clear)
+        .overlay {
+            if theme.figureBlocks && fill.hex == theme.surface.hex {
+                RoundedRectangle(cornerRadius: theme.corner, style: .continuous)
+                    .stroke(theme.rule.color, lineWidth: theme.border)
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: theme.corner, style: .continuous))
     }
 }

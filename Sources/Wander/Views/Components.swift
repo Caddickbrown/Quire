@@ -162,7 +162,7 @@ struct QuietButton: View {
 
     var body: some View {
         Button(action: action) {
-            SmallCaps(title, tone: hovering ? (tone ?? theme.accent) : theme.muted)
+            SmallCaps(title, tone: hovering ? (tone ?? theme.accentInk) : theme.muted)
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -211,7 +211,7 @@ struct PageTab: View {
 
     var body: some View {
         Button(action: action) {
-            SmallCaps(title, tone: active ? theme.accent : (hovering ? theme.ink : theme.muted))
+            SmallCaps(title, tone: active ? theme.accentInk : (hovering ? theme.ink : theme.muted))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

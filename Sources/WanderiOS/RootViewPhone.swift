@@ -17,7 +17,7 @@ struct RootViewPhone: View {
     @AppStorage("focusMode") private var focusMode = false
     @AppStorage("typewriter") private var typewriter = false
     @AppStorage("typeSize") private var typeSize = 17.5
-    @AppStorage("lineSpacing") private var lineSpacing = 0.42
+    @AppStorage("lineSpacing") private var lineSpacing = 0.3
     @AppStorage("appearance") private var appearanceRaw = Appearance.system.rawValue
     @AppStorage("theme") private var themeID = "almanac"
     @Environment(\.colorScheme) private var systemScheme
@@ -124,7 +124,8 @@ struct RootViewPhone: View {
             // off a grid of thumbnails.
             ThemeSwiper(themeID: Binding(get: { themeID }, set: { themeID = $0 }),
                         typeSize: $typeSize,
-                        leading: $lineSpacing)
+                        leading: $lineSpacing,
+                        appearance: appearance)
                 .environment(\.theme, theme)
         }
         .sheet(item: $store.reschedulingEntry) { entry in

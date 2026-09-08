@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-enum Appearance: String, CaseIterable {
+enum Appearance: String, CaseIterable, Hashable {
     case system, light, dark
 
     var label: String {

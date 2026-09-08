@@ -56,9 +56,26 @@ struct Tone: Equatable {
     /// Perceived lightness, 0–1. Used to decide what can be read on top.
     var luminance: CGFloat { 0.2126 * r + 0.7152 * g + 0.0722 * b }
 
-    /// Whichever of two tones will actually read against this one.
-    func readable(_ light: Tone, _ dark: Tone) -> Tone {
-        luminance > 0.55 ? dark : light
+    /// Whichever of two tones actually contrasts with this one. Measured, not
+    /// assumed: in a dark theme `ink` is near-white, so picking it as "the dark
+    /// one" put white text on a white block.
+    func readable(_ first: Tone, _ second: Tone) -> Tone {
+        abs(first.luminance - luminance) >= abs(second.luminance - luminance) ? first : second
+    }
+
+    /// Contrast ratio against another tone, on the usual 1–21 scale.
+    func contrast(with other: Tone) -> CGFloat {
+        let a = luminance + 0.05, b = other.luminance + 0.05
+        return max(a, b) / min(a, b)
+    }
+
+    /// The first candidate that can actually be read on this tone, else the one
+    /// that comes closest. Acid yellow is a fine fill and terrible text on
+    /// white; this is what tells them apart.
+    func legible(_ candidates: [Tone], minimum: CGFloat = 3.2) -> Tone {
+        candidates.first { contrast(with: $0) >= minimum }
+            ?? candidates.max { contrast(with: $0) < contrast(with: $1) }
+            ?? candidates[0]
     }
 
     private var r: CGFloat { CGFloat((hex >> 16) & 0xFF) / 255 }
@@ -191,6 +208,26 @@ struct Theme: Equatable, Identifiable {
         case .bold, .heavy, .black: return .bold
         default: return .regular
         }
+    }
+
+    /// The accent, where it is being used as text rather than as a fill: a
+    /// theme whose accent is acid yellow needs something else on a pale ground.
+    var accentInk: Tone { paper.legible([accent, ink, accentDeep, tint]) }
+
+    /// The accent as it must read on the ink band of a `band` masthead.
+    var accentOnBand: Tone { ink.legible([accent, tint, green, paper]) }
+
+    /// Distinct fills for the stats blocks. Several themes point two or three
+    /// of their colours at the same value — Brutalist's accent, ink and green
+    /// are all one white in the dark — so the list is deduplicated and padded
+    /// with the surface rather than repeating a block.
+    var figureFills: [Tone] {
+        var chosen: [Tone] = []
+        for tone in [accent, tint, green, ink] where !chosen.contains(where: { $0.hex == tone.hex }) {
+            chosen.append(tone)
+        }
+        while chosen.count < 3 { chosen.append(surface) }
+        return chosen
     }
 
     /// Code spans, wherever a theme doesn't already set prose in a mono face.

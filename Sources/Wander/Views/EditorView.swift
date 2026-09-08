@@ -87,7 +87,7 @@ struct EditorView: View {
     private var header: some View {
         VStack(alignment: theme.centred ? .center : .leading, spacing: 9) {
             if theme.kicker, !kickerText.isEmpty {
-                SmallCaps(kickerText, tone: theme.accent)
+                SmallCaps(kickerText, tone: theme.accentInk)
             }
             TextField("", text: $store.draftTitle,
                       prompt: Text(theme.displayUppercase ? "UNTITLED" : "Untitled")

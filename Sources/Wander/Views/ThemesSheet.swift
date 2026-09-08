@@ -15,6 +15,7 @@ struct ThemesSheet: View {
     @Binding var themeID: String
     @Binding var typeSize: Double
     @Binding var leading: Double
+    @Binding var appearance: Appearance
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
@@ -29,7 +30,8 @@ struct ThemesSheet: View {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 16) {
                     ForEach(Theme.all) { entry in
-                        ThemeCard(theme: Theme.resolve(entry.id, scheme),
+                        ThemeCard(theme: Theme.resolve(entry.id, previewScheme),
+                                  leading: leading,
                                   chosen: entry.id == themeID) {
                             pick(entry)
                         }
@@ -42,6 +44,12 @@ struct ThemesSheet: View {
         .background(theme.paper.color)
     }
 
+    /// The cards are drawn in whichever appearance the picker is set to, so
+    /// deciding between light and dark means seeing it.
+    private var previewScheme: ColorScheme {
+        appearance.colorScheme ?? scheme
+    }
+
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
             Text("Themes")
@@ -49,6 +57,7 @@ struct ThemesSheet: View {
                 .foregroundStyle(theme.ink.color)
             SmallCaps("\(Theme.all.count) looks · one journal")
             Spacer()
+            paperPicker
             // A sheet can't be dismissed by clicking away from it, so the way
             // out has to be visible — and Escape has to work.
             Button { dismiss() } label: {
@@ -68,11 +77,32 @@ struct ThemesSheet: View {
         .padding(.bottom, 10)
     }
 
+    /// Auto, light or dark — a theme is half its appearance.
+    private var paperPicker: some View {
+        HStack(spacing: 0) {
+            ForEach(Appearance.allCases, id: \.self) { option in
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { appearance = option }
+                } label: {
+                    SmallCaps(option.label, tone: option == appearance ? theme.paper : theme.muted)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(option == appearance ? theme.accent.color : Color.clear)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: theme.corner, style: .continuous)
+                .stroke(theme.rule.color, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: theme.corner, style: .continuous))
+    }
+
     private func pick(_ entry: Theme) {
+        // Type size and leading are the reader's settings, not the look's: a
+        // theme change leaves them exactly where they were.
         withAnimation(.easeOut(duration: 0.18)) { themeID = entry.id }
-        // Type size and leading belong to the look, not to the app.
-        typeSize = Double(entry.proseSize)
-        leading = Double(entry.lineHeight) - 1
         // Choosing is the end of the errand: close, and let them see it.
         dismiss()
     }
@@ -83,6 +113,7 @@ struct ThemesSheet: View {
 /// decide from.
 private struct ThemeCard: View {
     let theme: Theme
+    let leading: Double
     let chosen: Bool
     let action: () -> Void
     @Environment(\.theme) private var host
@@ -146,7 +177,7 @@ private struct ThemeCard: View {
 
             Text("Left before seven and took the long way round the reservoir, which adds twenty minutes.")
                 .font(theme.prose(9.5))
-                .lineSpacing(9.5 * (theme.lineHeight - 1) * 0.7)
+                .lineSpacing(9.5 * leading * 0.7)
                 .foregroundStyle(theme.prose.color)
                 .multilineTextAlignment(theme.centred ? .center : .leading)
                 .padding(.top, 9)

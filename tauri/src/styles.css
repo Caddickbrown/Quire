@@ -563,3 +563,25 @@ button.value:hover { color: var(--accent); text-decoration: underline; }
 .figure { display: flex; flex-direction: column; gap: 2px; }
 .figure .value { font-family: var(--display); font-size: 34px; line-height: 1; font-variant-numeric: tabular-nums; }
 .figure.block { padding: 12px 14px; border-radius: var(--corner); }
+
+
+/* Auto / Light / Dark, in the theme page: choosing a look means seeing which
+   appearance it is for. */
+.paper-picker {
+  display: flex;
+  border: 1px solid var(--rule);
+  border-radius: var(--corner);
+  overflow: hidden;
+  margin-right: 10px;
+}
+.paper-picker button {
+  font-family: var(--label);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 7px 10px;
+}
+.paper-picker button.on { background: var(--accent); color: var(--paper); }
+.paper-picker button:not(.on):hover { color: var(--ink); }

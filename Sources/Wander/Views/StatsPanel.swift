@@ -64,7 +64,7 @@ struct StatsPanel: View {
         if theme.figureBlocks {
             // Each figure gets a block of its own colour, the way the loud
             // themes set them.
-            let fills: [Tone] = [theme.green, theme.ink, theme.tint, theme.accent]
+            let fills = theme.figureFills
             let fill = fills[index % fills.count]
             // Read the fill rather than assuming: several themes set accent or
             // green to near-black, which used to print black on black.
@@ -81,6 +81,12 @@ struct StatsPanel: View {
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(fill.color)
+            .overlay {
+                if fill.hex == theme.surface.hex {
+                    RoundedRectangle(cornerRadius: theme.corner, style: .continuous)
+                        .stroke(theme.rule.color, lineWidth: theme.border)
+                }
+            }
             .clipShape(RoundedRectangle(cornerRadius: theme.corner, style: .continuous))
         } else {
             VStack(alignment: .leading, spacing: 2) {

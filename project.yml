@@ -29,7 +29,7 @@ packages:
     path: WanderCore
 
 targets:
-  wander:
+  wander (iOS):
     type: application
     platform: iOS
     sources:
@@ -121,3 +121,44 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+  wander (macOS):
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/Wander
+      - path: Resources/themes.json
+      - path: Resources/Fonts
+      - path: Resources/Icons
+      - path: Resources/AppIcon.icns
+      - path: Resources/AppIcon-light.png
+      - path: Resources/AppIcon-dark.png
+    dependencies:
+      - package: WanderCore
+        product: WanderCore
+    info:
+      path: Resources/Info-macOS.plist
+      properties:
+        CFBundleName: wander
+        CFBundleDisplayName: wander
+        CFBundleIconFile: AppIcon
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.productivity
+        LSMinimumSystemVersion: "14.0"
+        NSHighResolutionCapable: true
+        NSHumanReadableCopyright: Wander
+        NSSupportsAutomaticTermination: false
+    entitlements:
+      path: Resources/Wander-macOS.entitlements
+    settings:
+      base:
+        PRODUCT_NAME: wander
+        PRODUCT_BUNDLE_IDENTIFIER: com.caddickbrown.wander
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        COMBINE_HIDPI_IMAGES: YES

@@ -40,7 +40,7 @@ let theme = null;
 const settings = Object.assign({
   theme: 'almanac',
   type: 17.5,
-  lead: 0.42,
+  lead: 0.3,
   measure: 760,
   focus: false,
   paper: 'auto',
@@ -1059,6 +1059,9 @@ $('o-folder').onclick = async () => {
 function renderThemes() {
   const grid = $('theme-grid');
   grid.innerHTML = '';
+  document.querySelectorAll('[data-paper]').forEach((button) => {
+    button.classList.toggle('on', button.dataset.paper === settings.paper);
+  });
   $('themes-count').textContent = `${THEMES.length} looks · one journal`;
 
   for (const entry of THEMES) {
@@ -1080,7 +1083,7 @@ function renderThemes() {
          ${entry.chrome.mastheadRule ? `<div class="pv-rule" style="background:${palette.ink};height:${Math.min(entry.chrome.mastheadRule, 3)}px"></div>` : '<div style="height:4px"></div>'}
          <div class="pv-title" style="font-family:${display};font-size:${Math.min(21, 15 * (entry.type.display.scale || 1))}px;color:${palette.ink};text-transform:${upper}">The long way round</div>
          <div class="pv-meta" style="font-family:${label};color:${palette.muted}">8 sep · 122 words</div>
-         <div class="pv-body" style="font-family:${prose};color:${palette.prose};line-height:${entry.chrome.lineHeight}">Left before seven and took the long way round the reservoir, which adds twenty minutes.</div>
+         <div class="pv-body" style="font-family:${prose};color:${palette.prose};line-height:${1 + settings.lead}">Left before seven and took the long way round the reservoir, which adds twenty minutes.</div>
          <div class="pv-dots" style="margin-top:auto">
            <span class="pv-chip" style="font-family:${label};border-radius:${entry.chrome.corner}px;${filled ? `background:${palette.accent};color:${palette.paper}` : `color:${palette.accent};box-shadow:inset 0 0 0 1px ${palette.rule}`}">new entry</span>
            <i style="background:${palette.tint}"></i><i style="background:${palette.green}"></i>
@@ -1093,11 +1096,10 @@ function renderThemes() {
        </div>`;
 
     card.onclick = () => {
+      // Type size and leading are the reader's settings: a theme change leaves
+      // them where they were.
       settings.theme = entry.id;
       theme = entry;
-      // Type size and leading belong to the look.
-      settings.type = entry.type.prose.size || 17.5;
-      settings.lead = (entry.chrome.lineHeight || 1.42) - 1;
       applySettings();
       renderPanels();
       $('themes').hidden = true;
@@ -1105,6 +1107,15 @@ function renderThemes() {
     grid.appendChild(card);
   }
 }
+
+document.querySelectorAll('[data-paper]').forEach((button) => {
+  button.onclick = () => {
+    settings.paper = button.dataset.paper;
+    applySettings();
+    renderPanels();
+    renderThemes();
+  };
+});
 
 $('o-theme').onclick = () => { renderThemes(); $('themes').hidden = false; };
 $('themes-done').onclick = () => { $('themes').hidden = true; };

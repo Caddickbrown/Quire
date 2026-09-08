@@ -155,8 +155,8 @@ takes a folder as its first argument: `wander ~/Notes`.
 
 | | |
 |---|---|
-| **macOS** | `./build.sh --run` |
-| **iOS / iPadOS** | `xcodegen generate && open Wander.xcodeproj` |
+| **macOS** | `./build.sh --run`, or the `wander (macOS)` scheme in the Xcode project |
+| **iOS / iPadOS** | `xcodegen generate && open Wander.xcodeproj`, scheme `wander (iOS)` |
 | **Linux, Windows, macOS** | `cd tauri/src-tauri && cargo run` |
 
 Both Apple builds are signed with the same Apple Development identity and team

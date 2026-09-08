@@ -16,7 +16,7 @@ struct RootView: View {
     @AppStorage("focusMode") private var focusMode = false
     @AppStorage("typewriter") private var typewriter = false
     @AppStorage("typeSize") private var typeSize = 17.5
-    @AppStorage("lineSpacing") private var lineSpacing = 0.42
+    @AppStorage("lineSpacing") private var lineSpacing = 0.3
     @AppStorage("showIndex") private var showIndex = true
     @AppStorage("showStats") private var showStats = true
     @AppStorage("showOptions") private var showOptions = false
@@ -54,7 +54,8 @@ struct RootView: View {
         .sheet(isPresented: $showingThemes) {
             ThemesSheet(themeID: Binding(get: { themeID }, set: { themeID = $0 }),
                         typeSize: $typeSize,
-                        leading: $lineSpacing)
+                        leading: $lineSpacing,
+                        appearance: appearance)
                 .environment(\.theme, theme)
                 .environment(\.colorScheme, effectiveScheme)
         }
@@ -182,10 +183,8 @@ struct RootView: View {
     }
 
     /// An accent that survives being put on the ink band — Brutalist's accent
-    /// is the ink itself, which would vanish.
-    private var bandAccent: Tone {
-        theme.accent.readable(theme.accent, theme.tint)
-    }
+    /// is the ink itself, and its tint is a yellow that only works as a fill.
+    private var bandAccent: Tone { theme.accentOnBand }
 
     /// Wordmark on its own line, centred, the way a title page sets one.
     private var centredMasthead: some View {
