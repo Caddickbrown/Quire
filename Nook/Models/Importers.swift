@@ -263,9 +263,8 @@ extension JournalStore {
     /// remaining whitespace collapsed (stripping a link leaves blank lines
     /// behind, and a link appended to the end leaves a trailing one).
     private static func importKey(ts: String, title: String, body: String) -> String {
-        let stripped = body.replacingOccurrences(
-            of: #"!\[[^\]]*\]\([^)]*\)"#, with: " ", options: .regularExpression)
-        let squashed = stripped.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        let squashed = MediaLinks.strippingLinks(body)
+            .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         return "\(ts)\u{1}\(title.trimmingCharacters(in: .whitespacesAndNewlines))\u{1}\(squashed)"
     }
 }

@@ -45,6 +45,18 @@ do {
     check(Entry.togglingStarMarker("*") == "", "star helper: bare marker toggles to empty")
 }
 
+// isHeaderLine (the per-line check behind the editors' body escaper) and
+// MediaLinks.strippingLinks (the importers' re-run identity)
+do {
+    check(JournalParser.isHeaderLine("[2026-05-10 08:00:00] title"), "header line: with title")
+    check(JournalParser.isHeaderLine("[2026-05-10 08:00:00]"), "header line: bare")
+    check(!JournalParser.isHeaderLine("\\[2026-05-10 08:00:00] escaped"), "header line: escaped is body")
+    check(!JournalParser.isHeaderLine(" [2026-05-10 08:00:00] indented"), "header line: indented is body")
+    check(!JournalParser.isHeaderLine("[2026-05-10] no time"), "header line: needs a time")
+    check(MediaLinks.strippingLinks("see ![cap](assets/a.png) here") == "see   here", "media: links stripped")
+    check(MediaLinks.strippingLinks("plain") == "plain", "media: no links untouched")
+}
+
 // parseEntries basic fields
 do {
     let e = JournalParser.parseEntries("[2026-05-10 08:00:00] A title\nfirst line\nsecond line\n")

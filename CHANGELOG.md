@@ -334,6 +334,17 @@ section is dated development history rather than versioned releases.
 - **Media**: `webm`, `weba`, `mkv`, `ogg`, `oga`, `opus` and `flac` are
   recognised everywhere, so recordings made by the Linux port are shown as video
   or audio on Apple platforms too rather than as images.
+- **Performance**: autosave no longer re-parses the whole entry two or three
+  times per save to check for pasted `[timestamp]` headers — one scan, and the
+  header pattern only for lines that could be one. Re-running a Day One import
+  no longer compiles a fresh pattern for every entry it compares; the daily
+  reminder is only re-planned when something that shapes it has changed
+  (before, ~15 notification-centre calls after every editing pause); and the
+  streak, same-second-twin lookup and two-pane resync each do less work per
+  call.
+- **Performance**: `settings.json` is read and parsed once and kept until the
+  next write, instead of on every single command. A hand edit to the file
+  while Nook is running is picked up on the next write or relaunch. (Linux)
 - **Templates**: `{{date}}` and `{{time}}` always render as an ISO date and
   24-hour time whatever the device's locale or calendar; `{{weekday}}` stays
   localised.

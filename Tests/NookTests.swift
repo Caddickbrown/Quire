@@ -19,6 +19,21 @@ import XCTest
 // MARK: - jnl parser parity (mirrors ~/Code/jnl/main_test.go)
 
 final class JournalParserTests: XCTestCase {
+    /// The per-line check behind the editors' body escaper must agree with
+    /// the parser on what opens an entry.
+    func testHeaderLineCheckMatchesTheParser() {
+        XCTAssertTrue(JournalParser.isHeaderLine("[2026-05-10 08:00:00] title"))
+        XCTAssertTrue(JournalParser.isHeaderLine("[2026-05-10 08:00:00]"))
+        XCTAssertFalse(JournalParser.isHeaderLine("\\[2026-05-10 08:00:00] escaped"))
+        XCTAssertFalse(JournalParser.isHeaderLine(" [2026-05-10 08:00:00] indented"))
+        XCTAssertFalse(JournalParser.isHeaderLine("[2026-05-10] no time"))
+    }
+
+    func testStrippingLinksLeavesTheProse() {
+        XCTAssertEqual(MediaLinks.strippingLinks("see ![cap](assets/a.png) here"), "see   here")
+        XCTAssertEqual(MediaLinks.strippingLinks("plain"), "plain")
+    }
+
     /// The star marker is a standalone token. A bare `hasSuffix("*")` also
     /// matched a markdown-bold title, which then lost one `*` per un-star.
     func testStarMarkerIsAStandaloneToken() {

@@ -19,6 +19,18 @@ enum MediaLinks {
         return regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
             .map { ns.substring(with: $0.range(at: 1)) }
     }
+
+    /// `content` with every media link replaced by a space — what an entry
+    /// says apart from its attachments, for an identity that has to survive a
+    /// link being rewritten to a fresh asset path (the importers' re-run
+    /// check). Uses the one compiled regex above; an inline
+    /// `replacingOccurrences(…, options: .regularExpression)` compiles a new
+    /// one per call.
+    static func strippingLinks(_ content: String) -> String {
+        regex.stringByReplacingMatches(
+            in: content, range: NSRange(location: 0, length: (content as NSString).length),
+            withTemplate: " ")
+    }
 }
 
 /// What kind of media a path points at, decided by its file extension.

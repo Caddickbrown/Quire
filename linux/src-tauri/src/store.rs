@@ -41,11 +41,23 @@ fn prefs_path() -> PathBuf {
 /// overlapping calls used to drop one another's key.
 static PREFS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// settings.json, parsed once and kept until the next write. `resolve_store()`
+/// opens nearly every command and used to read and parse the file each time —
+/// with sixty-odd call sites, the single biggest per-call cost in this layer.
+/// A pref edited on disk by hand while Nook runs isn't seen until the next
+/// write or relaunch, which is how the Apple app's UserDefaults behave too.
+static PREFS: std::sync::RwLock<Option<Value>> = std::sync::RwLock::new(None);
+
 pub fn read_prefs() -> Value {
-    fs::read_to_string(prefs_path())
+    if let Some(v) = PREFS.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        return v.clone();
+    }
+    let v = fs::read_to_string(prefs_path())
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| json!({}))
+        .unwrap_or_else(|| json!({}));
+    *PREFS.write().unwrap_or_else(|e| e.into_inner()) = Some(v.clone());
+    v
 }
 
 /// Temp file + rename, so a crash (or a full disk) mid-write can't leave a
@@ -59,9 +71,14 @@ pub fn write_prefs(v: &Value) {
         f.write_all(s.as_bytes())?;
         f.sync_all()
     });
+    let mut cache = PREFS.write().unwrap_or_else(|e| e.into_inner());
     if wrote.is_err() || fs::rename(&tmp, &path).is_err() {
         let _ = fs::remove_file(&tmp);
+        // Unsure what's on disk now: drop the cache so the next read looks.
+        *cache = None;
+        return;
     }
+    *cache = Some(v.clone());
 }
 
 pub fn set_pref(key: &str, value: Value) {

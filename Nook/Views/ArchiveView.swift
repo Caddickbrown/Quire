@@ -356,8 +356,14 @@ struct EntryTwoPane: View {
             let days = store.allEntriesByDay()
             if let hit = find(days.first(where: { $0.date == d })?.entries ?? []) { return hit }
             // Re-dating moves the entry to another day's file mid-edit; find it
-            // there rather than closing the pane under the user's cursor.
-            return find(days.filter { $0.date != d }.flatMap(\.entries))
+            // there rather than closing the pane under the user's cursor. One
+            // day at a time (`find` is timestamp-first, and stops at the first
+            // day that has it) instead of flattening the whole corpus and
+            // comparing every body twice.
+            for day in days where day.date != d {
+                if let hit = find(day.entries) { return hit }
+            }
+            return nil
         case .journal(let n): return find(store.entries(inJournal: n))
         }
     }

@@ -2194,7 +2194,10 @@ final class JournalStore: ObservableObject {
         // entry (a typo, a note written ahead) used to anchor the walk past
         // today and read the whole streak as 0.
         let today = cal.startOfDay(for: Date())
-        let upToToday = dates.filter { cal.startOfDay(for: $0) <= today }
+        // `dates` is sorted, so the future is a suffix: one cut, not a
+        // Calendar call per date.
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: today) ?? .distantFuture
+        let upToToday = Array(dates.prefix { $0 < tomorrow })
         var anchor = today
         if let last = upToToday.last, !cal.isDate(last, inSameDayAs: today),
            let yesterday = cal.date(byAdding: .day, value: -1, to: today) {
@@ -2308,11 +2311,20 @@ final class JournalStore: ObservableObject {
     /// first twin, so editing the second overwrote the first.
     nonisolated static func index(of entry: Entry, in entries: [Entry]) -> Int? {
         // Trimmed raw: the last entry in a file parses back carrying the file's
-        // own trailing newline, so a bare == misses it.
+        // own trailing newline, so a bare == misses it. The candidates are
+        // compared in place rather than each trimmed into a copy — a mismatch
+        // rejects at the header, and only the true match walks its tail.
         let want = JournalParser.trimRightNewlines(entry.raw)
-        if let i = entries.firstIndex(where: { JournalParser.trimRightNewlines($0.raw) == want }) { return i }
+        if let i = entries.firstIndex(where: { rawMatches($0.raw, want) }) { return i }
         let sameTS = entries.indices.filter { entries[$0].ts == entry.ts }
         return sameTS.count == 1 ? sameTS[0] : nil
+    }
+
+    /// `raw == want` apart from trailing newlines — what `trimRightNewlines`
+    /// would strip — without allocating the trimmed string.
+    private nonisolated static func rawMatches(_ raw: String, _ want: String) -> Bool {
+        guard raw.hasPrefix(want) else { return false }
+        return raw.utf8.dropFirst(want.utf8.count).allSatisfy { $0 == UInt8(ascii: "\n") }
     }
 
     // MARK: Embedded headers (one editor's text is always one entry)
@@ -2321,28 +2333,40 @@ final class JournalStore: ObservableObject {
     /// format has no escape for a header line, so a body holding its own
     /// headers would parse back as several entries — the composer offers to
     /// import such a paste rather than writing it as one draft.
+    ///
+    /// One scan over Substrings, and the header regex only for a line that
+    /// starts with `[` — this runs on every autosave (`makeEntry`), where a
+    /// full `parseEntries` used to build the entries just to count them.
     nonisolated static func embeddedEntryCount(in body: String) -> Int {
-        JournalParser.parseEntries(body).count
+        var n = 0
+        for line in body.split(separator: "\n", omittingEmptySubsequences: false)
+        where line.first == "[" && JournalParser.isHeaderLine(String(line)) { n += 1 }
+        return n
     }
 
     /// True when this single line would parse as a jnl entry header.
     nonisolated static func isEntryHeader(_ line: String) -> Bool {
-        JournalParser.parseEntries(line).count == 1
+        JournalParser.isHeaderLine(line)
     }
 
     /// Backslash-escape every line that would parse as an entry header, so the
     /// text stays one entry. `skippingFirstLine` spares an entry's own header.
     /// A markdown `\[` is the standard literal-bracket escape and renders as
     /// `[`; indenting instead wouldn't survive the parser's body trim.
+    ///
+    /// Same single scan as `embeddedEntryCount`: the lines are only copied
+    /// into a new string once a header has actually been found, so the
+    /// common body costs one pass and no allocation.
     nonisolated static func escapingEmbeddedHeaders(_ text: String, skippingFirstLine: Bool) -> String {
-        // Fast path: nothing in here would split. A whole entry's raw text
-        // legitimately opens with one header of its own.
-        guard embeddedEntryCount(in: text) > (skippingFirstLine ? 1 : 0) else { return text }
-        var lines = text.components(separatedBy: "\n")
-        for i in lines.indices where !(skippingFirstLine && i == 0) {
-            if isEntryHeader(lines[i]) { lines[i] = "\\" + lines[i] }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        var escaped: [Substring]? = nil
+        for (i, line) in lines.enumerated() where !(skippingFirstLine && i == 0) {
+            guard line.first == "[", JournalParser.isHeaderLine(String(line)) else { continue }
+            if escaped == nil { escaped = Array(lines) }
+            escaped![i] = Substring("\\" + line)
         }
-        return lines.joined(separator: "\n")
+        guard let escaped else { return text }
+        return escaped.joined(separator: "\n")
     }
 
     // MARK: Atomic write (jnl writeFile)

@@ -140,17 +140,28 @@ enum ReminderScheduler {
 
     /// Re-plan the pending notifications. Called when the setting changes and
     /// after every store rebuild (which is when "has an entry today" can flip).
+    /// What the current plan was made from. `refresh` runs after every store
+    /// rebuild — every editing pause — and a plan is one bulk removal plus up
+    /// to `horizon` adds, each a round-trip to the notification centre, so it
+    /// is only redone when something that shapes it has changed. Kept in
+    /// defaults so a relaunch on the same day skips it too.
+    private static let planKey = "dailyReminderPlan"
+
     static func refresh(hasEntryToday: Bool, streak: Int) {
         let defaults = UserDefaults.standard
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(
-            withIdentifiers: [requestID] + (0..<horizon).map { "\(requestPrefix)\($0)" })
-        guard defaults.bool(forKey: enabledKey) else { return }
-
+        let enabled = defaults.bool(forKey: enabledKey)
         let hour = defaults.object(forKey: hourKey) as? Int ?? defaultHour
         let minute = defaults.object(forKey: minuteKey) as? Int ?? 0
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
+        let plan = "\(enabled)|\(hasEntryToday)|\(streak)|\(hour)|\(minute)|\(Int(today.timeIntervalSinceReferenceDate))"
+        guard plan != defaults.string(forKey: planKey) else { return }
+        defaults.set(plan, forKey: planKey)
+
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(
+            withIdentifiers: [requestID] + (0..<horizon).map { "\(requestPrefix)\($0)" })
+        guard enabled else { return }
         let now = Date()
 
         var slot = 0

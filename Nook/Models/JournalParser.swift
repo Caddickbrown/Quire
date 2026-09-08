@@ -32,6 +32,12 @@ enum JournalParser {
         return (String(line[dr]), String(line[tr]), String(line[sr]))
     }
 
+    /// True when this one line would open a jnl entry. The cheap form of the
+    /// question for callers that don't need entries built — the editors' body
+    /// escaper asks it per line, where a `parseEntries` per line was a regex
+    /// pass plus allocation for every line of every autosave.
+    static func isHeaderLine(_ line: String) -> Bool { matchHeader(line) != nil }
+
     /// Split file content into entries. Content before the first header is
     /// silently dropped (see `leadingPreamble` to preserve it on rewrite).
     static func parseEntries(_ content: String) -> [Entry] {
