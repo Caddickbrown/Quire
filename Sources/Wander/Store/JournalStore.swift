@@ -57,16 +57,26 @@ final class JournalStore: ObservableObject {
     private var lastFingerprint = ""
 
     private static let folderKey = "journalFolderPath"
+    private static let bookmarkKey = "journalFolderBookmark"
     private static let pageKey = "page"
+
+    /// Held for as long as the app uses a folder the user picked, so the grant
+    /// stays open. Only meaningful under the sandbox; harmless without it.
+    private var scopedURL: URL?
 
     var baseURL: URL { library.baseURL }
 
     // MARK: Lifecycle
 
     init() {
-        library = JournalLibrary(
-            baseURL: JournalLibrary.resolveBase(
-                preferred: UserDefaults.standard.string(forKey: Self.folderKey)))
+        library = JournalLibrary(baseURL: JournalLibrary.resolveBase(preferred: nil))
+        // A remembered folder is reached through its bookmark, not its path: a
+        // path alone stops working the moment the app is sandboxed, and breaks
+        // anyway if the folder is moved or renamed.
+        if let remembered = Self.resolveRememberedFolder() {
+            scopedURL = remembered.scoped ? remembered.url : nil
+            library = JournalLibrary(baseURL: remembered.url)
+        }
         library.ensureFolders()
         if let saved = UserDefaults.standard.string(forKey: Self.pageKey),
            let remembered = Page(rawValue: saved) {
@@ -406,12 +416,66 @@ final class JournalStore: ObservableObject {
     func adopt(_ url: URL) {
         flush()
         UserDefaults.standard.set(url.path, forKey: Self.folderKey)
+        if let bookmark = Self.makeBookmark(for: url) {
+            UserDefaults.standard.set(bookmark, forKey: Self.bookmarkKey)
+        }
+        scopedURL?.stopAccessingSecurityScopedResource()
+        scopedURL = url.startAccessingSecurityScopedResource() ? url : nil
         library = JournalLibrary(baseURL: url)
         library.ensureFolders()
         draftEntry = nil
         selection = nil
         reload()
         select(firstVisibleID)
+    }
+
+    // MARK: Remembering the folder
+
+    /// Security-scoped where the platform allows it, plain otherwise — a
+    /// non-sandboxed app can't always mint a scoped bookmark, and doesn't need
+    /// one.
+    private static func makeBookmark(for url: URL) -> Data? {
+        #if os(macOS)
+        if let scoped = try? url.bookmarkData(options: .withSecurityScope,
+                                              includingResourceValuesForKeys: nil,
+                                              relativeTo: nil) {
+            return scoped
+        }
+        #endif
+        return try? url.bookmarkData(includingResourceValuesForKeys: nil, relativeTo: nil)
+    }
+
+    /// The folder the user last chose, resolved from its bookmark. A stale
+    /// bookmark still resolves, but only for now — it is re-minted so a moved
+    /// or renamed folder doesn't become unreachable on some later launch.
+    private static func resolveRememberedFolder() -> (url: URL, scoped: Bool)? {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: bookmarkKey) {
+            var stale = false
+            #if os(macOS)
+            let options: URL.BookmarkResolutionOptions = [.withSecurityScope]
+            #else
+            let options: URL.BookmarkResolutionOptions = []
+            #endif
+            if let url = try? URL(resolvingBookmarkData: data, options: options,
+                                  relativeTo: nil, bookmarkDataIsStale: &stale) {
+                let scoped = url.startAccessingSecurityScopedResource()
+                if stale, let fresh = makeBookmark(for: url) {
+                    defaults.set(fresh, forKey: bookmarkKey)
+                }
+                defaults.set(url.path, forKey: folderKey)
+                return (url, scoped)
+            }
+        }
+        // Nothing bookmarked: fall back to a remembered path, which is how
+        // folders chosen before bookmarks existed were stored.
+        if let path = defaults.string(forKey: folderKey),
+           FileManager.default.fileExists(atPath: path) {
+            let url = URL(fileURLWithPath: path, isDirectory: true)
+            if let bookmark = makeBookmark(for: url) { defaults.set(bookmark, forKey: bookmarkKey) }
+            return (url, false)
+        }
+        return nil
     }
 
     // MARK: Derived

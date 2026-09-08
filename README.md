@@ -145,6 +145,11 @@ existing jnl or Nook journal opens as-is — else `~/Documents/Wander`.
 | **iOS / iPadOS** | `xcodegen generate && open Wander.xcodeproj` |
 | **Linux, Windows, macOS** | `cd tauri/src-tauri && cargo run` |
 
+Both Apple builds are signed with the same Apple Development identity and team
+as Nook (`52W73J6V95`); the Mac app also gets the hardened runtime. Signing
+falls back to ad-hoc when no certificate is installed, so `./build.sh` works on
+a machine without the developer account.
+
 `Sources/WanderCore` is the shared Swift core — the model, the jnl parser and
 every file operation, Foundation only — used by both Apple builds.
 `tauri/src-tauri/src/journal.rs` is a second, deliberate port of the same

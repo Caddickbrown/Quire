@@ -18,9 +18,23 @@ for asset in AppIcon.icns AppIcon-light.png AppIcon-dark.png; do
 done
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-# Ad-hoc signature: enough for the app to keep its identity (and so its
-# window position, defaults and any TCC grants) across rebuilds.
-codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+# Signed with the same identity and team as Nook, with the hardened runtime.
+# Falls back to an ad-hoc signature when no certificate is installed — enough
+# for the app to keep its identity (and so its window position, defaults and
+# any TCC grants) across rebuilds, but not enough to run on another machine.
+TEAM=${DEVELOPMENT_TEAM:-52W73J6V95}
+IDENTITY=${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning \
+  | grep -m1 "Apple Development" | sed 's/.*"\(.*\)"/\1/')}
+
+if [ -n "$IDENTITY" ]; then
+  codesign --force --options runtime \
+    --entitlements Resources/Wander-macOS.entitlements \
+    --sign "$IDENTITY" "$APP"
+  echo "signed as $IDENTITY (team $TEAM)"
+else
+  codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+  echo "no signing certificate found — signed ad-hoc"
+fi
 
 echo "built $APP"
 if [ "${1:-}" = "--run" ]; then
