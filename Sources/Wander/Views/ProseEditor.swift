@@ -2,21 +2,27 @@
 //  ProseEditor.swift
 //  Wander
 //
-//  The writing surface: a TextKit 1 NSTextView holding plain markdown, styled
-//  in place. There is no preview pane — a heading looks like a heading while
-//  you type it, and the markers themselves recede to a hairline grey.
+//  The writing surface: a platform text view holding plain markdown, styled in
+//  place. There is no preview pane — a heading looks like a heading while you
+//  type it, and the markers themselves recede to a hairline grey.
 //
 //  Styling is a set of line-bound regex passes (see MarkdownStyle), re-run over
 //  the edited paragraph on each keystroke and over the whole text when the
-//  entry, theme or type size changes.
+//  entry, theme or type size changes. macOS uses NSTextView, iOS UITextView;
+//  everything above the view is shared.
 //
 
 import SwiftUI
-import AppKit
 import WanderCore
 
-struct ProseEditor: NSViewRepresentable {
-    @Binding var text: String
+#if canImport(AppKit)
+import AppKit
+#else
+import UIKit
+#endif
+
+/// Everything the editor needs that isn't the text itself.
+struct ProseStyle: Equatable {
     var theme: Theme
     var scheme: ColorScheme
     var size: CGFloat
@@ -24,6 +30,22 @@ struct ProseEditor: NSViewRepresentable {
     var leading: Double
     var typewriter: Bool
     var dimInactive: Bool
+
+    /// Everything that changes how the text is drawn but not what it says.
+    var key: String { "\(scheme)-\(size)-\(leading)-\(dimInactive)-\(typewriter)" }
+}
+
+extension Theme: Equatable {
+    static func == (lhs: Theme, rhs: Theme) -> Bool {
+        lhs.paper.hex == rhs.paper.hex && lhs.accent.hex == rhs.accent.hex
+    }
+}
+
+#if canImport(AppKit)
+
+struct ProseEditor: NSViewRepresentable {
+    @Binding var text: String
+    var style: ProseStyle
     /// Bumped by the owner to hand the caret to the editor.
     var focusToken: Int
     var onEdit: () -> Void
@@ -47,7 +69,8 @@ struct ProseEditor: NSViewRepresentable {
         tv.isHorizontallyResizable = false
         tv.autoresizingMask = [NSView.AutoresizingMask.width]
         tv.minSize = NSSize(width: 0, height: 0)
-        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                            height: CGFloat.greatestFiniteMagnitude)
         tv.textContainerInset = NSSize(width: 0, height: 10)
         tv.isAutomaticQuoteSubstitutionEnabled = true
         tv.isAutomaticDashSubstitutionEnabled = true
@@ -65,8 +88,7 @@ struct ProseEditor: NSViewRepresentable {
         scroll.autohidesScrollers = true
         scroll.automaticallyAdjustsContentInsets = false
 
-        context.coordinator.textView = tv
-        context.coordinator.applyAll(tv)
+        context.coordinator.restyle(tv, all: true)
         return scroll
     }
 
@@ -76,32 +98,28 @@ struct ProseEditor: NSViewRepresentable {
         coordinator.parent = self
 
         var needsRestyle = false
-
         if tv.string != text {
             let selected = tv.selectedRange()
             tv.string = text
-            // A new entry starts at the top with the caret at the head of it;
-            // an external edit to the open entry keeps the caret where it was.
-            let location = min(selected.location, (text as NSString).length)
-            tv.setSelectedRange(NSRange(location: location, length: 0))
+            tv.setSelectedRange(NSRange(location: min(selected.location, (text as NSString).length),
+                                        length: 0))
             needsRestyle = true
         }
-
-        if coordinator.styleKey != styleKey {
-            coordinator.styleKey = styleKey
+        if coordinator.styleKey != style.key {
+            coordinator.styleKey = style.key
             needsRestyle = true
         }
 
         tv.placeholderAttributes = [
-            .font: Face.nsSerif(size, italic: true),
-            .foregroundColor: theme.muted.opacity(0.55).nsColor
+            .font: Face.nsSerif(style.size, italic: true),
+            .foregroundColor: style.theme.muted.opacity(0.55).platform
         ]
-        tv.insertionPointColor = theme.accent.nsColor
-        tv.selectedTextAttributes = [.backgroundColor: theme.accent.opacity(0.18).nsColor]
+        tv.insertionPointColor = style.theme.accent.platform
+        tv.selectedTextAttributes = [.backgroundColor: style.theme.accent.opacity(0.18).platform]
         scroll.contentInsets = NSEdgeInsets(top: 0, left: 0,
-                                            bottom: typewriter ? 320 : 0, right: 0)
+                                            bottom: style.typewriter ? 320 : 0, right: 0)
 
-        if needsRestyle { coordinator.applyAll(tv) }
+        if needsRestyle { coordinator.restyle(tv, all: true) }
 
         if coordinator.lastFocusToken != focusToken {
             coordinator.lastFocusToken = focusToken
@@ -109,51 +127,38 @@ struct ProseEditor: NSViewRepresentable {
         }
     }
 
-    /// Everything that changes how the text is drawn but not what it says.
-    private var styleKey: String {
-        "\(scheme)-\(size)-\(leading)-\(dimInactive)-\(typewriter)"
-    }
-
-    // MARK: Coordinator
-
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ProseEditor
         var styleKey = ""
         var lastFocusToken = 0
-        weak var textView: ProseTextView?
 
         init(_ parent: ProseEditor) {
             self.parent = parent
-            self.styleKey = parent.styleKey
+            self.styleKey = parent.style.key
             self.lastFocusToken = parent.focusToken
         }
 
-        func applyAll(_ tv: NSTextView) {
-            MarkdownStyle.apply(to: tv, range: nil,
-                                theme: parent.theme, size: parent.size,
-                                leading: parent.leading,
-                                dimInactive: parent.dimInactive)
+        func restyle(_ tv: NSTextView, all: Bool) {
+            guard let storage = tv.textStorage else { return }
+            let style = parent.style
+            let base = MarkdownStyle.apply(to: storage, caret: tv.selectedRange(), restyleAll: all,
+                                           theme: style.theme, size: style.size,
+                                           leading: style.leading, dimInactive: style.dimInactive)
+            tv.typingAttributes = base
+            tv.defaultParagraphStyle = base[.paragraphStyle] as? NSParagraphStyle
         }
 
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             parent.text = tv.string
-            MarkdownStyle.apply(to: tv, range: tv.selectedRange(),
-                                theme: parent.theme, size: parent.size,
-                                leading: parent.leading,
-                                dimInactive: parent.dimInactive)
+            restyle(tv, all: false)
             parent.onEdit()
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
-            if parent.dimInactive {
-                MarkdownStyle.apply(to: tv, range: nil,
-                                    theme: parent.theme, size: parent.size,
-                                    leading: parent.leading,
-                                    dimInactive: true)
-            }
-            if parent.typewriter { Self.centreCaret(tv) }
+            if parent.style.dimInactive { restyle(tv, all: true) }
+            if parent.style.typewriter { Self.centreCaret(tv) }
         }
 
         /// Keep the caret on the same line of the window as the text grows.
@@ -171,8 +176,8 @@ struct ProseEditor: NSViewRepresentable {
     }
 }
 
-/// NSTextView with a placeholder and the two markdown key equivalents that a
-/// writing app is expected to have.
+/// NSTextView with a placeholder and the two markdown key equivalents a writing
+/// app is expected to have.
 final class ProseTextView: NSTextView {
     var placeholder = "Begin writing\u{2026}"
     var placeholderAttributes: [NSAttributedString.Key: Any] = [:]
@@ -206,15 +211,101 @@ final class ProseTextView: NSTextView {
             return
         }
         let selected = ns.substring(with: range)
-        let stripped = selected.hasPrefix(marker) && selected.hasSuffix(marker)
+        let wrapped = selected.hasPrefix(marker) && selected.hasSuffix(marker)
             && selected.count > marker.count * 2
-        let replacement = stripped
+        let replacement = wrapped
             ? String(selected.dropFirst(marker.count).dropLast(marker.count))
             : marker + selected + marker
         if shouldChangeText(in: range, replacementString: replacement) {
             replaceCharacters(in: range, with: replacement)
             didChangeText()
-            setSelectedRange(NSRange(location: range.location, length: (replacement as NSString).length))
+            setSelectedRange(NSRange(location: range.location,
+                                     length: (replacement as NSString).length))
         }
     }
 }
+
+#else
+
+struct ProseEditor: UIViewRepresentable {
+    @Binding var text: String
+    var style: ProseStyle
+    var focusToken: Int
+    var onEdit: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UITextView {
+        let tv = UITextView()
+        tv.delegate = context.coordinator
+        tv.backgroundColor = .clear
+        tv.isScrollEnabled = true
+        tv.alwaysBounceVertical = true
+        tv.textContainerInset = UIEdgeInsets(top: 10, left: 0, bottom: 40, right: 0)
+        tv.textContainer.lineFragmentPadding = 0
+        tv.autocorrectionType = .yes
+        tv.smartQuotesType = .yes
+        tv.smartDashesType = .yes
+        tv.keyboardDismissMode = .interactive
+        tv.text = text
+        context.coordinator.restyle(tv, all: true)
+        return tv
+    }
+
+    func updateUIView(_ tv: UITextView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.parent = self
+
+        var needsRestyle = false
+        if tv.text != text {
+            let selected = tv.selectedRange
+            tv.text = text
+            tv.selectedRange = NSRange(location: min(selected.location, (text as NSString).length),
+                                       length: 0)
+            needsRestyle = true
+        }
+        if coordinator.styleKey != style.key {
+            coordinator.styleKey = style.key
+            needsRestyle = true
+        }
+        tv.tintColor = style.theme.accent.platform
+        if needsRestyle { coordinator.restyle(tv, all: true) }
+
+        if coordinator.lastFocusToken != focusToken {
+            coordinator.lastFocusToken = focusToken
+            DispatchQueue.main.async { tv.becomeFirstResponder() }
+        }
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: ProseEditor
+        var styleKey = ""
+        var lastFocusToken = 0
+
+        init(_ parent: ProseEditor) {
+            self.parent = parent
+            self.styleKey = parent.style.key
+            self.lastFocusToken = parent.focusToken
+        }
+
+        func restyle(_ tv: UITextView, all: Bool) {
+            let style = parent.style
+            let base = MarkdownStyle.apply(to: tv.textStorage, caret: tv.selectedRange,
+                                           restyleAll: all, theme: style.theme, size: style.size,
+                                           leading: style.leading, dimInactive: style.dimInactive)
+            tv.typingAttributes = base
+        }
+
+        func textViewDidChange(_ tv: UITextView) {
+            parent.text = tv.text
+            restyle(tv, all: false)
+            parent.onEdit()
+        }
+
+        func textViewDidChangeSelection(_ tv: UITextView) {
+            if parent.style.dimInactive { restyle(tv, all: true) }
+        }
+    }
+}
+
+#endif

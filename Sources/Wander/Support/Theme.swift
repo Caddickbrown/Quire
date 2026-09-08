@@ -4,13 +4,25 @@
 //
 //  The almanac palette: warm paper, near-black ink, hairline rules and one
 //  terracotta accent, with a warm-neutral dark counterpart in the same hue
-//  family. Every colour in the app comes from here, in both SwiftUI and
-//  AppKit form — the prose editor is an NSTextView and needs NSColor.
+//  family. Every colour comes from here in two forms: SwiftUI's, and the
+//  platform's (NSColor or UIColor), because the prose editor is a platform
+//  text view on both macOS and iOS.
 //
 
 import SwiftUI
-import AppKit
 import WanderCore
+
+#if canImport(AppKit)
+import AppKit
+typealias PlatformColor = NSColor
+typealias PlatformFont = NSFont
+typealias PlatformFontWeight = NSFont.Weight
+#else
+import UIKit
+typealias PlatformColor = UIColor
+typealias PlatformFont = UIFont
+typealias PlatformFontWeight = UIFont.Weight
+#endif
 
 struct Tone {
     let hex: UInt32
@@ -20,8 +32,14 @@ struct Tone {
         Color(.sRGB, red: Double(r), green: Double(g), blue: Double(b), opacity: Double(alpha))
     }
 
-    var nsColor: NSColor {
-        NSColor(srgbRed: r, green: g, blue: b, alpha: alpha)
+    /// NSColor or UIColor, depending on where the app is running — the prose
+    /// editor is a platform text view either way and needs the platform type.
+    var platform: PlatformColor {
+        #if canImport(AppKit)
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: alpha)
+        #else
+        return UIColor(red: r, green: g, blue: b, alpha: alpha)
+        #endif
     }
 
     func opacity(_ a: CGFloat) -> Tone { Tone(hex: hex, alpha: a) }
@@ -103,11 +121,19 @@ extension EnvironmentValues {
 /// installed the app falls back to New York and SF, which sit in the same
 /// places — a transitional serif with a true italic, and a neutral grotesque.
 enum Face {
+    /// Newsreader and IBM Plex Sans are the design's faces; where they aren't
+    /// installed the app falls back to New York and the system sans, which sit
+    /// in the same places — a transitional serif with a true italic, and a
+    /// neutral grotesque.
     static let serifName: String? = installed("Newsreader")
     static let sansName: String? = installed("IBM Plex Sans")
 
     private static func installed(_ family: String) -> String? {
-        NSFontManager.shared.availableFontFamilies.contains(family) ? family : nil
+        #if canImport(AppKit)
+        return NSFontManager.shared.availableFontFamilies.contains(family) ? family : nil
+        #else
+        return UIFont.familyNames.contains(family) ? family : nil
+        #endif
     }
 
     static func serif(_ size: CGFloat, weight: Font.Weight = .regular, italic: Bool = false) -> Font {
@@ -128,9 +154,11 @@ enum Face {
         return .system(size: size, weight: weight)
     }
 
-    /// AppKit twin of `serif`, for the prose editor's text storage.
-    static func nsSerif(_ size: CGFloat, weight: NSFont.Weight = .regular, italic: Bool = false) -> NSFont {
-        var font: NSFont
+    /// The platform twin of `serif`, for the prose editor's text storage.
+    static func nsSerif(_ size: CGFloat, weight: PlatformFontWeight = .regular,
+                        italic: Bool = false) -> PlatformFont {
+        #if canImport(AppKit)
+        var font: PlatformFont
         if let serifName, let custom = NSFont(name: serifName, size: size) {
             font = custom
         } else {
@@ -145,9 +173,20 @@ enum Face {
             font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
         }
         return font
+        #else
+        let base = UIFont.systemFont(ofSize: size, weight: weight)
+        var descriptor = base.fontDescriptor.withDesign(.serif) ?? base.fontDescriptor
+        var traits: UIFontDescriptor.SymbolicTraits = []
+        if weight != .regular { traits.insert(.traitBold) }
+        if italic { traits.insert(.traitItalic) }
+        if !traits.isEmpty, let withTraits = descriptor.withSymbolicTraits(traits) {
+            descriptor = withTraits
+        }
+        return UIFont(descriptor: descriptor, size: size)
+        #endif
     }
 
-    static func nsMono(_ size: CGFloat) -> NSFont {
-        NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    static func nsMono(_ size: CGFloat) -> PlatformFont {
+        PlatformFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 }

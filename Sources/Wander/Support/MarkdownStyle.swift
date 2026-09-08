@@ -9,8 +9,14 @@
 //  structure still visible.
 //
 
-import AppKit
+import Foundation
 import WanderCore
+
+#if canImport(AppKit)
+import AppKit
+#else
+import UIKit
+#endif
 
 enum MarkdownStyle {
 
@@ -36,26 +42,31 @@ enum MarkdownStyle {
     /// text when `range` is nil. Long documents restyle a paragraph at a time;
     /// short ones — which is nearly every journal entry — restyle whole, so a
     /// closing `**` finds its opener however far back it sits.
-    static func apply(to tv: NSTextView, range: NSRange?, theme: Theme,
-                      size: CGFloat, leading: Double, dimInactive: Bool) {
-        guard let storage = tv.textStorage else { return }
+    /// Restyle `storage`. `caret` is where the insertion point is — its
+    /// paragraph is the unit restyled on a keystroke, and the one left lit in
+    /// focus mode. Returns the base attributes so the caller can set them as
+    /// the view's typing attributes.
+    @discardableResult
+    static func apply(to storage: NSTextStorage, caret: NSRange?, restyleAll: Bool,
+                      theme: Theme, size: CGFloat, leading: Double,
+                      dimInactive: Bool) -> [NSAttributedString.Key: Any] {
         let ns = storage.string as NSString
         let full = NSRange(location: 0, length: ns.length)
 
         var target = full
-        if let range, !dimInactive, ns.length > 8_000 {
-            let caret = NSRange(location: min(range.location, ns.length), length: 0)
-            target = ns.paragraphRange(for: caret)
+        if let caret, !restyleAll, !dimInactive, ns.length > 8_000 {
+            let point = NSRange(location: min(caret.location, ns.length), length: 0)
+            target = ns.paragraphRange(for: point)
         }
 
         let body = Face.nsSerif(size)
         let bodyParagraph = paragraph(size: size, leading: leading)
         let base: [NSAttributedString.Key: Any] = [
             .font: body,
-            .foregroundColor: theme.prose.nsColor,
+            .foregroundColor: theme.prose.platform,
             .paragraphStyle: bodyParagraph
         ]
-        let marker = theme.muted.opacity(0.45).nsColor
+        let marker = theme.muted.opacity(0.45).platform
 
         storage.beginEditing()
         storage.setAttributes(base, range: target)
@@ -77,7 +88,7 @@ enum MarkdownStyle {
             let scale: CGFloat = [1.55, 1.30, 1.14, 1.04, 1.0, 1.0][min(level, 6) - 1]
             let weight: NSFont.Weight = level <= 2 ? .semibold : .semibold
             set(.font, Face.nsSerif(size * scale, weight: weight), m.range)
-            set(.foregroundColor, theme.ink.nsColor, m.range)
+            set(.foregroundColor, theme.ink.platform, m.range)
             set(.paragraphStyle, paragraph(size: size, leading: leading, spacingBefore: size * 0.9), m.range)
             // The hashes stay, but at body size and hairline grey, so they read
             // as a printer's mark beside the heading rather than part of it.
@@ -88,7 +99,7 @@ enum MarkdownStyle {
         // Block quotes — italic, indented, in the muted voice of a margin note.
         each(quote) { m in
             set(.font, Face.nsSerif(size, italic: true), m.range)
-            set(.foregroundColor, theme.muted.nsColor, m.range)
+            set(.foregroundColor, theme.muted.platform, m.range)
             set(.paragraphStyle, paragraph(size: size, leading: leading, indent: size * 1.1), m.range)
             set(.font, Face.nsSerif(size * 0.85), m.range(at: 1))
             set(.foregroundColor, marker, m.range(at: 1))
@@ -97,7 +108,7 @@ enum MarkdownStyle {
         // List markers pick up the accent; the item hangs off the marker.
         each(bullet) { m in
             set(.paragraphStyle, paragraph(size: size, leading: leading, indent: size * 1.2), m.range)
-            set(.foregroundColor, theme.accent.nsColor, m.range(at: 2))
+            set(.foregroundColor, theme.accent.platform, m.range(at: 2))
         }
 
         each(divider) { m in
@@ -107,7 +118,7 @@ enum MarkdownStyle {
 
         each(strong) { m in
             set(.font, Face.nsSerif(size, weight: .bold), m.range(at: 2))
-            set(.foregroundColor, theme.ink.nsColor, m.range(at: 2))
+            set(.foregroundColor, theme.ink.platform, m.range(at: 2))
             set(.foregroundColor, marker, NSRange(location: m.range.location, length: m.range(at: 1).length))
             set(.foregroundColor, marker, NSRange(location: NSMaxRange(m.range) - m.range(at: 1).length,
                                                   length: m.range(at: 1).length))
@@ -121,37 +132,37 @@ enum MarkdownStyle {
 
         each(code) { m in
             set(.font, Face.nsMono(size * 0.88), m.range)
-            set(.backgroundColor, theme.rule.opacity(0.5).nsColor, m.range)
-            set(.foregroundColor, theme.ink.nsColor, m.range(at: 1))
+            set(.backgroundColor, theme.rule.opacity(0.5).platform, m.range)
+            set(.foregroundColor, theme.ink.platform, m.range(at: 1))
             set(.foregroundColor, marker, NSRange(location: m.range.location, length: 1))
             set(.foregroundColor, marker, NSRange(location: NSMaxRange(m.range) - 1, length: 1))
         }
 
         each(fence) { m in
             set(.font, Face.nsMono(size * 0.88), m.range)
-            set(.foregroundColor, theme.prose.nsColor, m.range)
-            set(.backgroundColor, theme.rule.opacity(0.35).nsColor, m.range)
+            set(.foregroundColor, theme.prose.platform, m.range)
+            set(.backgroundColor, theme.rule.opacity(0.35).platform, m.range)
             set(.paragraphStyle, paragraph(size: size, leading: leading, indent: size * 0.6), m.range)
         }
 
         each(link) { m in
-            set(.foregroundColor, theme.accent.nsColor, m.range(at: 1))
+            set(.foregroundColor, theme.accent.platform, m.range(at: 1))
             set(.underlineStyle, NSUnderlineStyle.single.rawValue, m.range(at: 1))
-            set(.underlineColor, theme.accent.opacity(0.4).nsColor, m.range(at: 1))
+            set(.underlineColor, theme.accent.opacity(0.4).platform, m.range(at: 1))
             set(.foregroundColor, marker, m.range(at: 2))
             set(.font, Face.nsMono(size * 0.8), m.range(at: 2))
         }
 
         // @tags — the same tokens Nook and jnl index on.
         each(tag) { m in
-            set(.foregroundColor, theme.accent.nsColor, m.range)
+            set(.foregroundColor, theme.accent.platform, m.range)
         }
 
         // Focus mode: everything but the paragraph under the caret recedes.
         if dimInactive {
-            let caret = NSRange(location: min(tv.selectedRange().location, ns.length), length: 0)
-            let live = ns.paragraphRange(for: caret)
-            let faded = theme.muted.opacity(0.38).nsColor
+            let point = NSRange(location: min(caret?.location ?? 0, ns.length), length: 0)
+            let live = ns.paragraphRange(for: point)
+            let faded = theme.muted.opacity(0.38).platform
             for r in [NSRange(location: 0, length: live.location),
                       NSRange(location: NSMaxRange(live), length: ns.length - NSMaxRange(live))] {
                 set(.foregroundColor, faded, r)
@@ -159,9 +170,7 @@ enum MarkdownStyle {
         }
 
         storage.endEditing()
-
-        tv.typingAttributes = base
-        tv.defaultParagraphStyle = bodyParagraph
+        return base
     }
 
     private static func paragraph(size: CGFloat,

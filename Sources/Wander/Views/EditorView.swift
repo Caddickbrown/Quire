@@ -37,12 +37,12 @@ struct EditorView: View {
             header
             Rule(tone: theme.ink)
             ProseEditor(text: $store.draftBody,
-                        theme: theme,
-                        scheme: scheme,
-                        size: typeSize,
-                        leading: leading,
-                        typewriter: typewriter,
-                        dimInactive: focusMode,
+                        style: ProseStyle(theme: theme,
+                                          scheme: scheme,
+                                          size: typeSize,
+                                          leading: leading,
+                                          typewriter: typewriter,
+                                          dimInactive: focusMode),
                         focusToken: focusToken,
                         onEdit: store.edited)
                 .padding(.top, 12)
