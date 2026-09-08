@@ -80,11 +80,50 @@ quietly files it.
 ## Dark
 
 The same hue family, inverted — warm neutral rather than blue-grey. Auto,
-Light, or Dark; the Dock icon follows.
+Light, or Dark; the Dock icon follows. Every theme below carries both, so the
+setting stays a switch rather than a different app.
 
 <p align="center">
   <img src="docs/images/macos-dark.png" alt="Wander in the dark palette" width="100%">
 </p>
+
+## Fourteen looks
+
+A theme here is not a palette swap with the same app underneath. It sets the
+faces, the measure, the leading, the rules, the shape of the buttons and the
+way the stats column is drawn. **Almanac** — the warm paper above — is the one
+it opens in. **Broadsheet** centres the masthead over a double rule and runs
+the day as a front page. **Cinema** letterboxes the window and sets the title
+in Oswald caps against one blood red. **Editorial** takes a slab headline and
+spends its magenta twice. **Memphis** puts the page on a card with a hard drop
+shadow and colours the index rows.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/theme-broadsheet.png" alt="Broadsheet: a centred masthead over a double rule"></td>
+<td width="50%"><img src="docs/images/theme-cinema.png" alt="Cinema: a letterboxed masthead, Oswald caps, one red"></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/images/theme-editorial.png" alt="Editorial: a slab headline, wide kickers, magenta"></td>
+<td width="50%"><img src="docs/images/theme-memphis.png" alt="Memphis: rounded cards, a hard drop shadow, coloured rows"></td>
+</tr>
+</table>
+
+They are chosen from **Options ▸ Theme**, on a page where each is drawn in its
+own colours and its own type rather than named in a list — the decision is made
+by looking. The cards preview in whichever of Light and Dark the picker is set
+to, and the dot beside each name — light, dark, or one half of each — says
+which it was drawn for. Picking one brings its type size and leading with it;
+the Options steppers move them afterwards.
+
+<p align="center">
+  <img src="docs/images/themes-page.png" alt="The themes page: fourteen looks, each drawn in its own colours and faces" width="100%">
+</p>
+
+All fourteen live in one file — `Resources/themes.json`, kept byte-identical at
+`tauri/src/themes.json` — as colours, faces and a short list of furniture
+switches. Adding a look is editing that file, and it arrives on macOS, iOS and
+Linux together.
 
 ## On iPhone and iPad
 
