@@ -4,14 +4,22 @@ import PackageDescription
 let package = Package(
     name: "Wander",
     platforms: [.macOS(.v14)],
-    products: [
-        .library(name: "WanderCore", targets: ["WanderCore"])
+    dependencies: [
+        // Models, parsing and every file operation, in its own package so the
+        // iOS project can depend on it from a path that isn't its own folder.
+        .package(path: "Core")
     ],
     targets: [
-        // Models, parsing and every file operation. Foundation only.
-        .target(name: "WanderCore", path: "Sources/WanderCore"),
         // The macOS app. Built into a bundle by ./build.sh.
-        .executableTarget(name: "Wander", dependencies: ["WanderCore"], path: "Sources/Wander"),
-        .testTarget(name: "WanderCoreTests", dependencies: ["WanderCore"], path: "Tests/WanderCoreTests")
+        .executableTarget(
+            name: "Wander",
+            dependencies: [.product(name: "WanderCore", package: "Core")],
+            path: "Sources/Wander"
+        ),
+        .testTarget(
+            name: "WanderCoreTests",
+            dependencies: [.product(name: "WanderCore", package: "Core")],
+            path: "Tests/WanderCoreTests"
+        )
     ]
 )
