@@ -9,6 +9,7 @@
 
 const invoke = window.__TAURI__.core.invoke;
 const dialog = window.__TAURI__.dialog;
+const appWindow = window.__TAURI__.window.getCurrentWindow();
 
 const $ = (id) => document.getElementById(id);
 const PAGES = ['journal', 'inbox', 'starred'];
@@ -876,6 +877,22 @@ document.addEventListener('keydown', (event) => {
     shortcuts[key]();
   }
 });
+
+// On Linux and Windows the window has no bar of its own: the masthead is the
+// drag region (see data-tauri-drag-region in index.html) and carries the
+// controls. macOS keeps its title bar, and hides them.
+document.querySelectorAll('[data-window]').forEach((button) => {
+  button.onclick = () => {
+    const action = button.dataset.window;
+    if (action === 'minimise') appWindow.minimize();
+    if (action === 'maximise') appWindow.toggleMaximize();
+    if (action === 'close') appWindow.close();
+  };
+});
+
+invoke('undecorated').then((custom) => {
+  if (custom) document.documentElement.dataset.chrome = 'custom';
+}).catch(() => {});
 
 window.matchMedia('(prefers-color-scheme: dark)')
   .addEventListener('change', () => applySettings());

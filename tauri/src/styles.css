@@ -168,6 +168,21 @@ button.value:hover { color: var(--accent); text-decoration: underline; }
 .toggles { display: flex; align-items: baseline; gap: 12px; }
 .pipe { font-size: 10px; color: var(--rule); }
 
+/* Window controls, on the platforms where the window has no bar of its own.
+   Drawn as quietly as everything else: glyphs in the label grey, the accent
+   only on the one that closes. */
+
+.window-controls { display: none; align-items: baseline; gap: 10px; margin-left: 6px; }
+:root[data-chrome='custom'] .window-controls { display: flex; }
+.window-controls button {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted);
+  padding: 2px 3px;
+}
+.window-controls button:hover { color: var(--ink); }
+.window-controls button[data-window='close']:hover { color: var(--accent); }
+
 /* Columns ---------------------------------------------------------------- */
 
 .columns { flex: 1; display: flex; min-height: 0; }

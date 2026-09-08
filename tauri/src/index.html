@@ -10,7 +10,7 @@
 <body>
 
 <header class="masthead">
-  <div class="masthead-row">
+  <div class="masthead-row" data-tauri-drag-region>
     <span class="wordmark">wander</span>
     <nav class="pages" id="pages"></nav>
     <span class="spacer"></span>
@@ -20,6 +20,11 @@
       <button class="quiet" data-column="index">Index</button>
       <button class="quiet" data-column="stats">Stats</button>
       <button class="quiet" data-column="options">Options</button>
+    </span>
+    <span class="window-controls" id="window-controls">
+      <button title="Minimise" data-window="minimise">&#8211;</button>
+      <button title="Maximise" data-window="maximise">&#9723;</button>
+      <button title="Close" data-window="close">&#10005;</button>
     </span>
   </div>
   <div class="rule-heavy"></div>

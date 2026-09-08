@@ -105,6 +105,11 @@ SwiftUI doesn't run on Linux, so the Linux build isn't a port — it's a Tauri
 app over the same folder, drawn to match. Newsreader and IBM Plex Sans are
 bundled with it, so it looks the same on a machine that has neither installed.
 
+There, the window has no title bar: the masthead is the bar. Drag it to move
+the window; the three glyphs at its right minimise, maximise and close. macOS
+keeps its own title bar, since its traffic lights are better than anything
+drawn here — `WANDER_DECORATIONS=0` takes them away, `=1` puts them back.
+
 <p align="center">
   <img src="docs/images/linux-tauri.png" alt="The Tauri build, in the dark palette" width="100%">
 </p>

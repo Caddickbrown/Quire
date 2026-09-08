@@ -7,6 +7,7 @@
 mod journal;
 
 use journal::{Entry, Library};
+use tauri::Manager;
 use chrono::Local;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -143,6 +144,23 @@ fn set_folder(state: tauri::State<State>, path: String) -> Journal {
     load(state)
 }
 
+/// Whether the window is drawing its own chrome. The macOS build keeps the
+/// system title bar — its traffic lights are better than anything drawn here —
+/// while Linux and Windows go borderless, so the masthead is the only bar.
+/// `WANDER_DECORATIONS=0` or `=1` overrides either way.
+fn hides_decorations() -> bool {
+    match std::env::var("WANDER_DECORATIONS").as_deref() {
+        Ok("0") => true,
+        Ok("1") => false,
+        _ => !cfg!(target_os = "macos"),
+    }
+}
+
+#[tauri::command]
+fn undecorated() -> bool {
+    hides_decorations()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // A folder named on the command line wins; then the one last chosen in the
@@ -155,8 +173,16 @@ pub fn run() {
         .manage(State {
             base: Mutex::new(base),
         })
+        .setup(|app| {
+            if hides_decorations() {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_decorations(false);
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
-            load, create, save, remove, relocate, set_folder
+            load, create, save, remove, relocate, set_folder, undecorated
         ])
         .run(tauri::generate_context!())
         .expect("error while running wander");
