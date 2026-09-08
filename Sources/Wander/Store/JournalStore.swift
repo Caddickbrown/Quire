@@ -208,7 +208,15 @@ final class JournalStore: ObservableObject {
                           source: target)
         do {
             try library.remove(current)
-            let written = try library.persist(moved, previous: nil)
+            // An entry with neither title nor body is never written — moving an
+            // untouched new entry to another day must not leave a stub behind.
+            let blank = moved.suffix.isEmpty && moved.body.isEmpty
+            var written = moved
+            if blank {
+                written.source = nil
+            } else {
+                written = try library.persist(moved, previous: nil)
+            }
             entries.removeAll { $0.id == current.id }
             entries.append(written)
             entries = JournalParser.sortedByTimestamp(entries).reversed()
@@ -217,7 +225,7 @@ final class JournalStore: ObservableObject {
             draftTitle = written.displayTitle
             draftBody = written.body
             dirty = false
-            saveState = .saved(Date())
+            saveState = blank ? .idle : .saved(Date())
             lastFingerprint = library.fingerprint()
             return true
         } catch {

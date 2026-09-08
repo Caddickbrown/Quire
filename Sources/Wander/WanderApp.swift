@@ -6,9 +6,12 @@
 //  folder can be opened by any of them.
 //
 
+#if os(macOS)
+
 import SwiftUI
 import AppKit
 import WanderCore
+
 
 @main
 struct WanderApp: App {
@@ -123,3 +126,5 @@ struct WanderApp: App {
         }
     }
 }
+
+#endif

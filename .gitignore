@@ -2,6 +2,9 @@
 .swiftpm/
 build/
 DerivedData/
-*.xcodeproj/xcuserdata/
+# Generated from project.yml — run `xcodegen generate`.
+Wander.xcodeproj/
 *.xcworkspace/xcuserdata/
+tauri/src-tauri/target/
+tauri/src-tauri/gen/
 .DS_Store

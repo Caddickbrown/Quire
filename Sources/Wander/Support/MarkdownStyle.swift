@@ -86,8 +86,7 @@ enum MarkdownStyle {
         each(heading) { m in
             let level = m.range(at: 1).length
             let scale: CGFloat = [1.55, 1.30, 1.14, 1.04, 1.0, 1.0][min(level, 6) - 1]
-            let weight: NSFont.Weight = level <= 2 ? .semibold : .semibold
-            set(.font, Face.nsSerif(size * scale, weight: weight), m.range)
+            set(.font, Face.nsSerif(size * scale, weight: .semibold), m.range)
             set(.foregroundColor, theme.ink.platform, m.range)
             set(.paragraphStyle, paragraph(size: size, leading: leading, spacingBefore: size * 0.9), m.range)
             // The hashes stay, but at body size and hairline grey, so they read

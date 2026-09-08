@@ -7,9 +7,12 @@
 //  is an explicit Light/Dark choice rather than the system's.
 //
 
+#if os(macOS)
+
 import AppKit
 import SwiftUI
 import WanderCore
+
 
 enum DockIcon {
     private static var current: String?
@@ -27,3 +30,5 @@ enum DockIcon {
         apply(dark: scheme == .dark)
     }
 }
+
+#endif

@@ -163,7 +163,9 @@ private struct EntryRow: View {
                 store.toggleFiling(entry)
             }
             Button("Date & Time\u{2026}") { store.reschedulingEntry = entry }
+            #if os(macOS)
             Button("Reveal in Finder") { store.reveal(entry) }
+            #endif
             Button("Copy Markdown") { store.copyMarkdown(entry) }
             Divider()
             Button("Delete\u{2026}", role: .destructive) { store.deletionCandidate = entry }
