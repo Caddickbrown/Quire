@@ -15,6 +15,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use walkdir::WalkDir;
 
 pub const STAMP: &str = "%Y-%m-%d %H:%M:%S";
@@ -28,6 +29,10 @@ pub struct Entry {
     /// The title without the star marker — what the interface shows.
     pub title: String,
     pub body: String,
+    /// The entry as it sits in the file. Kept off the wire: it is the header
+    /// plus the body again, and sending it doubled the JSON the front end had
+    /// to parse on every load. `rawOf` in app.js rebuilds it where it's wanted.
+    #[serde(skip_serializing, default)]
     pub raw: String,
     /// Absolute path of the file the entry lives in.
     pub source: String,
@@ -37,12 +42,20 @@ pub struct Entry {
     pub words: usize,
 }
 
-fn header_regex() -> Regex {
-    Regex::new(r"^\[(\d{4}[-–]\d{2}[-–]\d{2}) (\d{2}:\d{2}:\d{2})\](.*)$").unwrap()
+/// Both patterns are compiled once for the life of the process. They are used
+/// per line and per entry, and `Regex::new` costs far more than the match does:
+/// building them afresh each time made a 7,000-entry folder take five seconds
+/// to open instead of a quarter of one.
+fn header_regex() -> &'static Regex {
+    static HEADER: OnceLock<Regex> = OnceLock::new();
+    HEADER.get_or_init(|| {
+        Regex::new(r"^\[(\d{4}[-–]\d{2}[-–]\d{2}) (\d{2}:\d{2}:\d{2})\](.*)$").unwrap()
+    })
 }
 
-fn tag_regex() -> Regex {
-    Regex::new(r"@[a-zA-Z][a-zA-Z0-9_-]*").unwrap()
+fn tag_regex() -> &'static Regex {
+    static TAG: OnceLock<Regex> = OnceLock::new();
+    TAG.get_or_init(|| Regex::new(r"@[a-zA-Z][a-zA-Z0-9_-]*").unwrap())
 }
 
 pub fn tags_in(text: &str) -> Vec<String> {
@@ -51,7 +64,7 @@ pub fn tags_in(text: &str) -> Vec<String> {
         let tag = found.as_str().to_string();
         // Deduplicated, case-insensitively: writing @admin three times in an
         // entry still files it under one tag.
-        if !seen.iter().any(|s| s.to_lowercase() == tag.to_lowercase()) {
+        if !seen.iter().any(|s| s.eq_ignore_ascii_case(&tag)) {
             seen.push(tag);
         }
     }

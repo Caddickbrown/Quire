@@ -28,17 +28,12 @@ struct ProseStyle: Equatable {
     var size: CGFloat
     /// Line spacing as a multiple of the type size, so it holds as type grows.
     var leading: Double
+    var centred: Bool = false
     var typewriter: Bool
     var dimInactive: Bool
 
     /// Everything that changes how the text is drawn but not what it says.
-    var key: String { "\(scheme)-\(size)-\(leading)-\(dimInactive)-\(typewriter)" }
-}
-
-extension Theme: Equatable {
-    static func == (lhs: Theme, rhs: Theme) -> Bool {
-        lhs.paper.hex == rhs.paper.hex && lhs.accent.hex == rhs.accent.hex
-    }
+    var key: String { "\(theme.id)-\(scheme)-\(size)-\(leading)-\(centred)-\(dimInactive)-\(typewriter)" }
 }
 
 #if canImport(AppKit)
@@ -111,7 +106,8 @@ struct ProseEditor: NSViewRepresentable {
         }
 
         tv.placeholderAttributes = [
-            .font: Face.nsSerif(style.size, italic: true),
+            .font: style.theme.proseFace.platformFont(style.size, weight: style.theme.proseWeightPlatform,
+                                                       italic: true),
             .foregroundColor: style.theme.muted.opacity(0.55).platform
         ]
         tv.insertionPointColor = style.theme.accent.platform
@@ -146,7 +142,7 @@ struct ProseEditor: NSViewRepresentable {
             let writing = tv.window?.firstResponder === tv
             let base = MarkdownStyle.apply(to: storage, caret: tv.selectedRange(), restyleAll: all,
                                            theme: style.theme, size: style.size,
-                                           leading: style.leading,
+                                           leading: style.leading, centred: style.centred,
                                            dimInactive: style.dimInactive && writing)
             tv.typingAttributes = base
             tv.defaultParagraphStyle = base[.paragraphStyle] as? NSParagraphStyle
@@ -306,7 +302,8 @@ struct ProseEditor: UIViewRepresentable {
             let style = parent.style
             let base = MarkdownStyle.apply(to: tv.textStorage, caret: tv.selectedRange,
                                            restyleAll: all, theme: style.theme, size: style.size,
-                                           leading: style.leading, dimInactive: style.dimInactive)
+                                           leading: style.leading, centred: style.centred,
+                                           dimInactive: style.dimInactive)
             tv.typingAttributes = base
         }
 

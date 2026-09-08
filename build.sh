@@ -13,9 +13,13 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Wander"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-for asset in AppIcon.icns AppIcon-light.png AppIcon-dark.png; do
+for asset in AppIcon.icns AppIcon-light.png AppIcon-dark.png themes.json; do
   [ -f "Resources/$asset" ] && cp "Resources/$asset" "$APP/Contents/Resources/$asset"
 done
+# Every theme's faces travel with the app; Fonts.register() picks them up.
+rm -rf "$APP/Contents/Resources/Fonts"
+cp -R Resources/Fonts "$APP/Contents/Resources/Fonts"
+[ -d Resources/Icons ] && cp -R Resources/Icons "$APP/Contents/Resources/Icons"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # Signed with the same identity and team as Nook, with the hardened runtime.

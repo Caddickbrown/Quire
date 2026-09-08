@@ -27,7 +27,7 @@ struct RescheduleSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Date & time")
-                    .font(Face.serif(22))
+                    .font(theme.display(22))
                     .foregroundStyle(theme.ink.color)
                 Spacer()
                 SmallCaps(entry.preview.isEmpty ? "Untitled" : entry.preview)

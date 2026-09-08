@@ -95,10 +95,12 @@ fn relocate(
 ) -> Result<Entry, String> {
     let library = library(&state);
     let from = PathBuf::from(&source);
-    let existing = library
-        .load()
+    // Only the file that owns the entry, not the whole folder: relocating one
+    // entry has no business parsing ten years of journal to find it.
+    let content = std::fs::read_to_string(&from).map_err(|e| e.to_string())?;
+    let existing = journal::parse_entries(&content, &from, &library.inbox())
         .into_iter()
-        .find(|e| e.ts == ts && e.source == source)
+        .find(|e| e.ts == ts)
         .ok_or_else(|| "entry not found".to_string())?;
 
     let stamp = new_ts.unwrap_or_else(|| existing.ts.clone());

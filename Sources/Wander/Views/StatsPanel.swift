@@ -29,13 +29,68 @@ struct StatsPanel: View {
         .background(theme.panel.color)
     }
 
+    @ViewBuilder
     private var thisEntry: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionLabel(text: "This entry")
-            FieldRow("Words", "\(Counts.words(store.draftBody))")
-            FieldRow("Characters", "\(Counts.characters(store.draftBody))")
-            FieldRow("Paragraphs", "\(Counts.paragraphs(store.draftBody))")
-            FieldRow("Reading", "\(Counts.readingMinutes(store.draftBody)) min")
+        if theme.statsStyle == .figures {
+            VStack(alignment: .leading, spacing: 20) {
+                figure("Words", "\(Counts.words(store.draftBody))", theme.ink)
+                figure("Days running", "\(store.streak)", theme.accent)
+                figure("This month", "\(store.entriesThisMonth)", theme.ink)
+                figure("Reading", "\(Counts.readingMinutes(store.draftBody)) min", theme.ink)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                SectionLabel(text: "This entry")
+                FieldRow("Words", "\(Counts.words(store.draftBody))")
+                FieldRow("Characters", "\(Counts.characters(store.draftBody))")
+                FieldRow("Paragraphs", "\(Counts.paragraphs(store.draftBody))")
+                FieldRow("Reading", "\(Counts.readingMinutes(store.draftBody)) min")
+            }
+        }
+    }
+
+    /// A label over a display numeral — the treatment nearly every one of these
+    /// looks used for its counts.
+    private func figure(_ label: String, _ value: String, _ tone: Tone) -> some View {
+        figureBody(label, value, tone, index: figureIndex(label))
+    }
+
+    private func figureIndex(_ label: String) -> Int {
+        ["Words", "Days running", "This month", "Reading"].firstIndex(of: label) ?? 0
+    }
+
+    @ViewBuilder
+    private func figureBody(_ label: String, _ value: String, _ tone: Tone, index: Int) -> some View {
+        if theme.figureBlocks {
+            // Each figure gets a block of its own colour, the way the loud
+            // themes set them.
+            let fills: [Tone] = [theme.green, theme.ink, theme.tint, theme.accent]
+            let fill = fills[index % fills.count]
+            // Read the fill rather than assuming: several themes set accent or
+            // green to near-black, which used to print black on black.
+            let onFill = fill.readable(theme.paper, theme.ink)
+            VStack(alignment: .leading, spacing: 2) {
+                SmallCaps(label, tone: onFill.opacity(0.75))
+                Text(value)
+                    .font(theme.display(34 * min(1.2, theme.displayScale)))
+                    .tracking(theme.displayTracking)
+                    .foregroundStyle(onFill.color)
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(fill.color)
+            .clipShape(RoundedRectangle(cornerRadius: theme.corner, style: .continuous))
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                SmallCaps(label)
+                Text(value)
+                    .font(theme.display(34 * min(1.2, theme.displayScale)))
+                    .tracking(theme.displayTracking)
+                    .foregroundStyle(tone.color)
+                    .monospacedDigit()
+            }
         }
     }
 
@@ -71,7 +126,15 @@ struct StatsPanel: View {
         }
     }
 
+    @ViewBuilder
     private var journal: some View {
+        if theme.statsStyle == .figures {
+            VStack(alignment: .leading, spacing: 0) {
+                SectionLabel(text: "Journal")
+                FieldRow("Entries", "\(store.entries.count)")
+                FieldRow("Words", store.totalWords.formatted(.number))
+            }
+        } else {
         VStack(alignment: .leading, spacing: 0) {
             SectionLabel(text: "Journal")
             FieldRow("Entries", "\(store.entries.count)")
@@ -79,6 +142,7 @@ struct StatsPanel: View {
             FieldRow("This month", "\(store.entriesThisMonth)")
             FieldRow("Streak", "\(store.streak) \(store.streak == 1 ? "day" : "days")",
                      tint: store.streak > 0 ? theme.green : theme.muted)
+        }
         }
     }
 

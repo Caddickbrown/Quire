@@ -16,10 +16,14 @@ import WanderCore
 struct WanderiOSApp: App {
     @StateObject private var store = JournalStore()
 
+    init() {
+        Fonts.register()
+        Fonts.refreshInstalled()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootViewPhone(store: store)
-                .background(Theme.resolve(.light).paper.color)
         }
     }
 }

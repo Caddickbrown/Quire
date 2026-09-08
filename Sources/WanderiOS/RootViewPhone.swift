@@ -19,6 +19,7 @@ struct RootViewPhone: View {
     @AppStorage("typeSize") private var typeSize = 17.5
     @AppStorage("lineSpacing") private var lineSpacing = 0.42
     @AppStorage("appearance") private var appearanceRaw = Appearance.system.rawValue
+    @AppStorage("theme") private var themeID = "almanac"
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.scenePhase) private var scenePhase
@@ -27,6 +28,7 @@ struct RootViewPhone: View {
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var showingStats = false
     @State private var showingOptions = false
+    @State private var showingThemes = false
 
     private var appearance: Binding<Appearance> {
         Binding(get: { Appearance(rawValue: appearanceRaw) ?? .system },
@@ -37,7 +39,7 @@ struct RootViewPhone: View {
         appearance.wrappedValue.colorScheme ?? systemScheme
     }
 
-    private var theme: Theme { Theme.resolve(effectiveScheme) }
+    private var theme: Theme { Theme.resolve(themeID, effectiveScheme) }
 
     var body: some View {
         Group {
@@ -87,10 +89,18 @@ struct RootViewPhone: View {
                          appearance: appearance,
                          showIndex: .constant(true),
                          showStats: .constant(true),
-                         showOptions: .constant(true))
+                         showOptions: .constant(true),
+                         themeID: Binding(get: { themeID }, set: { themeID = $0 }),
+                         showingThemes: $showingThemes)
                 .environment(\.theme, theme)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showingThemes) {
+            ThemesSheet(themeID: Binding(get: { themeID }, set: { themeID = $0 }),
+                        typeSize: $typeSize,
+                        leading: $lineSpacing)
+                .environment(\.theme, theme)
         }
         .sheet(item: $store.reschedulingEntry) { entry in
             RescheduleSheet(entry: entry, store: store)
@@ -105,6 +115,8 @@ struct RootViewPhone: View {
                 store.deletionCandidate = nil
             }
         }
+        .onAppear { AppIconSwitcher.apply(theme: themeID) }
+        .onChange(of: themeID) { _, id in AppIconSwitcher.apply(theme: id) }
         .onChange(of: scenePhase) { _, phase in
             phase == .active ? store.reloadIfChanged() : store.flush()
         }
@@ -139,8 +151,9 @@ struct RootViewPhone: View {
     private var wordmark: some View {
         HStack(spacing: 8) {
             Text("wander")
-                .font(Face.serif(19, weight: .semibold))
-                .tracking(-0.3)
+                .font(theme.display(19))
+                .tracking(theme.displayTracking)
+                .textCase(theme.displayUppercase ? .uppercase : nil)
                 .foregroundStyle(theme.ink.color)
                 .fixedSize()
             SmallCaps(store.page.label, tone: theme.accent)
@@ -153,8 +166,9 @@ struct RootViewPhone: View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 13) {
                 Text("wander")
-                    .font(Face.serif(24, weight: .semibold))
-                    .tracking(-0.4)
+                    .font(theme.display(24))
+                    .tracking(theme.displayTracking)
+                    .textCase(theme.displayUppercase ? .uppercase : nil)
                     .foregroundStyle(theme.ink.color)
                     .fixedSize()
                 ForEach(orderedPages, id: \.self) { page in
@@ -201,6 +215,7 @@ struct RootViewPhone: View {
                 Divider()
                 Button("Stats") { showingStats = true }
                 Button("Options") { showingOptions = true }
+                Button("Themes\u{2026}") { showingThemes = true }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }

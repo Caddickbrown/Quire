@@ -21,7 +21,9 @@ struct RootView: View {
     @AppStorage("showStats") private var showStats = true
     @AppStorage("showOptions") private var showOptions = false
     @AppStorage("appearance") private var appearanceRaw = Appearance.system.rawValue
+    @AppStorage("theme") private var themeID = "almanac"
     @Environment(\.colorScheme) private var systemScheme
+    @State private var showingThemes = false
 
     private var appearance: Binding<Appearance> {
         Binding(get: { Appearance(rawValue: appearanceRaw) ?? .system },
@@ -34,7 +36,7 @@ struct RootView: View {
         appearance.wrappedValue.colorScheme ?? systemScheme
     }
 
-    private var theme: Theme { Theme.resolve(effectiveScheme) }
+    private var theme: Theme { Theme.resolve(themeID, effectiveScheme) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -49,6 +51,13 @@ struct RootView: View {
         .environment(\.theme, theme)
         .environment(\.colorScheme, effectiveScheme)
         .preferredColorScheme(appearance.wrappedValue.colorScheme)
+        .sheet(isPresented: $showingThemes) {
+            ThemesSheet(themeID: Binding(get: { themeID }, set: { themeID = $0 }),
+                        typeSize: $typeSize,
+                        leading: $lineSpacing)
+                .environment(\.theme, theme)
+                .environment(\.colorScheme, effectiveScheme)
+        }
         .sheet(item: $store.reschedulingEntry) { entry in
             RescheduleSheet(entry: entry, store: store)
                 .environment(\.theme, theme)
@@ -69,8 +78,19 @@ struct RootView: View {
             Text("“\(entry.preview.isEmpty ? "Untitled" : entry.preview)” will be removed from "
                  + "\(entry.source?.lastPathComponent ?? "the journal") on disk.")
         }
-        .onAppear { DockIcon.apply(for: effectiveScheme) }
-        .onChange(of: effectiveScheme) { _, scheme in DockIcon.apply(for: scheme) }
+        .onAppear {
+            DockIcon.apply(theme: themeID, dark: effectiveScheme == .dark)
+            if ProcessInfo.processInfo.arguments.contains("--demo-themes") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showingThemes = true }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openThemes)) { _ in
+            showingThemes = true
+        }
+        .onChange(of: themeID) { _, id in DockIcon.apply(theme: id, dark: effectiveScheme == .dark) }
+        .onChange(of: effectiveScheme) { _, scheme in
+            DockIcon.apply(theme: themeID, dark: scheme == .dark)
+        }
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didBecomeActiveNotification)) { _ in
             store.reloadIfChanged()
@@ -83,27 +103,134 @@ struct RootView: View {
 
     // MARK: Masthead
 
+    // MARK: Masthead — five settings, because these looks disagree about what a
+    // masthead is: a ruled line, a solid band, a centred plate, a newspaper's
+    // double rule, or nothing at all.
+
+    @ViewBuilder
     private var masthead: some View {
+        switch theme.mastheadStyle {
+        case .band:    bandMasthead
+        case .centred: centredMasthead
+        case .double:  doubleMasthead
+        case .none:    plainMasthead
+        case .rule:    ruledMasthead
+        }
+    }
+
+    private var wordmark: some View {
+        Text("wander")
+            .font(theme.display(26 * min(1.15, theme.displayScale + 0.15)))
+            .tracking(theme.displayTracking)
+            .textCase(theme.displayUppercase ? .uppercase : nil)
+            .foregroundStyle(theme.ink.color)
+    }
+
+    private var mastheadRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            wordmark
+            pages
+            Spacer(minLength: 20)
+            SmallCaps(runningHead)
+            columnToggles
+        }
+        .padding(.leading, 34)
+        .padding(.trailing, 34)
+        .padding(.top, 22)
+        .padding(.bottom, 8)
+    }
+
+    private var ruledMasthead: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 14) {
-                Text("wander")
-                    .font(Face.serif(26, weight: .semibold))
-                    .tracking(-0.4)
-                    .foregroundStyle(theme.ink.color)
-                pages
-                Spacer(minLength: 20)
-                SmallCaps(runningHead)
-                columnToggles
-            }
-            // The wordmark keeps the page's left margin, so the masthead sits
-            // below the traffic lights rather than beside them.
-            .padding(.leading, 34)
-            .padding(.trailing, 34)
-            .padding(.top, 22)
-            .padding(.bottom, 8)
-            Rule(weight: 2, tone: theme.ink)
+            mastheadRow
+            Rule(weight: theme.mastheadRule, tone: theme.ink)
                 .padding(.horizontal, 34)
         }
+    }
+
+    private var plainMasthead: some View {
+        mastheadRow
+    }
+
+    /// A solid bar of ink with the type knocked out of it.
+    private var bandMasthead: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            Text("wander")
+                .font(theme.display(24 * min(1.15, theme.displayScale + 0.15)))
+                .tracking(theme.displayTracking)
+                .textCase(theme.displayUppercase ? .uppercase : nil)
+                .foregroundStyle(theme.paper.color)
+            HStack(alignment: .firstTextBaseline, spacing: 13) {
+                ForEach(orderedPages, id: \.self) { page in
+                    Button {
+                        withAnimation(.easeOut(duration: 0.14)) { store.show(page) }
+                    } label: {
+                        SmallCaps(label(for: page),
+                                  tone: page == store.page ? bandAccent : theme.paper.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Spacer(minLength: 20)
+            SmallCaps(runningHead, tone: theme.paper.opacity(0.65))
+            columnToggles
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 26)
+        .padding(.bottom, 14)
+        .background(theme.ink.color)
+    }
+
+    /// An accent that survives being put on the ink band — Brutalist's accent
+    /// is the ink itself, which would vanish.
+    private var bandAccent: Tone {
+        theme.accent.readable(theme.accent, theme.tint)
+    }
+
+    /// Wordmark on its own line, centred, the way a title page sets one.
+    private var centredMasthead: some View {
+        VStack(spacing: 6) {
+            HStack {
+                SmallCaps(runningHead)
+                Spacer()
+                columnToggles
+            }
+            wordmark
+                .padding(.top, 2)
+            pages
+                .padding(.bottom, 2)
+            Rule(weight: max(1, theme.mastheadRule), tone: theme.rule)
+        }
+        .padding(.leading, 72)
+        .padding(.trailing, 34)
+        .padding(.top, 20)
+        .padding(.bottom, 8)
+    }
+
+    /// Heavy rule, hairline under it, masthead centred between two slugs.
+    private var doubleMasthead: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                SmallCaps("No. \(Formats.groupNumber(store.selectedNumber ?? 1))")
+                Spacer()
+                wordmark
+                Spacer()
+                SmallCaps(Formats.longDay.string(from: Date()))
+            }
+            .padding(.bottom, 10)
+            Rule(weight: 3, tone: theme.ink)
+            Rule(tone: theme.ink).padding(.top, 3)
+            HStack(spacing: 22) {
+                pages
+                Spacer()
+                columnToggles
+            }
+            .padding(.top, 7)
+        }
+        .padding(.leading, 72)
+        .padding(.trailing, 34)
+        .padding(.top, 20)
+        .padding(.bottom, 6)
     }
 
     /// The page being read comes first, in accent; the rest follow in grey.
@@ -149,7 +276,7 @@ struct RootView: View {
     private var columnToggles: some View {
         HStack(spacing: 12) {
             Text("\u{2502}")
-                .font(Face.sans(10))
+                .font(theme.ui(10))
                 .foregroundStyle(theme.rule.color)
             toggle("Index", open: indexOpen) { showIndex.toggle() }
             toggle("Stats", open: statsOpen) { showStats.toggle() }
@@ -181,6 +308,12 @@ struct RootView: View {
         .opacity(open ? 1 : 0)
     }
 
+    /// Broken grid's ghost numeral: the open entry's day.
+    private var ghostCaption: String {
+        guard let entry = store.selectedEntry else { return "" }
+        return String(entry.date.suffix(2))
+    }
+
     private var columns: some View {
         HStack(spacing: 0) {
             sliding(indexOpen, width: 250, ruleOn: .trailing) {
@@ -190,7 +323,8 @@ struct RootView: View {
                        typeSize: $typeSize,
                        leading: $lineSpacing,
                        focusMode: focusMode,
-                       typewriter: typewriter)
+                       typewriter: typewriter,
+                       ornamentCaption: ghostCaption)
                 .layoutPriority(1)
             sliding(statsOpen, width: 252, ruleOn: .leading) {
                 StatsPanel(store: store)
@@ -204,7 +338,9 @@ struct RootView: View {
                              appearance: appearance,
                              showIndex: Binding(get: { showIndex }, set: { showIndex = $0 }),
                              showStats: Binding(get: { showStats }, set: { showStats = $0 }),
-                             showOptions: Binding(get: { showOptions }, set: { showOptions = $0 }))
+                             showOptions: Binding(get: { showOptions }, set: { showOptions = $0 }),
+                             themeID: Binding(get: { themeID }, set: { themeID = $0 }),
+                             showingThemes: $showingThemes)
             }
         }
         .frame(maxHeight: .infinity)

@@ -15,6 +15,16 @@ struct SidebarView: View {
     @FocusState private var searchFocused: Bool
 
     var body: some View {
+        HStack(spacing: 0) {
+            // Bauhaus's rail is a column of its own, not a backdrop: it has to
+            // take width from the index rather than sit under it.
+            if theme.ornament == .rail { ThemeOrnament(theme: theme).frame(width: 74) }
+            content
+        }
+        .background(theme.panel.color)
+    }
+
+    private var content: some View {
         VStack(spacing: 0) {
             search
             Rule()
@@ -27,7 +37,6 @@ struct SidebarView: View {
             }
             .padding(14)
         }
-        .background(theme.panel.color)
         .onChange(of: store.searchFocusRequest) { searchFocused = true }
     }
 
@@ -35,10 +44,10 @@ struct SidebarView: View {
         HStack(spacing: 9) {
             SmallCaps("Find")
             TextField("", text: $store.query, prompt: Text("title, text or @tag")
-                .font(Face.serif(13, italic: true))
+                .font(theme.proseItalic(13))
                 .foregroundColor(theme.muted.opacity(0.7).color))
                 .textFieldStyle(.plain)
-                .font(Face.sans(13))
+                .font(theme.ui(13))
                 .foregroundStyle(theme.ink.color)
                 .focused($searchFocused)
             if !store.query.isEmpty {
@@ -59,6 +68,7 @@ struct SidebarView: View {
                             ForEach(section.entries) { entry in
                                 EntryRow(entry: entry,
                                          selected: entry.id == store.selection,
+                                         position: section.entries.firstIndex(of: entry) ?? 0,
                                          store: store)
                                     .id(entry.id)
                             }
@@ -115,6 +125,7 @@ struct SidebarView: View {
 private struct EntryRow: View {
     let entry: Entry
     let selected: Bool
+    let position: Int
     @ObservedObject var store: JournalStore
     @Environment(\.theme) private var theme
     @State private var hovering = false
@@ -125,15 +136,15 @@ private struct EntryRow: View {
         } label: {
             HStack(spacing: 0) {
                 Rectangle()
-                    .fill(selected ? theme.accent.color : Color.clear)
-                    .frame(width: 2)
+                    .fill(selected && theme.rowStyle != .card ? theme.accent.color : Color.clear)
+                    .frame(width: theme.rowStyle == .block ? theme.border : 2)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         title
                         Spacer(minLength: 4)
                         if entry.isStarred {
                             Text("\u{2731}")
-                                .font(Face.sans(9))
+                                .font(theme.ui(9))
                                 .foregroundStyle(theme.accent.color)
                         }
                     }
@@ -147,12 +158,27 @@ private struct EntryRow: View {
                         }
                     }
                 }
-                .padding(.vertical, 9)
+                .padding(.vertical, theme.rowStyle == .card ? 11 : 9)
                 .padding(.horizontal, 12)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(background)
-            .overlay(alignment: .bottom) { Rule(tone: theme.ruleFaint) }
+            .overlay {
+                if theme.rowStyle == .card {
+                    RoundedRectangle(cornerRadius: theme.corner, style: .continuous)
+                        .stroke(selected ? theme.accent.color : theme.rule.color,
+                                lineWidth: theme.border)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: theme.rowStyle == .card ? theme.corner : 0,
+                                        style: .continuous))
+            .overlay(alignment: .bottom) {
+                // Only the ruled style draws a line between rows; the others
+                // separate by card, block or plain air.
+                if theme.rowStyle == .rule { Rule(tone: theme.ruleFaint) }
+            }
+            .padding(.horizontal, theme.rowStyle == .card ? 10 : 0)
+            .padding(.vertical, theme.rowStyle == .card ? 4 : 0)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -176,12 +202,12 @@ private struct EntryRow: View {
         Group {
             if entry.preview.isEmpty {
                 Text("Untitled")
-                    .font(Face.serif(14.5, italic: true))
+                    .font(theme.proseItalic(14.5))
                     .foregroundStyle(theme.muted.color)
             } else {
                 Text(entry.preview)
-                    .font(Face.serif(14.5))
-                    .foregroundStyle(theme.ink.color)
+                    .font(theme.rowTitle(14.5))
+                    .foregroundStyle(titleTone.color)
             }
         }
         .lineLimit(1)
@@ -196,8 +222,31 @@ private struct EntryRow: View {
     }
 
     private var background: Color {
-        if selected { return theme.surface.color }
-        if hovering { return theme.rule.opacity(0.35).color }
-        return .clear
+        switch theme.rowStyle {
+        case .plain, .indent:
+            // No fill at all — the accent bar and the ink weight carry it.
+            return hovering ? theme.rule.opacity(0.3).color : .clear
+        case .block:
+            if selected { return theme.ink.color }
+            return hovering ? theme.rule.opacity(0.3).color : .clear
+        case .card:
+            if theme.rowColours {
+                // Pink, teal, plain, in rotation — the selected one takes the accent.
+                if selected { return theme.accent.color }
+                let fills: [Color] = [theme.surface.color, theme.tint.color, theme.surface.color]
+                return fills[position % fills.count]
+            }
+            return selected ? theme.surface.color : theme.surface.opacity(0.6).color
+        case .rule:
+            if selected { return theme.surface.color }
+            return hovering ? theme.rule.opacity(0.35).color : .clear
+        }
+    }
+
+    /// A block-style row inverts when selected, so its text has to invert too.
+    private var titleTone: Tone {
+        if theme.rowStyle == .block && selected { return theme.paper }
+        if theme.rowColours && selected { return theme.paper }
+        return theme.ink
     }
 }

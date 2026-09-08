@@ -48,7 +48,7 @@ enum MarkdownStyle {
     /// the view's typing attributes.
     @discardableResult
     static func apply(to storage: NSTextStorage, caret: NSRange?, restyleAll: Bool,
-                      theme: Theme, size: CGFloat, leading: Double,
+                      theme: Theme, size: CGFloat, leading: Double, centred: Bool = false,
                       dimInactive: Bool) -> [NSAttributedString.Key: Any] {
         let ns = storage.string as NSString
         let full = NSRange(location: 0, length: ns.length)
@@ -59,8 +59,8 @@ enum MarkdownStyle {
             target = ns.paragraphRange(for: point)
         }
 
-        let body = Face.nsSerif(size)
-        let bodyParagraph = paragraph(size: size, leading: leading)
+        let body = theme.proseFace.platformFont(size, weight: theme.proseWeightPlatform)
+        let bodyParagraph = paragraph(size: size, leading: leading, centred: centred)
         let base: [NSAttributedString.Key: Any] = [
             .font: body,
             .foregroundColor: theme.prose.platform,
@@ -86,21 +86,21 @@ enum MarkdownStyle {
         each(heading) { m in
             let level = m.range(at: 1).length
             let scale: CGFloat = [1.55, 1.30, 1.14, 1.04, 1.0, 1.0][min(level, 6) - 1]
-            set(.font, Face.nsSerif(size * scale, weight: .semibold), m.range)
+            set(.font, theme.displayFace.platformFont(size * scale, weight: .semibold), m.range)
             set(.foregroundColor, theme.ink.platform, m.range)
             set(.paragraphStyle, paragraph(size: size, leading: leading, spacingBefore: size * 0.9), m.range)
             // The hashes stay, but at body size and hairline grey, so they read
             // as a printer's mark beside the heading rather than part of it.
-            set(.font, Face.nsSerif(size * 0.85), m.range(at: 1))
+            set(.font, theme.proseFace.platformFont(size * 0.85, weight: theme.proseWeightPlatform), m.range(at: 1))
             set(.foregroundColor, marker, m.range(at: 1))
         }
 
         // Block quotes — italic, indented, in the muted voice of a margin note.
         each(quote) { m in
-            set(.font, Face.nsSerif(size, italic: true), m.range)
+            set(.font, theme.proseFace.platformFont(size, weight: theme.proseWeightPlatform, italic: true), m.range)
             set(.foregroundColor, theme.muted.platform, m.range)
             set(.paragraphStyle, paragraph(size: size, leading: leading, indent: size * 1.1), m.range)
-            set(.font, Face.nsSerif(size * 0.85), m.range(at: 1))
+            set(.font, theme.proseFace.platformFont(size * 0.85, weight: theme.proseWeightPlatform), m.range(at: 1))
             set(.foregroundColor, marker, m.range(at: 1))
         }
 
@@ -116,7 +116,7 @@ enum MarkdownStyle {
         }
 
         each(strong) { m in
-            set(.font, Face.nsSerif(size, weight: .bold), m.range(at: 2))
+            set(.font, theme.proseFace.platformFont(size, weight: .bold), m.range(at: 2))
             set(.foregroundColor, theme.ink.platform, m.range(at: 2))
             set(.foregroundColor, marker, NSRange(location: m.range.location, length: m.range(at: 1).length))
             set(.foregroundColor, marker, NSRange(location: NSMaxRange(m.range) - m.range(at: 1).length,
@@ -124,13 +124,13 @@ enum MarkdownStyle {
         }
 
         each(emphasis) { m in
-            set(.font, Face.nsSerif(size, italic: true), m.range(at: 2))
+            set(.font, theme.proseFace.platformFont(size, weight: theme.proseWeightPlatform, italic: true), m.range(at: 2))
             set(.foregroundColor, marker, NSRange(location: m.range.location, length: 1))
             set(.foregroundColor, marker, NSRange(location: NSMaxRange(m.range) - 1, length: 1))
         }
 
         each(code) { m in
-            set(.font, Face.nsMono(size * 0.88), m.range)
+            set(.font, theme.monoFace.platformFont(size * 0.88), m.range)
             set(.backgroundColor, theme.rule.opacity(0.5).platform, m.range)
             set(.foregroundColor, theme.ink.platform, m.range(at: 1))
             set(.foregroundColor, marker, NSRange(location: m.range.location, length: 1))
@@ -138,7 +138,7 @@ enum MarkdownStyle {
         }
 
         each(fence) { m in
-            set(.font, Face.nsMono(size * 0.88), m.range)
+            set(.font, theme.monoFace.platformFont(size * 0.88), m.range)
             set(.foregroundColor, theme.prose.platform, m.range)
             set(.backgroundColor, theme.rule.opacity(0.35).platform, m.range)
             set(.paragraphStyle, paragraph(size: size, leading: leading, indent: size * 0.6), m.range)
@@ -149,7 +149,7 @@ enum MarkdownStyle {
             set(.underlineStyle, NSUnderlineStyle.single.rawValue, m.range(at: 1))
             set(.underlineColor, theme.accent.opacity(0.4).platform, m.range(at: 1))
             set(.foregroundColor, marker, m.range(at: 2))
-            set(.font, Face.nsMono(size * 0.8), m.range(at: 2))
+            set(.font, theme.monoFace.platformFont(size * 0.8), m.range(at: 2))
         }
 
         // @tags — the same tokens Nook and jnl index on.
@@ -175,8 +175,10 @@ enum MarkdownStyle {
     private static func paragraph(size: CGFloat,
                                   leading: Double,
                                   spacingBefore: CGFloat = 0,
-                                  indent: CGFloat = 0) -> NSParagraphStyle {
+                                  indent: CGFloat = 0,
+                                  centred: Bool = false) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
+        if centred { style.alignment = .center }
         style.lineSpacing = size * CGFloat(leading)
         style.paragraphSpacing = size * CGFloat(leading) * 1.5
         style.paragraphSpacingBefore = spacingBefore

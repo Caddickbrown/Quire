@@ -50,7 +50,7 @@ struct CalendarPicker: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(Formats.month.string(from: visibleMonth))
-                .font(Face.serif(17))
+                .font(theme.display(17))
                 .foregroundStyle(theme.ink.color)
             Spacer()
             QuietButton(title: "Today") { jump(to: Date()) }
@@ -130,7 +130,7 @@ private struct DayCell: View {
         Button(action: action) {
             VStack(spacing: 2) {
                 Text("\(Calendar.current.component(.day, from: day))")
-                    .font(Face.sans(12.5, weight: selected || today ? .semibold : .regular))
+                    .font(theme.ui(12.5, weight: selected || today ? .semibold : .regular))
                     .monospacedDigit()
                     .foregroundStyle(numberTone.color)
                 Circle()
@@ -184,7 +184,7 @@ struct TimeField: View {
             TextField("", text: $text)
                 .textFieldStyle(.plain)
                 .multilineTextAlignment(.trailing)
-                .font(Face.sans(13, weight: .medium))
+                .font(theme.ui(13, weight: .medium))
                 .monospacedDigit()
                 .foregroundStyle(theme.ink.color)
                 .frame(width: 44)

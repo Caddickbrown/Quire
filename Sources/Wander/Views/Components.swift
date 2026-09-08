@@ -22,9 +22,9 @@ struct SmallCaps: View {
     }
 
     var body: some View {
-        Text(text.uppercased())
-            .font(Face.sans(10.5, weight: .semibold))
-            .tracking(1.15)
+        Text(theme.labelText(text))
+            .font(theme.label())
+            .tracking(theme.labelTracking)
             .foregroundStyle((tone ?? theme.muted).color)
             .lineLimit(1)
             .minimumScaleFactor(0.75)
@@ -68,7 +68,7 @@ struct FieldRow<Value: View>: View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(label)
-                    .font(Face.sans(13))
+                    .font(theme.ui(13))
                     .foregroundStyle(theme.muted.color)
                 Spacer(minLength: 6)
                 value()
@@ -93,7 +93,7 @@ struct FieldValue: View {
 
     var body: some View {
         Text(text)
-            .font(Face.sans(13, weight: .medium))
+            .font(theme.ui(13, weight: .medium))
             .monospacedDigit()
             .foregroundStyle((tint ?? theme.ink).color)
             .lineLimit(1)
@@ -110,9 +110,9 @@ struct AccentBlock: View {
 
     var body: some View {
         Button(action: action) {
-            Text(title)
-                .font(Face.sans(12.5, weight: .semibold))
-                .tracking(0.4)
+            Text(theme.labelText(title))
+                .font(theme.label(12.5))
+                .tracking(theme.labelTracking * 0.4)
                 .foregroundStyle(filled ? theme.paper.color : theme.accent.color)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 9)
@@ -124,9 +124,13 @@ struct AccentBlock: View {
                             (hovering ? theme.rule.opacity(0.6) : theme.rule.opacity(0)).color
                         }
                     }
+                    .clipShape(RoundedRectangle(cornerRadius: theme.corner, style: .continuous))
                 )
                 .overlay {
-                    if !filled { Rectangle().stroke(theme.rule.color, lineWidth: 1) }
+                    if !filled {
+                        RoundedRectangle(cornerRadius: theme.corner, style: .continuous)
+                            .stroke(theme.rule.color, lineWidth: max(1, theme.border - 1))
+                    }
                 }
         }
         .buttonStyle(.plain)
@@ -141,7 +145,7 @@ struct Marginalia: View {
 
     var body: some View {
         Text(text)
-            .font(Face.serif(12.5, italic: true))
+            .font(theme.proseItalic(12.5))
             .lineSpacing(3.5)
             .foregroundStyle(theme.muted.color)
             .fixedSize(horizontal: false, vertical: true)
@@ -185,7 +189,7 @@ struct ValueButton: View {
     var body: some View {
         Button(action: action) {
             Text(text)
-                .font(Face.sans(13, weight: .medium))
+                .font(theme.ui(13, weight: .medium))
                 .monospacedDigit()
                 .foregroundStyle((hovering ? theme.accent : theme.ink).color)
                 .underline(hovering, color: theme.accent.opacity(0.4).color)

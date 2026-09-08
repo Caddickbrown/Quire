@@ -16,6 +16,13 @@ import WanderCore
 @main
 struct WanderApp: App {
     @StateObject private var store = JournalStore()
+
+    init() {
+        // The themes are largely made of type; register the bundled faces
+        // before the first view asks for one.
+        Fonts.register()
+        Fonts.refreshInstalled()
+    }
     @AppStorage("focusMode") private var focusMode = false
     @AppStorage("showIndex") private var showIndex = true
     @AppStorage("showStats") private var showStats = true
@@ -117,6 +124,8 @@ struct WanderApp: App {
                     .keyboardShortcut("+")
                 Button("Smaller Type") { typeSize = max(13, typeSize - 0.5) }
                     .keyboardShortcut("-")
+                Button("Themes\u{2026}") { NotificationCenter.default.post(name: .openThemes, object: nil) }
+                    .keyboardShortcut("t")
                 Button("Appearance: \(Appearance(rawValue: appearanceRaw)?.label ?? "Auto")") {
                     appearanceRaw = (Appearance(rawValue: appearanceRaw) ?? .system).next.rawValue
                 }

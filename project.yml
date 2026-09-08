@@ -36,6 +36,9 @@ targets:
       - path: Sources/Wander
       - path: Sources/WanderiOS
       - path: Resources/Assets.xcassets
+      - path: Resources/themes.json
+      - path: Resources/Fonts
+      - path: Resources/AltIcons
     dependencies:
       - package: WanderCore
         product: WanderCore
@@ -53,6 +56,52 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UIApplicationSupportsIndirectInputEvents: true
+        CFBundleIcons:
+          CFBundlePrimaryIcon:
+            CFBundleIconFiles: [AppIcon]
+          CFBundleAlternateIcons:
+            wander-almanac:
+              CFBundleIconFiles: [wander-almanac]
+              UIPrerenderedIcon: false
+            wander-quiet:
+              CFBundleIconFiles: [wander-quiet]
+              UIPrerenderedIcon: false
+            wander-botanic:
+              CFBundleIconFiles: [wander-botanic]
+              UIPrerenderedIcon: false
+            wander-manuscript:
+              CFBundleIconFiles: [wander-manuscript]
+              UIPrerenderedIcon: false
+            wander-sumi:
+              CFBundleIconFiles: [wander-sumi]
+              UIPrerenderedIcon: false
+            wander-editorial:
+              CFBundleIconFiles: [wander-editorial]
+              UIPrerenderedIcon: false
+            wander-broadsheet:
+              CFBundleIconFiles: [wander-broadsheet]
+              UIPrerenderedIcon: false
+            wander-cinema:
+              CFBundleIconFiles: [wander-cinema]
+              UIPrerenderedIcon: false
+            wander-seismograph:
+              CFBundleIconFiles: [wander-seismograph]
+              UIPrerenderedIcon: false
+            wander-constructivist:
+              CFBundleIconFiles: [wander-constructivist]
+              UIPrerenderedIcon: false
+            wander-bauhaus:
+              CFBundleIconFiles: [wander-bauhaus]
+              UIPrerenderedIcon: false
+            wander-brutalist:
+              CFBundleIconFiles: [wander-brutalist]
+              UIPrerenderedIcon: false
+            wander-brokengrid:
+              CFBundleIconFiles: [wander-brokengrid]
+              UIPrerenderedIcon: false
+            wander-memphis:
+              CFBundleIconFiles: [wander-memphis]
+              UIPrerenderedIcon: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft

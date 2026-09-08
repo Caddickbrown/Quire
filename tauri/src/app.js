@@ -26,9 +26,19 @@ const state = {
   sheetDate: null,
   calendarMonth: null,
   pendingDelete: null,
+  // Bumped whenever the entry list changes. Anything derived from every entry
+  // — the visible set, the streak — is cached against it, because with a big
+  // journal those walks are done several times per render.
+  revision: 0,
 };
 
+const touch = () => { state.revision += 1; };
+
+let THEMES = [];
+let theme = null;
+
 const settings = Object.assign({
+  theme: 'almanac',
   type: 17.5,
   lead: 0.42,
   measure: 760,
@@ -44,6 +54,24 @@ function persistSettings() {
 // ---------------------------------------------------------------- utilities
 
 const idOf = (entry) => `${entry.source}#${entry.ts}`;
+
+/// The entry as it sits in the file. The Rust side no longer sends this — it is
+/// the header line plus the body a second time, and it doubled the JSON the
+/// front end had to parse — so it is rebuilt here, where it is actually wanted.
+function rawOf(entry) {
+  let raw = `[${entry.ts}]`;
+  if (entry.suffix) raw += ` ${entry.suffix}`;
+  if (entry.body) raw += `\n${entry.body}`;
+  return raw;
+}
+
+/// Folded to lower case once and kept on the entry: search used to fold the
+/// whole journal on every keystroke in the find box.
+function haystack(entry) {
+  if (entry.folded === undefined) entry.folded = rawOf(entry).toLowerCase();
+  return entry.folded;
+}
+
 const current = () => state.entries.find((e) => idOf(e) === state.selection) || null;
 
 const words = (text) => (text.trim() ? text.trim().split(/\s+/).length : 0);
@@ -92,16 +120,21 @@ const PROMPTS = [
 
 // ------------------------------------------------------------------- filing
 
-const matches = (entry, query) => {
-  const q = query.trim().toLowerCase();
-  return !q || entry.raw.toLowerCase().includes(q);
-};
+let visibleCache = { key: null, list: [] };
 
 function visibleEntries() {
-  const found = state.entries.filter((e) => matches(e, state.query));
-  if (state.page === 'inbox') return found.filter((e) => e.unfiled);
-  if (state.page === 'starred') return found.filter((e) => e.starred);
-  return found.filter((e) => !e.unfiled);
+  const query = state.query.trim().toLowerCase();
+  const key = `${state.revision}\u0000${state.page}\u0000${query}`;
+  if (visibleCache.key === key) return visibleCache.list;
+
+  const found = query
+    ? state.entries.filter((e) => haystack(e).includes(query))
+    : state.entries;
+  const list = state.page === 'inbox' ? found.filter((e) => e.unfiled)
+    : state.page === 'starred' ? found.filter((e) => e.starred)
+    : found.filter((e) => !e.unfiled);
+  visibleCache = { key, list };
+  return list;
 }
 
 /// Sections for the index: the inbox is one undated run, because inbox.md is;
@@ -124,7 +157,15 @@ function sections() {
   });
 }
 
+let streakCache = { revision: -1, value: 0 };
+
 function streak() {
+  if (streakCache.revision === state.revision) return streakCache.value;
+  streakCache = { revision: state.revision, value: countStreak() };
+  return streakCache.value;
+}
+
+function countStreak() {
   const days = new Set(state.entries.map((e) => e.date));
   if (!days.size) return 0;
   let cursor = new Date();
@@ -222,8 +263,38 @@ function readProse() {
   return { text, caret };
 }
 
+/// The lines as the DOM currently has them, so a keystroke can be matched
+/// against them and only its own line rebuilt.
+let renderedLines = [];
+
 function renderProse(text, caret) {
-  prose.innerHTML = text.split('\n').map(renderLine).join('');
+  const lines = text.split('\n');
+
+  // Typing touches one line, and the styling here is line by line, so replacing
+  // that one block beats re-parsing the whole entry's HTML on every keystroke.
+  // Anything wider — a paste, a return, a delete across a newline — falls
+  // through to the full rebuild below.
+  if (lines.length === renderedLines.length && prose.children.length === lines.length) {
+    let changed = -1;
+    let count = 0;
+    for (let index = 0; index < lines.length && count < 2; index += 1) {
+      if (lines[index] !== renderedLines[index]) { changed = index; count += 1; }
+    }
+    if (count < 2) {
+      if (count === 1) {
+        const holder = document.createElement('div');
+        holder.innerHTML = renderLine(lines[changed]);
+        prose.replaceChild(holder.firstChild, prose.children[changed]);
+      }
+      renderedLines = lines;
+      if (caret !== null && caret !== undefined) placeCaret(caret);
+      markLiveLine();
+      return;
+    }
+  }
+
+  prose.innerHTML = lines.map(renderLine).join('');
+  renderedLines = lines;
   if (caret !== null && caret !== undefined) placeCaret(caret);
   markLiveLine();
 }
@@ -263,13 +334,25 @@ function placeCaret(offset) {
   }
 }
 
-/// Focus mode lights only the line the caret is on.
+/// Focus mode lights only the line the caret is on. Finding it by walking up
+/// from the caret touches two nodes; asking every line whether it contains the
+/// caret touched all of them, on every keystroke.
+let liveLine = null;
+
 function markLiveLine() {
-  if (!settings.focus) return;
-  const selection = window.getSelection();
-  Array.from(prose.children).forEach((line) => {
-    line.classList.toggle('live', !!selection && line.contains(selection.anchorNode));
-  });
+  if (!settings.focus) {
+    if (liveLine) { liveLine.classList.remove('live'); liveLine = null; }
+    return;
+  }
+  const anchor = window.getSelection() ? window.getSelection().anchorNode : null;
+  let line = anchor && (anchor.nodeType === 1 ? anchor : anchor.parentElement);
+  while (line && line !== prose && line.parentElement !== prose) line = line.parentElement;
+  if (line === prose) line = null;
+
+  if (line === liveLine) return;
+  if (liveLine) liveLine.classList.remove('live');
+  liveLine = line;
+  if (liveLine) liveLine.classList.add('live');
 }
 
 const undoStack = [];
@@ -343,10 +426,20 @@ function wrapSelection(marker) {
 
 let saveTimer = null;
 
+/// Clean when the buffer matches what is on disk, or what was last written
+/// from it — the Rust side trims what it stores, so comparing only against the
+/// stored entry would leave a buffer with a trailing newline dirty for ever,
+/// saving on a loop.
+function dirty(entry) {
+  if (state.title === entry.title && state.body === entry.body) return false;
+  const written = entry.written;
+  return !written || state.title !== written.title || state.body !== written.body;
+}
+
 function edited() {
   const entry = current();
   if (!entry) return;
-  if (state.title === entry.title && state.body === entry.body) {
+  if (!dirty(entry)) {
     clearTimeout(saveTimer);
     if (state.saveState === 'Writing…') setSaveState('');
     return;
@@ -364,27 +457,57 @@ function setSaveState(text) {
 async function save() {
   clearTimeout(saveTimer);
   const entry = current();
-  if (!entry) return;
-  if (state.title === entry.title && state.body === entry.body) return;
+  if (!entry || !dirty(entry)) return;
+  const written = { title: state.title, body: state.body };
   try {
     const saved = await invoke('save', {
       ts: entry.ts,
       source: entry.source,
-      title: state.title,
-      body: state.body,
+      title: written.title,
+      body: written.body,
       starred: entry.starred,
     });
-    await refresh(saved ? idOf(saved) : null);
+    absorb(entry, saved, written);
     setSaveState(saved ? `Saved ${clock(new Date())}` : '');
   } catch (error) {
     setSaveState(`Not saved — ${error}`);
   }
 }
 
+/// Fold what the disk now holds back into the list, without rereading the
+/// folder. Saving used to call `refresh`, which parsed every file in the
+/// journal and rebuilt the index from it — once every 700ms while you typed,
+/// and it took the caret and the undo stack with it each time.
+function absorb(entry, saved, written) {
+  // By id, not by identity: a reload may have swapped the objects out while
+  // the write was in flight.
+  const id = idOf(entry);
+  const index = state.entries.findIndex((e) => idOf(e) === id);
+
+  // Emptied: the Rust side has taken it off disk, so it leaves the list too.
+  if (!saved) {
+    if (index >= 0) state.entries.splice(index, 1);
+    touch();
+    // Only move on if the entry that went was the one still open — a save that
+    // lands after you have clicked elsewhere must not drag you back.
+    if (!current()) ensureSelection();
+    render();
+    return;
+  }
+
+  // Saving never moves an entry, so its id — and its place in the list — hold.
+  if (written) saved.written = written;
+  if (index >= 0) state.entries[index] = saved;
+  else state.entries.unshift(saved);
+  touch();
+  render();
+}
+
 async function refresh(selectId) {
   const journal = await invoke('load');
   state.base = journal.base;
   state.entries = journal.entries;
+  touch();
   if (selectId !== undefined && selectId !== null) state.selection = selectId;
   if (!current()) {
     const first = visibleEntries()[0];
@@ -420,6 +543,7 @@ async function newEntry(draft) {
   state.page = draft ? 'inbox' : 'journal';
   // A blank entry isn't on disk until it has text; hold it in the list.
   state.entries.unshift(entry);
+  touch();
   state.selection = idOf(entry);
   loadDraft();
   render();
@@ -427,14 +551,15 @@ async function newEntry(draft) {
 }
 
 async function toggleStar() {
+  await save();
+  // `save` may have replaced the entry object, so ask for it again.
   const entry = current();
   if (!entry) return;
-  await save();
   const saved = await invoke('save', {
     ts: entry.ts, source: entry.source,
     title: entry.title, body: entry.body, starred: !entry.starred,
   });
-  await refresh(saved ? idOf(saved) : null);
+  absorb(entry, saved, null);
 }
 
 async function toggleFiling() {
@@ -477,12 +602,12 @@ function renderMasthead() {
   const nav = $('pages');
   const ordered = [state.page, ...PAGES.filter((p) => p !== state.page)];
   nav.innerHTML = '';
+  // Only the inbox carries a count: it is a queue, and the number is the thing
+  // waiting to be dealt with. Counted once, not once per button.
+  const count = state.entries.reduce((n, e) => n + (e.unfiled ? 1 : 0), 0);
   for (const page of ordered) {
     const button = document.createElement('button');
     button.className = `quiet${page === state.page ? ' on' : ''}`;
-    // Only the inbox carries a count: it is a queue, and the number is the
-    // thing waiting to be dealt with.
-    const count = state.entries.filter((e) => e.unfiled).length;
     button.textContent = page === 'inbox' && count
       ? `Inbox ${count}`
       : page.charAt(0).toUpperCase() + page.slice(1);
@@ -508,9 +633,34 @@ function renderMasthead() {
   });
 }
 
+/// The index is windowed. A journal of any age is thousands of rows, and
+/// building every one of them — which is what this did — cost a third of a
+/// second of frozen interface every time anything at all changed. Rows are
+/// built a screenful at a time and appended as the list is scrolled.
+const LIST_BATCH = 60;
+const LIST_LOOKAHEAD = 400;
+let listItems = [];
+let listShown = 0;
+let listKey = null;
+let rowHeight = 56;
+
+/// Stands in for the rows not built yet, so the scrollbar still measures the
+/// whole journal rather than the handful of rows currently in the document.
+const spacer = document.createElement('div');
+spacer.className = 'list-rest';
+
 function renderList() {
   const list = $('list');
+  // Most re-renders are a word count or a title changing, not the list itself.
+  // Only a different page or a different search starts again from the top.
+  const key = `${state.page}\u0000${state.query}`;
+  const keep = key === listKey;
+  listKey = key;
+  const wasScrolled = keep ? list.scrollTop : 0;
+
   list.innerHTML = '';
+  listItems = [];
+  listShown = 0;
   const grouped = sections();
 
   if (!grouped.length) {
@@ -529,45 +679,88 @@ function renderList() {
   }
 
   for (const section of grouped) {
-    const head = document.createElement('div');
-    head.className = `month${section.inbox ? ' inbox' : ''}`;
-    head.innerHTML = `<span class="smallcaps">${section.title}</span>` +
-                     `<span class="smallcaps">${section.entries.length}</span>`;
-    list.appendChild(head);
-
-    for (const entry of section.entries) {
-      const row = document.createElement('button');
-      row.className = `row${idOf(entry) === state.selection ? ' on' : ''}`;
-      const title = entry.title || firstLine(entry.body);
-      const date = parseStamp(entry.ts);
-      const meta = `${entry.unfiled ? 'Draft · ' : ''}${shortDay(date)} · ${entry.words} ` +
-                   `${entry.words === 1 ? 'word' : 'words'}`;
-      row.innerHTML =
-        `<div class="row-title${title ? '' : ' untitled'}">${escapeHtml(title || 'Untitled')}` +
-        `${entry.starred ? '<span class="star"> ✱</span>' : ''}</div>` +
-        `<div class="row-meta"><span class="smallcaps">${escapeHtml(meta)}</span>` +
-        `<span class="spacer"></span>` +
-        `${entry.unfiled ? '<span class="smallcaps file">File</span>' : ''}</div>`;
-      row.onclick = (event) => {
-        if (event.target.classList.contains('file')) {
-          selectEntry(idOf(entry));
-          toggleFiling();
-          return;
-        }
-        selectEntry(idOf(entry));
-      };
-      row.oncontextmenu = (event) => {
-        event.preventDefault();
-        selectEntry(idOf(entry));
-        state.pendingDelete = entry;
-        $('confirm-note').textContent =
-          `“${entry.title || firstLine(entry.body) || 'Untitled'}” will be removed from ` +
-          `${entry.source.split('/').pop()} on disk.`;
-        $('confirm').hidden = false;
-      };
-      list.appendChild(row);
-    }
+    listItems.push({ section });
+    for (const entry of section.entries) listItems.push({ entry });
   }
+  spacer.style.height = '0px';
+  list.appendChild(spacer);
+  // Back to where the list was, which means building the rows up to there.
+  growTo(Math.max(wasScrolled + list.clientHeight, LIST_LOOKAHEAD));
+  list.scrollTop = wasScrolled;
+  growList();
+}
+
+/// Rows enough to cover what is on screen, and a little beyond it.
+function growList() {
+  const list = $('list');
+  growTo(list.scrollTop + list.clientHeight + LIST_LOOKAHEAD);
+}
+
+function growTo(bottom) {
+  const list = $('list');
+  // How far the rows built so far reach. Taken from the list's own scroll
+  // height rather than the spacer's offsetTop, which is measured against
+  // whichever ancestor happens to be positioned.
+  const built = () => list.scrollHeight - spacer.offsetHeight;
+  while (listShown < listItems.length && built() < bottom) {
+    const end = Math.min(listItems.length, listShown + LIST_BATCH);
+    const batch = document.createDocumentFragment();
+    for (let index = listShown; index < end; index += 1) {
+      const item = listItems[index];
+      batch.appendChild(item.section ? sectionNode(item.section) : rowNode(item.entry));
+    }
+    list.insertBefore(batch, spacer);
+    listShown = end;
+    // Measured rather than guessed, so the scrollbar is about the right size.
+    const first = list.querySelector('.row');
+    if (first && first.offsetHeight) rowHeight = first.offsetHeight;
+    spacer.style.height = `${(listItems.length - listShown) * rowHeight}px`;
+  }
+}
+
+$('list').addEventListener('scroll', () => {
+  if (listShown < listItems.length) growList();
+});
+
+function sectionNode(section) {
+  const head = document.createElement('div');
+  head.className = `month${section.inbox ? ' inbox' : ''}`;
+  head.innerHTML = `<span class="smallcaps">${section.title}</span>` +
+                   `<span class="smallcaps">${section.entries.length}</span>`;
+  return head;
+}
+
+function rowNode(entry) {
+  const row = document.createElement('button');
+  row.className = `row${idOf(entry) === state.selection ? ' on' : ''}`;
+  const title = entry.title || firstLine(entry.body);
+  const date = parseStamp(entry.ts);
+  const meta = `${entry.unfiled ? 'Draft · ' : ''}${shortDay(date)} · ${entry.words} ` +
+               `${entry.words === 1 ? 'word' : 'words'}`;
+  row.innerHTML =
+    `<div class="row-title${title ? '' : ' untitled'}">${escapeHtml(title || 'Untitled')}` +
+    `${entry.starred ? '<span class="star"> ✱</span>' : ''}</div>` +
+    `<div class="row-meta"><span class="smallcaps">${escapeHtml(meta)}</span>` +
+    `<span class="spacer"></span>` +
+    `${entry.unfiled ? '<span class="smallcaps file">File</span>' : ''}</div>`;
+  row.onclick = (event) => {
+    if (event.target.classList.contains('file')) {
+      selectEntry(idOf(entry));
+      toggleFiling();
+      return;
+    }
+    selectEntry(idOf(entry));
+  };
+  row.oncontextmenu = (event) => {
+    event.preventDefault();
+    selectEntry(idOf(entry));
+    state.pendingDelete = entry;
+    $('confirm-note').textContent =
+      `“${entry.title || firstLine(entry.body) || 'Untitled'}” will be removed from ` +
+      `${entry.source.split('/').pop()} on disk.`;
+    $('confirm').hidden = false;
+  };
+  return row;
 }
 
 const firstLine = (body) =>
@@ -634,6 +827,50 @@ function renderPanels() {
   $('prompt').textContent = PROMPTS[day % PROMPTS.length];
 }
 
+/// The theme table is the same file the Mac and iOS apps read.
+async function loadThemes() {
+  try {
+    const response = await fetch('./themes.json');
+    THEMES = (await response.json()).themes;
+  } catch (error) {
+    THEMES = [];
+  }
+  theme = THEMES.find((t) => t.id === settings.theme) || THEMES[0] || null;
+}
+
+const isDark = () => {
+  if (settings.paper === 'dark') return true;
+  if (settings.paper === 'light') return false;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+};
+
+/// Paint the theme: its palette as custom properties, its faces, and the
+/// structural switches as data attributes the stylesheet keys off.
+function applyTheme() {
+  if (!theme) return;
+  const root = document.documentElement;
+  const palette = isDark() ? theme.dark : theme.light;
+  for (const [key, value] of Object.entries(palette)) {
+    root.style.setProperty(`--${key.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())}`, value);
+  }
+  const stack = (face, fallback) => `'${face.families.join("', '")}', ${fallback}`;
+  root.style.setProperty('--prose', stack(theme.type.prose, 'Georgia, serif'));
+  root.style.setProperty('--display', stack(theme.type.display, 'Georgia, serif'));
+  root.style.setProperty('--label', stack(theme.type.label, 'system-ui, sans-serif'));
+  root.style.setProperty('--label-size', `${theme.type.label.size || 10.5}px`);
+  root.style.setProperty('--label-tracking', `${(theme.type.label.tracking || 1.15) / 10}em`);
+  root.style.setProperty('--display-scale', theme.type.display.scale || 1);
+  root.style.setProperty('--corner', `${theme.chrome.corner || 0}px`);
+  root.style.setProperty('--border', `${theme.chrome.border || 1}px`);
+  root.style.setProperty('--masthead-rule', `${theme.chrome.mastheadRule || 0}px`);
+  root.dataset.masthead = theme.chrome.mastheadStyle || 'rule';
+  root.dataset.rows = theme.chrome.rowStyle || 'rule';
+  root.dataset.stats = theme.chrome.statsStyle || 'rows';
+  root.dataset.pageCard = String(!!theme.chrome.pageCard);
+  root.dataset.ornament = theme.chrome.ornament || 'none';
+  $('o-theme').textContent = theme.name;
+}
+
 function applySettings() {
   const root = document.documentElement;
   root.style.setProperty('--type', `${settings.type}px`);
@@ -641,6 +878,7 @@ function applySettings() {
   root.style.setProperty('--measure', `${settings.measure}px`);
   root.dataset.theme = settings.paper;
   root.dataset.system = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  applyTheme();
   prose.classList.toggle('focus', settings.focus);
 
   for (const [name, open] of Object.entries(settings.columns)) {
@@ -773,7 +1011,7 @@ $('dateline').onclick = openSheet;
 $('s-written').onclick = openSheet;
 $('a-copy').onclick = async () => {
   const entry = current();
-  if (entry) await navigator.clipboard.writeText(entry.raw);
+  if (entry) await navigator.clipboard.writeText(rawOf(entry));
 };
 
 document.querySelectorAll('[data-column]').forEach((button) => {
@@ -812,10 +1050,64 @@ $('o-folder').onclick = async () => {
   const journal = await invoke('set_folder', { path: chosen });
   state.base = journal.base;
   state.entries = journal.entries;
+  touch();
   state.selection = null;
   ensureSelection();
   render();
 };
+
+function renderThemes() {
+  const grid = $('theme-grid');
+  grid.innerHTML = '';
+  $('themes-count').textContent = `${THEMES.length} looks · one journal`;
+
+  for (const entry of THEMES) {
+    const palette = isDark() ? entry.dark : entry.light;
+    const card = document.createElement('button');
+    card.className = `theme-card${entry.id === settings.theme ? ' on' : ''}`;
+    const display = `'${entry.type.display.families.join("', '")}', Georgia, serif`;
+    const label = `'${entry.type.label.families.join("', '")}', system-ui, sans-serif`;
+    const prose = `'${entry.type.prose.families.join("', '")}', Georgia, serif`;
+    const upper = entry.type.display.uppercase ? 'uppercase' : 'none';
+    const filled = entry.chrome.filledButtons;
+
+    card.innerHTML =
+      `<div class="theme-preview" style="background:${palette.paper}">
+         <div class="pv-mast">
+           <span style="font-family:${display};font-size:13px;color:${palette.ink};text-transform:${upper}">wander</span>
+           <span class="pv-meta" style="font-family:${label};color:${palette.accent}">journal</span>
+         </div>
+         ${entry.chrome.mastheadRule ? `<div class="pv-rule" style="background:${palette.ink};height:${Math.min(entry.chrome.mastheadRule, 3)}px"></div>` : '<div style="height:4px"></div>'}
+         <div class="pv-title" style="font-family:${display};font-size:${Math.min(21, 15 * (entry.type.display.scale || 1))}px;color:${palette.ink};text-transform:${upper}">The long way round</div>
+         <div class="pv-meta" style="font-family:${label};color:${palette.muted}">8 sep · 122 words</div>
+         <div class="pv-body" style="font-family:${prose};color:${palette.prose};line-height:${entry.chrome.lineHeight}">Left before seven and took the long way round the reservoir, which adds twenty minutes.</div>
+         <div class="pv-dots" style="margin-top:auto">
+           <span class="pv-chip" style="font-family:${label};border-radius:${entry.chrome.corner}px;${filled ? `background:${palette.accent};color:${palette.paper}` : `color:${palette.accent};box-shadow:inset 0 0 0 1px ${palette.rule}`}">new entry</span>
+           <i style="background:${palette.tint}"></i><i style="background:${palette.green}"></i>
+         </div>
+       </div>
+       <div class="theme-caption">
+         <div class="row"><span class="scheme-dot ${entry.scheme || 'both'}" title="Best in ${entry.scheme || 'either'}"></span>
+           ${entry.name}${entry.id === settings.theme ? ' <span class="smallcaps" style="color:var(--accent)">In use</span>' : ''}</div>
+         <p>${entry.note}</p>
+       </div>`;
+
+    card.onclick = () => {
+      settings.theme = entry.id;
+      theme = entry;
+      // Type size and leading belong to the look.
+      settings.type = entry.type.prose.size || 17.5;
+      settings.lead = (entry.chrome.lineHeight || 1.42) - 1;
+      applySettings();
+      renderPanels();
+      $('themes').hidden = true;
+    };
+    grid.appendChild(card);
+  }
+}
+
+$('o-theme').onclick = () => { renderThemes(); $('themes').hidden = false; };
+$('themes-done').onclick = () => { $('themes').hidden = true; };
 
 $('cal-prev').onclick = () => {
   state.calendarMonth.setMonth(state.calendarMonth.getMonth() - 1);
@@ -852,7 +1144,9 @@ $('confirm-delete').onclick = async () => {
 document.addEventListener('keydown', (event) => {
   const meta = event.metaKey || event.ctrlKey;
   if (!meta) {
-    if (event.key === 'Escape' && !$('scrim').hidden) $('scrim').hidden = true;
+    if (event.key === 'Escape') {
+      for (const id of ['scrim', 'themes', 'confirm']) $(id).hidden = true;
+    }
     return;
   }
   const key = event.key.toLowerCase();
@@ -865,6 +1159,7 @@ document.addEventListener('keydown', (event) => {
     1: () => { state.page = 'journal'; ensureSelection(); render(); },
     2: () => { state.page = 'inbox'; ensureSelection(); render(); },
     3: () => { state.page = 'starred'; ensureSelection(); render(); },
+    t: () => { renderThemes(); $('themes').hidden = false; },
     '\\': () => {
       const name = event.shiftKey ? 'stats' : event.altKey ? 'options' : 'index';
       settings.columns[name] = !settings.columns[name];
@@ -899,4 +1194,7 @@ window.matchMedia('(prefers-color-scheme: dark)')
 
 window.addEventListener('beforeunload', () => { save(); });
 
-refresh();
+loadThemes().then(() => {
+  applySettings();
+  refresh();
+});

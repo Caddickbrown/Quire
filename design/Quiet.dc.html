@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Karla:wght@300;400;500&display=swap">
+  <style>
+    body { margin: 0; font-family: "Karla", system-ui, sans-serif; }
+    a { color: #1a1a19; } a:hover { color: #7a7a76; }
+    .lbl { font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase; color: #a8a8a2; font-weight: 500; }
+  </style>
+</helmet>
+
+<div style="width: 1240px; height: 800px; background: #fbfbfa; color: #1a1a19; display: flex; flex-direction: column; overflow: hidden">
+
+  <div style="display: flex; align-items: baseline; gap: 26px; padding: 34px 56px 0">
+    <span style="font-size: 15px; font-weight: 500; letter-spacing: .02em">wander</span>
+    <span class="lbl" style="color: #1a1a19">Journal</span>
+    <span class="lbl">Inbox</span>
+    <span class="lbl">Starred</span>
+    <span style="flex: 1"></span>
+    <span class="lbl">8 September</span>
+  </div>
+
+  <div style="flex: 1; display: flex; min-height: 0; padding: 44px 56px 0; gap: 72px">
+
+    <div style="width: 200px; display: flex; flex-direction: column; gap: 26px">
+      <div style="display: flex; flex-direction: column; gap: 20px">
+        <div>
+          <div style="font-size: 14.5px; font-weight: 500">The long way round the reservoir</div>
+          <div class="lbl" style="margin-top: 6px">8 Sep</div>
+        </div>
+        <div style="color: #7a7a76">
+          <div style="font-size: 14.5px; font-weight: 400">Sunday, and the fence again</div>
+          <div class="lbl" style="margin-top: 6px">7 Sep</div>
+        </div>
+        <div style="color: #7a7a76">
+          <div style="font-size: 14.5px; font-weight: 400">Half a page still counts</div>
+          <div class="lbl" style="margin-top: 6px">6 Sep</div>
+        </div>
+        <div style="color: #7a7a76">
+          <div style="font-size: 14.5px; font-weight: 400">A note on measure</div>
+          <div class="lbl" style="margin-top: 6px">5 Sep</div>
+        </div>
+        <div style="color: #7a7a76">
+          <div style="font-size: 14.5px; font-weight: 400">September</div>
+          <div class="lbl" style="margin-top: 6px">1 Sep</div>
+        </div>
+      </div>
+      <div style="flex: 1"></div>
+      <div class="lbl" style="color: #1a1a19; padding-bottom: 36px">New entry</div>
+    </div>
+
+    <div style="flex: 1; min-width: 0; max-width: 620px; display: flex; flex-direction: column">
+      <div style="font-size: 21px; font-weight: 500; letter-spacing: -.005em">The long way round the reservoir</div>
+      <div class="lbl" style="padding: 10px 0 30px">Tuesday 8 September · 08:12</div>
+      <div style="font-size: 17px; font-weight: 300; line-height: 1.78; color: #3a3a37; display: flex; flex-direction: column; gap: 22px">
+        <div>Left before seven and took the <span style="font-weight: 500; color: #1a1a19">long way</span> round the reservoir, which adds twenty minutes and, this morning, was worth every one of them.</div>
+        <div style="font-size: 17px; font-weight: 500; color: #1a1a19">What the light was doing</div>
+        <div>Low and flat off the water, the kind that makes the far bank look printed rather than grown. Two swans, unbothered. A man with a thermos who nodded like we had an arrangement.</div>
+        <div style="color: #7a7a76; padding-left: 26px">The dull entries are the ones worth having in five years.</div>
+        <div style="display: flex; flex-direction: column; gap: 6px; padding-left: 26px; color: #3a3a37">
+          <div>ask about the boiler service</div>
+          <div>read twenty pages, no phone</div>
+        </div>
+      </div>
+      <div style="flex: 1"></div>
+      <div class="lbl" style="padding: 30px 0 36px">122 words · saved</div>
+    </div>
+
+    <div style="width: 130px; display: flex; flex-direction: column; gap: 24px; padding-top: 2px">
+      <div><div class="lbl">Words</div><div style="font-size: 15px; margin-top: 4px">122</div></div>
+      <div><div class="lbl">Reading</div><div style="font-size: 15px; margin-top: 4px">1 min</div></div>
+      <div><div class="lbl">Streak</div><div style="font-size: 15px; margin-top: 4px">4 days</div></div>
+      <div><div class="lbl">This month</div><div style="font-size: 15px; margin-top: 4px">8 entries</div></div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

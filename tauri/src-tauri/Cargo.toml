@@ -23,6 +23,6 @@ regex = "1"
 walkdir = "2"
 
 [profile.release]
-opt-level = "s"
+opt-level = 3
 lto = true
 strip = true

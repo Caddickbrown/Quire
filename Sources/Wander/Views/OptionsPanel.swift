@@ -20,6 +20,8 @@ struct OptionsPanel: View {
     @Binding var showIndex: Bool
     @Binding var showStats: Bool
     @Binding var showOptions: Bool
+    @Binding var themeID: String
+    @Binding var showingThemes: Bool
     @Environment(\.theme) private var theme
     @State private var choosingFolder = false
 
@@ -49,6 +51,9 @@ struct OptionsPanel: View {
     private var setting: some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionLabel(text: "Setting")
+            FieldRow(label: "Theme") {
+                ValueButton(text: Theme.named(themeID).name) { showingThemes = true }
+            }
             FieldRow(label: "Type") {
                 Stepper(value: String(format: "%.1f", typeSize),
                         down: { typeSize = max(13, typeSize - 0.5) },
@@ -106,7 +111,7 @@ struct OptionsPanel: View {
                 }
             }
             Text(store.baseURL.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                .font(Face.sans(10.5))
+                .font(theme.ui(10.5))
                 .foregroundStyle(theme.muted.opacity(0.85).color)
                 .lineLimit(2)
                 .truncationMode(.middle)

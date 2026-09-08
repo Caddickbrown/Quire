@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><script src="./support.js"></script></head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;700&family=Barlow:wght@300;400;600&display=swap">
+  <style>
+    body { margin: 0; font-family: "Barlow", system-ui, sans-serif; }
+    a { color: #d92b1e; } a:hover { color: #14110f; }
+    .cond { font-family: "Oswald", sans-serif; text-transform: uppercase; }
+    .lbl { font-family: "Oswald", sans-serif; font-size: 10px; font-weight: 500; letter-spacing: .2em; text-transform: uppercase; }
+  </style>
+</helmet>
+<div style="width: 1240px; height: 800px; background: #efece3; color: #14110f; overflow: hidden; position: relative">
+
+  <!-- One angle, used consistently: a red wedge anchored to the corner, a black
+       rule running parallel to it, and nothing else rotated. -->
+  <svg viewBox="0 0 1240 800" style="position: absolute; inset: 0; width: 100%; height: 100%" aria-hidden="true">
+    <polygon points="1240,0 1240,470 300,800 0,800 0,690" fill="#d92b1e"/>
+    <polygon points="1240,470 1240,510 372,800 300,800" fill="#14110f"/>
+    <circle cx="1075" cy="150" r="86" fill="none" stroke="#14110f" stroke-width="10"/>
+    <path d="M1075 64 L1075 236 M989 150 L1161 150" stroke="#14110f" stroke-width="4"/>
+  </svg>
+
+  <div style="position: relative; display: flex; align-items: flex-end; gap: 20px; padding: 26px 34px 0">
+    <span class="cond" style="font-size: 30px; font-weight: 700; letter-spacing: -.005em; line-height: .9">WANDER</span>
+    <span style="width: 44px; height: 8px; background: #d92b1e; margin-bottom: 5px"></span>
+    <span class="lbl" style="color: #d92b1e">Journal</span><span class="lbl" style="color: #6d675e">Inbox 1</span><span class="lbl" style="color: #6d675e">Starred</span>
+    <span style="flex: 1"></span>
+    <span class="lbl" style="color: #6d675e">VIII . IX . MMXXVI</span>
+  </div>
+  <div style="position: relative; height: 5px; background: #14110f; margin: 12px 34px 0"></div>
+
+  <div style="position: relative; display: flex; gap: 30px; padding: 26px 34px 0; height: 706px">
+
+    <div style="width: 238px; display: flex; flex-direction: column">
+      <div class="lbl" style="color: #6d675e; padding-bottom: 12px">Index — September</div>
+      <div style="background: #14110f; color: #efece3; padding: 13px 15px">
+        <div class="cond" style="font-size: 16px; font-weight: 500; line-height: 1.14">The long way round<br>the reservoir</div>
+        <div class="lbl" style="margin-top: 8px; color: #d92b1e">08 · 122 W</div>
+      </div>
+      <div style="border-left: 8px solid #14110f; padding: 11px 15px; margin-top: 10px"><div class="cond" style="font-size: 15px; font-weight: 400; line-height: 1.14">Sunday, and the fence again</div><div class="lbl" style="margin-top: 6px; color: #6d675e">07 · 58 W</div></div>
+      <div style="border-left: 8px solid #14110f; padding: 11px 15px; margin-top: 8px"><div class="cond" style="font-size: 15px; font-weight: 400; line-height: 1.14">Half a page still counts</div><div class="lbl" style="margin-top: 6px; color: #6d675e">06 · 42 W</div></div>
+      <div style="border-left: 8px solid #14110f; padding: 11px 15px; margin-top: 8px"><div class="cond" style="font-size: 15px; font-weight: 400; line-height: 1.14">A note on measure</div><div class="lbl" style="margin-top: 6px; color: #6d675e">05 · 54 W</div></div>
+      <div style="flex: 1"></div>
+      <div class="lbl" style="background: #d92b1e; color: #efece3; text-align: center; padding: 14px; margin-bottom: 34px; font-weight: 500">＋ NEW ENTRY</div>
+    </div>
+
+    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+      <!-- Title set flush on the page's own axis: the diagonal is the ground,
+           not something the type has to fight. -->
+      <div class="cond" style="font-size: 56px; font-weight: 700; line-height: .92; letter-spacing: -.015em; max-width: 12ch">The long way<br>round the<br><span style="color: #d92b1e">reservoir</span></div>
+      <div style="display: flex; align-items: center; gap: 14px; padding: 20px 0 18px">
+        <span style="width: 78px; height: 5px; background: #14110f"></span>
+        <span class="lbl" style="color: #6d675e">08:12 — @admin @morning @walking</span>
+      </div>
+      <div style="font-size: 15.5px; line-height: 1.7; color: #2a2622; max-width: 52ch; display: flex; flex-direction: column; gap: 15px">
+        <div>Left before seven and took the <span style="background: #14110f; color: #efece3; padding: 0 5px; font-weight: 600">long way</span> round the reservoir, which adds twenty minutes and, this morning, was worth every one of them.</div>
+        <div class="cond" style="font-size: 20px; font-weight: 500">What the light was doing</div>
+        <div>Low and flat off the water, the kind that makes the far bank look printed rather than grown. Two swans, unbothered.</div>
+        <div style="border-left: 6px solid #d92b1e; padding-left: 15px; color: #4a443d">The dull entries are the ones worth having in five years.</div>
+      </div>
+      <div style="flex: 1"></div>
+      <div class="lbl" style="color: #6d675e; padding-bottom: 32px; display: flex; gap: 22px; border-top: 2px solid #14110f; padding-top: 12px"><span>122 W</span><span>691 C</span><span>01 MIN</span><span style="flex: 1"></span><span style="color: #d92b1e">SAVED</span></div>
+    </div>
+
+    <div style="width: 168px; display: flex; flex-direction: column; gap: 14px; padding-top: 176px">
+      <div style="background: #efece3; border: 5px solid #14110f; padding: 14px"><div class="lbl" style="color: #6d675e">Words</div><div class="cond" style="font-size: 42px; font-weight: 700; line-height: 1">122</div></div>
+      <div style="background: #14110f; color: #efece3; padding: 14px"><div class="lbl" style="color: #d92b1e">Streak</div><div class="cond" style="font-size: 42px; font-weight: 700; line-height: 1">04</div></div>
+      <div style="background: #efece3; border: 5px solid #14110f; padding: 14px"><div class="lbl" style="color: #6d675e">Month</div><div class="cond" style="font-size: 42px; font-weight: 700; line-height: 1">432</div></div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

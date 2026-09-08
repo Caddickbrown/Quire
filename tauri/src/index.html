@@ -112,6 +112,7 @@
     <div class="scroll">
       <div class="group">
         <div class="smallcaps section">Setting</div>
+        <div class="field"><span>Theme</span><b><button class="value" id="o-theme">Almanac</button></b></div>
         <div class="field"><span>Type</span>
           <b class="stepper"><button data-step="type-">−</button><i id="o-type">17.5</i><button data-step="type+">+</button></b>
         </div>
@@ -168,6 +169,19 @@
       <button class="block outline" id="sheet-cancel">Keep</button>
       <button class="block" id="sheet-move">Move entry</button>
     </div>
+  </div>
+</div>
+
+<div class="scrim" id="themes" hidden>
+  <div class="sheet themes">
+    <div class="sheet-head">
+      <h2>Themes</h2>
+      <span class="smallcaps" id="themes-count"></span>
+      <span class="spacer"></span>
+      <button class="block outline narrow" id="themes-done">Done</button>
+    </div>
+    <div class="rule-ink"></div>
+    <div class="theme-grid" id="theme-grid"></div>
   </div>
 </div>
 

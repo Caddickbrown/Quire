@@ -17,18 +17,21 @@ import WanderCore
 enum DockIcon {
     private static var current: String?
 
-    static func apply(dark: Bool) {
-        let name = dark ? "AppIcon-dark" : "AppIcon-light"
+    /// Each theme has its own mark, in its own palette and display face; the
+    /// Dock shows the one you are writing in.
+    static func apply(theme: String, dark: Bool) {
+        let name = "\(theme)-\(dark ? "dark" : "light")"
         guard current != name else { return }
-        guard let url = Bundle.main.url(forResource: name, withExtension: "png"),
-              let image = NSImage(contentsOf: url) else { return }
+        let url = Bundle.main.url(forResource: name, withExtension: "png", subdirectory: "Icons")
+            ?? Bundle.main.url(forResource: dark ? "AppIcon-dark" : "AppIcon-light", withExtension: "png")
+        guard let url, let image = NSImage(contentsOf: url) else { return }
         current = name
         NSApp.applicationIconImage = image
     }
+}
 
-    static func apply(for scheme: ColorScheme) {
-        apply(dark: scheme == .dark)
-    }
+extension Notification.Name {
+    static let openThemes = Notification.Name("wander.openThemes")
 }
 
 #endif

@@ -31,3 +31,9 @@ enum Appearance: String, CaseIterable {
         }
     }
 }
+
+#if !os(macOS)
+extension Notification.Name {
+    static let openThemes = Notification.Name("wander.openThemes")
+}
+#endif

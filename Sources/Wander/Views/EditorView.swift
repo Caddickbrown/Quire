@@ -16,6 +16,7 @@ struct EditorView: View {
     @Binding var leading: Double
     let focusMode: Bool
     let typewriter: Bool
+    var ornamentCaption: String = ""
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var scheme
     @State private var focusToken = 0
@@ -29,7 +30,17 @@ struct EditorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(theme.paper.color)
+        .background {
+            // The ornament sits on the page, above its paper and below the
+            // words — behind the whole window it was hidden by every column.
+            ZStack {
+                theme.paper.color
+                // The rail is index furniture; everything else belongs on the page.
+                if theme.ornament != .rail {
+                    ThemeOrnament(theme: theme, caption: ornamentCaption)
+                }
+            }
+        }
     }
 
     private var page: some View {
@@ -49,10 +60,24 @@ struct EditorView: View {
             Rule(tone: theme.rule)
             status
         }
-        .frame(maxWidth: 760, alignment: .leading)
-        .padding(.horizontal, 40)
+        .frame(maxWidth: theme.measure, alignment: theme.centred ? .center : .leading)
+        .padding(.horizontal, theme.pageCard ? 30 : 40)
         .padding(.top, 24)
         .padding(.bottom, 18)
+        .background {
+            if theme.pageCard {
+                ZStack {
+                    RoundedRectangle(cornerRadius: theme.corner, style: .continuous)
+                        .fill(theme.green.color)
+                        .offset(x: 9, y: 9)
+                    RoundedRectangle(cornerRadius: theme.corner, style: .continuous)
+                        .fill(theme.surface.color)
+                    RoundedRectangle(cornerRadius: theme.corner, style: .continuous)
+                        .stroke(theme.ink.color, lineWidth: theme.border)
+                }
+            }
+        }
+        .padding(theme.pageCard ? 20 : 0)
         .frame(maxWidth: .infinity)
         .onChange(of: store.draftTitle) { store.edited() }
         .onChange(of: store.selection) { focusToken += 1 }
@@ -60,14 +85,20 @@ struct EditorView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: theme.centred ? .center : .leading, spacing: 9) {
+            if theme.kicker, !kickerText.isEmpty {
+                SmallCaps(kickerText, tone: theme.accent)
+            }
             TextField("", text: $store.draftTitle,
-                      prompt: Text("Untitled")
-                        .font(Face.serif(30, italic: true))
+                      prompt: Text(theme.displayUppercase ? "UNTITLED" : "Untitled")
+                        .font(theme.display(theme.titleSize))
                         .foregroundColor(theme.muted.opacity(0.5).color),
                       axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(Face.serif(30))
+                .font(theme.display(theme.titleSize))
+                .tracking(theme.displayTracking)
+                .textCase(theme.displayUppercase ? .uppercase : nil)
+                .multilineTextAlignment(theme.centred ? .center : .leading)
                 .foregroundStyle(theme.ink.color)
                 .onSubmit { focusToken += 1 }
 
@@ -106,6 +137,14 @@ struct EditorView: View {
         .padding(.top, 9)
     }
 
+    /// The magazine kicker: the day, and the first tag if the entry carries one.
+    private var kickerText: String {
+        guard let entry = store.selectedEntry, let date = entry.createdDate else { return "" }
+        let day = Formats.longDay.string(from: date).components(separatedBy: ",").first ?? ""
+        if let tag = entry.tags.first { return "\(day) · \(tag)" }
+        return day
+    }
+
     private var dateline: String {
         guard let entry = store.selectedEntry, let date = entry.createdDate else { return "" }
         var parts = [Formats.longDay.string(from: date), Formats.clock.string(from: date)]
@@ -140,7 +179,7 @@ struct EditorView: View {
     private var blank: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Nothing open")
-                .font(Face.serif(34))
+                .font(theme.display(34))
                 .foregroundStyle(theme.ink.color)
             Marginalia(text: "Press \u{2318}N to start an entry. Wander writes plain markdown into "
                        + "\(store.baseURL.lastPathComponent)/journal/YYYY/MM/DD.md — the same files "
@@ -149,7 +188,7 @@ struct EditorView: View {
             AccentBlock(title: "New entry") { store.newEntry() }
                 .frame(width: 160)
         }
-        .frame(maxWidth: 760, alignment: .leading)
+        .frame(maxWidth: theme.measure, alignment: .leading)
         .padding(.horizontal, 40)
         .padding(.top, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
