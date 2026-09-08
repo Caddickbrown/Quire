@@ -172,16 +172,34 @@ button.value:hover { color: var(--accent); text-decoration: underline; }
    Drawn as quietly as everything else: glyphs in the label grey, the accent
    only on the one that closes. */
 
-.window-controls { display: none; align-items: baseline; gap: 10px; margin-left: 6px; }
-:root[data-chrome='custom'] .window-controls { display: flex; }
-.window-controls button {
-  font-size: 12px;
-  line-height: 1;
-  color: var(--muted);
-  padding: 2px 3px;
+/* Out of the masthead's flow and into the window's corner, where a title bar
+   would have put them — the running head keeps the baseline to itself. */
+.window-controls { display: none; }
+:root[data-chrome='custom'] .window-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: fixed;
+  top: 6px;
+  right: 8px;
+  z-index: 20;
 }
+.window-controls button {
+  font-size: 11px;
+  line-height: 1;
+  color: color-mix(in srgb, var(--muted) 75%, transparent);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.window-controls button:hover { color: var(--ink); background: color-mix(in srgb, var(--rule) 55%, transparent); }
 .window-controls button:hover { color: var(--ink); }
-.window-controls button[data-window='close']:hover { color: var(--accent); }
+.window-controls button[data-window='close']:hover {
+  color: var(--paper);
+  background: var(--accent);
+}
 
 /* Columns ---------------------------------------------------------------- */
 
