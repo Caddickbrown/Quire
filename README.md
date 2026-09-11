@@ -42,7 +42,8 @@ are writing into.
 
 **Journal** is what has been filed, by month. **Inbox** is what hasn't —
 undated drafts in `inbox.md`, for writing that isn't ready to belong to a day.
-**Starred** cuts across both. The page you are on sits first in the masthead in
+Every entry starts there, since new writing rarely is. **Starred** cuts across
+both. The page you are on sits first in the masthead in
 terracotta; the others follow in grey. Only the inbox carries a count, because
 only the inbox is a queue.
 
@@ -220,7 +221,7 @@ tools/make_icon.swift  redraws the icon in both palettes
 
 | | |
 |---|---|
-| `⌘N` / `⌘⇧N` | new entry / new draft |
+| `⌘N` | new entry, in the inbox |
 | `⌘1` `⌘2` `⌘3` | journal / inbox / starred |
 | `⌘J` | file a draft, or return an entry to the inbox |
 | `⌘D` / `⌘⇧D` | star / change date and time |

@@ -222,7 +222,6 @@ struct RootViewPhone: View {
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button { store.newEntry() } label: { Image(systemName: "square.and.pencil") }
             Menu {
-                Button("New Draft") { store.newDraft() }
                 if let entry = store.selectedEntry {
                     Button(entry.isStarred ? "Unstar" : "Star") { store.toggleStar(entry) }
                     Button(store.isUnfiled(entry) ? "File" : "Return to Inbox") {

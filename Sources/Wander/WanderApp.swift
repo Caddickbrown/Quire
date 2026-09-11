@@ -43,8 +43,6 @@ struct WanderApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Entry") { store.newEntry() }
                     .keyboardShortcut("n")
-                Button("New Draft") { store.newDraft() }
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .saveItem) {
                 Button("Save Now") { store.flush() }

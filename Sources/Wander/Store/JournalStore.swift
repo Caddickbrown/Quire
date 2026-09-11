@@ -304,17 +304,11 @@ final class JournalStore: ObservableObject {
 
     // MARK: Commands
 
+    /// Start writing. New work goes to `inbox.md`, not into the dated record:
+    /// what you have just begun is rarely ready to belong to a day, and filing
+    /// it later (⌘J) is one keystroke. There is no second way to start — an
+    /// entry that should be dated is written here and then filed.
     func newEntry() {
-        flush()
-        if page == .inbox { page = .journal }
-        let entry = Entry.blank()
-        entries.insert(entry, at: 0)
-        openFresh(entry)
-    }
-
-    /// A draft: same as a new entry, but destined for inbox.md rather than a day
-    /// file, so unfinished writing doesn't land in the dated record.
-    func newDraft() {
         flush()
         page = .inbox
         var entry = Entry.blank()

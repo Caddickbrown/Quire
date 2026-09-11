@@ -181,9 +181,10 @@ struct EditorView: View {
             Text("Nothing open")
                 .font(theme.display(34))
                 .foregroundStyle(theme.ink.color)
-            Marginalia(text: "Press \u{2318}N to start an entry. Wander writes plain markdown into "
-                       + "\(store.baseURL.lastPathComponent)/journal/YYYY/MM/DD.md — the same files "
-                       + "jnl and Nook read.")
+            Marginalia(text: "Press \u{2318}N to start an entry. It begins in "
+                       + "\(store.baseURL.lastPathComponent)/inbox.md, and \u{2318}J files it into "
+                       + "journal/YYYY/MM/DD.md — plain markdown either way, the same files jnl "
+                       + "and Nook read.")
                 .frame(maxWidth: 380, alignment: .leading)
             AccentBlock(title: "New entry") { store.newEntry() }
                 .frame(width: 160)

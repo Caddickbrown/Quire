@@ -30,12 +30,8 @@ struct SidebarView: View {
             Rule()
             entries
             Rule()
-            HStack(spacing: 8) {
-                AccentBlock(title: "New entry") { store.newEntry() }
-                AccentBlock(title: "Draft", filled: false) { store.newDraft() }
-                    .frame(width: 82)
-            }
-            .padding(14)
+            AccentBlock(title: "New entry") { store.newEntry() }
+                .padding(14)
         }
         .onChange(of: store.searchFocusRequest) { searchFocused = true }
     }
@@ -113,9 +109,10 @@ struct SidebarView: View {
         guard store.query.isEmpty else { return "No entry matches that." }
         switch store.page {
         case .journal:
-            return "Nothing filed yet. The first entry is the hardest to place; it needn't be good."
+            return "Nothing filed yet. Entries arrive here from the inbox, by \u{2318}J."
         case .inbox:
-            return "The inbox is empty — start a draft when something isn't ready to be dated."
+            return "The inbox is empty. \u{2318}N starts an entry here; file it to a day when it "
+                 + "is ready to belong to one."
         case .starred:
             return "Nothing starred. Star an entry to keep it where you can find it again."
         }
