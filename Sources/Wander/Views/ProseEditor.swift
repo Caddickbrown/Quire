@@ -219,7 +219,10 @@ final class ProseTextView: NSTextView {
         }
         switch event.charactersIgnoringModifiers {
         case "b": wrapSelection(with: "**"); return true
-        case "i": wrapSelection(with: "*"); return true
+        // Underscores for emphasis, asterisks for strong: `_like this_` reads
+        // as emphasis in plain text, and keeps the one marker clear of the two
+        // that surround bold.
+        case "i": wrapSelection(with: "_"); return true
         default: return super.performKeyEquivalent(with: event)
         }
     }

@@ -228,7 +228,7 @@ tools/make_icon.swift  redraws the icon in both palettes
 | `⌘F` | find |
 | `⌘\` `⌘⇧\` `⌘⌥\` | index / stats / options columns |
 | `⌘⇧F` / `⌘⇧T` | focus mode / typewriter scrolling |
-| `⌘B` `⌘I` | wrap the selection |
+| `⌘B` `⌘I` | wrap the selection in `**` / `_` |
 | `⌘⌥↑` `⌘⌥↓` | previous / next entry |
 
 ## Credits
