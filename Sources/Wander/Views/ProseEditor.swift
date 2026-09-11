@@ -146,6 +146,19 @@ struct ProseEditor: NSViewRepresentable {
                                            dimInactive: style.dimInactive && writing)
             tv.typingAttributes = base
             tv.defaultParagraphStyle = base[.paragraphStyle] as? NSParagraphStyle
+            // The restyle runs from inside `textDidChange`, while the text
+            // system is still settling the edit it has just made, and the
+            // redraw it owes the lines below the caret can be lost on the way
+            // through: the text is in the storage, and laid out, but never
+            // painted — insert a paragraph break above a line and that line
+            // vanishes until something else disturbs the view. Ask for the
+            // redraw plainly. Both calls are bounded by what is on screen, so
+            // the length of the entry doesn't come into it.
+            if let layout = tv.layoutManager, let container = tv.textContainer {
+                layout.invalidateDisplay(forCharacterRange:
+                    NSRange(location: 0, length: (tv.string as NSString).length))
+                layout.ensureLayout(forBoundingRect: tv.visibleRect, in: container)
+            }
         }
 
         func textDidChange(_ notification: Notification) {
