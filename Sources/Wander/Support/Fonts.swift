@@ -97,8 +97,24 @@ struct FaceSpec: Equatable {
     }
 
     /// The platform twin, for the prose editor's text storage.
+    ///
+    /// Cached, because the markdown styling asks for one per heading, bold run,
+    /// quote and code span on every restyle — and on AppKit a bold or italic
+    /// face is fetched through `NSFontManager`, which is far too slow to run
+    /// dozens of times a keystroke.
+    private static var platformFonts: [String: PlatformFont] = [:]
+
     func platformFont(_ size: CGFloat, weight: PlatformFontWeight = .regular,
                       italic: Bool = false) -> PlatformFont {
+        let key = "\(resolved ?? "system-\(shape)")|\(size)|\(weight.rawValue)|\(italic)"
+        if let ready = FaceSpec.platformFonts[key] { return ready }
+        let made = makePlatformFont(size, weight: weight, italic: italic)
+        FaceSpec.platformFonts[key] = made
+        return made
+    }
+
+    private func makePlatformFont(_ size: CGFloat, weight: PlatformFontWeight,
+                                  italic: Bool) -> PlatformFont {
         #if canImport(AppKit)
         var font: PlatformFont
         if let resolved, let custom = NSFont(name: resolved, size: size) {

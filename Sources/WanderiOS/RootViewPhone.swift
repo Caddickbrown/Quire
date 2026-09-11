@@ -98,7 +98,7 @@ struct RootViewPhone: View {
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showingStats) {
-            StatsPanel(store: store)
+            StatsPanel(store: store, draft: store.draft)
                 .environment(\.theme, theme)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
@@ -147,6 +147,7 @@ struct RootViewPhone: View {
 
     private var page: some View {
         EditorView(store: store,
+                   draft: store.draft,
                    typeSize: $typeSize,
                    leading: $lineSpacing,
                    focusMode: focusMode,

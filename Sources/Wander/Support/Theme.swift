@@ -333,10 +333,19 @@ enum ThemeFile {
         return document.themes.map { theme(from: $0, dark: false) }
     }
 
+    /// Built themes, by id and appearance. A SwiftUI body reads `theme` a dozen
+    /// times over, and each read used to search the decoded file and rebuild the
+    /// whole struct — twelve colours parsed out of their hex strings included.
+    private static var built: [String: Theme] = [:]
+
     static func resolve(id: String, dark: Bool) -> Theme {
+        let key = dark ? id + ".dark" : id + ".light"
+        if let ready = built[key] { return ready }
         guard let entry = document?.themes.first(where: { $0.id == id })
                 ?? document?.themes.first else { return .fallback }
-        return theme(from: entry, dark: dark)
+        let made = theme(from: entry, dark: dark)
+        built[key] = made
+        return made
     }
 
     private static func theme(from entry: Entry, dark: Bool) -> Theme {

@@ -18,6 +18,19 @@ import AppKit
 import UIKit
 #endif
 
+/// The text being typed, held apart from the store on purpose.
+///
+/// Everything the index, the masthead and the stats column read is derived from
+/// the whole journal, so publishing a keystroke from the store rebuilt all of
+/// it — thousands of entries regrouped and recounted per character. Only the
+/// editor and the live counts watch a `Draft`, so typing costs what typing
+/// should; the store hears about it once, on the debounced save.
+@MainActor
+final class Draft: ObservableObject {
+    @Published var title: String = ""
+    @Published var body: String = ""
+}
+
 @MainActor
 final class JournalStore: ObservableObject {
 
@@ -28,21 +41,75 @@ final class JournalStore: ObservableObject {
         case failed(String)
     }
 
-    @Published private(set) var entries: [Entry] = []      // newest first
-    @Published var selection: Entry.ID?
-    @Published var query: String = ""
+    /// One section of the index: a month of the journal, or the whole inbox.
+    struct Section: Identifiable {
+        let title: String
+        /// A slice of the page's entries, not a copy of them.
+        let entries: ArraySlice<Entry>
+        let inbox: Bool
+        var id: String { title }
+    }
+
+    @Published private(set) var entries: [Entry] = [] {      // newest first
+        didSet { rebuildIndex() }
+    }
+    @Published var selection: Entry.ID? {
+        didSet { if selection != oldValue { rebuildSelection() } }
+    }
+    @Published var query: String = "" {
+        didSet { if query != oldValue { rebuildIndex() } }
+    }
     /// Remembered across launches: reopening on the inbox you left open is the
     /// behaviour a shelf of notebooks has.
     @Published private(set) var page: Page = .journal {
-        didSet { UserDefaults.standard.set(page.rawValue, forKey: Self.pageKey) }
+        didSet {
+            UserDefaults.standard.set(page.rawValue, forKey: Self.pageKey)
+            if page != oldValue { rebuildIndex() }
+        }
     }
     @Published private(set) var saveState: SaveState = .idle
     @Published private(set) var library: JournalLibrary
 
-    /// The live text of the selected entry. The editor binds straight to these;
-    /// they are folded back into `entries` (and the file) on the debounced save.
-    @Published var draftTitle: String = ""
-    @Published var draftBody: String = ""
+    /// The live text of the selected entry. The editor binds straight to the
+    /// draft; it is folded back into `entries` (and the file) on the debounced
+    /// save.
+    let draft = Draft()
+
+    var draftTitle: String {
+        get { draft.title }
+        set { draft.title = newValue }
+    }
+
+    var draftBody: String {
+        get { draft.body }
+        set { draft.body = newValue }
+    }
+
+    // MARK: Derived state
+    //
+    // Held rather than computed. Each of these walks the whole journal, and a
+    // SwiftUI body reads several of them several times over; recomputing on
+    // every read is what made a keystroke cost a third of a second. They are
+    // refreshed together whenever the entries, the query or the page changes —
+    // which is to say when the answer can actually have changed.
+
+    /// Sidebar sections for the current page. The journal and the starred cut
+    /// are set by month; the inbox is one undated run, because inbox.md is.
+    @Published private(set) var sections: [Section] = []
+    @Published private(set) var selectedEntry: Entry?
+    @Published private(set) var selectedIsUnfiled = false
+    /// Position of the selected entry in the whole journal, oldest = 1 — the
+    /// masthead's "No. 014".
+    @Published private(set) var selectedNumber: Int?
+    @Published private(set) var totalWords = 0
+    @Published private(set) var entriesThisMonth = 0
+    @Published private(set) var streak = 0
+    /// Days that already hold at least one entry — the calendar dots them.
+    @Published private(set) var datesWithEntries: Set<String> = []
+    private var pageCounts: [Page: Int] = [:]
+
+    /// Badge count for the masthead's page switches.
+    func count(of page: Page) -> Int { pageCounts[page] ?? 0 }
 
     /// Bumped to ask the index to take keyboard focus (⌘F).
     @Published var searchFocusRequest: Int = 0
@@ -55,6 +122,9 @@ final class JournalStore: ObservableObject {
     private var dirty = false
     private var saveTask: Task<Void, Never>?
     private var lastFingerprint = ""
+    /// Guards against a slow fingerprint landing after a newer one.
+    private var fingerprintToken = 0
+    private var fingerprintPending = false
 
     private static let folderKey = "journalFolderPath"
     private static let bookmarkKey = "journalFolderBookmark"
@@ -110,7 +180,9 @@ final class JournalStore: ObservableObject {
     /// Skip the re-read when nothing on disk has changed — an edit made in jnl
     /// or Nook while Wander was in the background still shows up on activation.
     func reloadIfChanged() {
-        guard !dirty else { return }
+        // A write of our own may not have been fingerprinted yet; re-reading on
+        // the strength of a stale one would be a reload for nothing.
+        guard !dirty, !fingerprintPending else { return }
         let current = library.fingerprint()
         guard current != lastFingerprint else { return }
         let keep = selection
@@ -131,8 +203,6 @@ final class JournalStore: ObservableObject {
         dirty = false
         saveState = .idle
     }
-
-    var selectedEntry: Entry? { entries.first { $0.id == selection } }
 
     /// Switch page, keeping the open entry if it belongs there.
     func show(_ page: Page) {
@@ -156,7 +226,10 @@ final class JournalStore: ObservableObject {
             return
         }
         dirty = true
-        saveState = .editing
+        // Only on the transition. `@Published` fires on assignment, not on
+        // change, and a keystroke that republished the store from here undid
+        // the point of keeping the draft separate.
+        if saveState != .editing { saveState = .editing }
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 700_000_000)
@@ -195,10 +268,28 @@ final class JournalStore: ObservableObject {
                 replaceInMemory(base, with: written)
                 saveState = .saved(Date())
             }
-            lastFingerprint = library.fingerprint()
+            refreshFingerprint()
         } catch {
             dirty = true
             saveState = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Re-take the folder's fingerprint after a write of our own, off the main
+    /// actor: it stats every file in the journal, and a save happens while the
+    /// writing carries on.
+    private func refreshFingerprint() {
+        fingerprintToken += 1
+        fingerprintPending = true
+        let token = fingerprintToken
+        let library = self.library
+        Task.detached(priority: .utility) {
+            let taken = library.fingerprint()
+            await MainActor.run { [weak self] in
+                guard let self, self.fingerprintToken == token else { return }
+                self.lastFingerprint = taken
+                self.fingerprintPending = false
+            }
         }
     }
 
@@ -245,7 +336,7 @@ final class JournalStore: ObservableObject {
             draftBody = written.body
             dirty = false
             saveState = blank ? .idle : .saved(Date())
-            lastFingerprint = library.fingerprint()
+            refreshFingerprint()
             return true
         } catch {
             saveState = .failed(error.localizedDescription)
@@ -296,8 +387,6 @@ final class JournalStore: ObservableObject {
         entry.source == nil ? false : library.isUnfiled(entry)
     }
 
-    var selectedIsUnfiled: Bool { selectedEntry.map(isUnfiled) ?? false }
-
     func destinationName(for entry: Entry, at date: Date) -> String {
         library.destinationName(for: entry, on: Formats.day.string(from: date))
     }
@@ -335,7 +424,7 @@ final class JournalStore: ObservableObject {
             draftEntry = nil
             select(firstVisibleID)
         }
-        lastFingerprint = library.fingerprint()
+        refreshFingerprint()
     }
 
     func toggleStar(_ entry: Entry) {
@@ -477,52 +566,72 @@ final class JournalStore: ObservableObject {
 
     // MARK: Derived
 
-    var filtered: [Entry] {
-        entries.filter { JournalIndex.matches($0, query: query) }
-    }
+    /// Recompute everything the index and the panels read. One pass over the
+    /// journal, on the changes that can move the answer: a reload, an edit
+    /// folded back in, a new search, a different page.
+    private func rebuildIndex() {
+        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let visible = needle.isEmpty
+            ? entries
+            : entries.filter { $0.raw.lowercased().contains(needle) }
 
-    /// Sidebar sections for the current page. The journal and the starred cut
-    /// are set by month; the inbox is one undated run, because inbox.md is.
-    var sections: [(title: String, entries: [Entry], inbox: Bool)] {
+        var journal: [Entry] = []
+        var inbox: [Entry] = []
+        var starred: [Entry] = []
+        var days = Set<String>()
+        var words = 0
+        for entry in visible {
+            if library.isUnfiled(entry) { inbox.append(entry) } else { journal.append(entry) }
+            if entry.isStarred { starred.append(entry) }
+        }
+        for entry in entries {
+            days.insert(entry.date)
+            words += entry.wordCount
+        }
+
         switch page {
         case .journal:
-            return JournalIndex.months(of: filtered.filter { !isUnfiled($0) })
-                .map { ($0.title, $0.entries, false) }
+            sections = JournalIndex.months(of: journal)
+                .map { Section(title: $0.title, entries: $0.entries, inbox: false) }
         case .inbox:
-            let drafts = filtered.filter(isUnfiled)
-            return drafts.isEmpty ? [] : [("Inbox", drafts, true)]
+            sections = inbox.isEmpty ? [] : [Section(title: "Inbox", entries: inbox[...], inbox: true)]
         case .starred:
-            return JournalIndex.months(of: filtered.filter(\.isStarred))
-                .map { ($0.title, $0.entries, false) }
+            sections = JournalIndex.months(of: starred)
+                .map { Section(title: $0.title, entries: $0.entries, inbox: false) }
         }
-    }
 
-    /// Badge count for the masthead's page switches.
-    func count(of page: Page) -> Int {
-        switch page {
-        case .journal: return entries.filter { !isUnfiled($0) }.count
-        case .inbox:   return entries.filter(isUnfiled).count
-        case .starred: return entries.filter(\.isStarred).count
+        // The badges count the whole journal, not the search — a filtered count
+        // beside "Inbox" would read as the queue having emptied.
+        if needle.isEmpty {
+            pageCounts = [.journal: journal.count, .inbox: inbox.count, .starred: starred.count]
+        } else {
+            var counts: [Page: Int] = [.journal: 0, .inbox: 0, .starred: 0]
+            for entry in entries {
+                if library.isUnfiled(entry) { counts[.inbox]! += 1 } else { counts[.journal]! += 1 }
+                if entry.isStarred { counts[.starred]! += 1 }
+            }
+            pageCounts = counts
         }
+
+        datesWithEntries = days
+        totalWords = words
+        streak = JournalIndex.streak(of: entries)
+        let month = String(Formats.day.string(from: Date()).prefix(7))
+        entriesThisMonth = entries.reduce(0) { $0 + ($1.date.hasPrefix(month) ? 1 : 0) }
+        rebuildSelection()
     }
 
-    /// Days that already hold at least one entry — the calendar dots them.
-    var datesWithEntries: Set<String> { Set(entries.map(\.date)) }
-
-    var totalWords: Int { entries.reduce(0) { $0 + $1.wordCount } }
-
-    var entriesThisMonth: Int {
-        let prefix = String(Formats.day.string(from: Date()).prefix(7))
-        return entries.filter { $0.date.hasPrefix(prefix) }.count
-    }
-
-    var streak: Int { JournalIndex.streak(of: entries) }
-
-    /// Position of the selected entry in the whole journal, oldest = 1 — the
-    /// masthead's "No. 014".
-    var selectedNumber: Int? {
-        guard let selection, let index = entries.firstIndex(where: { $0.id == selection })
-        else { return nil }
-        return entries.count - index
+    /// The three things that follow the selection rather than the journal.
+    private func rebuildSelection() {
+        guard let selection, let index = entries.firstIndex(where: { $0.id == selection }) else {
+            selectedEntry = nil
+            selectedIsUnfiled = false
+            selectedNumber = nil
+            return
+        }
+        let entry = entries[index]
+        selectedEntry = entry
+        selectedIsUnfiled = library.isUnfiled(entry)
+        selectedNumber = entries.count - index
     }
 }

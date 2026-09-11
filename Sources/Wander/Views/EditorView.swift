@@ -12,6 +12,9 @@ import WanderCore
 
 struct EditorView: View {
     @ObservedObject var store: JournalStore
+    /// Watched separately from the store: a keystroke should redraw the page
+    /// and its counts, and nothing else in the window.
+    @ObservedObject var draft: Draft
     @Binding var typeSize: Double
     @Binding var leading: Double
     let focusMode: Bool
@@ -47,7 +50,7 @@ struct EditorView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Rule(tone: theme.ink)
-            ProseEditor(text: $store.draftBody,
+            ProseEditor(text: $draft.body,
                         style: ProseStyle(theme: theme,
                                           scheme: scheme,
                                           size: typeSize,
@@ -79,7 +82,7 @@ struct EditorView: View {
         }
         .padding(theme.pageCard ? 20 : 0)
         .frame(maxWidth: .infinity)
-        .onChange(of: store.draftTitle) { store.edited() }
+        .onChange(of: draft.title) { store.edited() }
         .onChange(of: store.selection) { focusToken += 1 }
         .onAppear { focusToken += 1 }
     }
@@ -89,7 +92,7 @@ struct EditorView: View {
             if theme.kicker, !kickerText.isEmpty {
                 SmallCaps(kickerText, tone: theme.accentInk)
             }
-            TextField("", text: $store.draftTitle,
+            TextField("", text: $draft.title,
                       prompt: Text(theme.displayUppercase ? "UNTITLED" : "Untitled")
                         .font(theme.display(theme.titleSize))
                         .foregroundColor(theme.muted.opacity(0.5).color),
@@ -154,9 +157,9 @@ struct EditorView: View {
     }
 
     private var counts: String {
-        let words = Counts.words(store.draftBody)
-        let characters = Counts.characters(store.draftBody)
-        let minutes = Counts.readingMinutes(store.draftBody)
+        let words = Counts.words(draft.body)
+        let characters = Counts.characters(draft.body)
+        let minutes = Counts.readingMinutes(draft.body)
         var parts = ["\(words) \(words == 1 ? "word" : "words")", "\(characters) characters"]
         if minutes > 0 { parts.append("\(minutes) min read") }
         return parts.joined(separator: " · ")

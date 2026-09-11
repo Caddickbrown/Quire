@@ -222,4 +222,54 @@ struct PageTab: View {
 /// Shared timing, so every column opens and closes at the same pace.
 enum Motion {
     static let column: Animation = .easeInOut(duration: 0.22)
+    static let columnDuration: Duration = .milliseconds(220)
+}
+
+/// A column that slides rather than appears: the content keeps its width and the
+/// frame around it closes, so the panel travels off its own edge instead of
+/// reflowing as it goes.
+///
+/// It is also unmounted once it has gone. A closed column is still a view, and
+/// SwiftUI rebuilds it on every change it watches — which for the panels means
+/// on every keystroke, to redraw counts nobody can see. It is put back the
+/// moment the column opens, and taken away only after the close has finished
+/// travelling, so the slide is unaffected.
+struct SlidingColumn<Content: View>: View {
+    let open: Bool
+    let width: CGFloat
+    /// The side the hairline sits on.
+    let rule: HorizontalEdge
+    @ViewBuilder var content: () -> Content
+    @State private var mounted: Bool
+
+    init(open: Bool, width: CGFloat, ruleOn rule: HorizontalEdge,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.open = open
+        self.width = width
+        self.rule = rule
+        self.content = content
+        _mounted = State(initialValue: open)
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if rule == .leading { VRule() }
+            Group {
+                if mounted { content() }
+            }
+            .frame(width: width)
+            if rule == .trailing { VRule() }
+        }
+        .frame(width: open ? width + 1 : 0,
+               alignment: rule == .trailing ? .trailing : .leading)
+        .clipped()
+        .opacity(open ? 1 : 0)
+        .onChange(of: open) { _, isOpen in
+            guard !isOpen else { return mounted = true }
+            Task {
+                try? await Task.sleep(for: Motion.columnDuration)
+                if !open { mounted = false }
+            }
+        }
+    }
 }

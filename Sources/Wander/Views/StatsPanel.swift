@@ -11,6 +11,8 @@ import WanderCore
 
 struct StatsPanel: View {
     @ObservedObject var store: JournalStore
+    /// The live counts follow the draft; everything else here follows the store.
+    @ObservedObject var draft: Draft
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -33,18 +35,18 @@ struct StatsPanel: View {
     private var thisEntry: some View {
         if theme.statsStyle == .figures {
             VStack(alignment: .leading, spacing: 20) {
-                figure("Words", "\(Counts.words(store.draftBody))", theme.ink)
+                figure("Words", "\(Counts.words(draft.body))", theme.ink)
                 figure("Days running", "\(store.streak)", theme.accent)
                 figure("This month", "\(store.entriesThisMonth)", theme.ink)
-                figure("Reading", "\(Counts.readingMinutes(store.draftBody)) min", theme.ink)
+                figure("Reading", "\(Counts.readingMinutes(draft.body)) min", theme.ink)
             }
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 SectionLabel(text: "This entry")
-                FieldRow("Words", "\(Counts.words(store.draftBody))")
-                FieldRow("Characters", "\(Counts.characters(store.draftBody))")
-                FieldRow("Paragraphs", "\(Counts.paragraphs(store.draftBody))")
-                FieldRow("Reading", "\(Counts.readingMinutes(store.draftBody)) min")
+                FieldRow("Words", "\(Counts.words(draft.body))")
+                FieldRow("Characters", "\(Counts.characters(draft.body))")
+                FieldRow("Paragraphs", "\(Counts.paragraphs(draft.body))")
+                FieldRow("Reading", "\(Counts.readingMinutes(draft.body)) min")
             }
         }
     }

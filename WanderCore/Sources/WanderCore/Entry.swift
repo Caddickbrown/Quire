@@ -17,7 +17,26 @@ public struct Entry: Identifiable, Hashable, Sendable {
     public let body: String     // lines after the header, trimmed of leading/trailing blanks
     public let raw: String      // full original text including the normalised header line
     /// File the entry was parsed from — the rewrite target, and half of `id`.
-    public var source: URL?
+    public var source: URL? { didSet { indexSource() } }
+
+    /// `source.path`, kept beside the URL. Comparing two URLs costs microseconds
+    /// — enough that filing the whole journal by file, which the index does on
+    /// every rebuild, was measurable; comparing the paths as strings is free.
+    public private(set) var sourcePath: String?
+
+    /// Stable across reloads: one timestamp per file. Selection survives a
+    /// re-read of the folder, which a fresh UUID per parse would not. Stored
+    /// rather than computed — `ForEach` asks every row for its id on each pass.
+    public private(set) var id: String
+
+    /// Counted once, at parse. The journal's total is a sum over thousands of
+    /// entries and used to be recounted from the text each time it was read.
+    public let wordCount: Int
+
+    /// The timestamp as a date, parsed once. Every index row asks for it, and
+    /// through `DateFormatter` a single one of these costs the best part of a
+    /// tenth of a millisecond.
+    public let createdDate: Date?
 
     public init(date: String, ts: String, suffix: String, body: String,
                 raw: String, source: URL? = nil) {
@@ -27,11 +46,20 @@ public struct Entry: Identifiable, Hashable, Sendable {
         self.body = body
         self.raw = raw
         self.source = source
+        self.sourcePath = source?.path
+        self.id = Entry.identity(of: source?.path, ts: ts)
+        self.wordCount = Counts.words(body)
+        self.createdDate = Formats.moment(from: ts)
     }
 
-    /// Stable across reloads: one timestamp per file. Selection survives a
-    /// re-read of the folder, which a fresh UUID per parse would not.
-    public var id: String { "\(source?.path ?? "-")#\(ts)" }
+    private mutating func indexSource() {
+        sourcePath = source?.path
+        id = Entry.identity(of: sourcePath, ts: ts)
+    }
+
+    private static func identity(of path: String?, ts: String) -> String {
+        "\(path ?? "-")#\(ts)"
+    }
 
     /// The normalised header line, e.g. "[2026-05-10 08:00:00] A title".
     public var header: String { suffix.isEmpty ? "[\(ts)]" : "[\(ts)] \(suffix)" }
@@ -67,8 +95,6 @@ public struct Entry: Identifiable, Hashable, Sendable {
         return JournalParser.splitTags(raw).filter { seen.insert($0.lowercased()).inserted }
     }
 
-    public var wordCount: Int { Counts.words(body) }
-
     /// Rebuild from edited parts, keeping the timestamp (and so the file) fixed.
     public func revised(title: String, body: String, starred: Bool? = nil) -> Entry {
         let star = starred ?? isStarred
@@ -90,13 +116,25 @@ public struct Entry: Identifiable, Hashable, Sendable {
                      raw: "[\(ts)]", source: nil)
     }
 
-    public var createdDate: Date? { Formats.stamp.date(from: ts) }
 }
 
 /// Word / character counting, shared by the entry model and the status line.
 public enum Counts {
+    /// Counted by walking the bytes rather than by `split`, which allocates an
+    /// array of substrings — the difference is an order of magnitude once the
+    /// caller is summing over a whole journal.
     public static func words(_ s: String) -> Int {
-        s.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
+        var count = 0
+        var inWord = false
+        for byte in s.utf8 {
+            if byte == 0x20 || byte == 0x0A || byte == 0x09 || byte == 0x0D {
+                inWord = false
+            } else if !inWord {
+                inWord = true
+                count += 1
+            }
+        }
+        return count
     }
 
     public static func characters(_ s: String) -> Int { s.count }
@@ -158,6 +196,39 @@ public enum Formats {
         f.dateFormat = "HH:mm"
         return f
     }()
+
+    /// The calendar the fixed-format timestamps are read against — built once,
+    /// since `Calendar.current` is resolved afresh on every access.
+    private static let calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return calendar
+    }()
+
+    /// "YYYY-MM-DD HH:MM:SS" to a `Date`, read straight off the digits.
+    ///
+    /// This is `stamp.date(from:)` without the formatter: the shape is fixed and
+    /// ours, and `DateFormatter` spends around ninety microseconds on each one —
+    /// which the index felt, having thousands of them to place.
+    public static func moment(from ts: String) -> Date? {
+        let digits = Array(ts.utf8)
+        guard digits.count >= 19 else { return nil }
+        func number(at index: Int, _ length: Int) -> Int? {
+            var value = 0
+            for offset in index..<(index + length) {
+                let digit = digits[offset]
+                guard digit >= 48, digit <= 57 else { return nil }
+                value = value * 10 + Int(digit - 48)
+            }
+            return value
+        }
+        guard let year = number(at: 0, 4), let month = number(at: 5, 2),
+              let day = number(at: 8, 2), let hour = number(at: 11, 2),
+              let minute = number(at: 14, 2), let second = number(at: 17, 2)
+        else { return nil }
+        return calendar.date(from: DateComponents(year: year, month: month, day: day,
+                                                  hour: hour, minute: minute, second: second))
+    }
 
     public static func groupNumber(_ n: Int) -> String {
         String(format: "%03d", n)

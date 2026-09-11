@@ -17,14 +17,23 @@ import Foundation
 public struct JournalLibrary: Sendable {
     public let baseURL: URL
 
+    // MARK: Locations
+    //
+    // Built once, not on each read: `inboxURL` was a computed property, so
+    // `isUnfiled` minted a fresh URL — and then compared two of them, which
+    // Foundation does by normalising both — for every entry it was asked about.
+    // Over a few thousand entries that alone ran to tens of milliseconds a pass.
+
+    public let journalDir: URL
+    public let inboxURL: URL
+    private let inboxPath: String
+
     public init(baseURL: URL) {
         self.baseURL = baseURL
+        self.journalDir = baseURL.appendingPathComponent("journal", isDirectory: true)
+        self.inboxURL = baseURL.appendingPathComponent("inbox.md")
+        self.inboxPath = inboxURL.path
     }
-
-    // MARK: Locations
-
-    public var journalDir: URL { baseURL.appendingPathComponent("journal", isDirectory: true) }
-    public var inboxURL: URL { baseURL.appendingPathComponent("inbox.md") }
 
     /// journal/YYYY/MM/DD.md for a "YYYY-MM-DD" date.
     public func dayFile(for date: String) -> URL? {
@@ -35,7 +44,7 @@ public struct JournalLibrary: Sendable {
             .appendingPathComponent("\(parts[2]).md")
     }
 
-    public func isUnfiled(_ entry: Entry) -> Bool { entry.source == inboxURL }
+    public func isUnfiled(_ entry: Entry) -> Bool { entry.sourcePath == inboxPath }
 
     /// Where a retimed entry would end up, for display before the move.
     public func destinationName(for entry: Entry, on day: String) -> String {
@@ -193,18 +202,36 @@ public enum Page: String, CaseIterable, Hashable, Sendable {
 /// Grouping and counting shared by every front end.
 public enum JournalIndex {
     /// Entries grouped into month sections, newest month first.
-    public static func months(of list: [Entry]) -> [(title: String, entries: [Entry])] {
-        var order: [String] = []
-        var buckets: [String: [Entry]] = [:]
-        for entry in list {
-            let key = String(entry.date.prefix(7))   // YYYY-MM
-            if buckets[key] == nil { order.append(key) }
-            buckets[key, default: []].append(entry)
+    ///
+    /// `list` arrives sorted by timestamp, so a month is a run rather than a
+    /// bucket: the sections are slices of it. Copying entries into per-month
+    /// arrays instead — and re-deriving each month's title — was most of what a
+    /// rebuild of the index cost.
+    public static func months(of list: [Entry]) -> [(title: String, entries: ArraySlice<Entry>)] {
+        guard !list.isEmpty else { return [] }
+        var runs: [(key: String, entries: ArraySlice<Entry>)] = []
+        var start = list.startIndex
+        var key = String(list[start].date.prefix(7))   // YYYY-MM
+        for index in list.indices.dropFirst() {
+            let next = String(list[index].date.prefix(7))
+            guard next != key else { continue }
+            runs.append((key, list[start..<index]))
+            start = index
+            key = next
         }
-        return order.map { key in
-            let title = Formats.day.date(from: key + "-01").map { Formats.month.string(from: $0) } ?? key
-            return (title, buckets[key] ?? [])
-        }
+        runs.append((key, list[start...]))
+        return runs.map { (monthTitle(of: $0.key), $0.entries) }
+    }
+
+    /// "September 2026" for a "YYYY-MM" key. Memoised: there are as many of
+    /// these as the journal has months, and they never change.
+    private static var monthTitles: [String: String] = [:]
+
+    private static func monthTitle(of key: String) -> String {
+        if let ready = monthTitles[key] { return ready }
+        let title = Formats.day.date(from: key + "-01").map { Formats.month.string(from: $0) } ?? key
+        monthTitles[key] = title
+        return title
     }
 
     /// Consecutive days written, counting back from today — or from yesterday,

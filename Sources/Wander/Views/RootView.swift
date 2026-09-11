@@ -290,23 +290,6 @@ struct RootView: View {
         .opacity(focusMode ? 0.4 : 1)
     }
 
-    /// A column that slides rather than appears: the content keeps its width and
-    /// the frame around it closes, so the panel travels off its own edge instead
-    /// of reflowing as it goes.
-    @ViewBuilder
-    private func sliding<V: View>(_ open: Bool, width: CGFloat, ruleOn edge: HorizontalEdge,
-                                  @ViewBuilder content: () -> V) -> some View {
-        HStack(spacing: 0) {
-            if edge == .leading { VRule() }
-            content().frame(width: width)
-            if edge == .trailing { VRule() }
-        }
-        .frame(width: open ? width + 1 : 0,
-               alignment: edge == .trailing ? .trailing : .leading)
-        .clipped()
-        .opacity(open ? 1 : 0)
-    }
-
     /// Broken grid's ghost numeral: the open entry's day.
     private var ghostCaption: String {
         guard let entry = store.selectedEntry else { return "" }
@@ -315,20 +298,21 @@ struct RootView: View {
 
     private var columns: some View {
         HStack(spacing: 0) {
-            sliding(indexOpen, width: 250, ruleOn: .trailing) {
+            SlidingColumn(open: indexOpen, width: 250, ruleOn: .trailing) {
                 SidebarView(store: store)
             }
             EditorView(store: store,
+                       draft: store.draft,
                        typeSize: $typeSize,
                        leading: $lineSpacing,
                        focusMode: focusMode,
                        typewriter: typewriter,
                        ornamentCaption: ghostCaption)
                 .layoutPriority(1)
-            sliding(statsOpen, width: 252, ruleOn: .leading) {
-                StatsPanel(store: store)
+            SlidingColumn(open: statsOpen, width: 252, ruleOn: .leading) {
+                StatsPanel(store: store, draft: store.draft)
             }
-            sliding(optionsOpen, width: 252, ruleOn: .leading) {
+            SlidingColumn(open: optionsOpen, width: 252, ruleOn: .leading) {
                 OptionsPanel(store: store,
                              typeSize: $typeSize,
                              leading: $lineSpacing,

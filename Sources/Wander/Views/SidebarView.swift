@@ -59,12 +59,16 @@ struct SidebarView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    ForEach(store.sections, id: \.title) { section in
+                    ForEach(store.sections) { section in
                         Section {
-                            ForEach(section.entries) { entry in
+                            // Enumerated rather than searched: the row needs its
+                            // place in the section to pick a fill, and asking
+                            // `firstIndex(of:)` for it compared whole entries
+                            // down the list for every row drawn.
+                            ForEach(Array(section.entries.enumerated()), id: \.element.id) { position, entry in
                                 EntryRow(entry: entry,
                                          selected: entry.id == store.selection,
-                                         position: section.entries.firstIndex(of: entry) ?? 0,
+                                         position: position,
                                          store: store)
                                     .id(entry.id)
                             }
