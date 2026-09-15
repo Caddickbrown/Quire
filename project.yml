@@ -38,7 +38,6 @@ targets:
       - path: Resources/Assets.xcassets
       - path: Resources/themes.json
       - path: Resources/Fonts
-      - path: Resources/AltIcons
     dependencies:
       - package: WanderCore
         product: WanderCore
@@ -56,52 +55,6 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UIApplicationSupportsIndirectInputEvents: true
-        CFBundleIcons:
-          CFBundlePrimaryIcon:
-            CFBundleIconFiles: [AppIcon]
-          CFBundleAlternateIcons:
-            wander-almanac:
-              CFBundleIconFiles: [wander-almanac]
-              UIPrerenderedIcon: false
-            wander-quiet:
-              CFBundleIconFiles: [wander-quiet]
-              UIPrerenderedIcon: false
-            wander-botanic:
-              CFBundleIconFiles: [wander-botanic]
-              UIPrerenderedIcon: false
-            wander-manuscript:
-              CFBundleIconFiles: [wander-manuscript]
-              UIPrerenderedIcon: false
-            wander-sumi:
-              CFBundleIconFiles: [wander-sumi]
-              UIPrerenderedIcon: false
-            wander-editorial:
-              CFBundleIconFiles: [wander-editorial]
-              UIPrerenderedIcon: false
-            wander-broadsheet:
-              CFBundleIconFiles: [wander-broadsheet]
-              UIPrerenderedIcon: false
-            wander-cinema:
-              CFBundleIconFiles: [wander-cinema]
-              UIPrerenderedIcon: false
-            wander-seismograph:
-              CFBundleIconFiles: [wander-seismograph]
-              UIPrerenderedIcon: false
-            wander-constructivist:
-              CFBundleIconFiles: [wander-constructivist]
-              UIPrerenderedIcon: false
-            wander-bauhaus:
-              CFBundleIconFiles: [wander-bauhaus]
-              UIPrerenderedIcon: false
-            wander-brutalist:
-              CFBundleIconFiles: [wander-brutalist]
-              UIPrerenderedIcon: false
-            wander-brokengrid:
-              CFBundleIconFiles: [wander-brokengrid]
-              UIPrerenderedIcon: false
-            wander-memphis:
-              CFBundleIconFiles: [wander-memphis]
-              UIPrerenderedIcon: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -120,6 +73,24 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # The alternates AppIconSwitcher asks for by name. They live in the
+        # asset catalog rather than as loose files because only a catalog can
+        # carry a dark variant — loose CFBundleAlternateIcons cannot, which
+        # left iOS to derive one by darkening the light art into itself.
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES:
+          - wander-quiet
+          - wander-botanic
+          - wander-manuscript
+          - wander-sumi
+          - wander-editorial
+          - wander-broadsheet
+          - wander-cinema
+          - wander-seismograph
+          - wander-constructivist
+          - wander-bauhaus
+          - wander-brutalist
+          - wander-brokengrid
+          - wander-memphis
         ENABLE_USER_SCRIPT_SANDBOXING: NO
 
   wander (macOS):

@@ -3,8 +3,9 @@
 //  Wander — icon generator
 //
 //  One mark per theme, drawn in that theme's own palette and display face: the
-//  wordmark's "w" over the masthead rule. Reads `Resources/themes.json`, the
-//  same table the apps read, so an icon can never drift from its theme.
+//  wordmark's "w" over the masthead rule, in both appearances. Reads
+//  `Resources/themes.json`, the same table the apps read, so an icon can never
+//  drift from its theme.
 //
 //  Run: swift tools/make_icon.swift
 //
@@ -137,6 +138,54 @@ func flatPNG(_ spec: ThemeSpec, pixels: Int) -> Data? {
     return NSBitmapImageRep(cgImage: flattened).representation(using: .png, properties: [:])
 }
 
+/// One app icon set, with both appearances baked in: the theme's light mark,
+/// and the dark mark iOS shows when the home screen is in its dark appearance.
+/// Without the dark image the system derives one by darkening the light art
+/// wholesale — which sinks a near-black "w" into a near-black ground. Both are
+/// opaque, because a theme's paper is part of the mark rather than a backdrop
+/// for the system to supply.
+@MainActor
+func writeAppIconSet(named name: String, light: ThemeSpec, dark: ThemeSpec,
+                     in catalog: URL,
+                     lightFile: String = "icon.png",
+                     darkFile: String = "icon-dark.png") throws {
+    let set = catalog.appendingPathComponent("\(name).appiconset")
+    try FileManager.default.createDirectory(at: set, withIntermediateDirectories: true)
+    guard let lightData = flatPNG(light, pixels: 1024),
+          let darkData = flatPNG(dark, pixels: 1024) else { fatalError("render failed: \(name)") }
+    try lightData.write(to: set.appendingPathComponent(lightFile))
+    try darkData.write(to: set.appendingPathComponent(darkFile))
+    try """
+    {
+      "images" : [
+        {
+          "filename" : "\(lightFile)",
+          "idiom" : "universal",
+          "platform" : "ios",
+          "size" : "1024x1024"
+        },
+        {
+          "appearances" : [
+            {
+              "appearance" : "luminosity",
+              "value" : "dark"
+            }
+          ],
+          "filename" : "\(darkFile)",
+          "idiom" : "universal",
+          "platform" : "ios",
+          "size" : "1024x1024"
+        }
+      ],
+      "info" : {
+        "author" : "make_icon.swift",
+        "version" : 1
+      }
+    }
+
+    """.write(to: set.appendingPathComponent("Contents.json"), atomically: true, encoding: .utf8)
+}
+
 @MainActor
 func main() throws {
     let fm = FileManager.default
@@ -153,27 +202,26 @@ func main() throws {
     }
 
     let themes = loadThemes()
+    let catalog = resources.appendingPathComponent("Assets.xcassets")
+    // The first theme is the app's own: it becomes AppIcon, the primary icon,
+    // so it is not also written as an alternate no one can ask for.
+    let primary = themes.first?.light.id
     for (light, dark) in themes {
         // macOS: the Dock swaps these as the theme and appearance change.
         try png(light, pixels: 512).write(to: icons.appendingPathComponent("\(light.id)-light.png"))
         try png(dark, pixels: 512).write(to: icons.appendingPathComponent("\(dark.id)-dark.png"))
-        // iOS alternate icons, at the two sizes the home screen asks for.
-        for (size, suffix) in [(120, "@2x"), (180, "@3x")] {
-            if let data = flatPNG(light, pixels: size) {
-                try data.write(to: root.appendingPathComponent("Resources/AltIcons/wander-\(light.id)\(suffix).png"))
-            }
-        }
+        // iOS: an alternate icon set per theme, named as AppIconSwitcher asks.
+        guard light.id != primary else { continue }
+        try writeAppIconSet(named: "wander-\(light.id)", light: light, dark: dark, in: catalog)
     }
-    print("wrote \(themes.count * 2) dock icons and \(themes.count * 2) alternate iOS icons")
+    print("wrote \(themes.count * 2) dock icons and \(themes.count - 1) alternate iOS icon sets")
 
     // The default marks, still in the almanac palette.
     guard let almanac = themes.first else { return }
     try png(almanac.light, pixels: 1024).write(to: resources.appendingPathComponent("AppIcon-light.png"))
     try png(almanac.dark, pixels: 1024).write(to: resources.appendingPathComponent("AppIcon-dark.png"))
-    if let data = flatPNG(almanac.light, pixels: 1024) {
-        try data.write(to: resources.appendingPathComponent("AppIcon-ios.png"))
-        try data.write(to: resources.appendingPathComponent("Assets.xcassets/AppIcon.appiconset/icon-1024.png"))
-    }
+    try writeAppIconSet(named: "AppIcon", light: almanac.light, dark: almanac.dark, in: catalog,
+                        lightFile: "icon-1024.png", darkFile: "icon-1024-dark.png")
 
     let tauriIcons = root.appendingPathComponent("tauri/src-tauri/icons")
     try? fm.createDirectory(at: tauriIcons, withIntermediateDirectories: true)
