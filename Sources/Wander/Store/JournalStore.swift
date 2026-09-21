@@ -374,13 +374,38 @@ final class JournalStore: ObservableObject {
         move(current, to: library.inboxURL, stamp: current.ts)
     }
 
-    /// Toggle whichever way the entry sits, and follow it to the page it now
-    /// lives on so the open entry doesn't vanish from the index.
+    /// Toggle whichever way the entry sits. The entry travels; you don't. The
+    /// page stays as it was and the selection steps to whatever takes the
+    /// entry's place, so an inbox can be cleared one ⌘J at a time rather
+    /// than throwing the index over to the journal and back on every file.
     func toggleFiling(_ entry: Entry) {
-        let wasUnfiled = isUnfiled(entry)
-        wasUnfiled ? file(entry) : unfile(entry)
-        if page == .journal && !wasUnfiled { page = .inbox }
-        else if page == .inbox && wasUnfiled { page = .journal }
+        // Filing a row you aren't reading shouldn't move you at all, so the
+        // entry that keeps the editor is the open one, or this one's successor
+        // when this one *is* the open one.
+        let wasOpen = selection == entry.id
+        let next = wasOpen ? successorID(of: entry) : selection
+        isUnfiled(entry) ? file(entry) : unfile(entry)
+
+        // `move` selects whatever it has just written — right for retiming,
+        // where the entry stays on the page, and wrong here, where it has just
+        // left it.
+        let visible = sections.flatMap(\.entries)
+        if let selection, visible.contains(where: { $0.id == selection }) { return }
+        let target = next.flatMap { id -> Entry.ID? in
+            visible.contains { $0.id == id } ? id : nil
+        }
+        select(target ?? visible.first?.id)
+    }
+
+    /// Where the index should land when `entry` leaves the page it is on: the
+    /// row below it, which slides up into its place, or the row above when it
+    /// was the last one. Nil when it was the only one — an emptied inbox is
+    /// worth seeing.
+    private func successorID(of entry: Entry) -> Entry.ID? {
+        let visible = sections.flatMap(\.entries)
+        guard let index = visible.firstIndex(where: { $0.id == entry.id }) else { return nil }
+        if index + 1 < visible.count { return visible[index + 1].id }
+        return index > 0 ? visible[index - 1].id : nil
     }
 
     func isUnfiled(_ entry: Entry) -> Bool {

@@ -53,7 +53,9 @@ only the inbox is a queue.
 
 Filing a draft moves it from `inbox.md` into `journal/YYYY/MM/DD.md` under its
 own timestamp — `⌘J`, or the **File** switch on the row, in the header, or in
-the stats column.
+the stats column. The entry travels; you don't. The index stays in the inbox
+and opens whichever draft takes the filed one's place, so a queue is cleared
+one `⌘J` at a time rather than throwing you over to the journal and back.
 
 ## The columns
 

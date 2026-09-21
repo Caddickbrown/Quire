@@ -130,11 +130,30 @@ function visibleEntries() {
   const found = query
     ? state.entries.filter((e) => haystack(e).includes(query))
     : state.entries;
-  const list = state.page === 'inbox' ? found.filter((e) => e.unfiled)
-    : state.page === 'starred' ? found.filter((e) => e.starred)
-    : found.filter((e) => !e.unfiled);
+  const list = found.filter(onPage);
   visibleCache = { key, list };
   return list;
+}
+
+/// Whether an entry belongs on the page being shown. Filing carries an entry
+/// from the inbox to the journal, so this is also the test for whether it has
+/// just left the page you are standing on — starred, which cuts across both,
+/// keeps it.
+function onPage(entry) {
+  if (state.page === 'inbox') return entry.unfiled;
+  if (state.page === 'starred') return entry.starred;
+  return !entry.unfiled;
+}
+
+/// Where the index should land when the open entry leaves the page: the row
+/// below it, which slides up into its place, or the row above when it was the
+/// last one. Null when it was the only one — an emptied inbox is worth seeing.
+function successorId(entry) {
+  const list = visibleEntries();
+  const index = list.findIndex((e) => idOf(e) === idOf(entry));
+  if (index < 0) return null;
+  const next = list[index + 1] || list[index - 1];
+  return next ? idOf(next) : null;
 }
 
 /// Sections for the index: the inbox is one undated run, because inbox.md is;
@@ -562,15 +581,26 @@ async function toggleStar() {
   absorb(entry, saved, null);
 }
 
+/// File a draft, or send a filed entry back to the inbox. The entry travels;
+/// you don't. The page stays as it was and the selection steps to whatever
+/// takes the entry's place, so an inbox can be cleared one entry at a time
+/// rather than throwing the index over to the journal and back on every file.
 async function toggleFiling() {
-  const entry = current();
-  if (!entry) return;
+  const open = current();
+  if (!open) return;
   await save();
+  // By id, and from the list: `save` may have replaced the entry object, or
+  // emptied it off disk and moved the selection on — neither of which should
+  // end with some other entry being filed.
+  const entry = state.entries.find((e) => idOf(e) === idOf(open));
+  if (!entry) return;
+  // Read after the save, which may have rewritten the list under us.
+  const next = successorId(entry);
   const moved = await invoke('relocate', {
     ts: entry.ts, source: entry.source, newTs: null, toInbox: !entry.unfiled,
   });
-  state.page = moved.unfiled ? 'inbox' : 'journal';
-  await refresh(idOf(moved));
+  // On a page the entry still belongs to nothing has moved, so stay with it.
+  await refresh(onPage(moved) ? idOf(moved) : next);
 }
 
 async function removeEntry(entry) {

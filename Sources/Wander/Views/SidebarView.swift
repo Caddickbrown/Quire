@@ -155,7 +155,10 @@ private struct EntryRow: View {
                         // Filing is the one thing a draft is waiting for, so it
                         // sits on the row rather than behind a menu.
                         if store.isUnfiled(entry), hovering || selected {
-                            QuietButton(title: "File") { store.file(entry) }
+                            // Through the toggle, not `file`, so the row leaves
+                            // without taking the open entry's place in the
+                            // editor with it.
+                            QuietButton(title: "File") { store.toggleFiling(entry) }
                         }
                     }
                 }
