@@ -366,6 +366,12 @@ section is dated development history rather than versioned releases.
   with a 20-second ceiling so a change from another device still lands promptly,
   and the conflict scan now runs off the main thread and only looks at files
   iCloud has actually flagged.
+- **Return to Inbox**: returning an entry while `inbox.md` couldn't be read
+  replaced every draft in it with the returned entry. An unreadable file (one
+  stray non-UTF-8 byte from a hand edit or `jnl`) was indistinguishable from an
+  empty one, so the append had nothing to append to. Both reads now refuse
+  instead, leaving the file untouched and reporting it — and a failed return
+  says so rather than doing nothing. (Also Linux.)
 - **Search / Starred / Tags**: an edit made from one of these lists can no
   longer land in the wrong file. They merge entries from the inbox, the archive
   and the split journals into one list, and an inbox draft that shared its

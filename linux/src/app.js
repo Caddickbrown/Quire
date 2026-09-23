@@ -803,7 +803,7 @@ function rowMenu(x, y, item, onDelete) {
   const src = item.source;
   openMenuAt(x, y, [
     { label: item.entry.is_starred ? "Unstar" : "Star", icon: item.entry.is_starred ? "star.slash" : "star", action: async () => { if (!(await writeCmd("toggle_star", { source: src, ts: item.entry.ts, raw: item.entry.raw })).ok) return; (onDelete || (() => refresh()))(); } },
-    ...(src.kind !== "inbox" ? [{ label: "Return to Inbox", icon: "tray", action: async () => { if (await invoke("return_to_inbox", { source: src, ts: item.entry.ts, raw: item.entry.raw })) toast("Returned to Inbox"); (onDelete || (() => refresh()))(); } }] : []),
+    ...(src.kind !== "inbox" ? [{ label: "Return to Inbox", icon: "tray", action: async () => { if (await invoke("return_to_inbox", { source: src, ts: item.entry.ts, raw: item.entry.raw })) toast("Returned to Inbox"); else toast("Couldn't return that entry to the Inbox", true); (onDelete || (() => refresh()))(); } }] : []),
     { label: "Reveal in Files", icon: "folder", action: () => invoke("reveal_entry", { source: src }) },
     { sep: true },
     { label: "Delete", icon: "trash", danger: true, action: async () => { if (!(await deleteEntryBySource(item.entry, src))) return; (onDelete || (() => refresh()))(); } },
@@ -1231,7 +1231,7 @@ function entryEditor(entry, source, { onChange, onSaved } = {}) {
   delBtn.onclick = async () => { if (await confirmModal("Delete entry?", "This cannot be undone.", "Delete", true)) { save.cancel(); if (!(await deleteEntryBySource({ ts: st.activeTS, raw: st.activeRaw }, source))) return; onChange ? onChange() : refresh(); } };
   moreBtn.onclick = () => menuFromButton(moreBtn, [
     ...(source.kind !== "inbox" ? [
-      { label: "Return to Inbox", icon: "tray", action: async () => { save.cancel(); await commit(false); if (await invoke("return_to_inbox", { source, ts: st.activeTS, raw: st.activeRaw })) { toast("Returned to Inbox"); onChange ? onChange() : refresh(); } } },
+      { label: "Return to Inbox", icon: "tray", action: async () => { save.cancel(); await commit(false); if (await invoke("return_to_inbox", { source, ts: st.activeTS, raw: st.activeRaw })) { toast("Returned to Inbox"); onChange ? onChange() : refresh(); } else toast("Couldn't return that entry to the Inbox", true); } },
       { sep: true },
     ] : []),
     { label: "Attach Media", icon: "paperclip", action: attachMedia },

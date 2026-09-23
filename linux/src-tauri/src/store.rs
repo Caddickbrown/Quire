@@ -308,6 +308,19 @@ fn read_string(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
 
+/// Read a file that is about to be rewritten. `Ok("")` when it doesn't exist
+/// yet; `Err` when it exists but can't be read or decoded. `read_string` can't
+/// tell those apart — it yields "" for both — so an append built on it would
+/// replace an unreadable file's contents instead of leaving them alone. This
+/// mirrors `JournalStore.readForRewrite` on the Swift side.
+fn read_for_rewrite(path: &Path) -> Result<String, String> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("Couldn't read {}: {}", path.display(), e)),
+    }
+}
+
 /// Atomic write via temp-file + rename. Empty content removes the file.
 fn write_file(path: &Path, content: &str) -> std::io::Result<()> {
     if content.is_empty() {
@@ -1014,7 +1027,12 @@ impl Store {
         };
         let entry = entries[idx].clone();
         let inbox = self.inbox_path();
-        let existing = read_string(&inbox);
+        // `read_for_rewrite`, not `read_string`: an unreadable inbox yields ""
+        // from the latter, and the append below would then replace every draft
+        // in it with this one entry.
+        let Ok(existing) = read_for_rewrite(&inbox) else {
+            return false;
+        };
         let mut out = format!("{}\n", parser::trim_right_newlines(&entry.raw));
         if !existing.trim().is_empty() {
             out = format!("{}\n\n{}", parser::trim_right_newlines(&existing), out);
@@ -2758,6 +2776,39 @@ mod tests {
         assert!(!s.backup_now().0);
         // Nothing was conjured up where the drive used to be.
         assert!(!gone.exists());
+    }
+
+    #[test]
+    fn return_to_inbox_refuses_to_rewrite_an_unreadable_inbox() {
+        let s = temp_store();
+        let day = s.journal_file("2026-05-10").unwrap();
+        fs::create_dir_all(day.parent().unwrap()).unwrap();
+        fs::write(&day, "[2026-05-10 08:00:00] filed\nbody\n").unwrap();
+        // A single non-UTF-8 byte, as a hand edit or a jnl write can leave.
+        // read_string() yields "" for this, and the append would then replace
+        // the whole inbox with the returned entry.
+        let inbox = s.inbox_path();
+        fs::write(&inbox, b"[2026-05-01 07:00:00] draft\nca\xE9 au lait\n").unwrap();
+        let before = fs::read(&inbox).unwrap();
+
+        let src = Source { kind: "archive".into(), arg: Some("2026-05-10".into()) };
+        assert!(!s.return_to_inbox(&src, "2026-05-10 08:00:00", "[2026-05-10 08:00:00] filed\nbody"));
+        assert_eq!(fs::read(&inbox).unwrap(), before, "the unreadable inbox is left alone");
+        assert!(day.exists(), "and the entry stays where it was");
+        fs::remove_dir_all(&s.base).ok();
+    }
+
+    #[test]
+    fn read_for_rewrite_separates_missing_from_unreadable() {
+        let dir = std::env::temp_dir().join(format!("nook-rfr-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("absent.md");
+        assert_eq!(read_for_rewrite(&missing).unwrap(), "", "absent reads as empty");
+        let bad = dir.join("bad.md");
+        fs::write(&bad, b"ca\xE9").unwrap();
+        assert!(read_for_rewrite(&bad).is_err(), "undecodable is an error, not \"\"");
+        assert_eq!(read_string(&bad), "", "which is exactly what read_string cannot tell you");
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

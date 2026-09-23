@@ -1,6 +1,15 @@
 # Nook — Bug Fix Specification
 
-**Date:** 2026-09-04 · **Baseline:** commit `6b27c29` on `main` · **Status:** proposed
+**Date:** 2026-09-04 · **Baseline:** commit `6b27c29` on `main` · **Status:** delivered
+
+> **2026-09-23:** all 67 findings implemented (`f5b07e5`, `3bfdea7`, `4eb9513`)
+> and re-verified against `main` after the merge. Two notes on how the code
+> reached the "done when" line by a different route than the spec proposed:
+> **L1** — the Linux composer no longer has a text date field to clear, so the
+> frontend validation the spec asked for is gone; the in-app popover can only
+> emit a whole timestamp and the Rust `BAD_TIMESTAMP` refusal backs it.
+> **D1** — `returnToInbox`, added after this review, reintroduced the defect on
+> a new path and was fixed with the same `readForRewrite` helper.
 
 This is the output of a full-project defect review (Swift app, WidgetKit + Share
 extensions, Linux/Tauri port, build tooling). Every finding below was verified by

@@ -1828,17 +1828,25 @@ final class JournalStore: ObservableObject {
         // deferred (unindexed) autosave, and copying the stale text would
         // drop the edit. Gone from disk (another device moved it) → no-op,
         // so a stale row can't mint an inbox duplicate.
-        guard let fileURL else { return false }
-        let onDisk = JournalParser.parseEntries(readString(fileURL))
+        guard let fileURL, let sourceText = readToRewrite(fileURL) else { return false }
+        let onDisk = JournalParser.parseEntries(sourceText)
         guard let current = onDisk.first(where: { $0.raw == entry.raw })
                 ?? onDisk.first(where: { $0.ts == entry.ts }) else { return false }
 
+        // Both reads go through `readToRewrite`, not `readString`: this is a
+        // read-modify-write, and `readString` can't tell an unreadable file
+        // from an empty one (D1). An inbox with one non-UTF-8 byte in it read
+        // as "" here, and the append below then replaced every draft in it
+        // with this single entry.
         var out = JournalParser.trimRightNewlines(current.raw) + "\n"
-        let existing = readString(inboxURL)
+        guard let existing = readToRewrite(inboxURL) else { return false }
         if !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             out = JournalParser.trimRightNewlines(existing) + "\n\n" + out
         }
-        guard (try? writeFile(inboxURL, out)) != nil else { return false }
+        guard (try? writeFile(inboxURL, out)) != nil else {
+            reportWriteFailure(inboxURL)
+            return false
+        }
 
         switch source {
         case .inbox:            break
