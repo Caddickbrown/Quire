@@ -1,0 +1,364 @@
+{
+ "faces": [
+  {
+   "family": "Anton",
+   "weight": 400,
+   "italic": false,
+   "file": "Anton-0.ttf"
+  },
+  {
+   "family": "Archivo",
+   "weight": 400,
+   "italic": false,
+   "file": "Archivo-0.ttf"
+  },
+  {
+   "family": "Archivo",
+   "weight": 600,
+   "italic": false,
+   "file": "Archivo-1.ttf"
+  },
+  {
+   "family": "Archivo",
+   "weight": 800,
+   "italic": false,
+   "file": "Archivo-2.ttf"
+  },
+  {
+   "family": "Archivo Black",
+   "weight": 400,
+   "italic": false,
+   "file": "ArchivoBlack-0.ttf"
+  },
+  {
+   "family": "Barlow Light",
+   "weight": 300,
+   "italic": false,
+   "file": "Barlow-0.ttf"
+  },
+  {
+   "family": "Barlow",
+   "weight": 400,
+   "italic": false,
+   "file": "Barlow-1.ttf"
+  },
+  {
+   "family": "Barlow SemiBold",
+   "weight": 600,
+   "italic": false,
+   "file": "Barlow-2.ttf"
+  },
+  {
+   "family": "Bodoni Moda",
+   "weight": 900,
+   "italic": false,
+   "file": "BodoniModa-0.ttf"
+  },
+  {
+   "family": "Bodoni Moda",
+   "weight": 400,
+   "italic": true,
+   "file": "BodoniModa-1.ttf"
+  },
+  {
+   "family": "Bodoni Moda",
+   "weight": 700,
+   "italic": false,
+   "file": "BodoniModa-2.ttf"
+  },
+  {
+   "family": "Bodoni Moda",
+   "weight": 400,
+   "italic": false,
+   "file": "BodoniModa-3.ttf"
+  },
+  {
+   "family": "Cormorant Garamond",
+   "weight": 300,
+   "italic": true,
+   "file": "CormorantGaramond-0.ttf"
+  },
+  {
+   "family": "Cormorant Garamond",
+   "weight": 300,
+   "italic": false,
+   "file": "CormorantGaramond-1.ttf"
+  },
+  {
+   "family": "Cormorant Garamond",
+   "weight": 500,
+   "italic": false,
+   "file": "CormorantGaramond-2.ttf"
+  },
+  {
+   "family": "Courier Prime",
+   "weight": 400,
+   "italic": true,
+   "file": "CourierPrime-0.ttf"
+  },
+  {
+   "family": "Courier Prime",
+   "weight": 400,
+   "italic": false,
+   "file": "CourierPrime-1.ttf"
+  },
+  {
+   "family": "Courier Prime",
+   "weight": 700,
+   "italic": false,
+   "file": "CourierPrime-2.ttf"
+  },
+  {
+   "family": "EB Garamond",
+   "weight": 400,
+   "italic": true,
+   "file": "EBGaramond-0.ttf"
+  },
+  {
+   "family": "EB Garamond",
+   "weight": 400,
+   "italic": false,
+   "file": "EBGaramond-1.ttf"
+  },
+  {
+   "family": "EB Garamond",
+   "weight": 600,
+   "italic": false,
+   "file": "EBGaramond-2.ttf"
+  },
+  {
+   "family": "IBM Plex Mono",
+   "weight": 400,
+   "italic": false,
+   "file": "IBMPlexMono-0.ttf"
+  },
+  {
+   "family": "IBM Plex Mono Medium",
+   "weight": 500,
+   "italic": false,
+   "file": "IBMPlexMono-1.ttf"
+  },
+  {
+   "family": "IBM Plex Sans",
+   "weight": 300,
+   "italic": false,
+   "file": "IBMPlexSans-0.ttf"
+  },
+  {
+   "family": "IBM Plex Sans",
+   "weight": 400,
+   "italic": false,
+   "file": "IBMPlexSans-1.ttf"
+  },
+  {
+   "family": "IBM Plex Sans",
+   "weight": 500,
+   "italic": false,
+   "file": "IBMPlexSans-2.ttf"
+  },
+  {
+   "family": "IBM Plex Sans",
+   "weight": 600,
+   "italic": false,
+   "file": "IBMPlexSans-3.ttf"
+  },
+  {
+   "family": "Karla",
+   "weight": 300,
+   "italic": false,
+   "file": "Karla-0.ttf"
+  },
+  {
+   "family": "Karla",
+   "weight": 400,
+   "italic": false,
+   "file": "Karla-1.ttf"
+  },
+  {
+   "family": "Karla",
+   "weight": 500,
+   "italic": false,
+   "file": "Karla-2.ttf"
+  },
+  {
+   "family": "Libre Baskerville",
+   "weight": 400,
+   "italic": true,
+   "file": "LibreBaskerville-0.ttf"
+  },
+  {
+   "family": "Libre Baskerville",
+   "weight": 400,
+   "italic": false,
+   "file": "LibreBaskerville-1.ttf"
+  },
+  {
+   "family": "Libre Baskerville",
+   "weight": 700,
+   "italic": false,
+   "file": "LibreBaskerville-2.ttf"
+  },
+  {
+   "family": "Newsreader",
+   "weight": 300,
+   "italic": true,
+   "file": "Newsreader-0.ttf"
+  },
+  {
+   "family": "Newsreader",
+   "weight": 400,
+   "italic": true,
+   "file": "Newsreader-1.ttf"
+  },
+  {
+   "family": "Newsreader",
+   "weight": 500,
+   "italic": true,
+   "file": "Newsreader-2.ttf"
+  },
+  {
+   "family": "Newsreader",
+   "weight": 600,
+   "italic": true,
+   "file": "Newsreader-3.ttf"
+  },
+  {
+   "family": "Newsreader",
+   "weight": 300,
+   "italic": false,
+   "file": "Newsreader-4.ttf"
+  },
+  {
+   "family": "Newsreader",
+   "weight": 400,
+   "italic": false,
+   "file": "Newsreader-5.ttf"
+  },
+  {
+   "family": "Newsreader",
+   "weight": 500,
+   "italic": false,
+   "file": "Newsreader-6.ttf"
+  },
+  {
+   "family": "Newsreader",
+   "weight": 600,
+   "italic": false,
+   "file": "Newsreader-7.ttf"
+  },
+  {
+   "family": "Nunito Sans",
+   "weight": 300,
+   "italic": false,
+   "file": "NunitoSans-0.ttf"
+  },
+  {
+   "family": "Nunito Sans",
+   "weight": 400,
+   "italic": false,
+   "file": "NunitoSans-1.ttf"
+  },
+  {
+   "family": "Nunito Sans",
+   "weight": 600,
+   "italic": false,
+   "file": "NunitoSans-2.ttf"
+  },
+  {
+   "family": "Oswald",
+   "weight": 300,
+   "italic": false,
+   "file": "Oswald-0.ttf"
+  },
+  {
+   "family": "Oswald",
+   "weight": 500,
+   "italic": false,
+   "file": "Oswald-1.ttf"
+  },
+  {
+   "family": "Oswald",
+   "weight": 700,
+   "italic": false,
+   "file": "Oswald-2.ttf"
+  },
+  {
+   "family": "Playfair Display",
+   "weight": 500,
+   "italic": false,
+   "file": "PlayfairDisplay-0.ttf"
+  },
+  {
+   "family": "Playfair Display",
+   "weight": 700,
+   "italic": false,
+   "file": "PlayfairDisplay-1.ttf"
+  },
+  {
+   "family": "Playfair Display",
+   "weight": 900,
+   "italic": false,
+   "file": "PlayfairDisplay-2.ttf"
+  },
+  {
+   "family": "Poppins",
+   "weight": 400,
+   "italic": false,
+   "file": "Poppins-0.ttf"
+  },
+  {
+   "family": "Poppins SemiBold",
+   "weight": 600,
+   "italic": false,
+   "file": "Poppins-1.ttf"
+  },
+  {
+   "family": "Poppins ExtraBold",
+   "weight": 800,
+   "italic": false,
+   "file": "Poppins-2.ttf"
+  },
+  {
+   "family": "Spectral Light",
+   "weight": 300,
+   "italic": true,
+   "file": "Spectral-0.ttf"
+  },
+  {
+   "family": "Spectral Light",
+   "weight": 300,
+   "italic": false,
+   "file": "Spectral-1.ttf"
+  },
+  {
+   "family": "Spectral SemiBold",
+   "weight": 600,
+   "italic": false,
+   "file": "Spectral-2.ttf"
+  },
+  {
+   "family": "Spectral",
+   "weight": 400,
+   "italic": false,
+   "file": "Spectral-3.ttf"
+  },
+  {
+   "family": "Zilla Slab",
+   "weight": 400,
+   "italic": true,
+   "file": "ZillaSlab-0.ttf"
+  },
+  {
+   "family": "Zilla Slab Medium",
+   "weight": 500,
+   "italic": false,
+   "file": "ZillaSlab-1.ttf"
+  },
+  {
+   "family": "Zilla Slab",
+   "weight": 700,
+   "italic": false,
+   "file": "ZillaSlab-2.ttf"
+  }
+ ]
+}

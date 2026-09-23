@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The palette is Wander's own, chosen at runtime from themes.json; the
+         platform theme only has to stay out of the way and let the window draw
+         edge to edge. -->
+    <style name="Theme.Wander" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
+</resources>

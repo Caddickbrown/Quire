@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Almanac's paper and terracotta: the icon is the default theme's mark,
+         the same one tools/make_icon.swift draws for the other builds. -->
+    <color name="ic_launcher_background">#F6F2EA</color>
+</resources>
