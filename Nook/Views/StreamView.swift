@@ -422,6 +422,10 @@ private struct StreamRow: View {
     private var menu: some View {
         if item.isDraft {
             Button { store.fileDraft(entry) } label: { Label("File", systemImage: "archivebox") }
+        } else {
+            Button { returnToInbox() } label: {
+                Label("Return to Inbox", systemImage: "tray.and.arrow.up")
+            }
         }
         Button { store.toggleStar(entry, source: item.source) } label: {
             Label(entry.isStarred ? "Unstar" : "Star",
@@ -434,6 +438,11 @@ private struct StreamRow: View {
         #endif
         Button(role: .destructive) { delete() } label: { Label("Delete", systemImage: "trash") }
             .destructiveAction()
+    }
+
+    private func returnToInbox() {
+        if isActive { activeID = nil }
+        store.returnToInbox(entry, source: item.source)
     }
 
     private func delete() {

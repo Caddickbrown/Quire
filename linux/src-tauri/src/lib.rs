@@ -176,6 +176,11 @@ fn file_draft(ts: String, raw: String) -> Option<String> {
 }
 
 #[tauri::command]
+fn return_to_inbox(source: Source, ts: String, raw: String) -> bool {
+    resolve_store().return_to_inbox(&source, &ts, &raw)
+}
+
+#[tauri::command]
 fn file_all_drafts() -> usize {
     resolve_store().file_all_drafts()
 }
@@ -545,6 +550,7 @@ pub fn run() {
             import_drafts,
             sort_inbox,
             file_draft,
+            return_to_inbox,
             file_all_drafts,
             update_filed_entry,
             delete_filed_entry,

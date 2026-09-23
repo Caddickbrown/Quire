@@ -251,7 +251,9 @@ struct EntryTwoPane: View {
                 // (e.g. editing out a search term) doesn't kick you out mid-edit
                 // — cleared only when the selection itself is cleared.
                 if let e = openEntry {
-                    EntryDetailView(entry: e, source: sourceFor(e)).id(key(e))
+                    EntryDetailView(entry: e, source: sourceFor(e),
+                                    onReturnedToInbox: { openEntry = nil; selectedTS = nil })
+                        .id(key(e))
                 } else {
                     ContentUnavailableView("Select an entry", systemImage: "book.closed")
                 }
@@ -331,6 +333,11 @@ struct EntryTwoPane: View {
                     Label(entry.isStarred ? "Unstar" : "Star",
                           systemImage: entry.isStarred ? "star.slash" : "star")
                 }
+                if sourceFor(entry) != .inbox {
+                    Button { returnToInbox(entry) } label: {
+                        Label("Return to Inbox", systemImage: "tray.and.arrow.up")
+                    }
+                }
                 #if os(macOS)
                 Button { store.revealEntry(source: sourceFor(entry)) } label: {
                     Label("Reveal in Finder", systemImage: "folder")
@@ -371,6 +378,13 @@ struct EntryTwoPane: View {
         #else
         .constant(nil)
         #endif
+    }
+
+    private func returnToInbox(_ entry: Entry) {
+        #if os(macOS)
+        if openEntry?.id == entry.id { openEntry = nil; selectedTS = nil }
+        #endif
+        store.returnToInbox(entry, source: sourceFor(entry))
     }
 
     private func delete(_ entry: Entry) {

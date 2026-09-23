@@ -1641,6 +1641,44 @@ final class JournalStore: ObservableObject {
         }
     }
 
+    /// Send a filed entry (archive day or split journal) back to the inbox as a
+    /// draft — the inverse of `fileDraft`. The entry is appended to the inbox
+    /// verbatim first and only removed from its file once that write landed,
+    /// so a failed write leaves it where it was rather than losing it.
+    @discardableResult
+    func returnToInbox(_ entry: Entry, source: EntrySource) -> Bool {
+        guard let inboxURL else { return false }
+        let fileURL: URL?
+        switch source {
+        case .inbox:            return false
+        case .archive(let d):   fileURL = journalFileURL(for: d)
+        case .journal(let n):   fileURL = splitJournalURL(n)
+        }
+        // Move the on-disk copy, not the caller's: a list row can lag a
+        // deferred (unindexed) autosave, and copying the stale text would
+        // drop the edit. Gone from disk (another device moved it) → no-op,
+        // so a stale row can't mint an inbox duplicate.
+        guard let fileURL else { return false }
+        let onDisk = JournalParser.parseEntries(readString(fileURL))
+        guard let current = onDisk.first(where: { $0.raw == entry.raw })
+                ?? onDisk.first(where: { $0.ts == entry.ts }) else { return false }
+
+        var out = JournalParser.trimRightNewlines(current.raw) + "\n"
+        let existing = readString(inboxURL)
+        if !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            out = JournalParser.trimRightNewlines(existing) + "\n\n" + out
+        }
+        guard (try? writeFile(inboxURL, out)) != nil else { return false }
+
+        switch source {
+        case .inbox:            break
+        case .archive(let d):   deleteFiledEntry(date: d, entry: current)
+        case .journal(let n):   deleteJournalEntry(name: n, entry: current)
+        }
+        loadInbox()
+        return true
+    }
+
     func deleteDraft(_ entry: Entry) {
         removeFromInbox(entry)
         loadInbox()

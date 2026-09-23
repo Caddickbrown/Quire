@@ -735,6 +735,7 @@ function rowMenu(x, y, item, onDelete) {
   const src = item.source;
   openMenuAt(x, y, [
     { label: item.entry.is_starred ? "Unstar" : "Star", icon: item.entry.is_starred ? "star.slash" : "star", action: async () => { await invoke("toggle_star", { source: src, ts: item.entry.ts, raw: item.entry.raw }); (onDelete || (() => refresh()))(); } },
+    ...(src.kind !== "inbox" ? [{ label: "Return to Inbox", icon: "tray", action: async () => { if (await invoke("return_to_inbox", { source: src, ts: item.entry.ts, raw: item.entry.raw })) toast("Returned to Inbox"); (onDelete || (() => refresh()))(); } }] : []),
     { label: "Reveal in Files", icon: "folder", action: () => invoke("reveal_entry", { source: src }) },
     { sep: true },
     { label: "Delete", icon: "trash", danger: true, action: async () => { await deleteEntryBySource(item.entry, src); (onDelete || (() => refresh()))(); } },
@@ -1149,6 +1150,10 @@ function entryEditor(entry, source, { onChange, onSaved } = {}) {
   fileBtn.onclick = async () => { save.cancel(); await commit(false); await invoke("file_draft", { ts: st.activeTS, raw: st.activeRaw }); toast("Filed"); refresh(); };
   delBtn.onclick = async () => { if (await confirmModal("Delete entry?", "This cannot be undone.", "Delete", true)) { save.cancel(); await deleteEntryBySource({ ts: st.activeTS, raw: st.activeRaw }, source); onChange ? onChange() : refresh(); } };
   moreBtn.onclick = () => menuFromButton(moreBtn, [
+    ...(source.kind !== "inbox" ? [
+      { label: "Return to Inbox", icon: "tray", action: async () => { save.cancel(); await commit(false); if (await invoke("return_to_inbox", { source, ts: st.activeTS, raw: st.activeRaw })) { toast("Returned to Inbox"); onChange ? onChange() : refresh(); } } },
+      { sep: true },
+    ] : []),
     { label: "Attach Media", icon: "paperclip", action: attachMedia },
     { label: "Record Video", icon: "video", action: recordVideo },
     { label: "Copy text", icon: "copy", action: () => navigator.clipboard.writeText((st.title ? st.title + "\n" : "") + st.text) },

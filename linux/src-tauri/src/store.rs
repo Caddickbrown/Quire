@@ -848,6 +848,36 @@ impl Store {
         Some(label)
     }
 
+    /// Send a filed entry (archive day or split journal) back to the inbox as a
+    /// draft — the inverse of `file_draft` (mirrors JournalStore.returnToInbox).
+    /// The on-disk copy is appended to the inbox first and only removed from
+    /// its file once that write landed, so a failed write loses nothing.
+    pub fn return_to_inbox(&self, source: &Source, ts: &str, raw: &str) -> bool {
+        if source.kind == "inbox" {
+            return false;
+        }
+        let entries = self.entries_for_source(source);
+        let Some(idx) = find_entry(&entries, ts, raw) else {
+            return false;
+        };
+        let entry = entries[idx].clone();
+        let inbox = self.inbox_path();
+        let existing = read_string(&inbox);
+        let mut out = format!("{}\n", parser::trim_right_newlines(&entry.raw));
+        if !existing.trim().is_empty() {
+            out = format!("{}\n\n{}", parser::trim_right_newlines(&existing), out);
+        }
+        if write_file(&inbox, &out).is_err() {
+            return false;
+        }
+        match (source.kind.as_str(), &source.arg) {
+            ("archive", Some(d)) => self.delete_filed_entry(d, &entry.ts, &entry.raw),
+            ("journal", Some(n)) => self.delete_journal_entry(n, &entry.ts, &entry.raw),
+            _ => {}
+        }
+        true
+    }
+
     fn remove_from_inbox(&self, entry: &Entry) {
         let inbox = self.inbox_path();
         let content = read_string(&inbox);
@@ -2352,4 +2382,52 @@ pub fn now_date() -> String {
 #[allow(dead_code)]
 fn _use_datelike(d: NaiveDate) -> i32 {
     d.year()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_store() -> Store {
+        let base = std::env::temp_dir().join(format!("nook-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(base.join("journal")).unwrap();
+        Store { base, mode: "local".into() }
+    }
+
+    #[test]
+    fn return_to_inbox_round_trips_a_filed_entry() {
+        let s = temp_store();
+        let raw = "[2026-05-10 08:00:00] Title\nBody text";
+        write_file(&s.inbox_path(), &format!("{}\n", raw)).unwrap();
+        assert_eq!(s.file_draft("2026-05-10 08:00:00", raw).as_deref(), Some("2026-05-10"));
+        let day = s.journal_file("2026-05-10").unwrap();
+        assert!(day.exists());
+
+        let src = Source { kind: "archive".into(), arg: Some("2026-05-10".into()) };
+        assert!(s.return_to_inbox(&src, "2026-05-10 08:00:00", raw));
+        assert_eq!(read_string(&s.inbox_path()), format!("{}\n", raw));
+        assert!(!day.exists(), "emptied day file is removed");
+
+        // Gone from the source now → a second call is a no-op, not a duplicate.
+        assert!(!s.return_to_inbox(&src, "2026-05-10 08:00:00", raw));
+        assert_eq!(parser::parse_entries(&read_string(&s.inbox_path())).len(), 1);
+        let _ = fs::remove_dir_all(&s.base);
+    }
+
+    #[test]
+    fn return_to_inbox_appends_after_existing_drafts() {
+        let s = temp_store();
+        write_file(&s.inbox_path(), "[2026-06-01 09:00:00]\nexisting\n").unwrap();
+        let day = s.journal_file("2026-05-10").unwrap();
+        write_file(&day, "[2026-05-10 08:00:00]\nfirst\n\n[2026-05-10 09:00:00]\nsecond\n").unwrap();
+
+        let src = Source { kind: "archive".into(), arg: Some("2026-05-10".into()) };
+        assert!(s.return_to_inbox(&src, "2026-05-10 09:00:00", "[2026-05-10 09:00:00]\nsecond"));
+        assert_eq!(read_string(&s.inbox_path()),
+                   "[2026-06-01 09:00:00]\nexisting\n\n[2026-05-10 09:00:00]\nsecond\n");
+        let left = parser::parse_entries(&read_string(&day));
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].body, "first");
+        let _ = fs::remove_dir_all(&s.base);
+    }
 }

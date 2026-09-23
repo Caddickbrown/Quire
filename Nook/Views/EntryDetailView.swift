@@ -63,9 +63,16 @@ struct EntryDetailView: View {
         var id: String { rawValue }
     }
 
-    init(entry: Entry, source: EntrySource) {
+    /// Called after "Return to Inbox" moves the entry out from under this view.
+    /// Sheets and pushes just dismiss; a macOS side pane has nothing to dismiss,
+    /// so its host clears the selection through this instead of leaving a view
+    /// onto a vanished entry.
+    var onReturnedToInbox: (() -> Void)?
+
+    init(entry: Entry, source: EntrySource, onReturnedToInbox: (() -> Void)? = nil) {
         self.entry = entry
         self.source = source
+        self.onReturnedToInbox = onReturnedToInbox
         _title = State(initialValue: entry.suffix)
         _date = State(initialValue: JournalStore.date(from: entry.ts) ?? Date())
         _text = State(initialValue: entry.body)
@@ -271,6 +278,16 @@ struct EntryDetailView: View {
                 Label(isStarred ? "Unstar" : "Star",
                       systemImage: isStarred ? "star.slash" : "star")
             }
+            #endif
+            if source != .inbox {
+                Button { returnToInbox() } label: {
+                    Label("Return to Inbox", systemImage: "tray.and.arrow.up")
+                }
+                #if os(macOS)
+                Divider()
+                #endif
+            }
+            #if os(iOS)
             Divider()
             Button { showingPhotoPicker = true } label: { Label("Photo Library", systemImage: "photo") }
             Button { showingImagePicker = true } label: { Label("Choose File", systemImage: "folder") }
@@ -579,6 +596,16 @@ struct EntryDetailView: View {
             text = Transcriber.insert(transcript: transcript, after: rel, in: text)
             store.markTranscribed(assetID: ((rel as NSString).lastPathComponent as NSString).deletingPathExtension)
         }
+    }
+
+    /// Save first so the move carries any edit still in the autosave debounce,
+    /// then hand the entry back to the inbox and leave.
+    private func returnToInbox() {
+        flush()
+        guard store.returnToInbox(currentEntry, source: source) else { return }
+        // A sheet or push closes itself; a side pane (no presentation to
+        // dismiss — dismiss() there would pop the enclosing stack) asks its host.
+        if let onReturnedToInbox { onReturnedToInbox() } else { dismiss() }
     }
 
     private func delete() {

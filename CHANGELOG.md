@@ -31,6 +31,12 @@ section is dated development history rather than versioned releases.
 ## [Unreleased]
 
 ### Added
+- **Journal**: **Return to Inbox** — right-click (or long-press) a filed entry
+  in the Journal, a day, Starred, Tags, Search or the Stream, or pick it from
+  an open entry's ⋯ menu, to un-file it back into the inbox as a draft. The
+  entry moves byte-for-byte (split-journal entries too), and it's written to
+  the inbox before it leaves its day file, so a failed write can't lose it.
+  Also in the Linux app.
 - **Stream**: full keyboard navigation — ↑/↓ walk the page, ↩ opens the
   selected entry's in-place editor, ⎋ closes it — with the selection mirrored
   to the external display like every other list; rows also expose VoiceOver
