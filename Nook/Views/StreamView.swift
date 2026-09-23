@@ -42,8 +42,8 @@ enum StreamDrafts: String, CaseIterable, Identifiable {
 }
 
 /// One entry on the page, with the file it came from so edits go to the right
-/// place. `id` is stable across reloads (`Entry.id` is a fresh UUID per parse)
-/// and disambiguated, since two entries can share a timestamp.
+/// place. `id` is stable across reloads and disambiguated, since two entries
+/// can share a timestamp.
 struct StreamItem: Identifiable {
     let id: String
     let entry: Entry
@@ -530,6 +530,10 @@ private struct StreamEditor: View {
     @State private var title: String
     @State private var text: String
     @State private var baselineRaw: String
+    /// What this editor last wrote — the store looks an entry up by its text, so
+    /// after the first save `item.entry` is stale and the timestamp fallback
+    /// would land on the other twin of a same-second pair.
+    @State private var current: Entry
     @State private var saveTask: Task<Void, Never>?
     @State private var pendingReindex = false
     @FocusState private var focused: Bool
@@ -539,7 +543,11 @@ private struct StreamEditor: View {
         self.onDone = onDone
         _title = State(initialValue: item.entry.suffix)
         _text = State(initialValue: item.entry.body)
-        _baselineRaw = State(initialValue: item.entry.raw)
+        // Baseline from the composed text, not the file's raw: a non-canonical
+        // entry shouldn't read as dirty (and be rewritten) just by being opened.
+        _baselineRaw = State(initialValue: JournalStore.makeEntry(
+            timestamp: item.entry.ts, title: item.entry.suffix, body: item.entry.body).raw)
+        _current = State(initialValue: item.entry)
     }
 
     private var size: CGFloat { CGFloat(fontSize) }
@@ -548,7 +556,7 @@ private struct StreamEditor: View {
         JournalStore.makeEntry(timestamp: item.entry.ts, title: title, body: text)
     }
     private var isDirty: Bool { composed.raw != baselineRaw }
-    private var isStarred: Bool { title.trimmingCharacters(in: .whitespaces).hasSuffix("*") }
+    private var isStarred: Bool { Entry.hasStarMarker(title) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -588,7 +596,9 @@ private struct StreamEditor: View {
             if item.isDraft {
                 Button {
                     flush()
-                    store.fileDraft(composed)
+                    // `current` is what the flush actually wrote, so the inbox
+                    // copy is the one that gets removed.
+                    store.fileDraft(current)
                     onDone()
                 } label: {
                     Label("File", systemImage: "archivebox")
@@ -615,14 +625,7 @@ private struct StreamEditor: View {
         .padding(.top, 2)
     }
 
-    private func toggleStar() {
-        let base = title.trimmingCharacters(in: .whitespaces)
-        if base.hasSuffix("*") {
-            title = String(base.dropLast()).trimmingCharacters(in: .whitespaces)
-        } else {
-            title = base.isEmpty ? "*" : base + " *"
-        }
-    }
+    private func toggleStar() { title = Entry.togglingStarMarker(title) }
 
     // MARK: Autosave — same shape as the composer and the entry editor
 
@@ -640,11 +643,16 @@ private struct StreamEditor: View {
     private func commit(reindex: Bool = false) {
         guard isDirty else { return }
         let raw = composed.raw
+        let saved: Bool
         switch item.source {
-        case .inbox:          store.updateDraft(item.entry, newText: raw, reindex: reindex)
-        case .archive(let d): store.updateFiledEntry(date: d, original: item.entry, newText: raw, reindex: reindex)
-        case .journal(let n): store.updateJournalEntry(name: n, original: item.entry, newText: raw, reindex: reindex)
+        case .inbox:          saved = store.updateDraft(current, newText: raw, reindex: reindex)
+        case .archive(let d): saved = store.updateFiledEntry(date: d, original: current, newText: raw, reindex: reindex) != nil
+        case .journal(let n): saved = store.updateJournalEntry(name: n, original: current, newText: raw, reindex: reindex)
         }
+        // Only a write that happened moves the baseline, or the row would go
+        // clean with nothing on disk and never retry.
+        guard saved else { return }
+        current = JournalParser.parseEntries(raw).first ?? current
         baselineRaw = raw
         pendingReindex = !reindex
     }

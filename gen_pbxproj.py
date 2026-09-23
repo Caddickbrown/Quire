@@ -18,8 +18,26 @@ import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-def new_id():
-    return uuid.uuid4().hex[:24].upper()
+# Version numbers, written once and emitted into every target's build settings
+# (app, widget, share extension, test bundle) — bump MARKETING_VERSION here on
+# release, per CHANGELOG.md's "How to update this file".
+MARKETING_VERSION = '1.0'
+CURRENT_PROJECT_VERSION = '1'
+
+# The Xcode version this project is stamped for. Xcode raises its "Update to
+# recommended settings" sheet when the stamp is stale, whatever the settings
+# say, so it lives in one place and is emitted into LastUpgradeCheck /
+# LastSwiftUpdateCheck (pbxproj) and LastUpgradeVersion (schemes) alike.
+# Encoding: major * 100 + minor * 10 — 2650 is Xcode 26.5.
+XCODE_STAMP = '2650'
+
+# Object ids are derived from their stable key rather than randomised, so a
+# re-run of this generator produces a byte-identical pbxproj. `make build`
+# regenerates the project first, and a random id per run turned every build
+# into a several-hundred-line diff (and invalidated Xcode's per-object state).
+# uuid5 over a fixed namespace is a pure function of the key.
+def new_id(key):
+    return uuid.uuid5(uuid.NAMESPACE_URL, 'nook:' + key).hex[:24].upper()
 
 # (key, path relative to Nook/, containing group)
 swift_files = [
@@ -101,7 +119,7 @@ test_swift_files = [
 test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListContinuation']
 
 # Allocate ids
-IDs = {k: new_id() for k in [
+IDs = {k: new_id(k) for k in [
     'project', 'mainGroup', 'nookGroup', 'modelsGroup', 'viewsGroup',
     'iosGroup', 'macosGroup', 'productsGroup', 'target',
     'debugConfig', 'releaseConfig', 'projDebugConfig', 'projReleaseConfig',
@@ -132,22 +150,26 @@ IDs = {k: new_id() for k in [
     'changelog', 'bf_changelog',
 ]}
 for name, _, _ in swift_files:
-    IDs[name] = new_id()
-    IDs['bf_' + name] = new_id()
+    IDs[name] = new_id(name)
+    IDs['bf_' + name] = new_id('bf_' + name)
 for name, _, _ in resources:
-    IDs[name] = new_id()
-    IDs['bf_' + name] = new_id()
+    IDs[name] = new_id(name)
+    IDs['bf_' + name] = new_id('bf_' + name)
 for name, _ in widget_swift_files:
-    IDs[name] = new_id()
-    IDs['bf_' + name] = new_id()
+    IDs[name] = new_id(name)
+    IDs['bf_' + name] = new_id('bf_' + name)
 for name, _ in share_swift_files:
-    IDs[name] = new_id()
-    IDs['bf_' + name] = new_id()
+    IDs[name] = new_id(name)
+    IDs['bf_' + name] = new_id('bf_' + name)
 for name, _ in test_swift_files:
-    IDs[name] = new_id()
-    IDs['bf_' + name] = new_id()
+    IDs[name] = new_id(name)
+    IDs['bf_' + name] = new_id('bf_' + name)
 for name in test_shared_models:
-    IDs['tbf_' + name] = new_id()
+    IDs['tbf_' + name] = new_id('tbf_' + name)
+
+# Truncated uuid5s are unique in practice, but a duplicate would silently
+# produce a corrupt project — cheap to assert.
+assert len(set(IDs.values())) == len(IDs), 'duplicate object id'
 
 def base(path):
     return os.path.basename(path)
@@ -476,8 +498,8 @@ def pbxproj():
     a('\t\t\tisa = PBXProject;')
     a('\t\t\tattributes = {')
     a('\t\t\t\tBuildIndependentTargetsInParallel = 1;')
-    a('\t\t\t\tLastSwiftUpdateCheck = 2650;')
-    a('\t\t\t\tLastUpgradeCheck = 2650;')
+    a(f'\t\t\t\tLastSwiftUpdateCheck = {XCODE_STAMP};')
+    a(f'\t\t\t\tLastUpgradeCheck = {XCODE_STAMP};')
     a('\t\t\t\tTargetAttributes = {')
     a(f'\t\t\t\t\t{IDs["target"]} = {{')
     a('\t\t\t\t\t\tCreatedOnToolsVersion = 16.0;')
@@ -689,7 +711,7 @@ def pbxproj():
         a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Nook/Nook-iOS.entitlements;')
         a('\t\t\t\tCODE_SIGN_STYLE = Automatic;')
         a('\t\t\t\tDEAD_CODE_STRIPPING = YES;')
-        a('\t\t\t\tCURRENT_PROJECT_VERSION = 1;')
+        a(f'\t\t\t\tCURRENT_PROJECT_VERSION = {CURRENT_PROJECT_VERSION};')
         a('\t\t\t\tENABLE_HARDENED_RUNTIME = YES;')
         a('\t\t\t\tENABLE_PREVIEWS = YES;')
         a('\t\t\t\tGENERATE_INFOPLIST_FILE = YES;')
@@ -697,6 +719,10 @@ def pbxproj():
         a('\t\t\t\t"INFOPLIST_FILE[sdk=iphonesimulator*]" = Nook/iOS/Info.plist;')
         a('\t\t\t\t"INFOPLIST_FILE[sdk=macosx*]" = Nook/macOS/Info.plist;')
         a('\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = Nook;')
+        # macOS requires an App Store category in Info.plist (and Finder/the
+        # Store use it); GENERATE_INFOPLIST_FILE writes LSApplicationCategoryType
+        # from this setting. Name verified against Xcode's CoreBuildSystem.xcspec.
+        a('\t\t\t\tINFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";')
         a('\t\t\t\tINFOPLIST_KEY_NSMicrophoneUsageDescription = "Nook records voice memos to attach to your journal entries.";')
         a('\t\t\t\tINFOPLIST_KEY_NSCameraUsageDescription = "Nook takes photos and records video to attach to your journal entries.";')
         a('\t\t\t\tINFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Nook transcribes your voice memos on this device so their words become searchable text.";')
@@ -713,7 +739,7 @@ def pbxproj():
         a('\t\t\t\tLD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";')
         a('\t\t\t\t"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";')
         a('\t\t\t\tMACOSX_DEPLOYMENT_TARGET = 14.0;')
-        a('\t\t\t\tMARKETING_VERSION = 1.0;')
+        a(f'\t\t\t\tMARKETING_VERSION = {MARKETING_VERSION};')
         a('\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.nook;')
         a('\t\t\t\tREGISTER_APP_GROUPS = YES;')
         a('\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";')
@@ -736,7 +762,7 @@ def pbxproj():
         a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = NookWidget/NookWidget-iOS.entitlements;')
         a('\t\t\t\tCODE_SIGN_STYLE = Automatic;')
         a('\t\t\t\tDEAD_CODE_STRIPPING = YES;')
-        a('\t\t\t\tCURRENT_PROJECT_VERSION = 1;')
+        a(f'\t\t\t\tCURRENT_PROJECT_VERSION = {CURRENT_PROJECT_VERSION};')
         a('\t\t\t\tENABLE_HARDENED_RUNTIME = YES;')
         a('\t\t\t\tGENERATE_INFOPLIST_FILE = YES;')
         a('\t\t\t\tINFOPLIST_FILE = NookWidget/Info.plist;')
@@ -746,7 +772,7 @@ def pbxproj():
         a('\t\t\t\tLD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";')
         a('\t\t\t\t"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";')
         a('\t\t\t\tMACOSX_DEPLOYMENT_TARGET = 14.0;')
-        a('\t\t\t\tMARKETING_VERSION = 1.0;')
+        a(f'\t\t\t\tMARKETING_VERSION = {MARKETING_VERSION};')
         a('\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.nook.NookWidget;')
         a('\t\t\t\tREGISTER_APP_GROUPS = YES;')
         a('\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";')
@@ -770,7 +796,7 @@ def pbxproj():
         a('\t\t\t\t"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = NookShare/NookShare-iOS.entitlements;')
         a('\t\t\t\tCODE_SIGN_STYLE = Automatic;')
         a('\t\t\t\tDEAD_CODE_STRIPPING = YES;')
-        a('\t\t\t\tCURRENT_PROJECT_VERSION = 1;')
+        a(f'\t\t\t\tCURRENT_PROJECT_VERSION = {CURRENT_PROJECT_VERSION};')
         a('\t\t\t\tENABLE_HARDENED_RUNTIME = YES;')
         a('\t\t\t\tGENERATE_INFOPLIST_FILE = YES;')
         a('\t\t\t\tINFOPLIST_FILE = NookShare/Info.plist;')
@@ -780,7 +806,7 @@ def pbxproj():
         a('\t\t\t\tLD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";')
         a('\t\t\t\t"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";')
         a('\t\t\t\tMACOSX_DEPLOYMENT_TARGET = 14.0;')
-        a('\t\t\t\tMARKETING_VERSION = 1.0;')
+        a(f'\t\t\t\tMARKETING_VERSION = {MARKETING_VERSION};')
         a('\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.nook.NookShare;')
         a('\t\t\t\tREGISTER_APP_GROUPS = YES;')
         a('\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";')
@@ -800,11 +826,11 @@ def pbxproj():
         a('\t\t\tisa = XCBuildConfiguration;')
         a('\t\t\tbuildSettings = {')
         a('\t\t\t\tCODE_SIGN_STYLE = Automatic;')
-        a('\t\t\t\tCURRENT_PROJECT_VERSION = 1;')
+        a(f'\t\t\t\tCURRENT_PROJECT_VERSION = {CURRENT_PROJECT_VERSION};')
         a('\t\t\t\tGENERATE_INFOPLIST_FILE = YES;')
         a('\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 17.0;')
         a('\t\t\t\tMACOSX_DEPLOYMENT_TARGET = 14.0;')
-        a('\t\t\t\tMARKETING_VERSION = 1.0;')
+        a(f'\t\t\t\tMARKETING_VERSION = {MARKETING_VERSION};')
         a('\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.nook.NookTests;')
         a('\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";')
         a('\t\t\t\tSUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";')
@@ -907,7 +933,7 @@ def app_scheme():
     in git — and so the widget target, whose autocreation is suppressed in the
     scheme-management plist below, has no scheme to be autocreated next to."""
     return f'''<?xml version="1.0" encoding="UTF-8"?>
-<Scheme LastUpgradeVersion = "1600" version = "1.7">
+<Scheme LastUpgradeVersion = "{XCODE_STAMP}" version = "1.7">
    <BuildAction parallelizeBuildables = "YES" buildImplicitDependencies = "YES">
       <BuildActionEntries>
          <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "YES" buildForArchiving = "YES" buildForAnalyzing = "YES">
@@ -916,6 +942,15 @@ def app_scheme():
                BlueprintIdentifier = "{IDs['target']}"
                BuildableName = "Nook.app"
                BlueprintName = "Nook"
+               ReferencedContainer = "container:Nook.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry buildForTesting = "YES" buildForRunning = "NO" buildForProfiling = "NO" buildForArchiving = "NO" buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "{IDs['testsTarget']}"
+               BuildableName = "NookTests.xctest"
+               BlueprintName = "NookTests"
                ReferencedContainer = "container:Nook.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -1029,7 +1064,7 @@ def scheme_management():
 def widget_scheme():
     """Shared scheme for the widget extension, carrying _XCWidgetKind."""
     return f'''<?xml version="1.0" encoding="UTF-8"?>
-<Scheme LastUpgradeVersion = "1600" version = "1.7">
+<Scheme LastUpgradeVersion = "{XCODE_STAMP}" version = "1.7">
    <BuildAction parallelizeBuildables = "YES" buildImplicitDependencies = "YES">
       <BuildActionEntries>
          <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "YES" buildForArchiving = "YES" buildForAnalyzing = "YES">
@@ -1125,7 +1160,13 @@ if __name__ == '__main__':
     # locally on every run rather than shared — which is what keeps its target
     # ids in step with the freshly generated pbxproj.
     userdata = os.path.join(HERE, 'Nook.xcodeproj', 'xcuserdata')
-    existing = [d for d in os.listdir(userdata)] if os.path.isdir(userdata) else []
+    # Only *.xcuserdatad directories count: a .DS_Store (or any other stray
+    # file Finder drops in there) used to be picked as the user folder and the
+    # generator then crashed writing into it.
+    existing = sorted(
+        d for d in os.listdir(userdata)
+        if d.endswith('.xcuserdatad') and os.path.isdir(os.path.join(userdata, d))
+    ) if os.path.isdir(userdata) else []
     who = existing[0] if existing else f'{getpass.getuser()}.xcuserdatad'
     mgmt_dir = os.path.join(userdata, who, 'xcschemes')
     os.makedirs(mgmt_dir, exist_ok=True)

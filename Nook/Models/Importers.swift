@@ -189,12 +189,40 @@ extension JournalStore {
     /// File a prepared import into the archive: copy each entry's media through
     /// the normal asset path (rewriting its `dayone-moment://` links), then
     /// append the entries to their day files. Re-running the same import is
-    /// safe — an entry whose exact text is already in its day file is skipped.
+    /// safe — an entry already in its day file is skipped, media and all.
+    ///
+    /// The skip has to happen *before* the media copy: every copy takes a fresh
+    /// `assets/<uuid>` name, so the rewritten text of a re-import never matches
+    /// what the first run wrote, and comparing finished entries (which is all
+    /// `appendFiledEntries` can do) would duplicate every entry with a photo —
+    /// and re-copy the photo. So entries are matched on what survives the
+    /// rewrite instead: the timestamp, the title, and the body with its media
+    /// links stripped out.
     @discardableResult
     func commitImport(_ preview: ImportPreview) -> ImportResult {
         var result = ImportResult()
-        var entries: [Entry] = []
+        var toFile: [Entry] = []
+        // date → how many entries with each key that day file still holds
+        // unclaimed. A count rather than a set so an export that really does
+        // carry two look-alike entries files both the first time, and skips
+        // both — not just one — on a re-run.
+        var filed: [String: [String: Int]] = [:]
         for prepared in preview.entries {
+            let date = String(prepared.ts.prefix(10))
+            if filed[date] == nil {
+                var counts: [String: Int] = [:]
+                for e in entries(for: date) {
+                    counts[Self.importKey(ts: e.ts, title: e.suffix, body: e.body), default: 0] += 1
+                }
+                filed[date] = counts
+            }
+            let key = Self.importKey(ts: prepared.ts, title: prepared.title, body: prepared.body)
+            if let remaining = filed[date]?[key], remaining > 0 {
+                filed[date]?[key] = remaining - 1
+                result.skipped += 1
+                continue
+            }
+
             var body = prepared.body
             for m in prepared.media {
                 let scoped = m.url.startAccessingSecurityScopedResource()
@@ -222,11 +250,21 @@ extension JournalStore {
                     body += (body.isEmpty ? "" : "\n\n") + link
                 }
             }
-            entries.append(Self.makeEntry(timestamp: prepared.ts, title: prepared.title, body: body))
+            toFile.append(Self.makeEntry(timestamp: prepared.ts, title: prepared.title, body: body))
         }
-        let appended = appendFiledEntries(entries)
+        let appended = appendFiledEntries(toFile)
         result.entries = appended
-        result.skipped = entries.count - appended
+        result.skipped += toFile.count - appended
         return result
+    }
+
+    /// The identity of an imported entry, stable across the media rewrite:
+    /// timestamp + title + body with every `![](…)` link removed and the
+    /// remaining whitespace collapsed (stripping a link leaves blank lines
+    /// behind, and a link appended to the end leaves a trailing one).
+    private static func importKey(ts: String, title: String, body: String) -> String {
+        let squashed = MediaLinks.strippingLinks(body)
+            .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        return "\(ts)\u{1}\(title.trimmingCharacters(in: .whitespacesAndNewlines))\u{1}\(squashed)"
     }
 }

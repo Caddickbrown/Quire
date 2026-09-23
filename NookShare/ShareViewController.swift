@@ -63,6 +63,13 @@ final class ShareViewController: NSViewController {
         view = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 380))
     }
 
+    // Without this the macOS sheet came up empty and nothing was ever
+    // captured: `loadView` alone builds the view, it doesn't start the work.
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        Task { await run() }
+    }
+
     private func show(_ compose: ShareComposeView) {
         let host = NSHostingView(rootView: compose)
         host.frame = view.bounds

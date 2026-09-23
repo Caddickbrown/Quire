@@ -42,11 +42,20 @@ struct EntryDetailView: View {
 
     @State private var transcribing = false
     @State private var transcribeError: String?
+    @State private var dropError: String?
 
     @State private var title: String
     @State private var date: Date
     @State private var text: String
     @State private var baselineRaw: String
+    /// What this editor last wrote, and where. The store looks an entry up by
+    /// its text, so the lookup key has to follow every save — passing the
+    /// immutable `entry` it was opened with meant the first date change orphaned
+    /// the editor and every later autosave (and Delete, and File) silently
+    /// no-oped. `currentSource` moves too: re-dating a filed entry moves it into
+    /// another day's file.
+    @State private var current: Entry
+    @State private var currentSource: EntrySource
     @State private var mode: EntryViewMode = .edit
     @State private var showingImagePicker = false
     @State private var showingVideoRecorder = false
@@ -73,10 +82,17 @@ struct EntryDetailView: View {
         self.entry = entry
         self.source = source
         self.onReturnedToInbox = onReturnedToInbox
+        let opened = JournalStore.date(from: entry.ts) ?? Date()
         _title = State(initialValue: entry.suffix)
-        _date = State(initialValue: JournalStore.date(from: entry.ts) ?? Date())
+        _date = State(initialValue: opened)
         _text = State(initialValue: entry.body)
-        _baselineRaw = State(initialValue: entry.raw)
+        // Baseline from what this editor *would* compose, not from the file's
+        // raw text: a non-canonical entry (extra blank lines, a hand-edited
+        // header) used to read as dirty and be rewritten the moment it opened.
+        _baselineRaw = State(initialValue: JournalStore.makeEntry(
+            timestamp: JournalStore.ts(from: opened), title: entry.suffix, body: entry.body).raw)
+        _current = State(initialValue: entry)
+        _currentSource = State(initialValue: source)
         // Drafts open ready to edit; filed/journal entries open in Preview.
         let startMode: EntryViewMode = { if case .inbox = source { return .edit }; return .preview }()
         _mode = State(initialValue: startMode)
@@ -92,21 +108,10 @@ struct EntryDetailView: View {
 
     /// Star state is a trailing `*` on the title; toggling edits `title` so the
     /// change flows through the normal autosave (and Preview) path.
-    private var isStarred: Bool { title.trimmingCharacters(in: .whitespaces).hasSuffix("*") }
-    private func toggleStar() {
-        let base = title.trimmingCharacters(in: .whitespaces)
-        if base.hasSuffix("*") {
-            title = String(base.dropLast()).trimmingCharacters(in: .whitespaces)
-        } else {
-            title = base.isEmpty ? "*" : base + " *"
-        }
-    }
+    private var isStarred: Bool { Entry.hasStarMarker(title) }
+    private func toggleStar() { title = Entry.togglingStarMarker(title) }
     /// Title as shown in Preview: the star marker stripped (it's drawn as an icon).
-    private var previewTitle: String {
-        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard t.hasSuffix("*") else { return t }
-        return String(t.dropLast()).trimmingCharacters(in: .whitespaces)
-    }
+    private var previewTitle: String { Entry.strippingStarMarker(title) }
     private var saveHelp: String {
         if case .inbox = source { return "Save draft (keep in Inbox)" }
         return "Save"
@@ -187,6 +192,11 @@ struct EntryDetailView: View {
         .onChange(of: title) { _, _ in scheduleSave() }
         .onChange(of: text) { _, _ in scheduleSave() }
         .onChange(of: date) { _, _ in scheduleSave() }
+        // The same editor can be handed a re-read entry while it sits open —
+        // starring it from the inbox row, say. With nothing typed since the last
+        // save, adopt it; the fields held the pre-star text and the next
+        // keystroke wrote the star straight back off.
+        .onChange(of: entry) { _, e in adopt(e) }
         // Present the entry on a connected external display (iOS second screen).
         .externalDisplay(.reading(title: title, date: date, text: text, isStarred: isStarred))
         .onDisappear { finishRecordingIfNeeded(); flush() }
@@ -197,6 +207,14 @@ struct EntryDetailView: View {
             Button("OK") { }
         } message: {
             Text(transcribeError ?? "")
+        }
+        .alert("Can't attach that", isPresented: Binding(
+            get: { dropError != nil },
+            set: { if !$0 { dropError = nil } }
+        )) {
+            Button("OK") { }
+        } message: {
+            Text(dropError ?? "")
         }
     }
 
@@ -323,10 +341,13 @@ struct EntryDetailView: View {
         }
         .help(saveHelp)
 
-        if case .inbox = source {
+        if case .inbox = currentSource {
             Button {
                 flush()
-                store.fileDraft(currentEntry)
+                // `current` is what the flush actually wrote — filing the
+                // composed text instead left the original behind in the inbox
+                // once the date had been changed.
+                store.fileDraft(current)
                 #if os(iOS)
                 dismiss()
                 #endif
@@ -414,13 +435,46 @@ struct EntryDetailView: View {
     /// final flush reindexes so lists refresh once you leave.
     private func commit(reindex: Bool = false) {
         guard isDirty else { return }
-        switch source {
-        case .inbox:            store.updateDraft(entry, newText: composedRaw, reindex: reindex)
-        case .archive(let d):   store.updateFiledEntry(date: d, original: entry, newText: composedRaw, reindex: reindex)
-        case .journal(let n):   store.updateJournalEntry(name: n, original: entry, newText: composedRaw, reindex: reindex)
+        let composed = composedRaw
+        let saved: Bool
+        switch currentSource {
+        case .inbox:
+            saved = store.updateDraft(current, newText: composed, reindex: reindex)
+        case .archive(let d):
+            // A re-dated entry lands in another day's file; follow it there.
+            if let moved = store.updateFiledEntry(date: d, original: current,
+                                                  newText: composed, reindex: reindex) {
+                currentSource = moved
+                saved = true
+            } else {
+                saved = false
+            }
+        case .journal(let n):
+            saved = store.updateJournalEntry(name: n, original: current, newText: composed, reindex: reindex)
         }
-        baselineRaw = composedRaw
+        // Only a write that happened moves the baseline — otherwise the editor
+        // would go clean with nothing on disk and never retry.
+        guard saved else { return }
+        current = JournalParser.parseEntries(composed).first ?? current
+        baselineRaw = composed
         pendingReindex = !reindex
+    }
+
+    /// Take on an entry re-read from disk, unless there are unsaved edits (in
+    /// which case what's typed wins and the next commit will write it).
+    private func adopt(_ e: Entry) {
+        guard !isDirty else { return }
+        let opened = JournalStore.date(from: e.ts) ?? date
+        let incoming = JournalStore.makeEntry(timestamp: JournalStore.ts(from: opened),
+                                              title: e.suffix, body: e.body).raw
+        // Same text, freshly parsed (the usual case after our own save): keep
+        // the lookup key current and leave the fields — and the cursor — alone.
+        guard incoming != baselineRaw else { current = e; return }
+        title = e.suffix
+        text = e.body
+        date = opened
+        current = e
+        baselineRaw = incoming
     }
 
     /// Persist everything and make the store reload, so leaving the entry always
@@ -498,7 +552,17 @@ struct EntryDetailView: View {
                 handled = true
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
                     guard let url else { return }
-                    Task { @MainActor in attachFile(url) }
+                    Task { @MainActor in
+                        // A dropped file only becomes an `![](assets/…)` link, and
+                        // that renders nothing for a .zip or a .docx — so anything
+                        // that isn't image/video/audio is turned away rather than
+                        // copied in behind a link that can never show it.
+                        guard isMediaFile(url) else {
+                            dropError = "Only images, video and audio can be attached to an entry."
+                            return
+                        }
+                        attachFile(url)
+                    }
                 }
             } else if let id = provider.registeredTypeIdentifiers.first(where: { isMedia($0) }),
                       let type = UTType(id) {
@@ -531,6 +595,15 @@ struct EntryDetailView: View {
     private func isMedia(_ id: String) -> Bool {
         guard let t = UTType(id) else { return false }
         return t.conforms(to: .image) || t.conforms(to: .movie) || t.conforms(to: .audio)
+    }
+
+    /// Same test for a dropped file: its own content type when the file system
+    /// knows one, its extension otherwise.
+    private func isMediaFile(_ url: URL) -> Bool {
+        let type = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+            ?? UTType(filenameExtension: url.pathExtension)
+        guard let type else { return false }
+        return type.conforms(to: .image) || type.conforms(to: .movie) || type.conforms(to: .audio)
     }
 
     #if os(macOS)
@@ -609,10 +682,13 @@ struct EntryDetailView: View {
     }
 
     private func delete() {
-        switch source {
-        case .inbox:            store.deleteDraft(entry)
-        case .archive(let d):   store.deleteFiledEntry(date: d, entry: entry)
-        case .journal(let n):   store.deleteJournalEntry(name: n, entry: entry)
+        // `current`, not `entry`: after a date change the opened text is no
+        // longer what's on disk, and deleting by it removed nothing.
+        saveTask?.cancel()
+        switch currentSource {
+        case .inbox:            store.deleteDraft(current)
+        case .archive(let d):   store.deleteFiledEntry(date: d, entry: current)
+        case .journal(let n):   store.deleteJournalEntry(name: n, entry: current)
         }
     }
 }

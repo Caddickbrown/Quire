@@ -202,6 +202,7 @@ body.focus #sidebar { display: none; }
 .dp-time input:focus { border-color: var(--accent); }
 .dp-now { padding: 4px 8px; border-radius: 6px; font-size: 12px; color: var(--text-2); }
 .dp-now:hover { background: var(--hover); color: var(--text); }
+
 .compose-body-wrap { flex: 1; position: relative; overflow: hidden; padding: 8px 20px 20px; }
 .body-editor {
   width: 100%; height: 100%; resize: none; border: none; outline: none; background: none;
@@ -345,11 +346,24 @@ body.focus #sidebar { display: none; }
 .mc-day.inmonth { color: var(--text-2); }
 .mc-day.has { color: var(--text); background: var(--sel); cursor: pointer; }
 .mc-day.today { outline: 1.5px solid var(--accent); outline-offset: -1px; }
+/* Shown only while the chosen journal folder is unreachable. */
+.storage-banner { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 70; display: flex; align-items: center; gap: 8px; max-width: min(680px, 92vw); padding: 8px 12px; border-radius: 10px; font-size: 13px; color: #fff; background: var(--danger); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28); }
+.storage-banner .mono { font-family: ui-monospace, Menlo, monospace; opacity: 0.9; }
+.storage-banner button { flex: none; padding: 3px 9px; border-radius: 7px; border: 1px solid rgba(255, 255, 255, 0.55); background: transparent; color: #fff; font-size: 12px; cursor: pointer; }
+.storage-banner button:hover { background: rgba(255, 255, 255, 0.16); }
+
 .mc-day .mc-star { position: absolute; top: 0; right: 1px; font-size: 6px; color: var(--star); }
+/* Media-typed dots: photo / video / audio, one per kind the day carries. */
+.mc-day .mc-dots { position: absolute; bottom: 1px; left: 0; right: 0; display: flex; gap: 2px; justify-content: center; pointer-events: none; }
+.mc-dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-3); }
+.mc-dot.photo { background: var(--accent); }
+.mc-dot.video { background: #945CD6; }
+.mc-dot.audio { background: #34A86C; }
 
 /* toast */
 #toast-root { position: fixed; bottom: 20px; left: 0; right: 0; display: flex; justify-content: center; pointer-events: none; z-index: 300; }
 .toast { background: color-mix(in srgb, var(--bg-elev) 92%, transparent); border: 1px solid var(--border); backdrop-filter: blur(8px); border-radius: 999px; padding: 9px 18px; font-size: 13.5px; box-shadow: var(--shadow); animation: toastin .18s ease; }
+.toast.error { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); color: var(--danger); border-radius: 12px; max-width: min(70vw, 560px); }
 @keyframes toastin { from { opacity: 0; transform: translateY(6px); } }
 
 /* recording banner */

@@ -101,7 +101,20 @@ struct ExternalRow: Equatable, Identifiable {
 
     func present(_ new: ExternalDisplayContent) {
         latest = new
+        // Nothing goes to the monitor while the app lock is up. The veil only
+        // covers the device — the monitor is a window of its own, and left to
+        // itself it would keep showing the entry that was open when the phone
+        // was put down. `latest` is still kept, so unlocking restores it.
+        guard !AppLockManager.shared.showsVeil else { return }
         if isConnected { content = new }
+    }
+
+    /// The app lock engaged or lifted (called by AppLockManager): the monitor
+    /// falls back to the idle stats screen while covered, and picks up where it
+    /// left off once the app is unlocked.
+    func applyLockState(locked: Bool) {
+        guard isConnected else { return }
+        content = locked ? .idle : latest
     }
 
     /// Fall back to the idle screen, but only if `shown` is still what's up
@@ -527,14 +540,8 @@ private struct ExternalEntryView: View {
     private static let bottomAnchor = "nook.external.bottom"
 
     private var writingFont: Font { Theme.font(writingFontRaw, size: metrics.text) }
-    private var displayTitle: String {
-        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard t.hasSuffix("*") else { return t }
-        return String(t.dropLast()).trimmingCharacters(in: .whitespaces)
-    }
-    private var starred: Bool {
-        isStarred || title.trimmingCharacters(in: .whitespaces).hasSuffix("*")
-    }
+    private var displayTitle: String { Entry.strippingStarMarker(title) }
+    private var starred: Bool { isStarred || Entry.hasStarMarker(title) }
     private var tags: [String] { JournalParser.splitTags(title + "\n" + text) }
     private var wordCount: Int {
         text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count

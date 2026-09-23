@@ -146,13 +146,18 @@ extension JournalStore {
         setMediaProgress((0, work.count))
         for (i, item) in work.enumerated() {
             defer { setMediaProgress((i + 1, work.count)) }
-            guard let content = try? String(contentsOf: item.file, encoding: .utf8),
-                  let url = assetURL(forRelative: item.path) else { failed += 1; continue }
+            guard let url = assetURL(forRelative: item.path) else { failed += 1; continue }
             let id = ((item.path as NSString).lastPathComponent as NSString).deletingPathExtension
             do {
                 let transcript = try await Transcriber.transcribe(url: url)
+                // Re-read after the await: recognition takes seconds to
+                // minutes, and the composer autosaves the inbox every 500ms —
+                // inserting into the snapshot taken before it would write the
+                // file back as it was when this run started.
+                guard let fresh = try? JournalStore.readForRewrite(item.file),
+                      fresh.contains("](\(item.path))") else { continue }
                 rewriteContentFile(item.file,
-                                   Transcriber.insert(transcript: transcript, after: item.path, in: content))
+                                   Transcriber.insert(transcript: transcript, after: item.path, in: fresh))
                 markTranscribed(assetID: id)
                 done += 1
             } catch Transcriber.TranscriptionError.empty {

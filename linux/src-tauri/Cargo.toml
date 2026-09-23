@@ -27,6 +27,9 @@ dirs = "5"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "tiff", "webp"] }
 rand = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# IANA zone names, so a Day One export's per-entry `timeZone` lands on the day
+# it was actually written (the Swift importer uses Foundation's TimeZone).
+chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
 
 [profile.release]
 codegen-units = 1

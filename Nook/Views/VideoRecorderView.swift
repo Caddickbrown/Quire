@@ -33,14 +33,20 @@ struct VideoRecorderView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
-        picker.sourceType = .camera
+        // No camera on the Simulator (or when one is restricted) — asking for
+        // `.camera` anyway raises rather than opening black, so fall back to
+        // the library exactly as the photo path below does.
+        let hasCamera = UIImagePickerController.isSourceTypeAvailable(.camera)
+        picker.sourceType = hasCamera ? .camera : .photoLibrary
         // Order matters: mediaTypes must include movie BEFORE setting .video mode.
         picker.mediaTypes = [UTType.movie.identifier]
-        picker.cameraCaptureMode = .video
-        if UIImagePickerController.isCameraDeviceAvailable(.front) {
-            picker.cameraDevice = .front
+        if hasCamera {
+            picker.cameraCaptureMode = .video
+            if UIImagePickerController.isCameraDeviceAvailable(.front) {
+                picker.cameraDevice = .front
+            }
+            picker.videoQuality = .typeHigh
         }
-        picker.videoQuality = .typeHigh
         picker.delegate = context.coordinator
         return picker
     }

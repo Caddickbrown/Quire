@@ -57,11 +57,21 @@ struct AssetsView: View {
     @State private var assets: [JournalStore.AssetItem] = []
     @State private var viewing: JournalStore.AssetItem?
     @State private var usagePicker: UsagePicker?
+    @State private var pendingDelete: PendingDelete?
 
     /// Shown when an asset is used by several entries, so you can pick one.
     struct UsagePicker: Identifiable {
         let id = UUID()
         let uses: [(entry: Entry, source: EntrySource)]
+    }
+
+    /// A delete waiting on confirmation, carrying how many entries still link
+    /// the file — deleting one out from under an entry leaves a broken
+    /// `![](assets/…)` link that nothing here can repair.
+    struct PendingDelete: Identifiable {
+        let id = UUID()
+        let item: JournalStore.AssetItem
+        let uses: Int
     }
 
     // Tight square tiles with hairline gaps — a photo gallery, not a file list.
@@ -169,8 +179,10 @@ struct AssetsView: View {
                 }
                 #endif
                 Button(role: .destructive) {
-                    store.deleteAsset(item.url)
-                    reload()
+                    // Counted here rather than up front for the same reason as
+                    // "Go to Entry": usages(ofAsset:) reads the whole journal.
+                    pendingDelete = PendingDelete(item: item,
+                                                  uses: store.usages(ofAsset: item.name).count)
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
@@ -236,11 +248,35 @@ struct AssetsView: View {
         } message: { picker in
             Text("Used by \(picker.uses.count) entries.")
         }
+        // An alert rather than a second confirmationDialog: two dialogs on one
+        // view fight over the same presentation slot.
+        .alert("Delete this file?",
+               isPresented: Binding(get: { pendingDelete != nil },
+                                    set: { if !$0 { pendingDelete = nil } }),
+               presenting: pendingDelete) { pending in
+            Button("Delete", role: .destructive) {
+                store.deleteAsset(pending.item.url)
+                reload()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: { pending in
+            Text(deleteMessage(for: pending))
+        }
         .task { reload() }
     }
 
     private func reload() {
         Task { assets = await store.allAssetsAsync() }
+    }
+
+    /// Spells out what deleting costs — the entries keep their `![](assets/…)`
+    /// links, which is a broken image once the file is gone.
+    private func deleteMessage(for pending: PendingDelete) -> String {
+        guard pending.uses > 0 else {
+            return "\(pending.item.name) isn't linked by any entry. This can't be undone."
+        }
+        let entries = pending.uses == 1 ? "1 entry links" : "\(pending.uses) entries link"
+        return "\(entries) this file, and those links will break. This can't be undone."
     }
 
     /// "Go to entry". Finding an asset's usages means reading every journal
@@ -390,7 +426,7 @@ struct AssetViewer: View {
                 ContentUnavailableView("Can't open this image", systemImage: "photo")
             }
         case .video:
-            VideoPlayer(player: AVPlayer(url: item.url))
+            VideoView(url: item.url)
         case .audio:
             AudioPlayerView(url: item.url).padding()
         }

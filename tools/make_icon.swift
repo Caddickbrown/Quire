@@ -5,7 +5,11 @@
 //    swift tools/make_icon.swift preview     → render every concept at 256px to /tmp/nook-icons/
 //    swift tools/make_icon.swift <concept>   → render the chosen concept at ALL sizes into the appiconset
 //
-//  Concepts: bubble | pages | ink | glyph
+//  Concepts: bubble | pages | ink | glyph | … (see `concepts` at the bottom)
+//
+//  A concept with a companion `<name>-dark` entry also renders that one to
+//  icon-ios-1024-dark.png — the iOS 18 dark-appearance variant, wired up by the
+//  `appearances` entry in the appiconset's Contents.json.
 //
 
 import AppKit
@@ -458,38 +462,57 @@ func conceptNib(_ s: CGFloat) -> CGContext {
 }
 
 // ribbon — a clean closed journal with a satin bookmark that curls playfully.
-func conceptRibbon(_ s: CGFloat) -> CGContext {
+//
+// Two palettes, one geometry: `light` is the shipping icon (cream journal on
+// sage-teal), `dark` is the iOS dark-appearance variant (green journal on
+// near-black). Keep them sharing this function — a second copy would drift.
+struct RibbonPalette {
+    let bgTop: CGColor, bgBottom: CGColor
+    let cover: CGColor, frame: CGColor
+    let ribbon: CGColor, ribbonHi: CGColor
+
+    static let light = RibbonPalette(
+        bgTop:    srgb(70, 150, 128), bgBottom: srgb(44, 112, 96),   // muted sage-teal
+        cover:    srgb(250, 246, 236),                               // paper cream
+        frame:    srgb(44, 112, 96, 0.35),
+        ribbon:   srgb(214, 96, 92),  ribbonHi: srgb(232, 132, 126)) // warm coral
+
+    static let dark = RibbonPalette(
+        bgTop:    srgb(30, 36, 34),   bgBottom: srgb(14, 18, 17),    // near-black, faintly green
+        cover:    srgb(78, 168, 130),                                // green cover
+        frame:    srgb(20, 62, 46, 0.55),
+        ribbon:   srgb(226, 112, 104), ribbonHi: srgb(240, 148, 140))
+}
+
+func conceptRibbon(_ s: CGFloat, _ p: RibbonPalette) -> CGContext {
     let c = ctx(Int(s))
-    squircle(c, s, srgb(70, 150, 128), srgb(44, 112, 96))      // muted sage-teal
-    let cover = srgb(250, 246, 236)
+    squircle(c, s, p.bgTop, p.bgBottom)
     let cx = s/2
     let bw = s*0.44, bh = s*0.54
     let r = CGRect(x: cx - bw/2, y: (s-bh)/2, width: bw, height: bh)
 
     // Cover.
-    fill(c, cover) { g in g.addPath(roundedRectPath(r, s*0.045)) }
+    fill(c, p.cover) { g in g.addPath(roundedRectPath(r, s*0.045)) }
     // Subtle inset frame line (bookbinding detail).
-    c.setStrokeColor(srgb(44, 112, 96, 0.35)); c.setLineWidth(s*0.01)
+    c.setStrokeColor(p.frame); c.setLineWidth(s*0.01)
     c.addPath(roundedRectPath(r.insetBy(dx: s*0.045, dy: s*0.045), s*0.03)); c.strokePath()
 
     // Satin ribbon bookmark: tucked over the top edge, down the right third,
     // out past the bottom where the tail flicks up in a soft curl (the whimsy).
     let rw = s*0.05
     let rx = r.minX + bw*0.66
-    let ribbon = srgb(214, 96, 92)          // warm coral
-    let ribbonHi = srgb(232, 132, 126)      // satin highlight
     // Straight run from just over the top edge down to just below the bottom edge.
-    fill(c, ribbon) { g in
+    fill(c, p.ribbon) { g in
         g.addRect(CGRect(x: rx, y: r.minY - s*0.015, width: rw, height: bh + s*0.03))
     }
     // Soft flick at the tail.
-    c.setStrokeColor(ribbon); c.setLineCap(.round); c.setLineJoin(.round); c.setLineWidth(rw)
+    c.setStrokeColor(p.ribbon); c.setLineCap(.round); c.setLineJoin(.round); c.setLineWidth(rw)
     c.move(to: CGPoint(x: rx + rw/2, y: r.minY - s*0.015))
     c.addQuadCurve(to: CGPoint(x: rx + rw/2 + s*0.055, y: r.minY - s*0.075),
                    control: CGPoint(x: rx + rw/2 + s*0.02, y: r.minY - s*0.02))
     c.strokePath()
     // Thin satin highlight stripe down the ribbon.
-    c.setStrokeColor(ribbonHi); c.setLineWidth(s*0.012); c.setLineCap(.round)
+    c.setStrokeColor(p.ribbonHi); c.setLineWidth(s*0.012); c.setLineCap(.round)
     c.move(to: CGPoint(x: rx + rw*0.34, y: r.maxY + s*0.01))
     c.addLine(to: CGPoint(x: rx + rw*0.34, y: r.minY + s*0.02))
     c.strokePath()
@@ -501,7 +524,9 @@ let concepts: [String: (CGFloat) -> CGContext] = [
     "flatj": conceptFlatJ, "lines": conceptLines, "book": conceptBook,
     "cat": conceptCat, "moon": conceptMoon, "star": conceptStar,
     "bookface": conceptBookFace, "pencil": conceptPencil,
-    "nib": conceptNib, "ribbon": conceptRibbon,
+    "nib": conceptNib,
+    "ribbon": { conceptRibbon($0, .light) },
+    "ribbon-dark": { conceptRibbon($0, .dark) },
 ]
 
 func write(_ image: CGImage, _ path: String) {
@@ -536,6 +561,14 @@ if arg == "preview" {
         cache[key] = img
         write(img, "\(outDir)/\(name)")
         print("  wrote \(name)\(fullBleed ? " (full-bleed)" : "")")
+    }
+    // Dark-appearance variant (iOS 18+): one full-bleed 1024 next to the light
+    // icon, referenced from Contents.json by an `appearances` entry. macOS
+    // appiconsets have no dark slot, so this is iOS-only by design.
+    if let darkFn = concepts["\(arg)-dark"] {
+        fullBleed = true
+        write(darkFn(1024).makeImage()!, "\(outDir)/icon-ios-1024-dark.png")
+        print("  wrote icon-ios-1024-dark.png (full-bleed, dark appearance)")
     }
     fullBleed = false
     print("Done (\(arg)).")

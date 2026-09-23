@@ -424,6 +424,14 @@ struct SettingsView: View {
             }
 
             Section {
+                if let message = store.storageUnavailableMessage {
+                    Label {
+                        Text(message).fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                    }
+                    .foregroundStyle(.orange)
+                }
                 LabeledContent("Storage", value: store.storageMode.label)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Location").foregroundStyle(.secondary)
@@ -443,7 +451,9 @@ struct SettingsView: View {
             } header: {
                 Text("Journal folder")
             } footer: {
-                Text("Nook stores inbox.md and journal/YYYY/MM/DD.md here. Point this at an existing jnl folder to share files with the jnl CLI.")
+                Text(store.unavailableFolder == nil
+                     ? "Nook stores inbox.md and journal/YYYY/MM/DD.md here. Point this at an existing jnl folder to share files with the jnl CLI."
+                     : "Nook won't save anything while the folder is missing, so nothing ends up in a second journal. Plug the drive back in and locate the folder, or take the default back — your entries stay where they are either way.")
             }
 
             Section {
@@ -690,8 +700,15 @@ struct SettingsView: View {
         .padding(.vertical, 2)
     }
 
+    /// Doubles as the recovery action: when the remembered folder can't be
+    /// reached, picking it again (or wherever it moved to) mints a fresh
+    /// bookmark and unblocks writing.
     private var chooseFolderButton: some View {
-        Button { showingImporter = true } label: { Label("Choose Folder…", systemImage: "folder") }
+        let missing = store.unavailableFolder != nil
+        return Button { showingImporter = true } label: {
+            Label(missing ? "Locate Folder…" : "Choose Folder…",
+                  systemImage: missing ? "folder.badge.questionmark" : "folder")
+        }
             .fileImporter(isPresented: $showingImporter,
                           allowedContentTypes: [.folder],
                           allowsMultipleSelection: false) { result in

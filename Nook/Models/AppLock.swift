@@ -6,8 +6,13 @@
 //  This locks the *app*, not the files — the journal stays plain markdown on
 //  disk, readable in Files/Finder, by design; the setting's copy says so.
 //
-//  RootView overlays a veil while locked and while the app is in the
-//  background (so entry text never shows in the app switcher).
+//  RootView puts a veil up while locked *and* while the app is on its way out
+//  of the foreground — `veiled` goes true on the first sign of resigning
+//  active, which is when iOS takes the app-switcher snapshot, so entry text
+//  never ends up in it. Coming back inside the grace period drops the veil
+//  without asking for a face; outside it, the lock engages and the veil stays
+//  until you authenticate. The second screen is a window of its own that no
+//  veil reaches, so it is told separately to fall back to its idle screen.
 //
 
 import Foundation
@@ -22,6 +27,12 @@ final class AppLockManager: ObservableObject {
 
     @Published private(set) var isLocked: Bool
     @Published private(set) var unlocking = false
+    /// Covered but not necessarily locked: the veil the moment the app stops
+    /// being frontmost, before the system's snapshot is taken.
+    @Published private(set) var veiled = false
+
+    /// Whether anything should be covering the app right now.
+    var showsVeil: Bool { isLocked || veiled }
 
     private var leftForegroundAt: Date?
 
@@ -42,6 +53,8 @@ final class AppLockManager: ObservableObject {
     func lock() {
         guard enabled else { return }
         isLocked = true
+        veiled = true
+        syncExternalDisplay()
     }
 
     func unlock() {
@@ -53,37 +66,67 @@ final class AppLockManager: ObservableObject {
             defer { unlocking = false }
             guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) else {
                 // No passcode set on the device — nothing to gate behind.
-                isLocked = false
+                clearVeil()
                 return
             }
             let ok = (try? await context.evaluatePolicy(
                 .deviceOwnerAuthentication,
                 localizedReason: "Unlock your journal")) ?? false
-            if ok { isLocked = false }
+            if ok { clearVeil() }
         }
+    }
+
+    private func clearVeil() {
+        isLocked = false
+        veiled = false
+        syncExternalDisplay()
     }
 
     // MARK: Scene phase
 
+    /// Resigning active — a system prompt, the app switcher, a swipe home.
+    /// The veil has to be up *here*: by `didEnterBackground` the snapshot the
+    /// switcher shows has already been taken.
+    func willResignActive() {
+        guard enabled else { return }
+        veiled = true
+        syncExternalDisplay()
+    }
+
     func didEnterBackground() {
         guard enabled else { return }
+        veiled = true
         leftForegroundAt = Date()
+        syncExternalDisplay()
     }
 
     func didBecomeActive() {
-        guard enabled else { isLocked = false; return }
+        guard enabled else { clearVeil(); return }
         if let left = leftForegroundAt, Date().timeIntervalSince(left) >= grace {
             isLocked = true
+        } else if !isLocked {
+            // Back inside the grace period (or straight back from a system
+            // prompt): uncover without asking for a face.
+            veiled = false
         }
         leftForegroundAt = nil
+        syncExternalDisplay()
     }
 
     /// The setting flipped: lock immediately when turned on, release when off.
     func preferenceChanged() {
         if enabled {
-            // Newly enabled: stay unlocked for this session; lock on background.
+            // Newly enabled: stay unlocked for this session; the veil goes up
+            // on the way out of the foreground.
         } else {
-            isLocked = false
+            clearVeil()
         }
+    }
+
+    /// The external display is a separate window the veil can't cover, so it
+    /// is told directly: the idle stats screen while the app is covered, and
+    /// back to whatever it was showing once the lock lifts.
+    private func syncExternalDisplay() {
+        ExternalDisplayModel.shared.applyLockState(locked: showsVeil)
     }
 }

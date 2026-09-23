@@ -364,7 +364,7 @@ struct MediaBody: View {
         switch MediaKind(path: path) {
         case .video:
             if let url {
-                VideoPlayer(player: AVPlayer(url: url))
+                VideoView(url: url)
                     .frame(height: min(300, maxImageHeight))
                     .frame(maxWidth: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -542,6 +542,22 @@ struct EntryThumbnail: View {
                 }.value
             }
         }
+    }
+}
+
+/// An inline video player that owns one `AVPlayer` for the view's lifetime.
+/// Handing `VideoPlayer` a freshly-built `AVPlayer(url:)` from inside `body`
+/// made a new one on every re-evaluation, which restarted playback (and left
+/// the old players behind); `AudioPlayerView` below already does it this way.
+/// Sizing and clipping are left to the caller.
+struct VideoView: View {
+    let url: URL
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        VideoPlayer(player: player)
+            .onAppear { if player == nil { player = AVPlayer(url: url) } }
+            .onDisappear { player?.pause() }
     }
 }
 

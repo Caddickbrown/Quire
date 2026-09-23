@@ -62,6 +62,36 @@ public struct NookSnapshot: Codable {
     public var onThisDayDate: String?
     public var onThisDayTS: String?
 
+    public init() {}
+
+    /// Decoded field by field, every one of them optional, so a snapshot the
+    /// app wrote under a different shape — a field renamed, a new one added,
+    /// an old one dropped — still yields a usable snapshot instead of throwing
+    /// and blanking the widget back to zeros.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        currentStreak = try c.decodeIfPresent(Int.self, forKey: .currentStreak) ?? 0
+        bestStreak    = try c.decodeIfPresent(Int.self, forKey: .bestStreak) ?? 0
+        totalDays     = try c.decodeIfPresent(Int.self, forKey: .totalDays) ?? 0
+        totalEntries  = try c.decodeIfPresent(Int.self, forKey: .totalEntries) ?? 0
+        totalWords    = try c.decodeIfPresent(Int.self, forKey: .totalWords) ?? 0
+        inboxDrafts   = try c.decodeIfPresent(Int.self, forKey: .inboxDrafts) ?? 0
+        accentRaw     = try c.decodeIfPresent(String.self, forKey: .accentRaw) ?? "blue"
+        updatedAt     = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .distantPast
+        wordsToday    = try c.decodeIfPresent(Int.self, forKey: .wordsToday)
+        wordGoal      = try c.decodeIfPresent(Int.self, forKey: .wordGoal)
+        onThisDayPreview  = try c.decodeIfPresent(String.self, forKey: .onThisDayPreview)
+        onThisDayYearsAgo = try c.decodeIfPresent(Int.self, forKey: .onThisDayYearsAgo)
+        onThisDayDate     = try c.decodeIfPresent(String.self, forKey: .onThisDayDate)
+        onThisDayTS       = try c.decodeIfPresent(String.self, forKey: .onThisDayTS)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case currentStreak, bestStreak, totalDays, totalEntries, totalWords
+        case inboxDrafts, accentRaw, updatedAt, wordsToday, wordGoal
+        case onThisDayPreview, onThisDayYearsAgo, onThisDayDate, onThisDayTS
+    }
+
     /// Deep link to one entry (`nook://entry?date=…&ts=…`), used by the widget
     /// and notifications; the app resolves it via the archive lookup.
     public static func entryURL(date: String, ts: String) -> URL? {

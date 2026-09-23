@@ -199,6 +199,28 @@ struct EntryPreviewRow: View {
     }
 }
 
+/// Pair up entries drawn from more than one file for `EntryTwoPane`.
+///
+/// `Entry.id` is only unique *within* a file — `JournalParser.withOccurrences`
+/// numbers same-second twins per pool, so an inbox draft and a filed entry
+/// written in the same second both come back as the bare timestamp. Search,
+/// Starred and Tags merge pools, and keying a source map on the raw ids
+/// collapsed such a pair into one row pointing at one file: editing the draft
+/// saved through `.archive`, and `index(of:)`'s "only entry at this second"
+/// fallback then overwrote the filed entry with the draft's text.
+///
+/// Renumbering the merged list restores the invariant the ids are keyed on,
+/// and building the map from the same renumbered array keeps the two in step.
+/// Order is preserved, so sort before calling this, not after.
+func mergedEntrySources(
+    _ pairs: [(entry: Entry, source: EntrySource)]
+) -> (entries: [Entry], sourceFor: (Entry) -> EntrySource) {
+    let entries = JournalParser.withOccurrences(pairs.map(\.entry))
+    let sources = Dictionary(zip(entries.map(\.id), pairs.map(\.source)),
+                             uniquingKeysWith: { a, _ in a })
+    return (entries, { sources[$0.id] ?? .archive(date: $0.date) })
+}
+
 /// Reusable email-style list+detail for a set of entries (macOS); iOS pushes.
 /// Same look as the Inbox: fixed-width list on the left, open entry on the right.
 struct EntryTwoPane: View {
@@ -228,10 +250,10 @@ struct EntryTwoPane: View {
     /// Rebuilt only when the entries array actually changes — as a computed
     /// property this was rebuilt per `key()` call, i.e. per row render, which
     /// made a 4,000-entry list O(n²) and visibly slow.
-    @State private var rowKeys: [UUID: String] = [:]
+    @State private var rowKeys: [String: String] = [:]
 
-    private static func makeRowKeys(_ entries: [Entry]) -> [UUID: String] {
-        var seen: [String: Int] = [:], out: [UUID: String] = [:]
+    private static func makeRowKeys(_ entries: [Entry]) -> [String: String] {
+        var seen: [String: Int] = [:], out: [String: String] = [:]
         for e in entries {
             let n = seen[e.ts, default: 0]
             seen[e.ts] = n + 1
@@ -309,7 +331,75 @@ struct EntryTwoPane: View {
             open(entry)
         }
         .onAppear { rowKeys = Self.makeRowKeys(entries) }
-        .onChange(of: entries.map(\.id)) { _, _ in rowKeys = Self.makeRowKeys(entries) }
+        .onChange(of: entries.map(\.id)) { _, _ in
+            rowKeys = Self.makeRowKeys(entries)
+            resyncOpenEntry()
+        }
+    }
+
+    /// Keep the open pane pointed at something real. The detail is rendered from
+    /// a retained copy so that narrowing the search doesn't close what you're
+    /// editing — but that copy also outlived the entry being deleted (from a row's
+    /// menu, or from the pane itself), leaving a ghost editor writing into a file
+    /// the entry has gone from. So: adopt the store's fresh copy while the entry
+    /// is still there, and clear the selection once it isn't.
+    private func resyncOpenEntry() {
+        guard let open = openEntry else { return }
+        if let live = liveEntry(matching: open) {
+            // Text comparison, not identity: `Entry.id` is stable now, so an
+            // id match no longer means the text is unchanged. Re-pointing only
+            // on a real difference keeps a remote edit flowing through to the
+            // editor while an autosave's own echo changes nothing.
+            //
+            // `raw` rather than the whole value: every other field derives from
+            // it, and `occurrence` deliberately doesn't match here — a merged
+            // list (Search, Starred, Tags) renumbers across its pools, so the
+            // store's copy of a same-second twin carries a different one. On
+            // `!=` that would re-point on every pass, and `key(live)` would
+            // then miss `rowKeys` and drop the selection.
+            guard live.raw != open.raw else { return }
+            openEntry = live
+            if selectedTS != nil { selectedTS = key(live) }
+        } else {
+            openEntry = nil
+            selectedTS = nil
+        }
+    }
+
+    /// The current copy of an entry, or nil if the store no longer holds it.
+    /// Deliberately not id-based: an open editor rewrites — and on a re-date
+    /// moves — the very entry being looked for, so its id is exactly what the
+    /// edit changes. Falls back to the entry itself for same-second twins,
+    /// which no key can tell apart: "still there, don't re-point".
+    private func liveEntry(matching e: Entry) -> Entry? {
+        func find(_ pool: [Entry]) -> Entry? {
+            let sameTS = pool.filter { $0.ts == e.ts }
+            if sameTS.count == 1 { return sameTS[0] }
+            if let exact = sameTS.first(where: { $0.raw == e.raw }) { return exact }
+            if !sameTS.isEmpty { return e }
+            let sameText = pool.filter { $0.suffix == e.suffix && $0.body == e.body }
+            if sameText.count == 1 { return sameText[0] }
+            return sameText.isEmpty ? nil : e
+        }
+        // The visible list first; then the whole source, because `entries` also
+        // narrows as you type in the search field.
+        if let hit = find(entries) { return hit }
+        switch sourceFor(e) {
+        case .inbox:          return find(store.inboxDrafts)
+        case .archive(let d):
+            let days = store.allEntriesByDay()
+            if let hit = find(days.first(where: { $0.date == d })?.entries ?? []) { return hit }
+            // Re-dating moves the entry to another day's file mid-edit; find it
+            // there rather than closing the pane under the user's cursor. One
+            // day at a time (`find` is timestamp-first, and stops at the first
+            // day that has it) instead of flattening the whole corpus and
+            // comparing every body twice.
+            for day in days where day.date != d {
+                if let hit = find(day.entries) { return hit }
+            }
+            return nil
+        case .journal(let n): return find(store.entries(inJournal: n))
+        }
     }
 
     /// Open the keyboard-selected entry: the side pane on macOS, a push on iOS.
@@ -388,6 +478,12 @@ struct EntryTwoPane: View {
     }
 
     private func delete(_ entry: Entry) {
+        // Close the pane with the row it belongs to — waiting for the reload to
+        // notice would leave an editor open on a deleted entry for a beat.
+        if openEntry?.id == entry.id || selectedTS == key(entry) {
+            openEntry = nil
+            selectedTS = nil
+        }
         switch sourceFor(entry) {
         case .inbox:            store.deleteDraft(entry)
         case .archive(let d):   store.deleteFiledEntry(date: d, entry: entry)
@@ -404,11 +500,15 @@ struct DayView: View {
     @AppStorage("fontSize") private var fontSize: Double = Double(Theme.defaultFontSize)
     let date: String
 
+    /// Loaded once per store revision. Reading `store.entries(for:)` from `body`
+    /// re-read the day's file on every redraw — including every keystroke in the
+    /// pane beside it.
+    @State private var entries: [Entry] = []
     @State private var pdfDoc: PDFExportDocument?
     @State private var makingPDF = false
 
     var body: some View {
-        EntryTwoPane(entries: store.entries(for: date),
+        EntryTwoPane(entries: entries,
                      sourceFor: { _ in .archive(date: date) },
                      listTitle: Theme.sectionDate(date, style: dateStyleRaw),
                      showTime: true)
@@ -438,13 +538,19 @@ struct DayView: View {
                 get: { pdfDoc != nil },
                 set: { if !$0 { pdfDoc = nil } }
             ), document: pdfDoc, contentType: .pdf, defaultFilename: "nook-\(date).pdf") { _ in }
+            // The cached corpus every other list reads from; only a day that
+            // somehow isn't in it falls back to touching the file.
+            .task(id: store.revision) {
+                entries = store.allEntriesByDay().first(where: { $0.date == date })?.entries
+                    ?? store.entries(for: date)
+            }
     }
 
     private func exportPDF() {
         makingPDF = true
         Task { @MainActor in
             defer { makingPDF = false }
-            let data = await PDFExporter.makePDF(days: [(date, store.entries(for: date))],
+            let data = await PDFExporter.makePDF(days: [(date, entries)],
                                                  store: store,
                                                  dateStyleRaw: dateStyleRaw,
                                                  fontRaw: writingFontRaw,
@@ -459,7 +565,7 @@ struct DayView: View {
         makingPDF = true
         Task { @MainActor in
             defer { makingPDF = false }
-            guard let data = await PDFExporter.makePDF(days: [(date, store.entries(for: date))],
+            guard let data = await PDFExporter.makePDF(days: [(date, entries)],
                                                        store: store,
                                                        dateStyleRaw: dateStyleRaw,
                                                        fontRaw: writingFontRaw,
@@ -575,8 +681,17 @@ struct StarredView: View {
 
     private var oldestFirst: Bool { ArchiveSort(rawValue: sortRaw) == .oldest }
     private var grouping: EntryGrouping { EntryGrouping(rawValue: groupingRaw) ?? .date }
-    private var entries: [Entry] {
-        loaded.map(\.entry).sorted { oldestFirst ? $0.ts < $1.ts : $0.ts > $1.ts }
+    /// Sorted, then renumbered as a single pool by `mergedEntrySources` — the
+    /// starred set spans the archive, the inbox and the split journals, so the
+    /// per-file ids collide across it. Sorted by hand rather than with
+    /// `sorted(by:)`, which isn't stable: same-second twins have to keep their
+    /// relative order or they'd swap ids between recomputations.
+    private var sortedPairs: [(entry: Entry, source: EntrySource)] {
+        loaded.enumerated().sorted { a, b in
+            let l = a.element.entry.ts, r = b.element.entry.ts
+            if l != r { return oldestFirst ? l < r : l > r }
+            return a.offset < b.offset
+        }.map(\.element)
     }
 
     private func openRandom() {
@@ -594,11 +709,10 @@ struct StarredView: View {
                     description: Text("Star an entry (the ✩ button adds a * to its title) and it shows up here.")
                 )
             } else {
-                let sources = Dictionary(loaded.map { ($0.entry.id, $0.source) },
-                                         uniquingKeysWith: { a, _ in a })
+                let merged = mergedEntrySources(sortedPairs)
                 EntryTwoPane(
-                    entries: entries,
-                    sourceFor: { sources[$0.id] ?? .archive(date: $0.date) },
+                    entries: merged.entries,
+                    sourceFor: merged.sourceFor,
                     listTitle: "Starred",
                     showTime: grouping == .date,
                     fullDate: grouping == .none,   // ungrouped rows carry their own date

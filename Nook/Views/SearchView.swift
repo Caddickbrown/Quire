@@ -60,11 +60,10 @@ struct SearchView: View {
                     }
                 }
             } else {
-                let sources = Dictionary(results.map { ($0.entry.id, $0.source) },
-                                         uniquingKeysWith: { a, _ in a })
+                let merged = mergedEntrySources(results)
                 EntryTwoPane(
-                    entries: results.map(\.entry),
-                    sourceFor: { sources[$0.id] ?? .archive(date: $0.date) },
+                    entries: merged.entries,
+                    sourceFor: merged.sourceFor,
                     listTitle: "Search",
                     fullDate: true
                 )

@@ -21,10 +21,17 @@ final class AudioRecorder: ObservableObject {
     var elapsedString: String { String(format: "%d:%02d", elapsed / 60, elapsed % 60) }
 
     func start() async {
+        // Double-tapping the record button used to strand the first recorder:
+        // it kept running with nothing holding it, and `stop()` returned the
+        // second (empty) file.
+        guard !isRecording else { return }
+
         let granted = await withCheckedContinuation { cont in
             AVCaptureDevice.requestAccess(for: .audio) { cont.resume(returning: $0) }
         }
-        guard granted else { return }
+        // The await above is a suspension point, so re-check: a second tap can
+        // have got its permission answer first and already be recording.
+        guard granted, !isRecording else { return }
 
         #if os(iOS)
         try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default)
@@ -40,7 +47,15 @@ final class AudioRecorder: ObservableObject {
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
         ]
         guard let rec = try? AVAudioRecorder(url: url, settings: settings) else { return }
-        rec.record()
+        // `record()` reports failure rather than throwing (a busy session, an
+        // interruption); flipping isRecording anyway showed a banner counting
+        // up over a file that was never written.
+        guard rec.record() else {
+            #if os(iOS)
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            #endif
+            return
+        }
         recorder = rec
         tempURL = url
         elapsed = 0

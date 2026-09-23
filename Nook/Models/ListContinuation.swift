@@ -31,7 +31,7 @@ enum ListContinuation {
             let marker = ns.substring(with: m.range(at: 2))
             let rest = ns.substring(with: m.range(at: 3))
             if rest.trimmingCharacters(in: .whitespaces).isEmpty {
-                return .endList(prefixLength: (indent + marker).utf16.count)
+                return .endList(prefixLength: m.range(at: 3).location)
             }
             // A fresh, unchecked box regardless of the current one's state.
             let bullet = marker.prefix(2)   // "- " / "* " / "+ "
@@ -39,20 +39,26 @@ enum ListContinuation {
         }
         if let m = ordered.firstMatch(in: line, range: full) {
             let indent = ns.substring(with: m.range(at: 1))
-            let number = Int(ns.substring(with: m.range(at: 2))) ?? 0
+            let digits = ns.substring(with: m.range(at: 2))
             let sep = ns.substring(with: m.range(at: 3))
             let rest = ns.substring(with: m.range(at: 4))
             if rest.trimmingCharacters(in: .whitespaces).isEmpty {
-                return .endList(prefixLength: (indent + "\(number)" + sep).utf16.count)
+                // Measured from the match, not re-rendered: "007. " is five
+                // characters to strip, but "\(7)" would only account for three.
+                return .endList(prefixLength: m.range(at: 4).location)
             }
-            return .continueList(prefix: indent + "\(number + 1)" + sep)
+            // Anything that doesn't fit an Int (or is already at the top of it)
+            // just repeats its own number rather than overflowing.
+            let number = Int(digits) ?? 0
+            let next = number == .max ? number : number + 1
+            return .continueList(prefix: indent + "\(next)" + sep)
         }
         if let m = bullet.firstMatch(in: line, range: full) {
             let indent = ns.substring(with: m.range(at: 1))
             let marker = ns.substring(with: m.range(at: 2))
             let rest = ns.substring(with: m.range(at: 3))
             if rest.trimmingCharacters(in: .whitespaces).isEmpty {
-                return .endList(prefixLength: (indent + marker).utf16.count)
+                return .endList(prefixLength: m.range(at: 3).location)
             }
             return .continueList(prefix: indent + marker)
         }

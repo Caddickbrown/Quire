@@ -19,15 +19,39 @@ enum MediaLinks {
         return regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
             .map { ns.substring(with: $0.range(at: 1)) }
     }
+
+    /// `content` with every media link replaced by a space — what an entry
+    /// says apart from its attachments, for an identity that has to survive a
+    /// link being rewritten to a fresh asset path (the importers' re-run
+    /// check). Uses the one compiled regex above; an inline
+    /// `replacingOccurrences(…, options: .regularExpression)` compiles a new
+    /// one per call.
+    static func strippingLinks(_ content: String) -> String {
+        regex.stringByReplacingMatches(
+            in: content, range: NSRange(location: 0, length: (content as NSString).length),
+            withTemplate: " ")
+    }
 }
 
 /// What kind of media a path points at, decided by its file extension.
+///
+/// The `webm`/`weba`/`mkv`/`ogg`/`oga`/`opus`/`flac` entries are here because
+/// the Linux port records straight into them and writes the links into the same
+/// shared folder — without them a Linux voice memo showed up here as a photo.
+/// Keep in step with `Entry.mediaBadges` and the Rust `parser::media_kind`.
+/// (Not to be confused with `JournalStore`'s Data Saver extension sets, which
+/// are deliberately narrower — those are AVFoundation *transcode* targets.)
 enum MediaKind {
     case image, video, audio
+    static let videoExtensions = ["mov", "mp4", "m4v", "webm", "mkv"]
+    static let audioExtensions = ["m4a", "mp3", "wav", "aac", "aiff", "caf",
+                                  "ogg", "oga", "opus", "flac", "weba"]
+    static let imageExtensions = ["png", "jpg", "jpeg", "gif", "heic", "heif",
+                                  "webp", "tiff", "tif", "bmp", "svg"]
     init(path: String) {
         let ext = (path as NSString).pathExtension.lowercased()
-        if ["mov", "mp4", "m4v"].contains(ext) { self = .video }
-        else if ["m4a", "mp3", "wav", "aac", "aiff", "caf"].contains(ext) { self = .audio }
+        if Self.videoExtensions.contains(ext) { self = .video }
+        else if Self.audioExtensions.contains(ext) { self = .audio }
         else { self = .image }
     }
 }
