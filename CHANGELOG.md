@@ -355,6 +355,13 @@ section is dated development history rather than versioned releases.
   24-hour time whatever the device's locale or calendar; `{{weekday}}` stays
   localised.
 
+### Changed
+- **Tests**: the XCTest bundle now covers `JournalStore` as well as the pure
+  model files. It stays hostless — a store can be rooted at a temporary folder,
+  so its read-modify-write paths are exercised against real files without
+  launching the app or being able to reach iCloud. The two defects that reached
+  `main` both lived in that layer and neither was reachable by a test before.
+
 ### Fixed
 - **Performance**: typing no longer stutters in a large journal. Autosaving a
   draft re-read and re-parsed the whole inbox every time (~28 ms on the main

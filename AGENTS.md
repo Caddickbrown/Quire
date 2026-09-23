@@ -52,9 +52,15 @@ star button / context menus add/remove the marker; the **Starred** sidebar secti
 Four **multiplatform targets** (`platform: [iOS, macOS]`), deployment iOS 17 /
 macOS 14: the **Nook** app, the **NookWidgetExtension** WidgetKit extension,
 the **NookShareExtension** share extension (both embedded into the app), and
-**NookTests** — a hostless XCTest bundle compiling the pure model files
-(parser parity, search grammar, list continuation; run via the Nook scheme's
-Test action: `xcodebuild test -scheme Nook -destination 'platform=macOS'`).
+**NookTests** — a hostless XCTest bundle (run via the Nook scheme's Test
+action: `xcodebuild test -scheme Nook -destination 'platform=macOS'`). It
+compiles the model files listed in `gen_pbxproj.py`'s `test_shared_models`,
+which covers parser parity, search grammar and list continuation, and also
+**`JournalStore`** — `init(testingBase:)` roots a store at a temp folder, so
+its read-modify-write paths are tested against real files with no app host and
+no way to reach iCloud or the user's journal. Keep that list closed over its
+own dependencies: if a view type leaks in, it belongs in `Models/` instead
+(that is why `EntrySource` moved out of `EntryDetailView.swift`).
 There is **no hand-maintained `project.pbxproj`** — it is generated (all
 targets, the embed phase, and the app→extension dependencies all come out of
 `gen_pbxproj.py`):
@@ -73,7 +79,8 @@ Nook/
   NookApp.swift        @main; registers bundled Lato fonts; theme (auto/light/dark)
   Theme.swift            shared colours, font, line-spacing (freewrite aesthetic)
   Models/
-    Entry.swift          the entry value type + tag/preview helpers; `id` is
+    Entry.swift          the entry value type + `EntrySource` (which file an
+                         entry lives in) + tag/preview helpers; `id` is
                          ts + twin `occurrence`, stable across re-parses (a fresh
                          UUID per parse re-identified every row on every save).
                          Unique per *file* only — a view merging pools (Search,

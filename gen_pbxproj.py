@@ -109,14 +109,23 @@ share_swift_files = [
     ('SShareViewController', 'NookShare/ShareViewController.swift'),
 ]
 
-# Unit-test sources. The test bundle also compiles the PURE model files
-# (reusing the app's fileRefs, like the widget does with NookShared) so the
-# tests run hostless — plain logic tests, no app launch.
+# Unit-test sources. The test bundle also compiles the model files (reusing
+# the app's fileRefs, like the widget does with NookShared) so the tests run
+# hostless — plain logic tests, no app launch.
 test_swift_files = [
     ('TNookTests', 'Tests/NookTests.swift'),
+    ('TStoreTests', 'Tests/JournalStoreTests.swift'),
 ]
 # Model files compiled into the test bundle alongside the app.
-test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListContinuation']
+#
+# JournalStore is in here despite being @MainActor and 3k lines: it holds
+# every read-modify-write in the app, which is where the defects that reached
+# users have actually been, and it needs no app host — only Foundation and a
+# base directory, which `init(testingBase:)` supplies. The three files after
+# it are what it refers to, nothing more. Keep this list closed over its own
+# dependencies; a view type leaking in is the signal it belongs in Models.
+test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListContinuation',
+                      'JournalStore', 'NookShared', 'Reminders', 'SpotlightIndexer']
 
 # Allocate ids
 IDs = {k: new_id(k) for k in [

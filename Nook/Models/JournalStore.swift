@@ -151,6 +151,27 @@ final class JournalStore: ObservableObject {
         resolveBaseAndReload()
     }
 
+    #if DEBUG
+    /// True only for a store built by `init(testingBase:)`.
+    private var isTestStore = false
+
+    /// A store rooted at `base`, for tests.
+    ///
+    /// It deliberately skips folder resolution, so it can never reach iCloud
+    /// or the user's real journal, and starts no sync watcher and no backup
+    /// timer. It also suppresses the share drain: that moves whatever the
+    /// share extension has captured into the base folder, and a test run must
+    /// not swallow the pending shares of whoever is running it.
+    init(testingBase base: URL) {
+        isTestStore = true
+        try? fm.createDirectory(at: base.appendingPathComponent("journal", isDirectory: true),
+                                withIntermediateDirectories: true)
+        baseURL = base
+        storageMode = .local
+        reload()
+    }
+    #endif
+
     // MARK: Base directory resolution (custom folder → iCloud → local)
 
     /// `url` is nil only when a custom folder is remembered but unreachable —
@@ -2480,6 +2501,9 @@ final class JournalStore: ObservableObject {
     /// the drafts onto the end of the inbox. Runs on every reload, so shares
     /// land on the next launch or foreground.
     private func drainPendingShares() {
+        #if DEBUG
+        if isTestStore { return }
+        #endif
         guard let dir = Self.pendingShareDir, baseURL != nil else { return }
         // Claim the handoff by renaming it *before* reading. The extension only
         // ever appends to pending.md, so a share captured between our read and

@@ -18,12 +18,6 @@ import PDFKit
 import UIKit
 #endif
 
-enum EntrySource: Hashable {
-    case inbox
-    case archive(date: String)
-    case journal(name: String)   // a tag-routed split journal (<base>/<name>.md)
-}
-
 struct EntryDetailView: View {
     @EnvironmentObject private var store: JournalStore
     @Environment(\.colorScheme) private var colorScheme

@@ -122,3 +122,15 @@ struct Entry: Identifiable, Hashable {
         return out
     }
 }
+
+/// Which file an entry lives in — the inbox, a day in the archive, or a
+/// tag-routed split journal (`<base>/<name>.md`). Every edit path routes on
+/// this, so it decides which file a save rewrites.
+///
+/// A model type, not a view one: it lived in `EntryDetailView.swift`, which
+/// kept `JournalStore` (which needs it) out of the hostless test bundle.
+enum EntrySource: Hashable {
+    case inbox
+    case archive(date: String)
+    case journal(name: String)
+}

@@ -64,11 +64,16 @@
 		0391DE750EC65788A5C99D6E /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FEDB003B5EC5E3FAC8E0209 /* ShareViewController.swift */; };
 		8924EA7A868D55CB867B0AFD /* NookShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 0EDFE1977BF35F31A0A481FB /* NookShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A2B6283634C4502FA4A3402D /* NookTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBB0AF9FA4DD5159B7E9FECA /* NookTests.swift */; };
+		2F67C710D7FA50BA8ADF3B1E /* JournalStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E22B993D5D9256A9964DA4D4 /* JournalStoreTests.swift */; };
 		D7AAC3476F2759E0AFA776AA /* Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FAA5F830B325E3AAACB1750 /* Entry.swift */; };
 		075C438920C55D8E986100ED /* JournalParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56D3DCC39C50521E911AD8C1 /* JournalParser.swift */; };
 		EBD637808C3A50EAAE51BB39 /* Media.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8DCEAC7B5455ED59678D550 /* Media.swift */; };
 		5001891096B25795B1360868 /* SearchQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DFE4664700F5E7BBD95175B /* SearchQuery.swift */; };
 		B388B2B6854B5E6C802B979F /* ListContinuation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 962CA573C9C153CDB12EFE8A /* ListContinuation.swift */; };
+		58504BD808D25059A51B7D42 /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F7814FA4DD1588785BC8029 /* JournalStore.swift */; };
+		2459F3FB51725333B87BC439 /* NookShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = 683FFD5D976B5D23A0AA7A0F /* NookShared.swift */; };
+		DD92364F728E5003B4EB7897 /* Reminders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F948177919756FA8E7E51B8 /* Reminders.swift */; };
+		1CCDE5373AE05A7BBE2D2190 /* SpotlightIndexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51E0D7917D05425B52EF27C /* SpotlightIndexer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -168,6 +173,7 @@
 		A6DA5B1FF96C5D9BA9C2143C /* NookShare-macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NookShare-macOS.entitlements"; sourceTree = "<group>"; };
 		0EDFE1977BF35F31A0A481FB /* NookShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NookShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBB0AF9FA4DD5159B7E9FECA /* NookTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookTests.swift; sourceTree = "<group>"; };
+		E22B993D5D9256A9964DA4D4 /* JournalStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalStoreTests.swift; sourceTree = "<group>"; };
 		EAF2BF390FA25199B4A55F16 /* ParserChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParserChecks.swift; sourceTree = "<group>"; };
 		CC8A6A606C115028927AFB86 /* NookTests.xctest */ = {isa = PBXFileReference; explicitFileType = "wrapper.cfbundle"; includeInIndex = 0; path = NookTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -343,6 +349,7 @@
 			isa = PBXGroup;
 			children = (
 				FBB0AF9FA4DD5159B7E9FECA /* NookTests.swift */,
+				E22B993D5D9256A9964DA4D4 /* JournalStoreTests.swift */,
 				EAF2BF390FA25199B4A55F16 /* ParserChecks.swift */,
 			);
 			path = Tests;
@@ -563,11 +570,16 @@
 			buildActionMask = 2147483647;
 			files = (
 				A2B6283634C4502FA4A3402D /* NookTests.swift in Sources */,
+				2F67C710D7FA50BA8ADF3B1E /* JournalStoreTests.swift in Sources */,
 				D7AAC3476F2759E0AFA776AA /* Entry.swift in Sources */,
 				075C438920C55D8E986100ED /* JournalParser.swift in Sources */,
 				EBD637808C3A50EAAE51BB39 /* Media.swift in Sources */,
 				5001891096B25795B1360868 /* SearchQuery.swift in Sources */,
 				B388B2B6854B5E6C802B979F /* ListContinuation.swift in Sources */,
+				58504BD808D25059A51B7D42 /* JournalStore.swift in Sources */,
+				2459F3FB51725333B87BC439 /* NookShared.swift in Sources */,
+				DD92364F728E5003B4EB7897 /* Reminders.swift in Sources */,
+				1CCDE5373AE05A7BBE2D2190 /* SpotlightIndexer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
