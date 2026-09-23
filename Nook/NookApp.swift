@@ -325,7 +325,15 @@ struct AppCommands: Commands {
             Button("Search")   { nav.section = .search }.keyboardShortcut("f", modifiers: [.command, .shift])
             Divider()
             Button("Stats")    { nav.section = .stats }
+            // No ⌘, here on iOS: UIKit already puts a Settings item carrying
+            // that shortcut in the main menu, and registering a second one
+            // makes the menu builder drop one of them as a duplicate
+            // (_UIMenuBuilderError) — leaving the key undefined behaviour.
+            #if os(macOS)
             Button("Settings") { nav.section = .settings }.keyboardShortcut(",", modifiers: .command)
+            #else
+            Button("Settings") { nav.section = .settings }
+            #endif
         }
     }
 }

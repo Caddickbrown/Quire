@@ -199,6 +199,28 @@ struct EntryPreviewRow: View {
     }
 }
 
+/// Pair up entries drawn from more than one file for `EntryTwoPane`.
+///
+/// `Entry.id` is only unique *within* a file — `JournalParser.withOccurrences`
+/// numbers same-second twins per pool, so an inbox draft and a filed entry
+/// written in the same second both come back as the bare timestamp. Search,
+/// Starred and Tags merge pools, and keying a source map on the raw ids
+/// collapsed such a pair into one row pointing at one file: editing the draft
+/// saved through `.archive`, and `index(of:)`'s "only entry at this second"
+/// fallback then overwrote the filed entry with the draft's text.
+///
+/// Renumbering the merged list restores the invariant the ids are keyed on,
+/// and building the map from the same renumbered array keeps the two in step.
+/// Order is preserved, so sort before calling this, not after.
+func mergedEntrySources(
+    _ pairs: [(entry: Entry, source: EntrySource)]
+) -> (entries: [Entry], sourceFor: (Entry) -> EntrySource) {
+    let entries = JournalParser.withOccurrences(pairs.map(\.entry))
+    let sources = Dictionary(zip(entries.map(\.id), pairs.map(\.source)),
+                             uniquingKeysWith: { a, _ in a })
+    return (entries, { sources[$0.id] ?? .archive(date: $0.date) })
+}
+
 /// Reusable email-style list+detail for a set of entries (macOS); iOS pushes.
 /// Same look as the Inbox: fixed-width list on the left, open entry on the right.
 struct EntryTwoPane: View {
@@ -228,10 +250,10 @@ struct EntryTwoPane: View {
     /// Rebuilt only when the entries array actually changes — as a computed
     /// property this was rebuilt per `key()` call, i.e. per row render, which
     /// made a 4,000-entry list O(n²) and visibly slow.
-    @State private var rowKeys: [UUID: String] = [:]
+    @State private var rowKeys: [String: String] = [:]
 
-    private static func makeRowKeys(_ entries: [Entry]) -> [UUID: String] {
-        var seen: [String: Int] = [:], out: [UUID: String] = [:]
+    private static func makeRowKeys(_ entries: [Entry]) -> [String: String] {
+        var seen: [String: Int] = [:], out: [String: String] = [:]
         for e in entries {
             let n = seen[e.ts, default: 0]
             seen[e.ts] = n + 1
@@ -322,7 +344,18 @@ struct EntryTwoPane: View {
     private func resyncOpenEntry() {
         guard let open = openEntry else { return }
         if let live = liveEntry(matching: open) {
-            guard live.id != open.id else { return }
+            // Text comparison, not identity: `Entry.id` is stable now, so an
+            // id match no longer means the text is unchanged. Re-pointing only
+            // on a real difference keeps a remote edit flowing through to the
+            // editor while an autosave's own echo changes nothing.
+            //
+            // `raw` rather than the whole value: every other field derives from
+            // it, and `occurrence` deliberately doesn't match here — a merged
+            // list (Search, Starred, Tags) renumbers across its pools, so the
+            // store's copy of a same-second twin carries a different one. On
+            // `!=` that would re-point on every pass, and `key(live)` would
+            // then miss `rowKeys` and drop the selection.
+            guard live.raw != open.raw else { return }
             openEntry = live
             if selectedTS != nil { selectedTS = key(live) }
         } else {
@@ -332,11 +365,10 @@ struct EntryTwoPane: View {
     }
 
     /// The current copy of an entry, or nil if the store no longer holds it.
-    /// Deliberately not identity-based: `Entry.id` is a fresh UUID per parse,
-    /// and an open editor rewrites — and on a re-date moves — the very entry
-    /// being looked for, so the timestamp alone isn't enough either. Falls back
-    /// to the entry itself for same-second twins, which no key can tell apart:
-    /// "still there, don't re-point".
+    /// Deliberately not id-based: an open editor rewrites — and on a re-date
+    /// moves — the very entry being looked for, so its id is exactly what the
+    /// edit changes. Falls back to the entry itself for same-second twins,
+    /// which no key can tell apart: "still there, don't re-point".
     private func liveEntry(matching e: Entry) -> Entry? {
         func find(_ pool: [Entry]) -> Entry? {
             let sameTS = pool.filter { $0.ts == e.ts }
@@ -635,8 +667,17 @@ struct StarredView: View {
 
     private var oldestFirst: Bool { ArchiveSort(rawValue: sortRaw) == .oldest }
     private var grouping: EntryGrouping { EntryGrouping(rawValue: groupingRaw) ?? .date }
-    private var entries: [Entry] {
-        loaded.map(\.entry).sorted { oldestFirst ? $0.ts < $1.ts : $0.ts > $1.ts }
+    /// Sorted, then renumbered as a single pool by `mergedEntrySources` — the
+    /// starred set spans the archive, the inbox and the split journals, so the
+    /// per-file ids collide across it. Sorted by hand rather than with
+    /// `sorted(by:)`, which isn't stable: same-second twins have to keep their
+    /// relative order or they'd swap ids between recomputations.
+    private var sortedPairs: [(entry: Entry, source: EntrySource)] {
+        loaded.enumerated().sorted { a, b in
+            let l = a.element.entry.ts, r = b.element.entry.ts
+            if l != r { return oldestFirst ? l < r : l > r }
+            return a.offset < b.offset
+        }.map(\.element)
     }
 
     private func openRandom() {
@@ -654,11 +695,10 @@ struct StarredView: View {
                     description: Text("Star an entry (the ✩ button adds a * to its title) and it shows up here.")
                 )
             } else {
-                let sources = Dictionary(loaded.map { ($0.entry.id, $0.source) },
-                                         uniquingKeysWith: { a, _ in a })
+                let merged = mergedEntrySources(sortedPairs)
                 EntryTwoPane(
-                    entries: entries,
-                    sourceFor: { sources[$0.id] ?? .archive(date: $0.date) },
+                    entries: merged.entries,
+                    sourceFor: merged.sourceFor,
                     listTitle: "Starred",
                     showTime: grouping == .date,
                     fullDate: grouping == .none,   // ungrouped rows carry their own date

@@ -56,10 +56,10 @@ struct InboxView: View {
     /// the wrong one (see EntryTwoPane.rowKeys).
     /// Rebuilt only when the drafts array changes — as a computed property this
     /// ran per row render, making an 800-draft inbox O(n²).
-    @State private var rowKeys: [UUID: String] = [:]
+    @State private var rowKeys: [String: String] = [:]
 
-    private static func makeRowKeys(_ drafts: [Entry]) -> [UUID: String] {
-        var seen: [String: Int] = [:], out: [UUID: String] = [:]
+    private static func makeRowKeys(_ drafts: [Entry]) -> [String: String] {
+        var seen: [String: Int] = [:], out: [String: String] = [:]
         for d in drafts {
             let n = seen[d.ts, default: 0]
             seen[d.ts] = n + 1

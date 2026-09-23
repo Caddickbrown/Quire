@@ -10,9 +10,22 @@
 import Foundation
 
 struct Entry: Identifiable, Hashable {
-    /// In-memory identity only — entries have no persistent id on disk. Lists
-    /// are always rebuilt from the parsed file, so a fresh UUID per parse is fine.
-    let id = UUID()
+    /// Which same-second twin this is, in file order. Entries have no id on
+    /// disk and the timestamp alone isn't unique, so this is what separates
+    /// two entries written in the same second. `JournalParser.parseEntries`
+    /// assigns it; so does every store path that splices re-parsed entries
+    /// into an existing list (see `JournalParser.withOccurrences`).
+    var occurrence: Int = 0
+
+    /// Stable across re-parses, unlike the `UUID()` this used to be.
+    ///
+    /// Lists are rebuilt from the file constantly — every autosave republishes
+    /// the corpus — and with a fresh id per parse nothing on screen ever
+    /// compared equal to what the store now held. Every rebuild therefore
+    /// re-identified every row, re-created the open editor, and in
+    /// `EntryTwoPane` sent `resyncOpenEntry` walking the corpus for an entry it
+    /// had only just replaced.
+    var id: String { occurrence == 0 ? ts : "\(ts)#\(occurrence)" }
 
     let date: String    // "YYYY-MM-DD"
     let ts: String      // "YYYY-MM-DD HH:MM:SS"

@@ -73,7 +73,11 @@ Nook/
   NookApp.swift        @main; registers bundled Lato fonts; theme (auto/light/dark)
   Theme.swift            shared colours, font, line-spacing (freewrite aesthetic)
   Models/
-    Entry.swift          the entry value type + tag/preview helpers
+    Entry.swift          the entry value type + tag/preview helpers; `id` is
+                         ts + twin `occurrence`, stable across re-parses (a fresh
+                         UUID per parse re-identified every row on every save).
+                         Unique per *file* only — a view merging pools (Search,
+                         Starred, Tags) must renumber via `mergedEntrySources`
     JournalParser.swift  PURE port of jnl parse/render/sort/tags (no I/O; unit-tested)
     Media.swift          PURE media-link paths + MediaKind (used by Entry; in `make check`)
     SearchQuery.swift    PURE global-search grammar (tag:/before:/after:/has:/is:starred/
@@ -83,7 +87,12 @@ Nook/
     JournalStore.swift   @MainActor ObservableObject: iCloud base dir, load/file/sort, atomic
                          writes; also the share-extension drain, appendFiledEntries (imports),
                          onThisDay, and the live-sync watcher (NSMetadataQuery on iCloud,
-                         DispatchSource dir watchers otherwise; inbox conflicts merge keep-both)
+                         DispatchSource dir watchers otherwise; inbox conflicts merge keep-both).
+                         Every inbox rewrite goes through inboxForRewrite/writeInbox, which
+                         re-read the file but skip the parse while its bytes still match the
+                         cache — autosave is O(edit), not O(inbox). The watcher suppresses the
+                         echo of our own writes (with a 20s ceiling so remote changes still
+                         land) and scans for conflicts off-main, resource-value flag first.
     Templates.swift      entry templates (<base>/.nook/templates/*.md, {{date}} substitution)
                          + the PromptDeck of composer prompts
     Importers.swift      Day One JSON + dated-markdown-folder importers (prepare → confirm →

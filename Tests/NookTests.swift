@@ -120,6 +120,58 @@ final class JournalParserTests: XCTestCase {
                        "loose note\n\n[2026-05-10 08:00:00] a\nbody\n")
     }
 
+    func testEntryIdentityIsStableAcrossReparses() {
+        let text = """
+        [2026-05-10 08:00:00] first
+        body one
+        [2026-05-10 08:00:00] twin
+        body two
+        [2026-05-10 09:30:00] later
+        body three
+        """
+        let a = JournalParser.parseEntries(text)
+        let b = JournalParser.parseEntries(text)
+        XCTAssertEqual(a.map(\.id), b.map(\.id), "a re-parse must not re-identify every entry")
+        XCTAssertEqual(a, b)
+        XCTAssertEqual(Set(a.map(\.id)).count, a.count, "same-second twins need distinct ids")
+        XCTAssertEqual(a[0].id, "2026-05-10 08:00:00")
+        XCTAssertEqual(a[1].id, "2026-05-10 08:00:00#1")
+
+        let rendered = JournalParser.renderEntries(preamble: "", entries: a)
+        XCTAssertEqual(JournalParser.parseEntries(rendered).map(\.id), a.map(\.id))
+    }
+
+    func testOccurrenceRenumberingFixesSplicedEntries() {
+        let a = JournalParser.parseEntries("""
+        [2026-05-10 08:00:00] first
+        [2026-05-10 08:00:00] twin
+        [2026-05-10 09:30:00] later
+        """)
+        // What a store rewrite does: splice a freshly parsed entry (occurrence
+        // 0) over one of a same-second pair.
+        let spliced = [a[0], JournalParser.parseEntries("[2026-05-10 08:00:00] replaced").first!, a[2]]
+        XCTAssertEqual(Set(spliced.map(\.id)).count, 2, "the splice collides before renumbering")
+        let fixed = JournalParser.withOccurrences(spliced)
+        XCTAssertEqual(Set(fixed.map(\.id)).count, 3)
+        XCTAssertEqual(JournalParser.withOccurrences(a).map(\.id), a.map(\.id), "idempotent")
+        XCTAssertTrue(JournalParser.withOccurrences([]).isEmpty)
+    }
+
+    /// Search, Starred and Tags merge entries from several files into one list.
+    /// Each pool numbers its own same-second twins, so the ids collide across
+    /// the merge unless the merged list is renumbered — which is what those
+    /// views' source maps are keyed on.
+    func testMergedPoolsNeedRenumbering() {
+        let draft = JournalParser.parseEntries("[2026-05-10 08:00:00] a draft\nbody")
+        let filed = JournalParser.parseEntries("[2026-05-10 08:00:00] a filed entry\nbody")
+        XCTAssertEqual(draft[0].id, filed[0].id, "per-pool ids collide before renumbering")
+        XCTAssertNotEqual(draft[0], filed[0], "they are genuinely different entries")
+
+        let merged = JournalParser.withOccurrences(draft + filed)
+        XCTAssertEqual(Set(merged.map(\.id)).count, 2)
+        XCTAssertEqual(merged.map(\.raw), (draft + filed).map(\.raw), "order is preserved")
+    }
+
     func testTagsWholeTokens() {
         XCTAssertEqual(JournalParser.splitTags("real @work item and @health-check not @1bad"),
                        ["@work", "@health-check"])

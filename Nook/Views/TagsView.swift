@@ -14,7 +14,7 @@ struct TagsView: View {
     @State private var searchText = ""
     @State private var selectedTag: String?
     @State private var taggedEntries: [Entry] = []
-    @State private var taggedSources: [UUID: EntrySource] = [:]
+    @State private var taggedSources: [String: EntrySource] = [:]
 
     private var tags: [(tag: String, count: Int)] {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -65,13 +65,15 @@ struct TagsView: View {
         }
         let inboxHits = store.inboxDrafts.filter { $0.tags.contains(tag) }
         let journalHits = store.entries(taggedWith: tag)
-        // Keyed by the entry's in-memory id, not its timestamp — a draft and a
-        // filed entry sharing a second must not share a source.
-        var sources: [UUID: EntrySource] = [:]
-        for hit in journalHits { sources[hit.entry.id] = .archive(date: hit.date) }
-        for draft in inboxHits { sources[draft.id] = .inbox }
-        taggedEntries = inboxHits + journalHits.map(\.entry)
-        taggedSources = sources
+        // Two pools in one list, so the ids are renumbered across the merge —
+        // a draft and a filed entry sharing a second are both `ts` until then,
+        // and would share a source (see `mergedEntrySources`).
+        let pairs = inboxHits.map { (entry: $0, source: EntrySource.inbox) }
+            + journalHits.map { (entry: $0.entry, source: EntrySource.archive(date: $0.date)) }
+        let merged = mergedEntrySources(pairs)
+        taggedEntries = merged.entries
+        taggedSources = Dictionary(zip(merged.entries.map(\.id), pairs.map(\.source)),
+                                   uniquingKeysWith: { a, _ in a })
     }
 
     private var rail: some View {

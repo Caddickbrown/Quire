@@ -70,7 +70,22 @@ enum JournalParser {
             }
         }
         flush()
-        return entries
+        return withOccurrences(entries)
+    }
+
+    /// Number each entry among its same-second twins, in order, so `Entry.id`
+    /// is unique within a file and stable across re-parses. Store paths that
+    /// splice freshly parsed entries into an existing list must re-run this, or
+    /// two entries sharing a second would both claim occurrence 0.
+    static func withOccurrences(_ entries: [Entry]) -> [Entry] {
+        var seen: [String: Int] = [:]
+        return entries.map { e in
+            var e = e
+            let n = seen[e.ts, default: 0]
+            seen[e.ts] = n + 1
+            e.occurrence = n
+            return e
+        }
     }
 
     /// Content before the first header (or "" if only blank/absent). Rewrite

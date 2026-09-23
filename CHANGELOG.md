@@ -350,6 +350,29 @@ section is dated development history rather than versioned releases.
   localised.
 
 ### Fixed
+- **Performance**: typing no longer stutters in a large journal. Autosaving a
+  draft re-read and re-parsed the whole inbox every time (~28 ms on the main
+  thread with ~900 drafts); it now reuses the parse when the file on disk is
+  byte-identical to what Nook last wrote (~1.5 ms). Separately, every autosave
+  was echoing back through the file watcher and triggering a full conflict scan
+  and corpus reload a couple of seconds later — around 200 ms of stall, on
+  repeat, for the length of a writing session. The echo is suppressed again,
+  with a 20-second ceiling so a change from another device still lands promptly,
+  and the conflict scan now runs off the main thread and only looks at files
+  iCloud has actually flagged.
+- **Search / Starred / Tags**: an edit made from one of these lists can no
+  longer land in the wrong file. They merge entries from the inbox, the archive
+  and the split journals into one list, and an inbox draft that shared its
+  second with a filed entry collapsed onto it — the pair drew as a single row,
+  and saving the draft overwrote the filed entry instead. The merged list is
+  renumbered so the two stay distinct.
+- **Performance**: lists, the open editor and the Stream no longer rebuild
+  themselves every time anything is saved. Entries used to be re-identified on
+  every parse, so nothing on screen ever matched what the store held; entry
+  identity is now the timestamp plus a twin index, stable across reloads.
+- **Settings** (iOS): ⌘, works again on an iPad keyboard — Nook was registering
+  a second Settings shortcut alongside the system's, and the menu builder
+  discarded one of them.
 - **Reminders**: tapping the daily writing reminder now opens the composer
   instead of just launching the app where you left it, and a tap that launches
   the app cold is no longer dropped — the resurfacing note's entry link lands

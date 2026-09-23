@@ -237,5 +237,53 @@ do {
           "punctuation: alt text inside a link is untouched too")
 }
 
+// Entry identity: stable across re-parses, unique among same-second twins.
+// The views key rows, the open editor and SwiftUI's own diffing off `id`, so a
+// re-parse of unchanged text must produce the same ids — it used to mint a
+// fresh UUID per entry per parse.
+do {
+    let text = """
+    [2026-05-10 08:00:00] first
+    body one
+    [2026-05-10 08:00:00] twin
+    body two
+    [2026-05-10 09:30:00] later
+    body three
+    """
+    let a = JournalParser.parseEntries(text)
+    let b = JournalParser.parseEntries(text)
+    check(a.map(\.id) == b.map(\.id), "identity: re-parsing the same text gives the same ids")
+    check(a == b, "identity: re-parsed entries compare equal")
+    check(Set(a.map(\.id)).count == a.count, "identity: same-second twins get distinct ids")
+    check(a[0].id == "2026-05-10 08:00:00", "identity: first of a second is the bare timestamp")
+    check(a[1].id == "2026-05-10 08:00:00#1", "identity: the twin is suffixed")
+    check(a[2].id == "2026-05-10 09:30:00", "identity: a lone entry is the bare timestamp")
+
+    // Store paths splice freshly parsed entries (occurrence 0) into a list, so
+    // the renumber has to be idempotent and has to fix a collision.
+    let spliced = [a[0], JournalParser.parseEntries("[2026-05-10 08:00:00] replaced").first!, a[2]]
+    let fixed = JournalParser.withOccurrences(spliced)
+    check(Set(fixed.map(\.id)).count == 3, "identity: renumbering separates a spliced twin")
+    check(JournalParser.withOccurrences(a).map(\.id) == a.map(\.id), "identity: renumbering is idempotent")
+    check(JournalParser.withOccurrences([]).isEmpty, "identity: renumbering an empty list")
+
+    // Round-tripping through the file format must preserve them too, since the
+    // inbox cache hands back a parse of exactly what it wrote.
+    let rendered = JournalParser.renderEntries(preamble: "", entries: a)
+    check(JournalParser.parseEntries(rendered).map(\.id) == a.map(\.id),
+          "identity: ids survive a render/parse round trip")
+
+    // A merged list (Search, Starred, Tags) draws from several files at once.
+    // Each pool numbers its own twins, so the bare ids collide across the
+    // merge — renumbering the merged list is what the views' source maps key
+    // on, and what stops a draft's edit being routed into a day file.
+    let draft = JournalParser.parseEntries("[2026-05-10 08:00:00] a draft\nbody")
+    let filed = JournalParser.parseEntries("[2026-05-10 08:00:00] a filed entry\nbody")
+    check(draft[0].id == filed[0].id, "merge: per-pool ids collide before renumbering")
+    let mergedPools = JournalParser.withOccurrences(draft + filed)
+    check(Set(mergedPools.map(\.id)).count == 2, "merge: renumbering separates the pools")
+    check(mergedPools.map(\.raw) == (draft + filed).map(\.raw), "merge: renumbering preserves order")
+}
+
 print(failures == 0 ? "\nALL PASSED" : "\n\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

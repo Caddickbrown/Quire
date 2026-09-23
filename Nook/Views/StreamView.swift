@@ -42,8 +42,8 @@ enum StreamDrafts: String, CaseIterable, Identifiable {
 }
 
 /// One entry on the page, with the file it came from so edits go to the right
-/// place. `id` is stable across reloads (`Entry.id` is a fresh UUID per parse)
-/// and disambiguated, since two entries can share a timestamp.
+/// place. `id` is stable across reloads and disambiguated, since two entries
+/// can share a timestamp.
 struct StreamItem: Identifiable {
     let id: String
     let entry: Entry
