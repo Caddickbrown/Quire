@@ -11,8 +11,8 @@
 
 Every entry is a plain markdown file in the [jnl](https://github.com/Caddickbrown/jnl)
 layout — one file per day, drafts in an inbox, `@tags` inline. No database, no
-sidecar files, no export. The macOS app, the iOS app, the Linux app and the
-`jnl` CLI all read and write the same folder, byte for byte.
+sidecar files, no export. The macOS app, the iOS app, the Android app, the
+Linux app and the `jnl` CLI all read and write the same folder, byte for byte.
 
 ---
 
@@ -124,9 +124,9 @@ the Options steppers move them afterwards.
 </p>
 
 All fourteen live in one file — `Resources/themes.json`, kept byte-identical at
-`tauri/src/themes.json` — as colours, faces and a short list of furniture
-switches. Adding a look is editing that file, and it arrives on macOS, iOS and
-Linux together.
+`tauri/src/themes.json` and `android/app/src/main/assets/themes.json` — as
+colours, faces and a short list of furniture switches. Adding a look is editing
+that file, and it arrives on macOS, iOS, Android and Linux together.
 
 ## On iPhone and iPad
 
@@ -141,6 +141,39 @@ than picked off a grid, and the home-screen icon follows the one you choose.
 <td width="34%"><img src="docs/images/ipad.png" alt="Wander on iPad: index and page side by side"></td>
 </tr>
 </table>
+
+## On Android
+
+A fourth native build, in Kotlin and Compose, over the same folder. It takes the
+shape the iPhone settled on: the page is the root, so you land in what you were
+writing, the index arrives as a sheet, and themes are swiped through full size.
+The editor is the platform text view with the markdown drawn over it as spans —
+never as replaced text — so autocorrect, composition, dictation and the
+selection handles all behave as they do in any other app on the phone.
+
+Android is the one platform with no folder to fall back on: nothing may be read
+unasked, so it asks on first run, through the system picker, and holds the grant
+across launches. Point it at a folder a sync client already watches and the
+phone is reading the same bytes as the Mac.
+
+### Two screens
+
+On a Surface Duo, an unfolded foldable or a tablet, it lays out the way the Mac
+does — the index beside the page, both live at once. The split is taken from the
+hinge where the device reports one, so the index ends on the left screen and the
+page begins on the right. Nothing is drawn across the gap: a margin is better
+than a seam through a sentence. Folded flat into a tabletop, the page takes the
+raised half and the index the flat one.
+
+| | |
+|---|---|
+| Phone, or one screen of a Duo | the page, with the index a tap away |
+| Spanned, unfolded, or any window over 720dp | index and page side by side, split at the hinge |
+| Tabletop or book posture | the page in the raised half, the index in the flat half |
+
+Re-folding, rotating and resizing are handled in place rather than by restarting
+the activity, because none of them is a reason to lose the sentence you are in
+the middle of.
 
 ## On Linux and Windows
 
@@ -184,14 +217,18 @@ listed. Anything before the first header in a file is preserved across writes.
 
 The journal folder is an explicitly chosen one, else `$JNL_DIR` — so an
 existing jnl or Nook journal opens as-is — else `~/Documents/Wander`. Change it
-in **Options ▸ Folder ▸ Change** on any of the three: an open panel on macOS,
-the document picker on iOS, and a native folder dialog on Linux and Windows.
+in **Options ▸ Folder ▸ Change** on any of the four: an open panel on macOS, the
+document picker on iOS, the storage picker on Android, and a native folder
+dialog on Linux and Windows.
 
 The choice is remembered where each platform keeps such things — a
 security-scoped bookmark in UserDefaults on macOS and iOS, so it survives the
-folder being moved or renamed, and `~/.config/wander/folder` on Linux
-(`~/Library/Application Support/wander/folder` on macOS). The Tauri build also
-takes a folder as its first argument: `wander ~/Notes`.
+folder being moved or renamed; a persisted URI permission on Android, so the
+grant outlives the process; and `~/.config/wander/folder` on Linux
+(`~/Library/Application Support/wander/folder` on macOS). Android is the
+exception to the fallbacks above: it has no default, because it has no folder it
+may read without being handed one. The Tauri build also takes a folder as its
+first argument: `wander ~/Notes`.
 
 ## Building
 
@@ -199,6 +236,7 @@ takes a folder as its first argument: `wander ~/Notes`.
 |---|---|
 | **macOS** | `./build.sh --run`, or the `wander (macOS)` scheme in the Xcode project |
 | **iOS / iPadOS** | `xcodegen generate && open Wander.xcodeproj`, scheme `wander (iOS)` |
+| **Android** | `cd android && ./gradlew :app:assembleDebug`, or open `android/` in Android Studio |
 | **Linux, Windows, macOS** | `cd tauri/src-tauri && cargo run` |
 
 Both Apple builds are signed with the same Apple Development identity and team
@@ -206,15 +244,22 @@ as Nook (`52W73J6V95`); the Mac app also gets the hardened runtime. Signing
 falls back to ad-hoc when no certificate is installed, so `./build.sh` works on
 a machine without the developer account.
 
+The Android build wants JDK 17 and SDK platform 35, and runs from API 26.
+`android/README.md` has the detail, and the reasoning behind the three decisions
+that make it more than a transcription: the folder through the Storage Access
+Framework, the markdown drawn as spans over a platform text view, and the hinge.
+
 `WanderCore/` is the shared Swift core — the model, the jnl parser and
 every file operation, Foundation only — used by both Apple builds.
 `tauri/src-tauri/src/journal.rs` is a second, deliberate port of the same
-format in Rust; the two are kept byte-compatible on purpose.
+format in Rust, and `android/app/src/main/java/com/caddickbrown/wander/core/` a
+third in Kotlin; all three are kept byte-compatible on purpose.
 
 ```
 WanderCore/            the shared Swift package: model, parser, every read and write
 Sources/Wander         macOS app, and the views and store both Apple builds share
 Sources/WanderiOS      the iPhone and iPad shell
+android/               the Android app: Kotlin journal port, Compose interface
 tauri/                 the Tauri app: Rust journal port, HTML/CSS/JS interface
 tools/make_icon.swift  redraws the icon in both palettes
 ```
