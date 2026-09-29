@@ -322,7 +322,7 @@ button.value:hover { color: var(--accent); text-decoration: underline; }
 }
 .title::placeholder { font-style: italic; color: color-mix(in srgb, var(--muted) 55%, transparent); }
 
-.dateline { display: flex; align-items: baseline; gap: 12px; padding: 9px 0 11px; }
+.dateline { display: flex; align-items: center; gap: 10px; padding: 9px 0 11px; }
 .linkish:hover { color: var(--accent); }
 
 .prose {
@@ -365,6 +365,43 @@ button.value:hover { color: var(--accent); text-decoration: underline; }
 }
 .prose .tag { color: var(--accent); }
 .prose .link { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+/* Media: the link stays, faded; the photo, player or recording sits under it.
+   The holder is contenteditable=false and holds no text, so the caret steps
+   over it. A file that won't load says so from CSS — text in the DOM would
+   throw the caret arithmetic off by its length. */
+.prose .caption { font-style: italic; color: var(--muted); }
+.prose .media { display: block; margin: .45em 0 .8em; user-select: none; line-height: 0; }
+.prose .media img,
+.prose .media video { display: block; max-width: 100%; max-height: 70vh; border-radius: var(--corner); }
+.prose .media img { box-shadow: 0 0 0 1px var(--rule); }
+.prose .media audio { width: 100%; max-width: 460px; height: 36px; }
+.prose .media.broken > * { display: none; }
+.prose .media.broken::after {
+  content: attr(data-name) " can’t be shown here";
+  display: block; padding: 14px 16px; line-height: 1.4;
+  font-family: var(--label); font-size: var(--label-size); letter-spacing: var(--label-tracking);
+  text-transform: uppercase; color: var(--muted);
+  border: var(--border) dashed var(--rule); border-radius: var(--corner);
+}
+.prose.focus .ln:not(.live) .media { opacity: .35; }
+.page.dropping { outline: var(--border) dashed var(--accent); outline-offset: 10px; }
+
+/* The page's own actions — record, file, star — as icons drawn in the ink
+   of the chrome around them: muted at rest, the accent when on. */
+button.icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; color: var(--muted);
+}
+button.icon svg {
+  width: 17px; height: 17px; fill: none; stroke: currentColor;
+  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+}
+button.icon:hover, button.icon.on { color: var(--accent); }
+button.icon.star.on svg { fill: currentColor; }
+#record.on svg rect { fill: currentColor; animation: recording 1.6s ease-in-out infinite; }
+#record-time { color: var(--accent); font-variant-numeric: tabular-nums; }
+@keyframes recording { 50% { opacity: .35; } }
+
 .prose .url { font-family: ui-monospace, monospace; font-size: .8em; color: color-mix(in srgb, var(--muted) 45%, transparent); }
 
 /* Focus mode: everything but the paragraph under the caret recedes. */

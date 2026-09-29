@@ -59,8 +59,16 @@
       <div class="dateline">
         <button class="smallcaps linkish" id="dateline"></button>
         <span class="spacer"></span>
-        <button class="quiet" id="file-toggle" hidden>File</button>
-        <button class="quiet" id="star-toggle"></button>
+        <span class="smallcaps" id="record-time"></span>
+        <button class="icon" id="record" title="Record a voice note (⌘⇧R)" aria-label="Record">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+        </button>
+        <button class="icon" id="file-toggle" title="File into the journal (⌘J)" aria-label="File" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v10M8 9.5l4 4 4-4M4 13.5V19a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5.5"/></svg>
+        </button>
+        <button class="icon star" id="star-toggle" title="Star (⌘D)" aria-label="Star">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg>
+        </button>
       </div>
       <div class="rule-ink"></div>
       <div id="prose" class="prose" contenteditable="plaintext-only" spellcheck="true"></div>

@@ -5,6 +5,7 @@
 //! `journal::Library`, so the folder stays jnl-compatible.
 
 mod journal;
+mod media;
 
 use journal::{Entry, Library};
 use tauri::Manager;
@@ -15,6 +16,7 @@ use std::sync::Mutex;
 
 struct State {
     base: Mutex<PathBuf>,
+    recording: Mutex<Option<media::Recording>>,
 }
 
 #[derive(Serialize)]
@@ -159,8 +161,74 @@ fn relocate(
     Ok(moved)
 }
 
+/// Copy files dropped on the page into assets/, returning a link path for
+/// each, in order. One that can't be taken is reported and the rest still go.
+#[derive(Serialize)]
+struct Attached {
+    links: Vec<String>,
+    refused: Vec<String>,
+}
+
 #[tauri::command(async)]
-fn set_folder(state: tauri::State<State>, path: String) -> Journal {
+fn attach(state: tauri::State<State>, paths: Vec<String>) -> Attached {
+    let library = library(&state);
+    let mut attached = Attached { links: Vec::new(), refused: Vec::new() };
+    for path in paths {
+        match media::import(&library.base, &PathBuf::from(&path)) {
+            Ok(link) => attached.links.push(link),
+            Err(reason) => attached.refused.push(reason),
+        }
+    }
+    attached
+}
+
+/// A recording made in the page. The bytes arrive as the raw body of the call
+/// rather than as JSON — a minute of sound is a megabyte, and as a JSON array
+/// of numbers it would be four — with the container's extension in a header.
+#[tauri::command(async)]
+fn save_recording(state: tauri::State<State>, request: tauri::ipc::Request) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("The recording arrived empty".to_string());
+    };
+    let ext = request
+        .headers()
+        .get("x-ext")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("webm");
+    let library = library(&state);
+    media::save_recording(&library.base, bytes, ext)
+}
+
+/// Start a voice note. Err("unsupported") tells the page to record in the
+/// webview instead, which is what Windows and macOS do.
+#[tauri::command(async)]
+fn start_recording(state: tauri::State<State>) -> Result<(), String> {
+    let library = library(&state);
+    let mut recording = state.recording.lock().unwrap_or_else(|e| e.into_inner());
+    if recording.is_none() {
+        *recording = Some(media::start_recording(&library.base)?);
+    }
+    Ok(())
+}
+
+/// Stop the voice note and return its link path.
+#[tauri::command(async)]
+fn stop_recording(state: tauri::State<State>) -> Result<String, String> {
+    let taken = state.recording.lock().unwrap_or_else(|e| e.into_inner()).take();
+    taken.ok_or_else(|| "Nothing is being recorded".to_string())?.stop()
+}
+
+/// Let the page load files from the journal's assets/ folder, and nothing else
+/// on disk: the asset protocol's scope starts empty and is widened here.
+fn allow_assets(app: &tauri::AppHandle, base: &std::path::Path) {
+    let _ = app
+        .asset_protocol_scope()
+        .allow_directory(media::assets_dir(base), true);
+}
+
+#[tauri::command(async)]
+fn set_folder(app: tauri::AppHandle, state: tauri::State<State>, path: String) -> Journal {
+    allow_assets(&app, &PathBuf::from(&path));
     {
         let mut base = state.base.lock().unwrap_or_else(|e| e.into_inner());
         *base = PathBuf::from(&path);
@@ -285,8 +353,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(State {
             base: Mutex::new(base),
+            recording: Mutex::new(None),
         })
         .setup(|app| {
+            let base = app.state::<State>().base.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            allow_assets(app.handle(), &base);
             if hides_decorations() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_decorations(false);
@@ -295,7 +366,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            load, create, save, remove, relocate, set_folder, undecorated
+            load, create, save, remove, relocate, set_folder, undecorated, attach,
+            save_recording, start_recording, stop_recording
         ])
         .run(tauri::generate_context!())
         .expect("error while running wander");

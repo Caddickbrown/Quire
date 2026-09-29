@@ -8,6 +8,8 @@
 */
 
 const invoke = window.__TAURI__.core.invoke;
+const convertFileSrc = window.__TAURI__.core.convertFileSrc;
+const webview = window.__TAURI__.webview.getCurrentWebview();
 const dialog = window.__TAURI__.dialog;
 const appWindow = window.__TAURI__.window.getCurrentWindow();
 
@@ -204,6 +206,104 @@ function countStreak() {
   return count;
 }
 
+// -------------------------------------------------------------------- media
+
+/// Photos, video and sound are Nook's: a file in <base>/assets/ named by an
+/// uppercase UUID, and an image link to it from the entry, relative to the
+/// journal folder. The Rust side (media.rs) copies files in; this side shows
+/// them. The kinds match Nook's by extension, so a link reads as the same kind
+/// of thing in either app.
+const MEDIA_KINDS = {
+  image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'bmp', 'tif', 'tiff'],
+  video: ['mov', 'mp4', 'm4v', 'webm'],
+  audio: ['m4a', 'mp3', 'wav', 'aac', 'aiff', 'caf', 'ogg', 'opus', 'flac'],
+};
+const MEDIA_NAMES = { image: 'Photo', video: 'Video', audio: 'Recording' };
+const MEDIA_LINE = /^\s*!\[[^\]\n]*\]\(([^)\s]+)\)\s*$/;
+
+const extOf = (path) => (path.match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase() || '';
+const isMedia = (path) => Object.values(MEDIA_KINDS).some((list) => list.includes(extOf(path)));
+
+function mediaKind(path) {
+  const ext = extOf(path);
+  if (MEDIA_KINDS.video.includes(ext)) return 'video';
+  if (MEDIA_KINDS.audio.includes(ext)) return 'audio';
+  return 'image';
+}
+
+/// A URL the page may load for a link, or null for one it won't: a web
+/// address, an absolute path, or anything that climbs out with '..'. Only the
+/// folder's assets/ is in the asset protocol's scope anyway (lib.rs).
+function mediaUrl(src) {
+  if (!state.base || /^[a-z][a-z0-9+.-]*:/i.test(src) || /^[\\/]/.test(src)) return null;
+  if (src.split(/[\\/]/).includes('..')) return null;
+  let path = src;
+  try { path = decodeURI(src); } catch (error) { /* a stray % is part of the name */ }
+  return convertFileSrc(`${state.base}/${path}`);
+}
+
+/// The picture, player or recording under a link. It holds no text — an
+/// <img>, <video> or <audio> has no text nodes — so the caret arithmetic
+/// that counts characters line by line never sees it. A file that won't load
+/// is marked broken and says so through CSS, for the same reason.
+function mediaNode(src) {
+  const url = mediaUrl(src);
+  if (!url) return '';
+  const kind = mediaKind(src);
+  const name = escapeHtml(src.split(/[\\/]/).pop());
+  const inner = kind === 'image'
+    ? `<img src="${escapeHtml(url)}" alt="" loading="lazy" draggable="false">`
+    : kind === 'video'
+      ? `<video src="${escapeHtml(url)}" controls preload="metadata"></video>`
+      : `<audio src="${escapeHtml(url)}" controls preload="metadata"></audio>`;
+  return `<span class="media ${kind}" contenteditable="false" data-src="${escapeHtml(src)}" ` +
+         `data-name="${name}">${inner}</span>`;
+}
+
+/// WebKitGTK plays video and sound over http and blob: but not from the asset
+/// protocol, where an <img> loads fine and a <video> fails as unsupported. So a
+/// player that fails is given its file again as a blob, read through fetch,
+/// which the asset protocol does serve. Only once: a second failure is the file.
+async function retryAsBlob(player, holder) {
+  if (player.dataset.retried) {
+    holder.classList.add('broken');
+    return;
+  }
+  player.dataset.retried = 'true';
+  try {
+    const response = await fetch(player.src);
+    if (!response.ok) throw new Error(response.status);
+    player.src = URL.createObjectURL(await response.blob());
+  } catch (error) {
+    holder.classList.add('broken');
+  }
+}
+
+// A media element's error doesn't bubble, so it is caught on the way down.
+document.addEventListener('error', (event) => {
+  const holder = event.target.closest && event.target.closest('.media');
+  if (!holder) return;
+  if (event.target.matches('video, audio')) retryAsBlob(event.target, holder);
+  else holder.classList.add('broken');
+}, true);
+
+/// Re-styling a line rebuilds it, and a rebuilt <img> or <video> reloads —
+/// on every keystroke, a flicker, and a video that stops. So the old elements
+/// are carried over into the new line wherever it points at the same file.
+function adoptMedia(from, into) {
+  const old = new Map();
+  for (const node of from.querySelectorAll('.media')) {
+    const list = old.get(node.dataset.src) || [];
+    list.push(node);
+    old.set(node.dataset.src, list);
+  }
+  if (!old.size) return;
+  for (const node of into.querySelectorAll('.media')) {
+    const kept = (old.get(node.dataset.src) || []).shift();
+    if (kept) node.replaceWith(kept);
+  }
+}
+
 // -------------------------------------------------------- markdown styling
 
 /// Quotes too, though nothing here builds an attribute from escaped text:
@@ -227,6 +327,7 @@ const INLINE = new RegExp([
   '(?<both>\\*\\*\\*|___)(?=\\S)(?<bothBody>.+?)(?<=\\S)\\k<both>',
   '(?<strong>\\*\\*|__)(?=\\S)(?<strongBody>.+?)(?<=\\S)\\k<strong>',
   '(?<em>[*_])(?=[^\\s*_])(?<emBody>(?:(?!\\k<em>).)+?)(?<=[^\\s*_])\\k<em>(?![*_])',
+  '!\\[(?<alt>[^\\]\\n]*)\\]\\((?<src>[^)\\s]+)\\)',
   '\\[(?<label>[^\\]\\n]*)\\]\\((?<url>[^)\\s]+)\\)',
   '(?<tag>@[a-zA-Z][a-zA-Z0-9_-]*)',
 ].join('|'), 'g');
@@ -259,6 +360,11 @@ function inlineStyle(text) {
       out += `${mark(g.strong)}<span class="strong">${inlineStyle(g.strongBody)}</span>${mark(g.strong)}`;
     } else if (g.em) {
       out += `${mark(g.em)}<span class="em">${inlineStyle(g.emBody)}</span>${mark(g.em)}`;
+    } else if (g.src !== undefined) {
+      // The link stays on the page, faded, with the thing itself under it:
+      // what is on disk is still the markdown that was typed.
+      out += `${mark('![')}<span class="caption">${escapeHtml(g.alt)}</span>${mark('](')}` +
+             `<span class="url">${escapeHtml(g.src)}</span>${mark(')')}${mediaNode(g.src)}`;
     } else if (g.url !== undefined) {
       out += `${mark('[')}<span class="link">${escapeHtml(g.label)}</span>${mark(']')}` +
              `${mark('(')}<span class="url">${escapeHtml(g.url)}</span>${mark(')')}`;
@@ -352,6 +458,7 @@ function renderProse(text, caret) {
       if (count === 1) {
         const holder = document.createElement('div');
         holder.innerHTML = renderLine(lines[changed]);
+        adoptMedia(prose.children[changed], holder.firstChild);
         prose.replaceChild(holder.firstChild, prose.children[changed]);
       }
       renderedLines = lines;
@@ -361,7 +468,10 @@ function renderProse(text, caret) {
     }
   }
 
-  prose.innerHTML = lines.map(renderLine).join('');
+  const holder = document.createElement('div');
+  holder.innerHTML = lines.map(renderLine).join('');
+  adoptMedia(prose, holder);
+  prose.replaceChildren(...holder.childNodes);
   renderedLines = lines;
   if (caret !== null && caret !== undefined) placeCaret(caret);
   markLiveLine();
@@ -747,6 +857,162 @@ async function moveEntryNow(date) {
   await refreshNow(idOf(moved));
 }
 
+/// Put links to files already in assets/ into the open entry, each on a line
+/// of its own, after the line holding `at` (a character offset in the body) —
+/// or at the end when there is no caret to go by. After the line rather than
+/// at the caret, so a photo never lands in the middle of a sentence.
+function insertMedia(links, at) {
+  const text = state.body;
+  let pos = at === null || at === undefined ? text.length : at;
+  const eol = text.indexOf('\n', pos);
+  pos = eol < 0 ? text.length : eol;
+  const before = text.slice(0, pos);
+  const block = links.map((link) => `![](${link})`).join('\n');
+  const lead = before.trim() ? '\n' : '';
+  const head = before.trimEnd() + lead + block;
+  const next = head + (text.slice(pos) || '\n');
+  recordNow(text, pos);
+  state.body = next;
+  renderProse(next, head.length);
+  recordNow(next, head.length);
+  edited();
+  renderCounts();
+}
+
+/// The body offset under a point on screen, or null if the point isn't over
+/// the text — the drop lands where the pointer is, like dropping into any
+/// other editor.
+function offsetAt(x, y) {
+  const range = document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;
+  if (!range || !prose.contains(range.startContainer)) return null;
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return readProse().caret;
+}
+
+/// Files dropped anywhere on the window. Tauri takes the drop before the page
+/// sees it, and hands over paths rather than File objects — which is what the
+/// Rust side wants anyway: it copies from the path, and nothing crosses the
+/// bridge but a name.
+async function dropFilesNow(paths, position) {
+  const media = paths.filter(isMedia);
+  if (!media.length) {
+    setSaveState('Only photos, video and sound can be dropped in');
+    return;
+  }
+  if (!current()) await newEntryNow();
+  // Tauri reports the drop in physical pixels; the page works in CSS pixels.
+  const scale = window.devicePixelRatio || 1;
+  const at = position ? offsetAt(position.x / scale, position.y / scale) : null;
+  const attached = await invoke('attach', { paths: media });
+  if (attached.links.length) insertMedia(attached.links, at);
+  const skipped = paths.length - media.length + attached.refused.length;
+  if (attached.refused.length) setSaveState(`Not attached — ${attached.refused[0]}`);
+  else if (skipped) setSaveState(`${skipped} ${skipped === 1 ? 'file wasn’t' : 'files weren’t'} a photo, video or sound`);
+}
+
+// ---------------------------------------------------------------- recording
+
+/// Press to record, press again to stop: the note goes into assets/ as an
+/// .m4a and its link into the entry. Nothing more — no trimming, no waveform.
+/// On Linux ffmpeg records it (media.rs), since WebKitGTK's recorder needs
+/// plugins most desktops lack; elsewhere the webview records and ffmpeg, if
+/// installed, converts.
+let recorder = null;
+
+function renderRecord() {
+  const button = $('record');
+  const elapsed = $('record-time');
+  button.classList.toggle('on', !!recorder);
+  button.title = recorder ? 'Stop recording (⌘⇧R)' : 'Record a voice note (⌘⇧R)';
+  if (!recorder) {
+    elapsed.textContent = '';
+    return;
+  }
+  const seconds = Math.floor((Date.now() - recorder.started) / 1000);
+  elapsed.textContent = `${Math.floor(seconds / 60)}:${pad(seconds % 60)}`;
+}
+
+async function toggleRecordingNow() {
+  if (recorder) {
+    await recorder.stop();
+    return;
+  }
+  if (!current()) await newEntryNow();
+  const openId = state.selection;
+  const at = document.activeElement === prose ? readProse().caret : null;
+  const done = (link) => placeRecording(link, openId, at);
+
+  try {
+    await invoke('start_recording');
+    begin(async () => done(await invoke('stop_recording')));
+  } catch (error) {
+    if (String(error) !== 'unsupported') throw error;
+    await recordInWebview(done);
+  }
+}
+
+function begin(stop) {
+  recorder = {
+    started: Date.now(),
+    tick: setInterval(renderRecord, 500),
+    stop: async () => {
+      const running = recorder;
+      recorder = null;
+      clearInterval(running.tick);
+      renderRecord();
+      setSaveState('Saving the recording…');
+      await stop();
+    },
+  };
+  renderRecord();
+}
+
+async function recordInWebview(done) {
+  if (!window.MediaRecorder || !navigator.mediaDevices) {
+    throw new Error('this build of the webview can’t record');
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const type = ['audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']
+    .find((t) => MediaRecorder.isTypeSupported(t));
+  const media = new MediaRecorder(stream, type ? { mimeType: type } : {});
+  const chunks = [];
+  media.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+  const stopped = new Promise((resolve) => { media.onstop = resolve; });
+  media.start(1000);
+  begin(async () => {
+    media.stop();
+    await stopped;
+    stream.getTracks().forEach((track) => track.stop());
+    const mime = media.mimeType || '';
+    const ext = mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'm4a' : 'webm';
+    const bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    if (!bytes.length) throw new Error('nothing was recorded');
+    await done(await invoke('save_recording', bytes, { headers: { 'x-ext': ext } }));
+  });
+}
+
+/// Into the entry it was recorded for, even if another has been opened since.
+async function placeRecording(link, openId, at) {
+  if (state.selection === openId) {
+    insertMedia([link], at);
+    return;
+  }
+  await save();
+  const entry = state.entries.find((e) => idOf(e) === openId);
+  if (!entry) {
+    setSaveState(`Recording kept as ${link}, but its entry has moved — add the link by hand`);
+    return;
+  }
+  const body = `${entry.body.trimEnd()}${entry.body.trim() ? '\n' : ''}![](${link})`;
+  const saved = await invoke('save', {
+    ts: entry.ts, source: entry.source, title: entry.title, body, starred: entry.starred,
+  });
+  absorb(entry, saved, null);
+  setSaveState('Recording added to the entry it was made in');
+}
+
 /// Every action that goes to disk says so on the status line when it fails,
 /// where a failed save already does. Left alone, a rejected invoke is an
 /// unhandled rejection: nothing on screen, and a button that seems broken.
@@ -767,6 +1033,8 @@ const toggleFiling = reported('Not filed', toggleFilingNow);
 const removeEntry = reported('Not removed', removeEntryNow);
 const moveEntry = reported('Not moved', moveEntryNow);
 const refresh = reported('Couldn’t read the journal', refreshNow);
+const dropFiles = reported('Not attached', dropFilesNow);
+const toggleRecording = reported('Not recorded', toggleRecordingNow);
 
 // ---------------------------------------------------------------- rendering
 
@@ -952,8 +1220,15 @@ function rowNode(entry, position) {
   return row;
 }
 
-const firstLine = (body) =>
-  (body.split('\n').find((line) => line.trim()) || '').replace(/^[#>\-*_`\s]+/, '');
+/// The line a row is named by. A line that is only a photo or a recording
+/// names it by what it is, rather than by a UUID.
+function firstLine(body) {
+  const lines = body.split('\n').filter((line) => line.trim());
+  const text = lines.find((line) => !MEDIA_LINE.test(line));
+  if (text) return text.replace(/^[#>\-*_`\s]+/, '');
+  const media = lines.length ? lines[0].match(MEDIA_LINE) : null;
+  return media ? MEDIA_NAMES[mediaKind(media[1])] : '';
+}
 
 function renderEditor() {
   const entry = current();
@@ -976,8 +1251,8 @@ function renderEditor() {
     kicker.hidden = true;
   }
 
-  $('star-toggle').textContent = entry.starred ? '✱ Starred' : 'Star';
   $('star-toggle').classList.toggle('on', entry.starred);
+  $('star-toggle').title = entry.starred ? 'Unstar (⌘D)' : 'Star (⌘D)';
   $('file-toggle').hidden = !entry.unfiled;
   renderCounts();
 }
@@ -1311,6 +1586,7 @@ $('clear-query').onclick = () => {
 $('new-entry').onclick = newEntry;
 $('blank-new').onclick = newEntry;
 $('star-toggle').onclick = toggleStar;
+$('record').onclick = toggleRecording;
 $('file-toggle').onclick = toggleFiling;
 $('a-file').onclick = toggleFiling;
 $('s-status').onclick = toggleFiling;
@@ -1497,6 +1773,8 @@ document.addEventListener('keydown', (event) => {
       $('query').select();
     },
     d: () => (event.shiftKey ? openSheet() : toggleStar()),
+    // ⌘⇧R only: plain ⌘R is left alone.
+    r: event.shiftKey ? toggleRecording : undefined,
     j: () => toggleFiling(),
     1: () => { state.page = 'journal'; ensureSelection(); render(); },
     2: () => { state.page = 'inbox'; ensureSelection(); render(); },
@@ -1527,6 +1805,13 @@ document.querySelectorAll('[data-window]').forEach((button) => {
   };
 });
 
+webview.onDragDropEvent((event) => {
+  const page = document.querySelector('.page');
+  const { type } = event.payload;
+  page.classList.toggle('dropping', type === 'enter' || type === 'over');
+  if (type === 'drop') dropFiles(event.payload.paths || [], event.payload.position);
+});
+
 invoke('undecorated').then((custom) => {
   if (custom) document.documentElement.dataset.chrome = 'custom';
 }).catch(() => {});
@@ -1541,6 +1826,7 @@ window.matchMedia('(prefers-color-scheme: dark)')
 appWindow.onCloseRequested(async (event) => {
   event.preventDefault();
   try {
+    if (recorder) await recorder.stop().catch(() => {});
     await save();
   } finally {
     await appWindow.destroy();
