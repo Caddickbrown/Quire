@@ -21,6 +21,17 @@ enum MediaLinks {
     }
 }
 
+extension MediaLinks {
+    /// `content` with every link to `assets/<from>` pointed at `assets/<to>`
+    /// instead, or nil when it has none — so a caller rewrites only the files
+    /// that actually change.
+    static func renaming(_ content: String, from: String, to: String) -> String? {
+        let old = "(assets/\(from))"
+        guard content.contains(old) else { return nil }
+        return content.replacingOccurrences(of: old, with: "(assets/\(to))")
+    }
+}
+
 /// What kind of media a path points at, decided by its file extension.
 enum MediaKind {
     case image, video, audio

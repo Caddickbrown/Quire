@@ -32,6 +32,15 @@ do {
     check(e[0].suffix == "one" && e[1].suffix == "two", "parse: suffixes")
 }
 
+// MediaLinks.renaming (HEIC -> JPEG relinking)
+do {
+    let text = "[2026-09-29 08:00:00] Walk\n![](assets/AB.heic)\nand ![x](assets/AB.heic) again\n![](assets/ABC.heic)"
+    let out = MediaLinks.renaming(text, from: "AB.heic", to: "AB.jpg")
+    check(out == "[2026-09-29 08:00:00] Walk\n![](assets/AB.jpg)\nand ![x](assets/AB.jpg) again\n![](assets/ABC.heic)",
+          "renaming: every link to that file, and only that file")
+    check(MediaLinks.renaming("no media here", from: "AB.heic", to: "AB.jpg") == nil, "renaming: nil when nothing links")
+}
+
 // leadingPreamble
 do {
     check(JournalParser.leadingPreamble("[2026-05-10 08:00:00] x\nbody\n") == "", "preamble: none")
