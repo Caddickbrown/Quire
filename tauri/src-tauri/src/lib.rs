@@ -158,8 +158,95 @@ fn undecorated() -> bool {
     hides_decorations()
 }
 
+/// Hand WebKit a .woff and its web process spins at 100% of a core, paints
+/// nothing, and says nothing: the window opens blank and stays that way. WOFF
+/// is a web format that has no business on the system font path, but some
+/// distributions put it there anyway — Zorin's `fonts-opendyslexic` installs
+/// four alongside the .otf copies of the same faces — and that takes down every
+/// WebKit app on the machine, this one included.
+///
+/// So the font path is checked, and if any are found the app runs against a
+/// fontconfig of its own that keeps the system's and drops the web fonts. The
+/// .otf copies are untouched, so nothing is actually lost. Fontconfig is read
+/// when GTK starts, so this has to happen before the builder runs.
+#[cfg(target_os = "linux")]
+fn reject_woff_system_fonts() {
+    const SYSTEM: &str = "/etc/fonts/fonts.conf";
+    // Anyone who has pointed FONTCONFIG_FILE somewhere themselves means it.
+    if std::env::var_os("FONTCONFIG_FILE").is_some() || !std::path::Path::new(SYSTEM).exists() {
+        return;
+    }
+    let offenders = woff_on_font_path();
+    if offenders.is_empty() {
+        return;
+    }
+    let Some(dir) = journal::config_file().parent().map(|p| p.to_path_buf()) else {
+        return;
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    // A glob is matched from the start of the path, so each file is named in
+    // full: `*.woff` matches nothing.
+    let globs = offenders
+        .iter()
+        .map(|path| format!("      <glob>{}</glob>\n", xml_escape(path)))
+        .collect::<String>();
+    let file = dir.join("fonts.conf");
+    let config = format!(
+        r#"<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <include>{SYSTEM}</include>
+  <selectfont>
+    <rejectfont>
+{globs}    </rejectfont>
+  </selectfont>
+</fontconfig>
+"#
+    );
+    if std::fs::write(&file, config).is_ok() {
+        std::env::set_var("FONTCONFIG_FILE", &file);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn woff_on_font_path() -> Vec<String> {
+    let mut roots = vec![
+        PathBuf::from("/usr/share/fonts"),
+        PathBuf::from("/usr/local/share/fonts"),
+    ];
+    if let Ok(home) = std::env::var("HOME") {
+        roots.push(PathBuf::from(&home).join(".local/share/fonts"));
+        roots.push(PathBuf::from(&home).join(".fonts"));
+    }
+    roots
+        .iter()
+        .flat_map(|root| walkdir::WalkDir::new(root).into_iter().filter_map(Result::ok))
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("woff") || ext.eq_ignore_ascii_case("woff2")
+                })
+        })
+        .map(|entry| entry.path().to_string_lossy().into_owned())
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    reject_woff_system_fonts();
     // A folder named on the command line wins; then the one last chosen in the
     // app; then $JNL_DIR; then ~/Documents/Wander.
     let base = journal::resolve_base(

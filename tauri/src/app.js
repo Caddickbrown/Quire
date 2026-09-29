@@ -412,6 +412,31 @@ prose.addEventListener('keydown', (event) => {
     event.preventDefault();
     wrapSelection(event.key === 'b' ? '**' : '*');
   }
+  // Left to the browser, Enter is its native paragraph-insertion command —
+  // which line-splitting a <span class="ln"> per source line was never
+  // designed to survive, and which WebKitGTK's contenteditable in particular
+  // mangles into duplicated blocks and a caret that lands nowhere near the
+  // keystroke. Handled here instead: a plain text splice, exactly like
+  // wrapSelection, so Enter behaves the same on every platform.
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    const { text, caret } = readProse();
+    const selection = window.getSelection();
+    const chosen = selection && !selection.isCollapsed ? selection.toString() : '';
+    let start = caret;
+    let end = caret;
+    if (chosen) {
+      start = text.indexOf(chosen);
+      if (start < 0) start = caret;
+      end = start + chosen.length;
+    }
+    const next = text.slice(0, start) + '\n' + text.slice(end);
+    state.body = next;
+    snapshot(next, start + 1);
+    renderProse(next, start + 1);
+    edited();
+    renderCounts();
+  }
 });
 
 document.addEventListener('selectionchange', () => {
@@ -712,7 +737,9 @@ function renderList() {
 
   for (const section of grouped) {
     listItems.push({ section });
-    for (const entry of section.entries) listItems.push({ entry });
+    // Position within the section, not the whole list — row colours cycle
+    // fresh under each month heading, the way the Mac app cycles them.
+    section.entries.forEach((entry, position) => listItems.push({ entry, position }));
   }
   spacer.style.height = '0px';
   list.appendChild(spacer);
@@ -739,7 +766,7 @@ function growTo(bottom) {
     const batch = document.createDocumentFragment();
     for (let index = listShown; index < end; index += 1) {
       const item = listItems[index];
-      batch.appendChild(item.section ? sectionNode(item.section) : rowNode(item.entry));
+      batch.appendChild(item.section ? sectionNode(item.section) : rowNode(item.entry, item.position));
     }
     list.insertBefore(batch, spacer);
     listShown = end;
@@ -762,9 +789,16 @@ function sectionNode(section) {
   return head;
 }
 
-function rowNode(entry) {
+function rowNode(entry, position) {
   const row = document.createElement('button');
-  row.className = `row${idOf(entry) === state.selection ? ' on' : ''}`;
+  const selected = idOf(entry) === state.selection;
+  row.className = `row${selected ? ' on' : ''}`;
+  // Pink, teal, plain, in rotation — the selected row takes the accent via
+  // CSS instead, so this only touches the ones that aren't.
+  if (!selected && theme && theme.chrome.rowColours && theme.chrome.rowStyle === 'card') {
+    const fills = ['var(--surface)', 'var(--tint)', 'var(--surface)'];
+    row.style.background = fills[position % fills.length];
+  }
   const title = entry.title || firstLine(entry.body);
   const date = parseStamp(entry.ts);
   const meta = `${entry.unfiled ? 'Draft · ' : ''}${shortDay(date)} · ${entry.words} ` +
@@ -809,6 +843,16 @@ function renderEditor() {
   if (entry.tags.length) parts.push(entry.tags.slice(0, 4).join(' '));
   $('dateline').textContent = parts.join(' · ').toUpperCase();
 
+  // The magazine kicker: the day, and the first tag if the entry carries one.
+  const kicker = $('kicker');
+  if (theme && theme.chrome.kicker) {
+    const day = longDay(date).split(',')[0];
+    kicker.textContent = entry.tags.length ? `${day} · ${entry.tags[0]}` : day;
+    kicker.hidden = false;
+  } else {
+    kicker.hidden = true;
+  }
+
   $('star-toggle').textContent = entry.starred ? '✱ Starred' : 'Star';
   $('star-toggle').classList.toggle('on', entry.starred);
   $('file-toggle').hidden = !entry.unfiled;
@@ -823,12 +867,42 @@ function renderCounts() {
   $('counts').textContent = parts.join(' · ').toUpperCase();
 }
 
+/// A ruled row, the vocabulary the panels use everywhere except the themes
+/// whose stats read as figures instead.
+const fieldRow = (label, value, tone) =>
+  `<div class="field"><span>${label}</span><b${tone ? ` class="${tone}"` : ''}>${value}</b></div>`;
+
+/// A label over a display numeral — the treatment nearly every figures theme
+/// uses for its counts. `figureBlocks` themes give each one a fill of its
+/// own, cycling the theme's distinct colours; the rest just tint the value.
+function figureTile(index, label, value, tone) {
+  if (theme && theme.chrome.figureBlocks) {
+    return `<div class="figure block" style="background:var(--fill-${index});color:var(--fill-${index}-on)">` +
+      `<span class="smallcaps">${label}</span><span class="value">${value}</span></div>`;
+  }
+  return `<div class="figure"><span class="smallcaps">${label}</span>` +
+    `<span class="value" style="color:var(${tone || '--ink'})">${value}</span></div>`;
+}
+
 function renderPanels() {
   const entry = current();
-  $('s-words').textContent = words(state.body);
-  $('s-chars').textContent = state.body.length;
-  $('s-paras').textContent = paragraphs(state.body);
-  $('s-read').textContent = `${readingMinutes(state.body)} min`;
+  const figures = theme && theme.chrome.statsStyle === 'figures';
+  const run = streak();
+  const prefix = dayOf(new Date()).slice(0, 7);
+  const monthCount = state.entries.filter((e) => e.date.startsWith(prefix)).length;
+
+  $('group-entry').innerHTML = figures
+    ? `<div class="figures">` +
+      figureTile(0, 'Words', words(state.body)) +
+      figureTile(1, 'Days running', run, '--accent') +
+      figureTile(2, 'This month', monthCount) +
+      figureTile(0, 'Reading', `${readingMinutes(state.body)} min`) +
+      `</div>`
+    : `<div class="smallcaps section">This entry</div>` +
+      fieldRow('Words', words(state.body)) +
+      fieldRow('Characters', state.body.length) +
+      fieldRow('Paragraphs', paragraphs(state.body)) +
+      fieldRow('Reading', `${readingMinutes(state.body)} min`);
 
   const number = entry
     ? state.entries.length - state.entries.findIndex((e) => idOf(e) === state.selection)
@@ -841,12 +915,13 @@ function renderPanels() {
   $('s-file').textContent = entry ? entry.source.split('/').pop() : '—';
   $('a-file').hidden = !entry || !entry.unfiled;
 
-  $('s-entries').textContent = state.entries.length;
-  $('s-total').textContent = state.entries.reduce((sum, e) => sum + e.words, 0).toLocaleString();
-  const prefix = dayOf(new Date()).slice(0, 7);
-  $('s-month').textContent = state.entries.filter((e) => e.date.startsWith(prefix)).length;
-  const run = streak();
-  $('s-streak').textContent = `${run} ${run === 1 ? 'day' : 'days'}`;
+  const totalWords = state.entries.reduce((sum, e) => sum + e.words, 0).toLocaleString();
+  $('group-journal').innerHTML = `<div class="smallcaps section">Journal</div>` +
+    fieldRow('Entries', state.entries.length) +
+    fieldRow('Words', totalWords) +
+    (figures ? '' :
+      fieldRow('This month', monthCount) +
+      fieldRow('Streak', `${run} ${run === 1 ? 'day' : 'days'}`, run > 0 ? 'green' : ''));
 
   $('o-type').textContent = settings.type.toFixed(1);
   $('o-lead').textContent = (1 + settings.lead).toFixed(2);
@@ -857,6 +932,34 @@ function renderPanels() {
 
   const day = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
   $('prompt').textContent = PROMPTS[day % PROMPTS.length];
+}
+
+// --------------------------------------------------------------- palette math
+
+const hexLuminance = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+
+/// Whichever of two colours actually contrasts with a fill — the same measure
+/// as the Mac app's Tone.readable, so a near-white "ink" in a dark theme
+/// doesn't get chosen as the dark one and sit white on white.
+function readableOn(fill, first, second) {
+  const base = hexLuminance(fill);
+  return Math.abs(hexLuminance(first) - base) >= Math.abs(hexLuminance(second) - base) ? first : second;
+}
+
+/// Distinct fills for the stats blocks: accent, tint, green, ink, deduplicated
+/// and padded with surface — several themes point two or three of those at
+/// the same colour, so this is what keeps a block from repeating.
+function figureFills(palette) {
+  const chosen = [];
+  for (const key of ['accent', 'tint', 'green', 'ink']) {
+    if (!chosen.includes(palette[key])) chosen.push(palette[key]);
+  }
+  while (chosen.length < 3) chosen.push(palette.surface);
+  return chosen;
 }
 
 /// The theme table is the same file the Mac and iOS apps read.
@@ -900,7 +1003,33 @@ function applyTheme() {
   root.dataset.stats = theme.chrome.statsStyle || 'rows';
   root.dataset.pageCard = String(!!theme.chrome.pageCard);
   root.dataset.ornament = theme.chrome.ornament || 'none';
+  root.dataset.kicker = String(!!theme.chrome.kicker);
+  root.dataset.centred = String(!!theme.chrome.centred);
+
+  const fills = figureFills(palette);
+  fills.forEach((fill, index) => {
+    root.style.setProperty(`--fill-${index}`, fill);
+    root.style.setProperty(`--fill-${index}-on`, readableOn(fill, palette.paper, palette.ink));
+  });
+
   $('o-theme').textContent = theme.name;
+  updateOrnament();
+}
+
+/// The ornament is drawn in pure CSS, keyed off the class set here — except
+/// the ghost numeral, which is the open entry's day and has to come from the
+/// state this function already has to hand. Rail is index furniture, not
+/// something drawn on the page, so it gets its own element instead.
+function updateOrnament() {
+  const kind = theme ? (theme.chrome.ornament || 'none') : 'none';
+  const page = $('page-ornament');
+  const rail = $('rail-ornament');
+  if (page) {
+    page.className = `ornament ornament-${kind === 'rail' ? 'none' : kind}`;
+    const entry = current();
+    page.dataset.day = entry ? entry.date.slice(-2) : '';
+  }
+  if (rail) rail.className = `ornament ornament-${kind === 'rail' ? 'rail' : 'none'}`;
 }
 
 function applySettings() {
@@ -1105,8 +1234,16 @@ function renderThemes() {
     const upper = entry.type.display.uppercase ? 'uppercase' : 'none';
     const filled = entry.chrome.filledButtons;
 
+    // The ornament reads --ink/--panel/--accent/--tint/--green off its own
+    // element rather than the page's current theme, since a dozen of these
+    // sit on screen at once, each showing a different theme's palette.
+    const ornamentVars = `--ink:${palette.ink};--panel:${palette.panel};--accent:${palette.accent};` +
+      `--tint:${palette.tint};--green:${palette.green};--paper:${palette.paper}`;
     card.innerHTML =
       `<div class="theme-preview" style="background:${palette.paper}">
+         <div class="ornament ornament-${entry.chrome.ornament || 'none'}" data-day="08" style="${ornamentVars}">
+           <i class="orn-a"></i><i class="orn-b"></i><i class="orn-c"></i><i class="orn-d"></i>
+         </div>
          <div class="pv-mast">
            <span style="font-family:${display};font-size:13px;color:${palette.ink};text-transform:${upper}">wander</span>
            <span class="pv-meta" style="font-family:${label};color:${palette.accent}">journal</span>

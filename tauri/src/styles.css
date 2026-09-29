@@ -225,7 +225,8 @@ button.value:hover { color: var(--accent); text-decoration: underline; }
   transition: width var(--column-motion), opacity var(--column-motion);
 }
 
-.panel.index { width: var(--index-width); border-right: 1px solid var(--rule); }
+.panel.index { width: var(--index-width); position: relative; border-right: 1px solid var(--rule); }
+:root[data-ornament='rail'] .panel.index { padding-left: 74px; }
 .panel.stats, .panel.options { width: var(--panel-width); border-left: 1px solid var(--rule); }
 .panel.closed { width: 0; opacity: 0; border-width: 0; }
 
@@ -283,6 +284,7 @@ button.value:hover { color: var(--accent); text-decoration: underline; }
 .editor {
   flex: 1;
   min-width: 0;
+  position: relative;
   display: flex;
   justify-content: center;
   background: var(--paper);
@@ -296,6 +298,11 @@ button.value:hover { color: var(--accent); text-decoration: underline; }
   min-height: 0;
   padding: 24px 40px 18px;
 }
+
+.kicker { color: var(--accent); margin-bottom: 4px; }
+
+:root[data-centred='true'] .title,
+:root[data-centred='true'] .kicker { text-align: center; }
 
 .title {
   font-family: var(--display);
@@ -493,6 +500,7 @@ button.value:hover { color: var(--accent); text-decoration: underline; }
   /* Fixed, so the caption below it is never squeezed out of the card. */
   flex: 1 1 auto;
   min-height: 0;
+  position: relative;
   padding: 13px;
   display: flex;
   flex-direction: column;
@@ -563,6 +571,116 @@ button.value:hover { color: var(--accent); text-decoration: underline; }
 .figure { display: flex; flex-direction: column; gap: 2px; }
 .figure .value { font-family: var(--display); font-size: 34px; line-height: 1; font-variant-numeric: tabular-nums; }
 .figure.block { padding: 12px 14px; border-radius: var(--corner); }
+.figure.block .smallcaps { color: inherit; opacity: .75; }
+
+/* Ornaments — the part of a theme that isn't type or colour: the ink wash
+   behind Sumi, Cinema's letterbox bars, Constructivist's wedge, Broken grid's
+   ghost numeral, Memphis's confetti. Drawn behind the page, never over it,
+   and never in the way of a click. `.ornament` sits absolutely within its
+   positioned parent and paints just above that parent's own background
+   (z-index: -1 keeps it under every in-flow child without needing to touch
+   the stacking of the content itself). */
+.ornament { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.ornament i { display: none; position: absolute; }
+
+.ornament-wash .orn-a, .ornament-wash .orn-b, .ornament-wash .orn-c { display: block; border-radius: 999px; }
+.ornament-wash .orn-a {
+  width: 46%; height: 46%; right: -6%; top: 4%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--ink) 13%, transparent) 0%, transparent 70%);
+}
+.ornament-wash .orn-b {
+  width: 30%; height: 30%; right: 2%; bottom: -4%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--ink) 9%, transparent) 0%, transparent 70%);
+}
+.ornament-wash .orn-c {
+  width: 30%; height: 14px; left: 18%; bottom: 9%;
+  background: color-mix(in srgb, var(--ink) 16%, transparent);
+  transform: rotate(-2deg);
+}
+
+.ornament-letterbox::before, .ornament-letterbox::after {
+  content: ''; position: absolute; left: 0; right: 0; height: 34px; background: var(--panel);
+}
+.ornament-letterbox::before { top: 0; }
+.ornament-letterbox::after { bottom: 0; }
+
+.ornament-wedge::before {
+  content: ''; position: absolute; inset: 0;
+  clip-path: polygon(100% 0%, 100% 58%, 26% 100%, 0% 100%, 0% 86%);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.ornament-wedge::after {
+  content: ''; position: absolute; inset: 0;
+  clip-path: polygon(100% 58%, 100% 63%, 30% 100%, 26% 100%);
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+/* Broken grid's ghost numeral: the open entry's day, set as a data attribute
+   because content: attr() can't reach into a sibling's state. */
+.ornament-ghost::after {
+  content: attr(data-day);
+  position: absolute; left: 4%; top: 50%; transform: translateY(-50%);
+  font-family: var(--display); line-height: 1; white-space: nowrap;
+  font-size: 260px;
+  color: color-mix(in srgb, var(--ink) 5.5%, transparent);
+}
+.theme-preview .ornament-ghost::after { font-size: 70px; left: 6%; }
+
+.ornament-confetti .orn-a, .ornament-confetti .orn-b,
+.ornament-confetti .orn-c, .ornament-confetti .orn-d { display: block; }
+.ornament-confetti .orn-a {
+  left: 4%; bottom: 8%; width: 50px; height: 50px; border-radius: 50%;
+  border: 6px solid color-mix(in srgb, var(--tint) 55%, transparent);
+}
+.ornament-confetti .orn-b {
+  right: 5%; bottom: 8%; width: 0; height: 0;
+  border-left: 26px solid transparent; border-right: 26px solid transparent;
+  border-bottom: 38px solid color-mix(in srgb, var(--green) 65%, transparent);
+}
+.ornament-confetti .orn-c {
+  right: 8%; top: 5%; width: 90px; height: 12px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  transform: rotate(-8deg);
+}
+.ornament-confetti .orn-d {
+  left: 46%; bottom: 4%; width: 40px; height: 9px; border-radius: 999px;
+  background: color-mix(in srgb, var(--tint) 55%, transparent);
+  transform: rotate(-8deg);
+}
+.theme-preview .ornament-confetti .orn-a { width: 26px; height: 26px; border-width: 4px; }
+.theme-preview .ornament-confetti .orn-b {
+  border-left-width: 12px; border-right-width: 12px; border-bottom-width: 18px;
+}
+.theme-preview .ornament-confetti .orn-c { width: 44px; height: 7px; }
+.theme-preview .ornament-confetti .orn-d { width: 22px; height: 5px; }
+
+/* Bauhaus's rail: index furniture, not something drawn on the page — the
+   circle, triangle and square down the left edge, on a band of the theme's
+   third colour. It replaces the page ornament rather than joining it. */
+.ornament-rail {
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
+  position: absolute; inset: 0 auto 0 0; width: 74px; z-index: 0;
+  padding-top: 24px;
+  background: color-mix(in srgb, var(--tint) 35%, transparent);
+}
+.ornament-rail i { display: block; }
+.ornament-rail .orn-a { position: static; width: 34px; height: 34px; border-radius: 50%; background: var(--green); }
+.ornament-rail .orn-b {
+  position: static; width: 0; height: 0;
+  border-left: 18px solid transparent; border-right: 18px solid transparent;
+  border-bottom: 30px solid var(--accent);
+}
+.ornament-rail .orn-c { position: static; width: 32px; height: 32px; background: var(--paper); }
+
+.theme-preview .ornament-rail {
+  width: 26px; gap: 8px; padding-top: 8px;
+}
+.theme-preview .ornament-rail .orn-a { width: 13px; height: 13px; }
+.theme-preview .ornament-rail .orn-b {
+  border-left-width: 7px; border-right-width: 7px; border-bottom-width: 12px;
+}
+.theme-preview .ornament-rail .orn-c { width: 12px; height: 12px; }
+.theme-preview .ornament-rail .orn-d { display: none; }
 
 
 /* Auto / Light / Dark, in the theme page: choosing a look means seeing which

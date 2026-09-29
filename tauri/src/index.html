@@ -33,6 +33,9 @@
 <main class="columns">
 
   <section class="panel index" id="col-index">
+    <div class="ornament" id="rail-ornament" aria-hidden="true">
+      <i class="orn-a"></i><i class="orn-b"></i><i class="orn-c"></i>
+    </div>
     <div class="find">
       <span class="smallcaps">Find</span>
       <input id="query" type="text" placeholder="title, text or @tag" spellcheck="false">
@@ -47,7 +50,11 @@
   </section>
 
   <section class="editor" id="col-editor">
+    <div class="ornament" id="page-ornament" aria-hidden="true">
+      <i class="orn-a"></i><i class="orn-b"></i><i class="orn-c"></i><i class="orn-d"></i>
+    </div>
     <div class="page">
+      <div class="kicker smallcaps" id="kicker" hidden></div>
       <input id="title" class="title" placeholder="Untitled" spellcheck="false">
       <div class="dateline">
         <button class="smallcaps linkish" id="dateline"></button>
@@ -68,19 +75,13 @@
       <h1>Nothing open</h1>
       <p class="marginalia">Press ⌘N to start an entry. Wander writes plain markdown into
         journal/YYYY/MM/DD.md — the same files the Mac app and jnl read.</p>
-      <button class="block" id="blank-new">New entry</button>
+      <button class="block" id="blank-new">New</button>
     </div>
   </section>
 
   <section class="panel stats" id="col-stats">
     <div class="scroll">
-      <div class="group">
-        <div class="smallcaps section">This entry</div>
-        <div class="field"><span>Words</span><b id="s-words">0</b></div>
-        <div class="field"><span>Characters</span><b id="s-chars">0</b></div>
-        <div class="field"><span>Paragraphs</span><b id="s-paras">0</b></div>
-        <div class="field"><span>Reading</span><b id="s-read">0 min</b></div>
-      </div>
+      <div class="group" id="group-entry"></div>
       <div class="group">
         <div class="smallcaps section">Filed</div>
         <div class="field"><span>Number</span><b id="s-number">—</b></div>
@@ -89,13 +90,7 @@
         <div class="field"><span>Status</span><b><button class="value" id="s-status">—</button></b></div>
         <div class="field"><span>File</span><b id="s-file">—</b></div>
       </div>
-      <div class="group">
-        <div class="smallcaps section">Journal</div>
-        <div class="field"><span>Entries</span><b id="s-entries">0</b></div>
-        <div class="field"><span>Words</span><b id="s-total">0</b></div>
-        <div class="field"><span>This month</span><b id="s-month">0</b></div>
-        <div class="field"><span>Streak</span><b id="s-streak" class="green">0 days</b></div>
-      </div>
+      <div class="group" id="group-journal"></div>
       <div class="group actions">
         <button class="block" id="a-file" hidden>File</button>
         <button class="block" id="a-copy">Copy markdown</button>
