@@ -22,6 +22,9 @@ struct OptionsPanel: View {
     @Binding var showOptions: Bool
     @Binding var themeID: String
     @Binding var showingThemes: Bool
+    /// The Columns rows. Off on iPhone, where the panels are sheets rather than
+    /// columns and there is nothing for the switches to open or close.
+    var showsColumns: Bool = true
     @Environment(\.theme) private var theme
     @State private var choosingFolder = false
 
@@ -29,7 +32,7 @@ struct OptionsPanel: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 setting
-                columns
+                if showsColumns { columns }
                 folder
             }
             .padding(.horizontal, 18)

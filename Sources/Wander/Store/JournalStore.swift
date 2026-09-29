@@ -139,13 +139,15 @@ final class JournalStore: ObservableObject {
     // MARK: Lifecycle
 
     init() {
-        library = JournalLibrary(baseURL: JournalLibrary.resolveBase(preferred: nil))
         // A remembered folder is reached through its bookmark, not its path: a
         // path alone stops working the moment the app is sandboxed, and breaks
-        // anyway if the folder is moved or renamed.
+        // anyway if the folder is moved or renamed. The default is resolved only
+        // without one, since resolving it creates ~/Documents/Wander.
         if let remembered = Self.resolveRememberedFolder() {
             scopedURL = remembered.scoped ? remembered.url : nil
             library = JournalLibrary(baseURL: remembered.url)
+        } else {
+            library = JournalLibrary(baseURL: JournalLibrary.resolveBase(preferred: nil))
         }
         library.ensureFolders()
         if let saved = UserDefaults.standard.string(forKey: Self.pageKey),
@@ -168,7 +170,7 @@ final class JournalStore: ObservableObject {
         lastFingerprint = library.fingerprint()
 
         // An unsaved new entry lives only in memory until it has text; keep it.
-        if let draft = draftEntry, draft.source == nil,
+        if let draft = draftEntry, isUnwritten(draft),
            !entries.contains(where: { $0.id == draft.id }) {
             entries.insert(draft, at: 0)
         }
@@ -305,39 +307,32 @@ final class JournalStore: ObservableObject {
 
     // MARK: Moving between files
 
-    /// Move an entry to `target` under the timestamp `desired` — the one
-    /// primitive behind retiming, filing and unfiling.
+    /// Move an entry to `target` under the timestamp `desired`. The file work
+    /// — destination first, then the source — is the library's; this keeps
+    /// the index and the editor in step with it.
     @discardableResult
     private func move(_ current: Entry, to target: URL, stamp desired: String) -> Bool {
-        let stamp = library.freeStamp(desired, in: target, excluding: current)
-        var head = "[\(stamp)]"
-        if !current.suffix.isEmpty { head += " " + current.suffix }
-        let moved = Entry(date: String(stamp.prefix(10)), ts: stamp,
-                          suffix: current.suffix, body: current.body,
-                          raw: current.body.isEmpty ? head : head + "\n" + current.body,
-                          source: target)
         do {
-            try library.remove(current)
-            // An entry with neither title nor body is never written — moving an
-            // untouched new entry to another day must not leave a stub behind.
-            let blank = moved.suffix.isEmpty && moved.body.isEmpty
-            var written = moved
-            if blank {
-                written.source = nil
-            } else {
-                written = try library.persist(moved, previous: nil)
-            }
-            entries.removeAll { $0.id == current.id }
-            entries.append(written)
-            entries = JournalParser.sortedByTimestamp(entries).reversed()
+            let written = try library.move(current, to: target, stamp: desired)
+            // One assignment, not three: each change to `entries` rebuilds the
+            // whole index.
+            var list = entries.filter { $0.id != current.id }
+            list.append(written)
+            entries = JournalParser.sortedByTimestamp(list).reversed()
             selection = written.id
             draftEntry = written
             draftTitle = written.displayTitle
             draftBody = written.body
             dirty = false
-            saveState = blank ? .idle : .saved(Date())
+            saveState = isUnwritten(written) ? .idle : .saved(Date())
             refreshFingerprint()
             return true
+        } catch let error as JournalError {
+            // A move that got as far as the new file has changed the folder:
+            // show the folder as it now is, duplicate and all.
+            if case .leftBehind = error { reload() }
+            saveState = .failed(error.localizedDescription)
+            return false
         } catch {
             saveState = .failed(error.localizedDescription)
             return false
@@ -408,6 +403,15 @@ final class JournalStore: ObservableObject {
         return index > 0 ? visible[index - 1].id : nil
     }
 
+    /// Whether an entry exists only in memory. A new entry is given its file
+    /// up front (inbox.md) but isn't written until it has a title or a body,
+    /// and one emptied after it was written is taken back out — so "has a
+    /// source" can't answer this, and the reload and the status line must ask
+    /// the same question.
+    func isUnwritten(_ entry: Entry) -> Bool {
+        entry.source == nil || (entry.suffix.isEmpty && entry.body.isEmpty)
+    }
+
     func isUnfiled(_ entry: Entry) -> Bool {
         entry.source == nil ? false : library.isUnfiled(entry)
     }
@@ -443,7 +447,12 @@ final class JournalStore: ObservableObject {
     func delete(_ entry: Entry) {
         saveTask?.cancel()
         dirty = false
-        try? library.remove(entry)
+        do {
+            try library.remove(entry)
+        } catch {
+            saveState = .failed(error.localizedDescription)
+            return
+        }
         entries.removeAll { $0.id == entry.id }
         if selection == entry.id {
             draftEntry = nil
@@ -457,10 +466,13 @@ final class JournalStore: ObservableObject {
                                     body: entry.body,
                                     starred: !entry.isStarred)
         guard !flipped.suffix.isEmpty || !flipped.body.isEmpty else { return }
-        if let written = try? library.persist(flipped, previous: entry) {
+        do {
+            let written = try library.persist(flipped, previous: entry)
             replaceInMemory(entry, with: written)
             if selection == written.id { draftEntry = written }
             saveState = .saved(Date())
+        } catch {
+            saveState = .failed(error.localizedDescription)
         }
     }
 

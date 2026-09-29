@@ -114,7 +114,8 @@ struct RootViewPhone: View {
                          showStats: .constant(true),
                          showOptions: .constant(true),
                          themeID: Binding(get: { themeID }, set: { themeID = $0 }),
-                         showingThemes: $showingThemes)
+                         showingThemes: $showingThemes,
+                         showsColumns: false)
                 .environment(\.theme, theme)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)

@@ -26,15 +26,17 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 # Falls back to an ad-hoc signature when no certificate is installed — enough
 # for the app to keep its identity (and so its window position, defaults and
 # any TCC grants) across rebuilds, but not enough to run on another machine.
-TEAM=${DEVELOPMENT_TEAM:-52W73J6V95}
-IDENTITY=${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning \
-  | grep -m1 "Apple Development" | sed 's/.*"\(.*\)"/\1/')}
+# The team comes with the certificate, so there is none to pass separately.
+# `|| true`: with no certificate grep finds nothing and exits 1, and under
+# pipefail that aborted the script before it could reach the ad-hoc branch.
+IDENTITY=${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \
+  | grep -m1 "Apple Development" | sed 's/.*"\(.*\)"/\1/' || true)}
 
 if [ -n "$IDENTITY" ]; then
   codesign --force --options runtime \
     --entitlements Resources/Wander-macOS.entitlements \
     --sign "$IDENTITY" "$APP"
-  echo "signed as $IDENTITY (team $TEAM)"
+  echo "signed as $IDENTITY"
 else
   codesign --force --sign - "$APP" >/dev/null 2>&1 || true
   echo "no signing certificate found — signed ad-hoc"

@@ -4,8 +4,8 @@
 //
 //  The theme page: every theme drawn in its own colours and its own faces, so
 //  the choice is made by looking rather than by reading a name. Picking one
-//  also takes its type size and leading, which are part of the look — the
-//  Options steppers can move them afterwards.
+//  changes the look only: type size and leading are the reader's, and stay
+//  where the Options steppers left them.
 //
 
 import SwiftUI

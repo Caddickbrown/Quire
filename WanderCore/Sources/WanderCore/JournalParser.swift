@@ -36,6 +36,21 @@ public enum JournalParser {
 
     public static func isHeaderLine(_ line: String) -> Bool { matchHeader(line) != nil }
 
+    /// File text as the parser reads it: a leading byte-order mark dropped and
+    /// CRLF line endings turned to LF. Splitting on "\n" alone left a "\r" on
+    /// every line of a file written on Windows, and the rewrite then joined
+    /// those lines back with bare "\n" — half one ending, half the other, and
+    /// every entry changed on disk by a save that changed nothing. Wander
+    /// writes LF; a CRLF file becomes LF the first time it is saved.
+    public static func normalised(_ content: String) -> String {
+        var text = content
+        if text.unicodeScalars.first == "\u{FEFF}" { text.unicodeScalars.removeFirst() }
+        // Checked by byte: in Swift "\r\n" is one Character, so asking the
+        // String whether it contains "\r" would say no.
+        guard text.utf8.contains(0x0D) else { return text }
+        return text.replacingOccurrences(of: "\r\n", with: "\n")
+    }
+
     /// Split file content into entries. Content before the first header is
     /// dropped here — `leadingPreamble` preserves it across a rewrite.
     public static func parseEntries(_ content: String, source: URL? = nil) -> [Entry] {
@@ -53,7 +68,7 @@ public enum JournalParser {
             ))
         }
 
-        for line in content.components(separatedBy: "\n") {
+        for line in normalised(content).components(separatedBy: "\n") {
             if let h = matchHeader(line) {
                 flush()
                 curDate = h.date.replacingOccurrences(of: "–", with: "-")
@@ -75,7 +90,7 @@ public enum JournalParser {
     /// must preserve this or a hand-written file header would be lost.
     public static func leadingPreamble(_ content: String) -> String {
         var pre: [String] = []
-        for line in content.components(separatedBy: "\n") {
+        for line in normalised(content).components(separatedBy: "\n") {
             if matchHeader(line) != nil { break }
             pre.append(line)
         }
@@ -111,12 +126,12 @@ public enum JournalParser {
         }
     }
 
-    /// Trim only trailing "\n" (Go's strings.TrimRight(s, "\n")).
+    /// Trim only trailing "\n" (Go's strings.TrimRight(s, "\n")). Walked by
+    /// scalar, not by Character: a trailing "\r\n" is a single Character that
+    /// isn't equal to "\n", so it was never trimmed.
     public static func trimRightNewlines(_ s: String) -> String {
-        var end = s.endIndex
-        while end > s.startIndex, s[s.index(before: end)] == "\n" {
-            end = s.index(before: end)
-        }
-        return String(s[s.startIndex..<end])
+        var scalars = s.unicodeScalars[...]
+        while scalars.last == "\n" { scalars.removeLast() }
+        return String(scalars)
     }
 }

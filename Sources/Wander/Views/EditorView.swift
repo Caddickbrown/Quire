@@ -167,7 +167,9 @@ struct EditorView: View {
 
     private var saveLabel: String {
         switch store.saveState {
-        case .idle: return store.selectedEntry?.source == nil ? "Unsaved draft" : "Saved"
+        case .idle:
+            guard let entry = store.selectedEntry else { return "Unsaved draft" }
+            return store.isUnwritten(entry) ? "Unsaved draft" : "Saved"
         case .editing: return "Writing\u{2026}"
         case .saved(let at): return "Saved \(Formats.clock.string(from: at))"
         case .failed(let message): return "Not saved — \(message)"

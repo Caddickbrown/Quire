@@ -241,6 +241,9 @@ struct SlidingColumn<Content: View>: View {
     let rule: HorizontalEdge
     @ViewBuilder var content: () -> Content
     @State private var mounted: Bool
+    /// Bumped on every open and close, so a close's delayed unmount can tell
+    /// whether it is still the latest word.
+    @State private var generation = 0
 
     init(open: Bool, width: CGFloat, ruleOn rule: HorizontalEdge,
          @ViewBuilder content: @escaping () -> Content) {
@@ -265,10 +268,16 @@ struct SlidingColumn<Content: View>: View {
         .clipped()
         .opacity(open ? 1 : 0)
         .onChange(of: open) { _, isOpen in
+            generation += 1
             guard !isOpen else { return mounted = true }
+            // The unmount lands only if nothing has changed since the close.
+            // Checking `open` there can't tell: the task holds the view as it
+            // was when the close began, where `open` is always false — so a
+            // reopen inside the slide was unmounted while it stood open.
+            let closing = generation
             Task {
                 try? await Task.sleep(for: Motion.columnDuration)
-                if !open { mounted = false }
+                if generation == closing { mounted = false }
             }
         }
     }

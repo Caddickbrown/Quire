@@ -3,8 +3,8 @@
 //  WanderCore
 //
 //  Every read and write Wander makes to a journal folder, with no UI framework
-//  anywhere near it — Foundation only, so the same code serves the macOS app,
-//  the iOS app and the Linux terminal build.
+//  anywhere near it — Foundation only, so the same code serves the macOS app
+//  and the iOS app.
 //
 //  The layout is jnl's, which Nook also uses:
 //
@@ -119,6 +119,11 @@ public struct JournalLibrary: Sendable {
     }
 
     // MARK: Writing
+    //
+    // Every write reads the file it is about to replace, keeps what it isn't
+    // changing, and writes the rest back. So the one thing a write may never do
+    // is mistake "I couldn't read this" for "there is nothing here": that turns
+    // a save of one entry into the loss of every other entry in the day.
 
     /// Rewrite the file that owns `entry`, replacing the entry with the same
     /// timestamp or appending it. Returns the entry with its source set.
@@ -130,7 +135,7 @@ public struct JournalLibrary: Sendable {
         try FileManager.default.createDirectory(at: target.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
 
-        let existing = (try? String(contentsOf: target, encoding: .utf8)) ?? ""
+        let existing = try readForRewrite(target)
         let preamble = JournalParser.leadingPreamble(existing)
         var day = JournalParser.parseEntries(existing, source: target)
 
@@ -151,23 +156,74 @@ public struct JournalLibrary: Sendable {
     /// Take an entry out of its file, deleting the file if nothing is left.
     public func remove(_ entry: Entry) throws {
         guard let target = entry.source,
-              let existing = try? String(contentsOf: target, encoding: .utf8) else { return }
+              FileManager.default.fileExists(atPath: target.path) else { return }
+        let existing = try readForRewrite(target)
         let preamble = JournalParser.leadingPreamble(existing)
         let day = JournalParser.parseEntries(existing, source: target).filter { $0.ts != entry.ts }
         let content = JournalParser.renderEntries(preamble: preamble, entries: day)
         if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            try? FileManager.default.removeItem(at: target)
+            try FileManager.default.removeItem(at: target)
         } else {
             try writeAtomically(content, to: target)
         }
     }
 
+    /// Move an entry to `target` under the timestamp `desired` (or the next
+    /// free second after it) — the one primitive behind retiming, filing and
+    /// unfiling. Returns the entry as it now stands.
+    ///
+    /// The destination is written before the source is touched. If the second
+    /// step fails the entry is in both files rather than in neither: a
+    /// duplicate can be tidied, a loss can't. Within one file it is a single
+    /// rewrite, so there is no in-between at all.
+    public func move(_ entry: Entry, to target: URL, stamp desired: String) throws -> Entry {
+        let stamp = try freeStamp(desired, in: target, excluding: entry)
+        var head = "[\(stamp)]"
+        if !entry.suffix.isEmpty { head += " " + entry.suffix }
+        var moved = Entry(date: String(stamp.prefix(10)), ts: stamp,
+                          suffix: entry.suffix, body: entry.body,
+                          raw: entry.body.isEmpty ? head : head + "\n" + entry.body,
+                          source: target)
+
+        // An entry with neither title nor body is never written — moving an
+        // untouched new entry to another day must not leave a stub behind.
+        if moved.suffix.isEmpty && moved.body.isEmpty {
+            try remove(entry)
+            moved.source = nil
+            return moved
+        }
+
+        if entry.sourcePath == target.path {
+            let existing = try readForRewrite(target)
+            let preamble = JournalParser.leadingPreamble(existing)
+            var day = JournalParser.parseEntries(existing, source: target)
+            day.removeAll { $0.ts == entry.ts }
+            day.append(moved)
+            let content = JournalParser.renderEntries(preamble: preamble,
+                                                      entries: JournalParser.sortedByTimestamp(day))
+            try writeAtomically(content, to: target)
+            return moved
+        }
+
+        // Read the source before writing anywhere: one that can't be rewritten
+        // should refuse the move outright, not after a copy has been made.
+        if let source = entry.source { _ = try readForRewrite(source) }
+        let written = try persist(moved, previous: nil)
+        do {
+            try remove(entry)
+        } catch {
+            throw JournalError.leftBehind(entry.source?.lastPathComponent ?? "its old file")
+        }
+        return written
+    }
+
     /// A free timestamp at or after `desired` in `target` — two entries in one
     /// file may not share a second, since the timestamp is the entry's identity.
-    public func freeStamp(_ desired: String, in target: URL, excluding entry: Entry?) -> String {
-        guard let content = try? String(contentsOf: target, encoding: .utf8) else { return desired }
+    public func freeStamp(_ desired: String, in target: URL, excluding entry: Entry?) throws -> String {
+        let content = try readForRewrite(target)
+        guard !content.isEmpty else { return desired }
         var taken = Set(JournalParser.parseEntries(content).map(\.ts))
-        if let entry, entry.source == target { taken.remove(entry.ts) }
+        if let entry, entry.sourcePath == target.path { taken.remove(entry.ts) }
         var stamp = desired
         var moment = Formats.stamp.date(from: stamp) ?? Date()
         while taken.contains(stamp) {
@@ -177,11 +233,58 @@ public struct JournalLibrary: Sendable {
         return stamp
     }
 
+    /// The text of a file about to be rewritten. A file that isn't there yet is
+    /// empty; one that can't be read, or isn't UTF-8, is an error — never "".
+    /// `String(data:encoding:)` is strict, where a lossy decode would quietly
+    /// turn the bad bytes into U+FFFD and write that back.
+    private func readForRewrite(_ url: URL) throws -> String {
+        guard FileManager.default.fileExists(atPath: url.path) else { return "" }
+        let data = try Data(contentsOf: url)
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw JournalError.notUTF8(url.lastPathComponent)
+        }
+        return text
+    }
+
     private func writeAtomically(_ content: String, to url: URL) throws {
+        let fm = FileManager.default
         let tmp = url.deletingLastPathComponent()
             .appendingPathComponent(".wander-\(UUID().uuidString).tmp")
-        try content.write(to: tmp, atomically: false, encoding: .utf8)
-        _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+        do {
+            try content.write(to: tmp, atomically: false, encoding: .utf8)
+            // `replaceItemAt` is for replacing: the first entry of a new day has
+            // nothing to replace, so that one is a plain move into place.
+            if fm.fileExists(atPath: url.path) {
+                _ = try fm.replaceItemAt(url, withItemAt: tmp)
+            } else {
+                try fm.moveItem(at: tmp, to: url)
+            }
+        } catch {
+            try? fm.removeItem(at: tmp)
+            throw error
+        }
+    }
+}
+
+/// The ways a write refuses, worded for the status line — each has a
+/// different remedy, so none is folded into a generic failure.
+public enum JournalError: LocalizedError, Equatable, Sendable {
+    /// The file on disk isn't UTF-8. Rewriting it would lose whatever part of
+    /// it couldn't be read, so it is left exactly as it is.
+    case notUTF8(String)
+    /// A move wrote the entry to its new file but couldn't take it out of the
+    /// old one.
+    case leftBehind(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .notUTF8:
+            return "This file isn't valid UTF-8. "
+                + "Open it in an editor and re-save it as UTF-8."
+        case .leftBehind(let name):
+            return "Moved, but the old copy couldn't be taken out of \(name) — "
+                + "the entry is now in both files."
+        }
     }
 }
 
