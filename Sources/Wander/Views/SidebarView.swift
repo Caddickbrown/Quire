@@ -30,7 +30,7 @@ struct SidebarView: View {
             Rule()
             entries
             Rule()
-            AccentBlock(title: "New entry") { store.newEntry() }
+            AccentBlock(title: "New") { store.newEntry() }
                 .padding(14)
         }
         .onChange(of: store.searchFocusRequest) { searchFocused = true }

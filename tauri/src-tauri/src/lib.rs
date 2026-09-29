@@ -39,18 +39,13 @@ fn load(state: tauri::State<State>) -> Journal {
     }
 }
 
-/// A blank entry, stamped now — in a day file, or in the inbox when it's a draft.
+/// A blank entry, stamped now, waiting in the inbox — new writing rarely
+/// belongs to a day on the spot, so filing it is left to the writer.
 #[tauri::command]
-fn create(state: tauri::State<State>, draft: bool) -> Result<Entry, String> {
+fn create(state: tauri::State<State>) -> Result<Entry, String> {
     let library = library(&state);
     let stamp = Local::now().format(journal::STAMP).to_string();
-    let target = if draft {
-        library.inbox()
-    } else {
-        library
-            .day_file(&stamp[..10])
-            .ok_or_else(|| "bad date".to_string())?
-    };
+    let target = library.inbox();
     let free = library.free_stamp(&stamp, &target, None);
     Ok(library.compose(&free, "", "", false, &target))
 }

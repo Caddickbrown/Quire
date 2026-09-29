@@ -556,10 +556,12 @@ function selectEntry(id) {
 
 // ------------------------------------------------------------------ actions
 
-async function newEntry(draft) {
+// Every entry starts undated: new writing rarely belongs to a day on the spot,
+// so it waits in the inbox until it is filed.
+async function newEntry() {
   await save();
-  const entry = await invoke('create', { draft });
-  state.page = draft ? 'inbox' : 'journal';
+  const entry = await invoke('create');
+  state.page = 'inbox';
   // A blank entry isn't on disk until it has text; hold it in the list.
   state.entries.unshift(entry);
   touch();
@@ -1030,9 +1032,8 @@ $('clear-query').onclick = () => {
   render();
 };
 
-$('new-entry').onclick = () => newEntry(false);
-$('blank-new').onclick = () => newEntry(false);
-$('new-draft').onclick = () => newEntry(true);
+$('new-entry').onclick = newEntry;
+$('blank-new').onclick = newEntry;
 $('star-toggle').onclick = toggleStar;
 $('file-toggle').onclick = toggleFiling;
 $('a-file').onclick = toggleFiling;
@@ -1192,7 +1193,7 @@ document.addEventListener('keydown', (event) => {
   }
   const key = event.key.toLowerCase();
   const shortcuts = {
-    n: () => newEntry(event.shiftKey),
+    n: newEntry,
     s: () => save(),
     f: () => { $('query').focus(); $('query').select(); },
     d: () => (event.shiftKey ? openSheet() : toggleStar()),
