@@ -72,6 +72,10 @@ function haystack(entry) {
   return entry.folded;
 }
 
+/// The file's own name. `source` is an absolute path from the Rust side, so on
+/// Windows its separator is a backslash — split on either, not just '/'.
+const basename = (path) => path.split(/[\\/]/).pop();
+
 const current = () => state.entries.find((e) => idOf(e) === state.selection) || null;
 
 const words = (text) => (text.trim() ? text.trim().split(/\s+/).length : 0);
@@ -202,24 +206,69 @@ function countStreak() {
 
 // -------------------------------------------------------- markdown styling
 
+/// Quotes too, though nothing here builds an attribute from escaped text:
+/// the next template that does should not need to remember.
 const escapeHtml = (s) =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 const mark = (s) => `<span class="mark">${s}</span>`;
 
+/// Inline markdown, in one left-to-right pass over the source text. Each rule
+/// used to run over the previous rule's output — HTML, not markdown — so the
+/// emphasis rule matched the asterisks of a strong span's markers, a tag rule
+/// found the @ in a URL, and a link inside backticks came out live. Now each
+/// run is claimed once, in order of precedence (code, strong, emphasis, link,
+/// tag), and whatever falls between is escaped as plain text. Every character
+/// of the source comes out as exactly one character of text, which the caret
+/// arithmetic in readProse and placeCaret depends on.
+const INLINE = new RegExp([
+  '`(?<code>[^`\\n]+)`',
+  '(?<both>\\*\\*\\*|___)(?=\\S)(?<bothBody>.+?)(?<=\\S)\\k<both>',
+  '(?<strong>\\*\\*|__)(?=\\S)(?<strongBody>.+?)(?<=\\S)\\k<strong>',
+  '(?<em>[*_])(?=[^\\s*_])(?<emBody>(?:(?!\\k<em>).)+?)(?<=[^\\s*_])\\k<em>(?![*_])',
+  '\\[(?<label>[^\\]\\n]*)\\]\\((?<url>[^)\\s]+)\\)',
+  '(?<tag>@[a-zA-Z][a-zA-Z0-9_-]*)',
+].join('|'), 'g');
+
 function inlineStyle(text) {
-  let out = escapeHtml(text);
-  out = out.replace(/`([^`\n]+)`/g,
-    (_, code) => `<span class="code">${mark('`')}${code}${mark('`')}</span>`);
-  out = out.replace(/\*\*(.+?)\*\*/g,
-    (_, body) => `${mark('**')}<span class="strong">${body}</span>${mark('**')}`);
-  out = out.replace(/\*([^*\n]+?)\*/g,
-    (_, body) => `${mark('*')}<span class="em">${body}</span>${mark('*')}`);
-  out = out.replace(/\[([^\]\n]*)\]\(([^)\s]+)\)/g,
-    (_, label, url) => `${mark('[')}<span class="link">${label}</span>${mark(']')}` +
-                       `${mark('(')}<span class="url">${url}</span>${mark(')')}`);
-  out = out.replace(/@[a-zA-Z][a-zA-Z0-9_-]*/g, (tag) => `<span class="tag">${tag}</span>`);
-  return out;
+  let out = '';
+  let last = 0;
+  let from = 0;
+  for (;;) {
+    INLINE.lastIndex = from;
+    const match = INLINE.exec(text);
+    if (!match) break;
+    const at = match.index;
+    const g = match.groups;
+    const opener = g.both || g.strong || g.em;
+    // An @ inside a word is an address, not a tag; underscores inside a word
+    // are an identifier, not emphasis. Both are left as text.
+    if ((g.tag && at > 0 && /[\w.]/.test(text[at - 1])) ||
+        (opener && opener[0] === '_' && at > 0 && /\w/.test(text[at - 1]))) {
+      from = at + 1;
+      continue;
+    }
+    out += escapeHtml(text.slice(last, at));
+    if (g.code !== undefined) {
+      out += `<span class="code">${mark('`')}${escapeHtml(g.code)}${mark('`')}</span>`;
+    } else if (g.both) {
+      out += `${mark(g.both)}<span class="strong"><span class="em">${inlineStyle(g.bothBody)}` +
+             `</span></span>${mark(g.both)}`;
+    } else if (g.strong) {
+      out += `${mark(g.strong)}<span class="strong">${inlineStyle(g.strongBody)}</span>${mark(g.strong)}`;
+    } else if (g.em) {
+      out += `${mark(g.em)}<span class="em">${inlineStyle(g.emBody)}</span>${mark(g.em)}`;
+    } else if (g.url !== undefined) {
+      out += `${mark('[')}<span class="link">${escapeHtml(g.label)}</span>${mark(']')}` +
+             `${mark('(')}<span class="url">${escapeHtml(g.url)}</span>${mark(')')}`;
+    } else {
+      out += `<span class="tag">${escapeHtml(g.tag)}</span>`;
+    }
+    last = at + match[0].length;
+    from = last;
+  }
+  return out + escapeHtml(text.slice(last));
 }
 
 /// One source line as one styled block. Structure shows; the markers recede.
@@ -374,16 +423,61 @@ function markLiveLine() {
   if (liveLine) liveLine.classList.add('live');
 }
 
+/// The page is rebuilt as it is styled, which takes the browser's own undo
+/// with it, so undo is kept here. The top of the stack is always the text as
+/// it now stands (seeded with the entry as loaded), so ⌘Z steps back to the
+/// one before it, and all the way back reaches the entry as it was opened.
+/// Pauses of 400ms mark the steps. Cleared when another entry is opened.
 const undoStack = [];
+const redoStack = [];
 let undoTimer = null;
+
+function recordNow(text, caret) {
+  clearTimeout(undoTimer);
+  undoTimer = null;
+  const last = undoStack[undoStack.length - 1];
+  if (last && last.text === text) return;
+  undoStack.push({ text, caret });
+  if (undoStack.length > 200) undoStack.shift();
+  redoStack.length = 0;
+}
 
 function snapshot(text, caret) {
   clearTimeout(undoTimer);
-  undoTimer = setTimeout(() => {
-    const last = undoStack[undoStack.length - 1];
-    if (!last || last.text !== text) undoStack.push({ text, caret });
-    if (undoStack.length > 200) undoStack.shift();
-  }, 400);
+  undoTimer = setTimeout(() => recordNow(text, caret), 400);
+}
+
+function seedUndo(text) {
+  clearTimeout(undoTimer);
+  undoTimer = null;
+  undoStack.length = 0;
+  redoStack.length = 0;
+  undoStack.push({ text, caret: text.length });
+}
+
+function restore(step) {
+  state.body = step.text;
+  renderProse(step.text, step.caret);
+  edited();
+  renderCounts();
+}
+
+function undo() {
+  // A pause still pending is a step that has not been recorded yet: record it,
+  // so the undo lands on the one before rather than being eaten by it later.
+  if (undoTimer) recordNow(state.body, readProse().caret);
+  if (undoStack.length < 2) return;
+  redoStack.push(undoStack.pop());
+  restore(undoStack[undoStack.length - 1]);
+}
+
+function redo() {
+  clearTimeout(undoTimer);
+  undoTimer = null;
+  const next = redoStack.pop();
+  if (!next) return;
+  undoStack.push(next);
+  restore(next);
 }
 
 prose.addEventListener('input', () => {
@@ -399,18 +493,13 @@ prose.addEventListener('keydown', (event) => {
   const meta = event.metaKey || event.ctrlKey;
   if (meta && event.key.toLowerCase() === 'z') {
     event.preventDefault();
-    const previous = undoStack.pop();
-    if (previous) {
-      state.body = previous.text;
-      renderProse(previous.text, previous.caret);
-      edited();
-      renderCounts();
-    }
+    if (event.shiftKey) redo(); else undo();
     return;
   }
-  if (meta && (event.key === 'b' || event.key === 'i')) {
+  if (meta && !event.shiftKey && (event.key === 'b' || event.key === 'i')) {
     event.preventDefault();
-    wrapSelection(event.key === 'b' ? '**' : '*');
+    // Underscores for italic, as the Mac app and the README have it.
+    wrapSelection(event.key === 'b' ? '**' : '_');
   }
   // Left to the browser, Enter is its native paragraph-insertion command —
   // which line-splitting a <span class="ln"> per source line was never
@@ -447,10 +536,12 @@ function wrapSelection(marker) {
   const { text, caret } = readProse();
   const selection = window.getSelection();
   const chosen = selection && !selection.isCollapsed ? selection.toString() : '';
+  recordNow(text, caret);
   if (!chosen) {
     const next = text.slice(0, caret) + marker + marker + text.slice(caret);
     state.body = next;
     renderProse(next, caret + marker.length);
+    recordNow(next, caret + marker.length);
   } else {
     const start = text.indexOf(chosen);
     if (start < 0) return;
@@ -461,6 +552,7 @@ function wrapSelection(marker) {
     const next = text.slice(0, start) + replacement + text.slice(start + chosen.length);
     state.body = next;
     renderProse(next, start + replacement.length);
+    recordNow(next, start + replacement.length);
   }
   edited();
   renderCounts();
@@ -498,8 +590,18 @@ function setSaveState(text) {
   $('save-state').textContent = text;
 }
 
-async function save() {
+/// Saves run one at a time. A write slower than the 700ms debounce would
+/// otherwise let the next one start from the same entry while the first was
+/// still in flight, and the two could land in either order.
+let saving = Promise.resolve();
+
+function save() {
   clearTimeout(saveTimer);
+  saving = saving.then(saveNow, saveNow);
+  return saving;
+}
+
+async function saveNow() {
   const entry = current();
   if (!entry || !dirty(entry)) return;
   const written = { title: state.title, body: state.body };
@@ -547,7 +649,7 @@ function absorb(entry, saved, written) {
   render();
 }
 
-async function refresh(selectId) {
+async function refreshNow(selectId) {
   const journal = await invoke('load');
   state.base = journal.base;
   state.entries = journal.entries;
@@ -567,7 +669,7 @@ function loadDraft() {
   state.body = entry ? entry.body : '';
   $('title').value = state.title;
   renderProse(state.body, null);
-  undoStack.length = 0;
+  seedUndo(state.body);
 }
 
 function selectEntry(id) {
@@ -583,7 +685,7 @@ function selectEntry(id) {
 
 // Every entry starts undated: new writing rarely belongs to a day on the spot,
 // so it waits in the inbox until it is filed.
-async function newEntry() {
+async function newEntryNow() {
   await save();
   const entry = await invoke('create');
   state.page = 'inbox';
@@ -596,7 +698,7 @@ async function newEntry() {
   prose.focus();
 }
 
-async function toggleStar() {
+async function toggleStarNow() {
   await save();
   // `save` may have replaced the entry object, so ask for it again.
   const entry = current();
@@ -612,7 +714,7 @@ async function toggleStar() {
 /// you don't. The page stays as it was and the selection steps to whatever
 /// takes the entry's place, so an inbox can be cleared one entry at a time
 /// rather than throwing the index over to the journal and back on every file.
-async function toggleFiling() {
+async function toggleFilingNow() {
   const open = current();
   if (!open) return;
   await save();
@@ -627,23 +729,44 @@ async function toggleFiling() {
     ts: entry.ts, source: entry.source, newTs: null, toInbox: !entry.unfiled,
   });
   // On a page the entry still belongs to nothing has moved, so stay with it.
-  await refresh(onPage(moved) ? idOf(moved) : next);
+  await refreshNow(onPage(moved) ? idOf(moved) : next);
 }
 
-async function removeEntry(entry) {
+async function removeEntryNow(entry) {
   await invoke('remove', { ts: entry.ts, source: entry.source });
   state.selection = null;
-  await refresh(null);
+  await refreshNow(null);
 }
 
-async function moveEntry(date) {
+async function moveEntryNow(date) {
   const entry = current();
   if (!entry) return;
   const moved = await invoke('relocate', {
     ts: entry.ts, source: entry.source, newTs: stampOf(date), toInbox: null,
   });
-  await refresh(idOf(moved));
+  await refreshNow(idOf(moved));
 }
+
+/// Every action that goes to disk says so on the status line when it fails,
+/// where a failed save already does. Left alone, a rejected invoke is an
+/// unhandled rejection: nothing on screen, and a button that seems broken.
+function reported(failure, action) {
+  return async (...args) => {
+    try {
+      return await action(...args);
+    } catch (error) {
+      setSaveState(`${failure} — ${error}`);
+      return undefined;
+    }
+  };
+}
+
+const newEntry = reported('No new entry', newEntryNow);
+const toggleStar = reported('Not starred', toggleStarNow);
+const toggleFiling = reported('Not filed', toggleFilingNow);
+const removeEntry = reported('Not removed', removeEntryNow);
+const moveEntry = reported('Not moved', moveEntryNow);
+const refresh = reported('Couldn’t read the journal', refreshNow);
 
 // ---------------------------------------------------------------- rendering
 
@@ -823,7 +946,7 @@ function rowNode(entry, position) {
     state.pendingDelete = entry;
     $('confirm-note').textContent =
       `“${entry.title || firstLine(entry.body) || 'Untitled'}” will be removed from ` +
-      `${entry.source.split('/').pop()} on disk.`;
+      `${basename(entry.source)} on disk.`;
     $('confirm').hidden = false;
   };
   return row;
@@ -912,7 +1035,7 @@ function renderPanels() {
     ? `${shortDay(parseStamp(entry.ts))} · ${clock(parseStamp(entry.ts))}` : '—';
   $('s-tags').textContent = entry && entry.tags.length ? entry.tags.slice(0, 3).join(' ') : '—';
   $('s-status').textContent = entry ? (entry.unfiled ? 'In the inbox' : 'Filed') : '—';
-  $('s-file').textContent = entry ? entry.source.split('/').pop() : '—';
+  $('s-file').textContent = entry ? basename(entry.source) : '—';
   $('a-file').hidden = !entry || !entry.unfiled;
 
   const totalWords = state.entries.reduce((sum, e) => sum + e.words, 0).toLocaleString();
@@ -948,6 +1071,21 @@ const hexLuminance = (hex) => {
 function readableOn(fill, first, second) {
   const base = hexLuminance(fill);
   return Math.abs(hexLuminance(first) - base) >= Math.abs(hexLuminance(second) - base) ? first : second;
+}
+
+/// Contrast on the usual 1–21 scale, from the same luminance as above.
+const contrast = (a, b) => {
+  const [x, y] = [hexLuminance(a) + 0.05, hexLuminance(b) + 0.05];
+  return Math.max(x, y) / Math.min(x, y);
+};
+
+/// The first candidate that reads on a fill, else the best of them — the Mac
+/// app's Tone.legible. The band masthead needs it: Brutalist's accent is its
+/// ink, so an active page drawn in the accent vanishes into the band.
+function legibleOn(fill, candidates, minimum = 3.2) {
+  const found = candidates.find((c) => contrast(fill, c) >= minimum);
+  if (found) return found;
+  return candidates.reduce((best, c) => (contrast(fill, c) > contrast(fill, best) ? c : best));
 }
 
 /// Distinct fills for the stats blocks: accent, tint, green, ink, deduplicated
@@ -989,7 +1127,8 @@ function applyTheme() {
     root.style.setProperty(`--${key.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())}`, value);
   }
   const stack = (face, fallback) => `'${face.families.join("', '")}', ${fallback}`;
-  root.style.setProperty('--prose', stack(theme.type.prose, 'Georgia, serif'));
+  // --prose is the palette's prose colour, set above; the face has its own name.
+  root.style.setProperty('--prose-face', stack(theme.type.prose, 'Georgia, serif'));
   root.style.setProperty('--display', stack(theme.type.display, 'Georgia, serif'));
   root.style.setProperty('--label', stack(theme.type.label, 'system-ui, sans-serif'));
   root.style.setProperty('--label-size', `${theme.type.label.size || 10.5}px`);
@@ -1011,6 +1150,9 @@ function applyTheme() {
     root.style.setProperty(`--fill-${index}`, fill);
     root.style.setProperty(`--fill-${index}-on`, readableOn(fill, palette.paper, palette.ink));
   });
+
+  root.style.setProperty('--accent-on-band',
+    legibleOn(palette.ink, [palette.accent, palette.tint, palette.green, palette.paper]));
 
   $('o-theme').textContent = theme.name;
   updateOrnament();
@@ -1057,11 +1199,16 @@ function ensureSelection() {
 
 // ------------------------------------------------------------- the calendar
 
+/// The month the calendar shows, always held on its 1st: stepping a Date's
+/// month from the 31st overflows, so Jan 31 plus one month is 3 March, and the
+/// sheet would skip February.
+const monthOf = (date) => new Date(date.getFullYear(), date.getMonth(), 1);
+
 function openSheet() {
   const entry = current();
   if (!entry) return;
   state.sheetDate = parseStamp(entry.ts);
-  state.calendarMonth = new Date(state.sheetDate);
+  state.calendarMonth = monthOf(state.sheetDate);
   $('sheet-title').textContent = entry.title || firstLine(entry.body) || 'Untitled';
   $('dest-label').textContent = entry.unfiled ? 'Stays in' : 'Moves to';
   $('sheet-note').textContent = entry.unfiled
@@ -1105,7 +1252,7 @@ function renderCalendar() {
       const chosen = new Date(day);
       chosen.setHours(state.sheetDate.getHours(), state.sheetDate.getMinutes(), 0, 0);
       state.sheetDate = chosen;
-      state.calendarMonth = new Date(chosen);
+      state.calendarMonth = monthOf(chosen);
       renderCalendar();
     };
     grid.appendChild(cell);
@@ -1169,10 +1316,12 @@ $('a-file').onclick = toggleFiling;
 $('s-status').onclick = toggleFiling;
 $('dateline').onclick = openSheet;
 $('s-written').onclick = openSheet;
-$('a-copy').onclick = async () => {
+$('a-copy').onclick = reported('Not copied', async () => {
   const entry = current();
-  if (entry) await navigator.clipboard.writeText(rawOf(entry));
-};
+  if (!entry) return;
+  await navigator.clipboard.writeText(rawOf(entry));
+  setSaveState('Copied');
+});
 
 document.querySelectorAll('[data-column]').forEach((button) => {
   button.onclick = () => {
@@ -1204,7 +1353,7 @@ $('o-paper').onclick = () => {
   applySettings();
   renderPanels();
 };
-$('o-folder').onclick = async () => {
+$('o-folder').onclick = reported('Couldn’t open that folder', async () => {
   const chosen = await dialog.open({ directory: true, title: 'Choose a journal folder' });
   if (!chosen) return;
   const journal = await invoke('set_folder', { path: chosen });
@@ -1214,7 +1363,7 @@ $('o-folder').onclick = async () => {
   state.selection = null;
   ensureSelection();
   render();
-};
+});
 
 function renderThemes() {
   const grid = $('theme-grid');
@@ -1300,7 +1449,7 @@ $('cal-today').onclick = () => {
   const now = new Date();
   now.setHours(state.sheetDate.getHours(), state.sheetDate.getMinutes(), 0, 0);
   state.sheetDate = now;
-  state.calendarMonth = new Date(now);
+  state.calendarMonth = monthOf(now);
   renderCalendar();
 };
 $('time-down').onclick = () => nudgeTime(-5);
@@ -1328,11 +1477,25 @@ document.addEventListener('keydown', (event) => {
     }
     return;
   }
-  const key = event.key.toLowerCase();
+  // Shift changes event.key (⌘⇧\ arrives as '|'), so the backslash is read
+  // from the physical key instead.
+  const key = event.code === 'Backslash' ? '\\' : event.key.toLowerCase();
+  // ⌘⇧F is focus mode on the Mac, and ⌘⇧T typewriter scrolling, which this
+  // build doesn't have: neither may fall through to ⌘F or ⌘T.
+  if (event.shiftKey && key === 't') return;
   const shortcuts = {
     n: newEntry,
     s: () => save(),
-    f: () => { $('query').focus(); $('query').select(); },
+    f: () => {
+      if (event.shiftKey) {
+        settings.focus = !settings.focus;
+        applySettings();
+        renderPanels();
+        return;
+      }
+      $('query').focus();
+      $('query').select();
+    },
     d: () => (event.shiftKey ? openSheet() : toggleStar()),
     j: () => toggleFiling(),
     1: () => { state.page = 'journal'; ensureSelection(); render(); },
@@ -1360,7 +1523,7 @@ document.querySelectorAll('[data-window]').forEach((button) => {
     const action = button.dataset.window;
     if (action === 'minimise') appWindow.minimize();
     if (action === 'maximise') appWindow.toggleMaximize();
-    if (action === 'close') appWindow.close();
+    if (action === 'close') appWindow.close();   // through onCloseRequested below
   };
 });
 
@@ -1371,6 +1534,22 @@ invoke('undecorated').then((custom) => {
 window.matchMedia('(prefers-color-scheme: dark)')
   .addEventListener('change', () => applySettings());
 
+// Closing waits for the last edit to reach the disk. The window is held open
+// while a save is pending or in flight, then destroyed once it has landed —
+// or failed, since a window that won't close over a full disk is worse; the
+// failure is on the status line either way.
+appWindow.onCloseRequested(async (event) => {
+  event.preventDefault();
+  try {
+    await save();
+  } finally {
+    await appWindow.destroy();
+  }
+});
+
+// Best effort only: an async write can't be awaited from beforeunload, and the
+// page may be gone before the IPC call lands. The close handler above is what
+// actually flushes; this covers a reload.
 window.addEventListener('beforeunload', () => { save(); });
 
 loadThemes().then(() => {
