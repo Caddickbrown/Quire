@@ -159,8 +159,10 @@ private fun Status(state: JournalState, draft: Draft) {
         val save = state.saveState
         SmallCaps(
             text = when (save) {
+                // Every entry has a file from the moment it's made, so "has a
+                // source" says nothing; a blank entry is the one never written.
                 is SaveState.Idle ->
-                    if (state.selectedEntry?.source == null) "Unsaved draft" else "Saved"
+                    if (state.selectedEntry?.isBlank != false) "Unsaved draft" else "Saved"
                 is SaveState.Editing -> "Writing…"
                 is SaveState.Saved -> "Saved ${Formats.clock(save.at)}"
                 is SaveState.Failed -> "Not saved — ${save.message}"

@@ -157,36 +157,46 @@ fun ProseEditor(
         modifier = modifier,
         factory = { context -> ProseEditText(context).also(onViewReady) },
         update = { view ->
-            view.styler = styler
             view.typewriter = style.typewriter
-            view.dimInactive = style.dimInactive
             view.onProseChanged = onTextChange
 
-            view.setTextSize(TypedValue.COMPLEX_UNIT_SP, style.size)
-            view.typeface = Fonts.typeface(style.theme.proseFace, style.theme.proseWeight)
-            view.setTextColor(style.theme.prose.argb)
-            view.setHintTextColor(style.theme.muted.opacity(0.5f).argb)
-            view.highlightColor = style.theme.accent.opacity(0.22f).argb
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                runCatching { view.textCursorDrawable?.setTint(style.theme.accent.argb) }
+            // `update` runs on every recomposition, which is every keystroke.
+            // The look only changes when the styler does — it is remembered on
+            // exactly the inputs below — so everything that restyles or
+            // re-lays-out the text waits for that.
+            val restyle = view.styler !== styler
+            if (restyle) {
+                view.styler = styler
+                view.dimInactive = style.dimInactive
+                view.setTextSize(TypedValue.COMPLEX_UNIT_SP, style.size)
+                view.typeface = Fonts.typeface(style.theme.proseFace, style.theme.proseWeight)
+                view.setTextColor(style.theme.prose.argb)
+                view.setHintTextColor(style.theme.muted.opacity(0.5f).argb)
+                view.highlightColor = style.theme.accent.opacity(0.22f).argb
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    runCatching { view.textCursorDrawable?.setTint(style.theme.accent.argb) }
+                }
+                // sp to px through TypedValue: `scaledDensity` is deprecated, and on a
+                // device with non-linear font scaling it was never the right number.
+                val extra = TypedValue.applyDimension(
+                    TypedValue.COMPLEX_UNIT_SP,
+                    style.size * style.leading,
+                    view.resources.displayMetrics,
+                )
+                view.setLineSpacing(extra, 1f)
             }
-            // sp to px through TypedValue: `scaledDensity` is deprecated, and on a
-            // device with non-linear font scaling it was never the right number.
-            val extra = TypedValue.applyDimension(
-                TypedValue.COMPLEX_UNIT_SP,
-                style.size * style.leading,
-                view.resources.displayMetrics,
-            )
-            view.setLineSpacing(extra, 1f)
 
             // Only when it actually differs: assigning the same string would
             // reset the composing region and the selection under the IME, which
             // is the classic way an Android editor eats a letter mid-word.
-            if (view.text?.toString() != text) {
+            // A new text is a whole-document restyle: the watcher's own restyle
+            // only reaches the caret's paragraph on a long entry.
+            val replaced = view.text?.toString() != text
+            if (replaced) {
                 view.setText(text)
                 view.setSelection(view.text?.length ?: 0)
             }
-            view.text?.let { view.restyle(it, restyleAll = true) }
+            if (restyle || replaced) view.text?.let { view.restyle(it, restyleAll = true) }
         },
     )
 }

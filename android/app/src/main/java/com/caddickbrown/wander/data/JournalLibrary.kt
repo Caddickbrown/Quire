@@ -4,6 +4,7 @@ import com.caddickbrown.wander.core.Entry
 import com.caddickbrown.wander.core.Formats
 import com.caddickbrown.wander.core.JournalPaths
 import com.caddickbrown.wander.core.JournalParser
+import java.io.IOException
 
 /**
  * Every read and write Wander makes to a journal folder, with no UI anywhere
@@ -44,11 +45,15 @@ class JournalLibrary(private val tree: SafTree) {
         tree.invalidate()
         val found = ArrayList<Entry>()
 
-        tree.readText(JournalPaths.INBOX)?.let {
+        // A file that can't be read is left out rather than failing the whole
+        // journal: its entries are invisible, but its bytes are untouched, and
+        // a write to it is refused on the way in (see [rewrite]).
+        runCatching { tree.readText(JournalPaths.INBOX) }.getOrNull()?.let {
             found += JournalParser.parseEntries(it, JournalPaths.INBOX)
         }
         for (file in markdownFiles()) {
-            val content = tree.readText(tree.documentUri(file.node.documentId)) ?: continue
+            val content = runCatching { tree.readText(tree.documentUri(file.node.documentId)) }
+                .getOrNull() ?: continue
             found += JournalParser.parseEntries(content, file.path)
         }
         return JournalParser.sortedByTimestamp(found).reversed()
@@ -58,7 +63,8 @@ class JournalLibrary(private val tree: SafTree) {
 
     /** Every .md under journal/, depth first, with its relative path. */
     private fun markdownFiles(): List<Found> {
-        val journal = tree.find(JournalPaths.JOURNAL) ?: return emptyList()
+        val journal = runCatching { tree.find(JournalPaths.JOURNAL) }.getOrNull()
+            ?: return emptyList()
         val out = ArrayList<Found>()
         fun walk(documentId: String, prefix: String) {
             for (child in tree.children(documentId)) {
@@ -88,7 +94,7 @@ class JournalLibrary(private val tree: SafTree) {
             size += node.size
             newest = maxOf(newest, node.lastModified)
         }
-        tree.find(JournalPaths.INBOX)?.let { id ->
+        runCatching { tree.find(JournalPaths.INBOX) }.getOrNull()?.let { id ->
             tree.children(tree.root).firstOrNull { it.documentId == id }?.let(::stat)
         }
         for (file in markdownFiles()) stat(file.node)
@@ -96,6 +102,24 @@ class JournalLibrary(private val tree: SafTree) {
     }
 
     // MARK: Writing
+    //
+    // Every write reads the file first and rewrites it whole. The read is the
+    // dangerous half: a file that is there but can't be read, or isn't UTF-8,
+    // throws out of [SafTree.readText] and the write never happens. Only a file
+    // that is genuinely absent starts from empty.
+
+    /**
+     * Read [target], let [change] edit its entries, and write it back with its
+     * preamble — deleting the file if nothing is left in it.
+     */
+    private fun rewrite(target: String, change: (List<Entry>) -> List<Entry>) {
+        val existing = tree.readText(target) ?: ""
+        val preamble = JournalParser.leadingPreamble(existing)
+        val day = change(JournalParser.parseEntries(existing, target))
+        val content = JournalParser.renderEntries(preamble, day)
+        if (content == existing) return
+        if (content.isBlank()) tree.delete(target) else tree.writeText(target, content)
+    }
 
     /**
      * Rewrite the file that owns [entry], replacing the entry with the same
@@ -104,28 +128,55 @@ class JournalLibrary(private val tree: SafTree) {
     fun persist(entry: Entry, previous: Entry?): Entry {
         val target = entry.source ?: previous?.source ?: dayFile(entry.date)
             ?: throw IllegalArgumentException("no file for ${entry.ts}")
-
-        val existing = tree.readText(target) ?: ""
-        val preamble = JournalParser.leadingPreamble(existing)
-        val day = JournalParser.parseEntries(existing, target).toMutableList()
-
         val stamped = entry.movedTo(target)
-        val index = day.indexOfFirst { it.ts == entry.ts }
-        if (index >= 0) day[index] = stamped else day.add(stamped)
-
-        val content = JournalParser.renderEntries(preamble, JournalParser.sortedByTimestamp(day))
-        tree.writeText(target, content)
+        rewrite(target) { day ->
+            val list = day.toMutableList()
+            val index = list.indexOfFirst { it.ts == entry.ts }
+            if (index >= 0) list[index] = stamped else list.add(stamped)
+            JournalParser.sortedByTimestamp(list)
+        }
         return stamped
     }
 
     /** Take an entry out of its file, deleting the file if nothing is left. */
     fun remove(entry: Entry) {
         val target = entry.source ?: return
-        val existing = tree.readText(target) ?: return
-        val preamble = JournalParser.leadingPreamble(existing)
-        val day = JournalParser.parseEntries(existing, target).filter { it.ts != entry.ts }
-        val content = JournalParser.renderEntries(preamble, day)
-        if (content.isBlank()) tree.delete(target) else tree.writeText(target, content)
+        rewrite(target) { day -> day.filter { it.ts != entry.ts } }
+    }
+
+    /**
+     * Move [current] to [target] under the first free timestamp at or after
+     * [desired] — the one primitive behind retiming, filing and unfiling.
+     *
+     * The destination is written before the source is touched: if the second
+     * step fails, the entry is in both files rather than neither. A duplicate
+     * can be deleted; a loss can't be undone. Within one file there is no
+     * second step — the entry is replaced in a single rewrite.
+     */
+    fun move(current: Entry, target: String, desired: String): Entry {
+        val stamp = freeStamp(desired, target, current)
+        val moved = Entry.of(stamp, current.suffix, current.body, target)
+        // An entry with neither title nor body is never written — moving an
+        // untouched new entry to another day must not leave a stub.
+        val keep = if (moved.isBlank) emptyList() else listOf(moved)
+
+        if (current.source == target) {
+            rewrite(target) { day ->
+                JournalParser.sortedByTimestamp(day.filter { it.ts != current.ts } + keep)
+            }
+            return moved
+        }
+        if (!moved.isBlank) persist(moved, null)
+        try {
+            remove(current)
+        } catch (error: Throwable) {
+            throw IOException(
+                "Moved to ${moved.source}, but it couldn't be taken out of " +
+                    "${current.source} — it's in both for now. (${error.message})",
+                error,
+            )
+        }
+        return moved
     }
 
     /**

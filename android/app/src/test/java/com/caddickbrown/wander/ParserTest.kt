@@ -172,4 +172,42 @@ class ParserTest {
         assertEquals(1, Counts.readingMinutes("a few words here"))
         assertEquals(2, Counts.paragraphs("one\n\ntwo"))
     }
+
+    @Test
+    fun `a CRLF file is read as LF and rewritten as LF throughout`() {
+        val crlf = "# Notes\r\n\r\n[2026-09-08 08:12:00] Morning\r\nline a\r\nline b\r\n\r\n" +
+            "[2026-09-08 19:40:00] Evening\r\nbody\r\n"
+        val entries = JournalParser.parseEntries(crlf, "x.md")
+        assertEquals(2, entries.size)
+        assertEquals("Morning", entries[0].suffix)
+        assertEquals("line a\nline b", entries[0].body)
+        assertEquals("# Notes", JournalParser.leadingPreamble(crlf))
+
+        // The rewrite is all LF, not half and half, and stable from then on.
+        val rendered = JournalParser.renderEntries(JournalParser.leadingPreamble(crlf), entries)
+        assertFalse(rendered.contains('\r'))
+        val again = JournalParser.renderEntries(
+            JournalParser.leadingPreamble(rendered),
+            JournalParser.parseEntries(rendered, "x.md"),
+        )
+        assertEquals(rendered, again)
+    }
+
+    @Test
+    fun `a byte-order mark does not hide the first entry`() {
+        val bom = "\uFEFF[2026-09-08 08:12:00] First\nBody\n\n[2026-09-08 09:00:00] Second\n"
+        val entries = JournalParser.parseEntries(bom, "x.md")
+        assertEquals(listOf("First", "Second"), entries.map { it.suffix })
+        // Nothing before the first header, so no preamble — and the mark itself
+        // is not carried into the rewrite.
+        assertEquals("", JournalParser.leadingPreamble(bom))
+        assertFalse(JournalParser.renderEntries("", entries).startsWith("\uFEFF"))
+    }
+
+    @Test
+    fun `a blank entry is the one never written`() {
+        assertTrue(Entry.of("2026-01-01 09:00:00", "", "", "inbox.md").isBlank)
+        assertFalse(Entry.of("2026-01-01 09:00:00", "*", "", "inbox.md").isBlank)
+        assertFalse(Entry.of("2026-01-01 09:00:00", "", "text", "inbox.md").isBlank)
+    }
 }

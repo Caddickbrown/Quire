@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.caddickbrown.wander.WanderApp
 import com.caddickbrown.wander.core.Counts
 import com.caddickbrown.wander.core.Entry
 import com.caddickbrown.wander.core.Formats
@@ -22,12 +23,15 @@ import com.caddickbrown.wander.data.SafTree
 import com.caddickbrown.wander.data.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
 
@@ -109,6 +113,20 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
     private var lastFingerprint = ""
     private var fingerprintPending = false
 
+    /** Writes outlive the screen; see [WanderApp.writes]. */
+    private val writes = (app as WanderApp).writes
+
+    /**
+     * One disk operation at a time, in the order they were asked for. A save,
+     * a move and a star all rewrite whole files, so two of them interleaving
+     * on one file would each write back what the other hadn't seen.
+     */
+    private val disk = Mutex()
+
+    /** Run [block] on the IO thread, in turn, and see it through once begun. */
+    private suspend fun <T> onDisk(block: () -> T): T =
+        withContext(NonCancellable) { disk.withLock { withContext(Dispatchers.IO) { block() } } }
+
     init {
         settings.rememberedFolder()?.let { open(it, remember = false) }
     }
@@ -128,7 +146,7 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             val reachable = withContext(Dispatchers.IO) {
-                opened.isReachable().also { if (it) opened.ensureFolders() }
+                opened.isReachable().also { if (it) runCatching { opened.ensureFolders() } }
             }
             if (!reachable) {
                 library = null
@@ -158,8 +176,10 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
         val library = library ?: return
         viewModelScope.launch {
             _state.update { it.copy(loading = true) }
-            val (entries, fingerprint) = withContext(Dispatchers.IO) {
-                library.load() to library.fingerprint()
+            // In turn with the writes, so a load never sees a file half-way
+            // through a save of our own.
+            val (entries, fingerprint) = disk.withLock {
+                withContext(Dispatchers.IO) { library.load() to library.fingerprint() }
             }
             lastFingerprint = fingerprint
 
@@ -167,9 +187,20 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
             // inbox.md as its home at once, but nothing is written there until
             // something is typed. A reload must not drop it on the floor.
             val kept = draftEntry
-            val list = if (kept != null && kept.source != null &&
-                entries.none { it.id == kept.id } && (kept.suffix.isEmpty() && kept.body.isEmpty())
-            ) listOf(kept) + entries else entries
+            val list = if (kept != null && kept.isBlank && entries.none { it.id == kept.id })
+                listOf(kept) + entries else entries
+
+            // The open entry changed on disk — edited in jnl, or arriving through
+            // a sync — and nothing has been typed over it here: show what is on
+            // disk now, or the next keystroke would save the old text over it.
+            val fresh = kept?.let { open -> entries.firstOrNull { it.id == open.id } }
+            if (!dirty && kept != null && fresh != null &&
+                (fresh.suffix != kept.suffix || fresh.body != kept.body)
+            ) {
+                draftEntry = fresh
+                draft.title = fresh.displayTitle
+                draft.body = fresh.body
+            }
 
             _state.update { it.copy(entries = list, ready = true, loading = false) }
             rebuildIndex()
@@ -191,9 +222,8 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val current = withContext(Dispatchers.IO) { library.fingerprint() }
             if (current == lastFingerprint) return@launch
-            val keep = _state.value.selection
+            // reload keeps the selection when the entry is still there.
             reload()
-            if (keep != null) select(keep)
         }
     }
 
@@ -259,48 +289,80 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Fold the draft back into the entry and rewrite its file. */
-    fun flush() {
-        val library = library ?: return
+    /** A draft taken off the editor, ready to be written. */
+    private class Pending(val library: JournalLibrary, val base: Entry, val revised: Entry)
+
+    /**
+     * Take the draft, synchronously: clear `dirty` and capture the text before
+     * anything can change the selection under it. Null when there is nothing
+     * to write. Kept apart from the write so the fire-and-forget [flush] does
+     * this part on the caller's turn, not whenever its coroutine gets to run.
+     */
+    private fun takeDraft(): Pending? {
+        val library = library ?: return null
         saveJob?.cancel()
         saveJob = null
-        val base = draftEntry ?: return
-        if (!dirty) return
+        val base = draftEntry ?: return null
+        if (!dirty) return null
         dirty = false
 
         val revised = base.revised(draft.title, draft.body)
-        val isEmpty = revised.suffix.isEmpty() && revised.body.isEmpty()
 
         // Trailing whitespace alone can't cost a file rewrite.
         if (revised.raw == base.raw && base.source != null) {
             _state.update { it.copy(saveState = SaveState.Saved(LocalDateTime.now())) }
-            return
+            return null
         }
+        return Pending(library, base, revised)
+    }
 
-        viewModelScope.launch {
-            try {
-                if (isEmpty) {
-                    // Never leave an empty stub on disk. If it was written
-                    // earlier (title typed, then deleted), take it back out.
-                    withContext(Dispatchers.IO) { if (base.source != null) library.remove(base) }
-                    replaceInMemory(base, revised)
-                    _state.update { it.copy(saveState = SaveState.Idle) }
-                } else {
-                    val written = withContext(Dispatchers.IO) { library.persist(revised, base) }
-                    replaceInMemory(base, written)
-                    _state.update { it.copy(saveState = SaveState.Saved(LocalDateTime.now())) }
-                }
-                refreshFingerprint()
-            } catch (error: Throwable) {
-                dirty = true
-                _state.update {
-                    it.copy(saveState = SaveState.Failed(error.message ?: "write failed"))
-                }
+    private suspend fun write(pending: Pending) {
+        val library = pending.library
+        val base = pending.base
+        val revised = pending.revised
+        try {
+            if (revised.isBlank) {
+                // Never leave an empty stub on disk. If it was written
+                // earlier (title typed, then deleted), take it back out.
+                onDisk { if (base.source != null) library.remove(base) }
+                replaceInMemory(base, revised)
+                _state.update { it.copy(saveState = SaveState.Idle) }
+            } else {
+                val written = onDisk { library.persist(revised, base) }
+                replaceInMemory(base, written)
+                _state.update { it.copy(saveState = SaveState.Saved(LocalDateTime.now())) }
+            }
+            refreshFingerprint()
+        } catch (error: Throwable) {
+            // Still the open entry: try again on the next keystroke or flush.
+            if (draftEntry?.id == base.id) dirty = true
+            _state.update {
+                it.copy(saveState = SaveState.Failed(error.message ?: "write failed"))
             }
         }
     }
 
-    /** The save the lifecycle asks for when the app goes to the background. */
+    /**
+     * Fold the draft back into the entry and rewrite its file, returning once
+     * it is on disk. Everything that reads the entry after a flush — filing,
+     * retiming, starring, copying — waits on this rather than racing it, or it
+     * would act on the text as it stood before the last few keystrokes.
+     */
+    private suspend fun save() {
+        takeDraft()?.let { write(it) }
+    }
+
+    /** Save without waiting — the debounce, and a change of entry. */
+    fun flush() {
+        val pending = takeDraft() ?: return
+        writes.launch { write(pending) }
+    }
+
+    /**
+     * The save the lifecycle asks for when the app goes to the background. It
+     * runs in the application's scope, so the activity finishing doesn't
+     * cancel it; nothing blocks the main thread waiting for it.
+     */
     fun flushNow() = flush()
 
     /**
@@ -322,7 +384,10 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
         val entries = _state.value.entries.toMutableList()
         val index = entries.indexOfFirst { it.id == old.id }
         if (index >= 0) entries[index] = new else entries.add(0, new)
-        draftEntry = new
+        // Only if it is still the open entry: a save finishing after the reader
+        // has moved on must not pull the editor's base back to the old entry,
+        // or the next keystroke would be saved into it.
+        if (draftEntry?.id == old.id) draftEntry = new
         val selection = if (_state.value.selection == old.id) new.id else _state.value.selection
         _state.update { it.copy(entries = entries, selection = selection) }
         rebuildIndex()
@@ -332,40 +397,51 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
 
     /**
      * Move an entry to [target] under the timestamp [desired] — the one
-     * primitive behind retiming, filing and unfiling.
+     * primitive behind retiming, filing and unfiling. True if it moved.
      */
-    private suspend fun move(current: Entry, target: String, desired: String) {
-        val library = library ?: return
+    private suspend fun move(current: Entry, target: String, desired: String): Boolean {
+        val library = library ?: return false
         try {
-            val written = withContext(Dispatchers.IO) {
-                val stamp = library.freeStamp(desired, target, current)
-                val moved = Entry.of(stamp, current.suffix, current.body, target)
-                library.remove(current)
-                // An entry with neither title nor body is never written — moving
-                // an untouched new entry to another day must not leave a stub.
-                if (moved.suffix.isEmpty() && moved.body.isEmpty()) moved
-                else library.persist(moved, null)
-            }
-            val blank = written.suffix.isEmpty() && written.body.isEmpty()
+            val written = onDisk { library.move(current, target, desired) }
             val entries = _state.value.entries.filter { it.id != current.id } + written
             val ordered = JournalParser.sortedByTimestamp(entries).reversed()
-            draftEntry = written
-            draft.title = written.displayTitle
-            draft.body = written.body
-            dirty = false
+            // The editor follows the entry if it was the open one. Anything
+            // typed while the move was on disk stays in the editor and is saved
+            // to the entry's new home; only an untouched draft is refreshed.
+            val wasOpen = _state.value.selection == current.id
+            if (wasOpen) {
+                draftEntry = written
+                if (!dirty) {
+                    draft.title = written.displayTitle
+                    draft.body = written.body
+                }
+            }
             _state.update {
                 it.copy(
                     entries = ordered,
-                    selection = written.id,
-                    saveState = if (blank) SaveState.Idle else SaveState.Saved(LocalDateTime.now()),
+                    selection = if (wasOpen) written.id else it.selection,
+                    saveState = when {
+                        wasOpen && dirty -> it.saveState   // still writing
+                        written.isBlank -> SaveState.Idle
+                        else -> SaveState.Saved(LocalDateTime.now())
+                    },
                 )
             }
             rebuildIndex()
             refreshFingerprint()
+            return true
         } catch (error: Throwable) {
             _state.update { it.copy(saveState = SaveState.Failed(error.message ?: "move failed")) }
+            // A move that failed half-way has left the disk and memory
+            // disagreeing; the disk is the truth.
+            reload()
+            return false
         }
     }
+
+    /** The entry as the store now holds it — after a save, not before. */
+    private fun latest(entry: Entry): Entry =
+        _state.value.entries.firstOrNull { it.id == entry.id } ?: entry
 
     /**
      * Change an entry's timestamp. For a filed entry the date is the filename,
@@ -374,9 +450,9 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
      */
     fun reschedule(entry: Entry, at: LocalDateTime) {
         val library = library ?: return
-        viewModelScope.launch {
-            flush()
-            val current = _state.value.entries.firstOrNull { it.id == entry.id } ?: entry
+        writes.launch {
+            save()
+            val current = latest(entry)
             val stamp = Formats.stamp(at)
             if (stamp == current.ts) return@launch
             val target = if (library.isUnfiled(current)) JournalPaths.INBOX
@@ -386,36 +462,57 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
     }
 
     /** Draft to journal: inbox.md into journal/YYYY/MM/DD.md, by its own date. */
-    fun file(entry: Entry) {
-        val library = library ?: return
-        viewModelScope.launch {
-            flush()
-            val current = _state.value.entries.firstOrNull { it.id == entry.id } ?: entry
-            val target = library.dayFile(current.date) ?: return@launch
-            move(current, target, current.ts)
-        }
+    private suspend fun file(current: Entry): Boolean {
+        val library = library ?: return false
+        val target = library.dayFile(current.date) ?: return false
+        return move(current, target, current.ts)
     }
 
     /** Journal to draft: back to inbox.md, to be worked on and filed again. */
-    fun unfile(entry: Entry) {
-        viewModelScope.launch {
-            flush()
-            val current = _state.value.entries.firstOrNull { it.id == entry.id } ?: entry
-            if (current.isUnfiled) return@launch
-            move(current, JournalPaths.INBOX, current.ts)
+    private suspend fun unfile(current: Entry): Boolean {
+        if (current.isUnfiled) return false
+        return move(current, JournalPaths.INBOX, current.ts)
+    }
+
+    /**
+     * Toggle whichever way the entry sits. The entry travels; you don't — the
+     * same as the Mac. The page stays as it was and the selection steps to
+     * whatever takes the entry's place, so an inbox can be cleared one tap at
+     * a time rather than throwing the index over to the journal and back.
+     */
+    fun toggleFiling(entry: Entry) {
+        // Filing a row you aren't reading shouldn't move you at all, so the
+        // entry that keeps the editor is the open one, or this one's successor
+        // when this one *is* the open one. Decided now, while the row is still
+        // on the page to have a successor.
+        val wasOpen = _state.value.selection == entry.id
+        val next = if (wasOpen) successorId(entry) else _state.value.selection
+        writes.launch {
+            save()
+            val current = latest(entry)
+            val moved = if (current.isUnfiled) file(current) else unfile(current)
+            if (!moved) return@launch
+
+            val visible = _state.value.sections.flatMap { it.entries }
+            val selection = _state.value.selection
+            if (selection != null && visible.any { it.id == selection }) return@launch
+            val target = next?.takeIf { id -> visible.any { it.id == id } }
+            select(target ?: visible.firstOrNull()?.id)
         }
     }
 
     /**
-     * Toggle whichever way the entry sits, and follow it to the page it now
-     * lives on so the open entry doesn't vanish from the index.
+     * Where the index should land when [entry] leaves the page it is on: the
+     * row below it, which slides up into its place, or the row above when it
+     * was the last one. Null when it was the only one — an emptied inbox is
+     * worth seeing.
      */
-    fun toggleFiling(entry: Entry) {
-        val wasUnfiled = entry.isUnfiled
-        if (wasUnfiled) file(entry) else unfile(entry)
-        val page = _state.value.page
-        if (page == Page.JOURNAL && !wasUnfiled) show(Page.INBOX)
-        else if (page == Page.INBOX && wasUnfiled) show(Page.JOURNAL)
+    private fun successorId(entry: Entry): String? {
+        val visible = _state.value.sections.flatMap { it.entries }
+        val index = visible.indexOfFirst { it.id == entry.id }
+        if (index < 0) return null
+        if (index + 1 < visible.size) return visible[index + 1].id
+        return if (index > 0) visible[index - 1].id else null
     }
 
     fun destinationName(entry: Entry, at: LocalDateTime): String =
@@ -445,15 +542,26 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
 
     fun delete(entry: Entry) {
         val library = library ?: return
-        saveJob?.cancel()
-        dirty = false
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) { runCatching { library.remove(entry) } }
+        val wasSelected = _state.value.selection == entry.id
+        // Only the entry being deleted loses its pending edits; deleting some
+        // other row must not throw away what is being typed in this one.
+        if (wasSelected) {
+            saveJob?.cancel()
+            dirty = false
+        }
+        writes.launch {
+            try {
+                onDisk { library.remove(entry) }
+            } catch (error: Throwable) {
+                _state.update {
+                    it.copy(saveState = SaveState.Failed(error.message ?: "delete failed"))
+                }
+                return@launch
+            }
             val entries = _state.value.entries.filter { it.id != entry.id }
-            val wasSelected = _state.value.selection == entry.id
             _state.update { it.copy(entries = entries) }
             rebuildIndex()
-            if (wasSelected) {
+            if (_state.value.selection == entry.id) {
                 draftEntry = null
                 select(firstVisibleId())
             }
@@ -462,21 +570,30 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
     }
 
     fun toggleStar(entry: Entry) {
-        val library = library ?: return
-        val flipped = entry.revised(entry.displayTitle, entry.body, !entry.isStarred)
-        if (flipped.suffix.isEmpty() && flipped.body.isEmpty()) return
-        viewModelScope.launch {
-            val written = withContext(Dispatchers.IO) {
-                runCatching { library.persist(flipped, entry) }.getOrNull()
-            } ?: return@launch
-            replaceInMemory(entry, written)
-            _state.update { it.copy(saveState = SaveState.Saved(LocalDateTime.now())) }
+        writes.launch {
+            save()
+            star(latest(entry))
         }
     }
 
     fun toggleStarOnSelection() {
-        flushNow()
-        _state.value.selectedEntry?.let(::toggleStar)
+        writes.launch {
+            save()
+            _state.value.selectedEntry?.let { star(it) }
+        }
+    }
+
+    private suspend fun star(entry: Entry) {
+        val library = library ?: return
+        val flipped = entry.revised(entry.displayTitle, entry.body, !entry.isStarred)
+        if (flipped.isBlank) return
+        try {
+            val written = onDisk { library.persist(flipped, entry) }
+            replaceInMemory(entry, written)
+            _state.update { it.copy(saveState = SaveState.Saved(LocalDateTime.now())) }
+        } catch (error: Throwable) {
+            _state.update { it.copy(saveState = SaveState.Failed(error.message ?: "write failed")) }
+        }
     }
 
     /** Move the selection through the index: -1 newer, +1 older. */
@@ -493,11 +610,13 @@ class JournalStore(app: Application) : AndroidViewModel(app) {
      * straight into another jnl file.
      */
     fun copyMarkdown(entry: Entry) {
-        flushNow()
-        val current = _state.value.entries.firstOrNull { it.id == entry.id } ?: entry
-        val clipboard = getApplication<Application>()
-            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("wander", current.raw))
+        writes.launch {
+            save()
+            val current = latest(entry)
+            val clipboard = getApplication<Application>()
+                .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("wander", current.raw))
+        }
     }
 
     // MARK: Derived

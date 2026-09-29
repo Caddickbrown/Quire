@@ -27,6 +27,17 @@ object JournalParser {
     fun isHeaderLine(line: String): Boolean = matchHeader(line) != null
 
     /**
+     * The one form every file is read in: LF line endings and no byte-order
+     * mark. A file saved on Windows with CRLF would otherwise keep a `\r` on
+     * every interior line and come back half CRLF, half LF after a rewrite; a
+     * leading BOM would stop the first header matching `^\[`, so the first
+     * entry would be read as preamble and never shown. Both are dropped on the
+     * next write, which is jnl's form too: LF, no BOM.
+     */
+    fun normalise(content: String): String =
+        content.removePrefix("\uFEFF").replace("\r\n", "\n")
+
+    /**
      * Split file content into entries. Content before the first header is
      * dropped here — [leadingPreamble] preserves it across a rewrite.
      */
@@ -48,7 +59,7 @@ object JournalParser {
             )
         }
 
-        for (line in content.split("\n")) {
+        for (line in normalise(content).split("\n")) {
             val h = matchHeader(line)
             if (h != null) {
                 flush()
@@ -73,7 +84,7 @@ object JournalParser {
      */
     fun leadingPreamble(content: String): String {
         val pre = ArrayList<String>()
-        for (line in content.split("\n")) {
+        for (line in normalise(content).split("\n")) {
             if (matchHeader(line) != null) break
             pre.add(line)
         }

@@ -65,6 +65,12 @@ data class Entry(
             return JournalParser.splitTags(raw).filter { seen.add(it.lowercase()) }
         }
 
+    /**
+     * Neither title nor body: a new entry nothing has been typed into. Such an
+     * entry is never written, so this is also the test for "not on disk yet".
+     */
+    val isBlank: Boolean get() = suffix.isEmpty() && body.isEmpty()
+
     /** Whether this entry lives in the undated inbox rather than a day file. */
     val isUnfiled: Boolean get() = source == JournalPaths.INBOX
 
