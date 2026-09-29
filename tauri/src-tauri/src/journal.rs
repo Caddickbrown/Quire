@@ -4,8 +4,10 @@
 //! the Go `jnl` CLI), so a folder written by the Mac app, the `jnl` CLI, Nook or
 //! this app round-trips byte for byte:
 //!
-//!     <base>/journal/YYYY/MM/DD.md   one file per day
-//!     <base>/inbox.md                undated drafts
+//! ```text
+//! <base>/journal/YYYY/MM/DD.md   one file per day
+//! <base>/inbox.md                undated drafts
+//! ```
 //!
 //! An entry is a `[YYYY-MM-DD HH:MM:SS] optional title` header line followed by
 //! its body. A trailing `*` on the title means starred; `@tags` live inline.
@@ -14,11 +16,54 @@ use chrono::{Local, NaiveDateTime};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::io::ErrorKind;
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 use walkdir::WalkDir;
 
 pub const STAMP: &str = "%Y-%m-%d %H:%M:%S";
+
+/// What a reader is told when a day file can't be decoded. It gets its own
+/// words, not the generic failure, because the remedy is theirs to take.
+pub const NOT_UTF8: &str =
+    "This file isn't valid UTF-8. Open it in an editor and re-save it as UTF-8.";
+
+/// The date of a `YYYY-MM-DD HH:MM:SS` stamp, or `None` if it isn't one. Every
+/// stamp that arrives from the webview comes through here before it can name a
+/// file or be written as a header: a malformed one would otherwise slice past
+/// the end of the string, climb out of the journal with `..`, or be written as
+/// a header the parser can't read back — an entry that vanishes on reload.
+pub fn stamp_date(ts: &str) -> Option<&str> {
+    let parsed = NaiveDateTime::parse_from_str(ts, STAMP).ok()?;
+    // chrono will take an unpadded month or day; the format won't.
+    if parsed.format(STAMP).to_string() != ts {
+        return None;
+    }
+    ts.get(..10)
+}
+
+/// A file's text with CRLF folded to LF — once, where it is read, so the parser
+/// and the preamble see the same lines and the rewrite is LF throughout rather
+/// than half of each.
+fn normalised(content: String) -> String {
+    if content.contains('\r') {
+        content.replace("\r\n", "\n")
+    } else {
+        content
+    }
+}
+
+/// A day file's text: `None` if it doesn't exist yet. Any other failure is an
+/// error, never an empty file — rewriting from an empty parse would throw away
+/// every entry in it but the one being saved.
+fn read_day(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(Some(normalised(content))),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) if e.kind() == ErrorKind::InvalidData => Err(NOT_UTF8.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
@@ -99,7 +144,7 @@ fn build(ts: &str, suffix: &str, body: &str, source: &Path, inbox: &Path) -> Ent
     }
     Entry {
         ts: ts.to_string(),
-        date: ts[..10].to_string(),
+        date: ts.get(..10).unwrap_or_default().to_string(),
         suffix: suffix.to_string(),
         title: display_title(suffix),
         body: body.to_string(),
@@ -215,13 +260,13 @@ impl Library {
         let mut found: Vec<Entry> = Vec::new();
 
         if let Ok(content) = fs::read_to_string(&inbox) {
-            found.extend(parse_entries(&content, &inbox, &inbox));
+            found.extend(parse_entries(&normalised(content), &inbox, &inbox));
         }
         for item in WalkDir::new(self.journal_dir()).into_iter().flatten() {
             let path = item.path();
             if path.extension().map(|e| e == "md").unwrap_or(false) {
                 if let Ok(content) = fs::read_to_string(path) {
-                    found.extend(parse_entries(&content, path, &inbox));
+                    found.extend(parse_entries(&normalised(content), path, &inbox));
                 }
             }
         }
@@ -229,55 +274,73 @@ impl Library {
         found
     }
 
-    /// Rewrite the file that owns `entry`, replacing the entry with the same
-    /// timestamp or appending it.
-    pub fn persist(&self, entry: &Entry) -> std::io::Result<Entry> {
-        let target = PathBuf::from(&entry.source);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
+    /// Whether `path` is a file this library may touch: inbox.md or a `.md`
+    /// under journal/, named without `..`. The webview names the file for every
+    /// write, and nothing it sends should reach outside the folder.
+    pub fn owns(&self, path: &Path) -> bool {
+        if path.components().any(|c| matches!(c, Component::ParentDir)) {
+            return false;
         }
-        let existing = fs::read_to_string(&target).unwrap_or_default();
+        if path == self.inbox() {
+            return true;
+        }
+        path.starts_with(self.journal_dir()) && path.extension().is_some_and(|e| e == "md")
+    }
+
+    /// Rewrite `target` without the entry stamped `drop` and with `add` in its
+    /// place (or appended). The one primitive behind persist, remove and a move
+    /// within a file. A file left with nothing in it is deleted.
+    pub fn rewrite(&self, target: &Path, drop: Option<&str>, add: Option<&Entry>) -> Result<(), String> {
+        let existing = read_day(target)?;
+        if existing.is_none() && add.is_none() {
+            return Ok(());
+        }
+        let existing = existing.unwrap_or_default();
         let preamble = leading_preamble(&existing);
         let inbox = self.inbox();
-        let mut day = parse_entries(&existing, &target, &inbox);
+        let mut day: Vec<Entry> = parse_entries(&existing, target, &inbox)
+            .into_iter()
+            .filter(|e| Some(e.ts.as_str()) != drop)
+            .collect();
 
-        match day.iter().position(|e| e.ts == entry.ts) {
-            Some(index) => day[index] = entry.clone(),
-            None => day.push(entry.clone()),
+        if let Some(entry) = add {
+            match day.iter().position(|e| e.ts == entry.ts) {
+                Some(index) => day[index] = entry.clone(),
+                None => day.push(entry.clone()),
+            }
+            day.sort_by(|a, b| a.ts.cmp(&b.ts));
         }
-        day.sort_by(|a, b| a.ts.cmp(&b.ts));
-        write_atomically(&target, &render_entries(&preamble, &day))?;
+        let content = render_entries(&preamble, &day);
+        if content.trim().is_empty() {
+            return match fs::remove_file(target) {
+                Err(e) if e.kind() != ErrorKind::NotFound => Err(e.to_string()),
+                _ => Ok(()),
+            };
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        write_atomically(target, &content).map_err(|e| e.to_string())
+    }
+
+    /// Rewrite the file that owns `entry`, replacing the entry with the same
+    /// timestamp or appending it.
+    pub fn persist(&self, entry: &Entry) -> Result<Entry, String> {
+        self.rewrite(Path::new(&entry.source), None, Some(entry))?;
         Ok(entry.clone())
     }
 
     /// Take an entry out of its file, deleting the file if nothing is left.
-    pub fn remove(&self, entry: &Entry) -> std::io::Result<()> {
-        let target = PathBuf::from(&entry.source);
-        let existing = match fs::read_to_string(&target) {
-            Ok(content) => content,
-            Err(_) => return Ok(()),
-        };
-        let preamble = leading_preamble(&existing);
-        let inbox = self.inbox();
-        let day: Vec<Entry> = parse_entries(&existing, &target, &inbox)
-            .into_iter()
-            .filter(|e| e.ts != entry.ts)
-            .collect();
-        let content = render_entries(&preamble, &day);
-        if content.trim().is_empty() {
-            let _ = fs::remove_file(&target);
-        } else {
-            write_atomically(&target, &content)?;
-        }
-        Ok(())
+    pub fn remove(&self, entry: &Entry) -> Result<(), String> {
+        self.rewrite(Path::new(&entry.source), Some(&entry.ts), None)
     }
 
     /// A free timestamp at or after `desired` in `target` — two entries in one
     /// file may not share a second, since the timestamp is the identity.
-    pub fn free_stamp(&self, desired: &str, target: &Path, excluding: Option<&str>) -> String {
-        let content = match fs::read_to_string(target) {
-            Ok(text) => text,
-            Err(_) => return desired.to_string(),
+    pub fn free_stamp(&self, desired: &str, target: &Path, excluding: Option<&str>) -> Result<String, String> {
+        let content = match read_day(target)? {
+            Some(text) => text,
+            None => return Ok(desired.to_string()),
         };
         let inbox = self.inbox();
         let taken: Vec<String> = parse_entries(&content, target, &inbox)
@@ -293,7 +356,16 @@ impl Library {
             moment += chrono::Duration::seconds(1);
             stamp = moment.format(STAMP).to_string();
         }
-        stamp
+        Ok(stamp)
+    }
+
+    /// The entry stamped `ts` in `source`, read from that file alone.
+    pub fn find(&self, source: &Path, ts: &str) -> Result<Entry, String> {
+        let content = read_day(source)?.ok_or_else(|| "entry not found".to_string())?;
+        parse_entries(&content, source, &self.inbox())
+            .into_iter()
+            .find(|e| e.ts == ts)
+            .ok_or_else(|| "entry not found".to_string())
     }
 
     /// Build an entry from edited parts, keeping its timestamp and file.
@@ -313,7 +385,9 @@ impl Library {
 fn write_atomically(target: &Path, content: &str) -> std::io::Result<()> {
     let tmp = target.with_extension("wander-tmp");
     fs::write(&tmp, content)?;
-    fs::rename(&tmp, target)
+    fs::rename(&tmp, target).inspect_err(|_| {
+        let _ = fs::remove_file(&tmp);
+    })
 }
 
 /// Where the chosen folder is remembered between launches. The Apple builds use
@@ -388,4 +462,164 @@ fn dirs_home() -> PathBuf {
         }
     }
     PathBuf::from(".")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A fresh, empty journal folder under the system temp directory.
+    fn scratch() -> Library {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let base = std::env::temp_dir().join(format!(
+            "wander-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = fs::remove_dir_all(&base);
+        let library = Library::new(base);
+        library.ensure();
+        library
+    }
+
+    fn day(library: &Library, date: &str) -> PathBuf {
+        library.day_file(date).unwrap()
+    }
+
+    #[test]
+    fn a_file_that_is_not_utf8_is_refused_and_left_alone() {
+        let library = scratch();
+        let target = day(&library, "2026-09-08");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let bytes = b"[2026-09-08 09:00:00] caf\xe9\n\n[2026-09-08 10:00:00] two\nbody\n".to_vec();
+        fs::write(&target, &bytes).unwrap();
+
+        let entry = library.compose("2026-09-08 11:00:00", "three", "", false, &target);
+        assert_eq!(library.persist(&entry).unwrap_err(), NOT_UTF8);
+        assert_eq!(library.remove(&entry).unwrap_err(), NOT_UTF8);
+        assert!(library.free_stamp("2026-09-08 11:00:00", &target, None).is_err());
+        assert_eq!(fs::read(&target).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_missing_file_is_created() {
+        let library = scratch();
+        let target = day(&library, "2026-09-08");
+        let entry = library.compose("2026-09-08 09:00:00", "first", "hello", false, &target);
+        library.persist(&entry).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "[2026-09-08 09:00:00] first\nhello\n");
+    }
+
+    #[test]
+    fn removing_from_a_missing_file_is_not_an_error() {
+        let library = scratch();
+        let entry = library.compose("2026-09-08 09:00:00", "x", "", false, &day(&library, "2026-09-08"));
+        library.remove(&entry).unwrap();
+    }
+
+    #[test]
+    fn crlf_is_written_back_as_lf() {
+        let library = scratch();
+        let target = day(&library, "2026-09-08");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, "preamble\r\n\r\n[2026-09-08 09:00:00] one\r\nline a\r\nline b\r\n").unwrap();
+
+        let entry = library.compose("2026-09-08 10:00:00", "two", "body", false, &target);
+        library.persist(&entry).unwrap();
+        let written = fs::read_to_string(&target).unwrap();
+        assert!(!written.contains('\r'), "{:?}", written);
+        assert_eq!(
+            written,
+            "preamble\n\n[2026-09-08 09:00:00] one\nline a\nline b\n\n[2026-09-08 10:00:00] two\nbody\n"
+        );
+    }
+
+    #[test]
+    fn only_a_real_stamp_is_a_stamp() {
+        for bad in ["", "2026", "2026-09-0é", "../.-..-..", "2026-9-8 09:00:00", "2026-09-08", "2026-09-08 25:00:00"] {
+            assert_eq!(stamp_date(bad), None, "{:?}", bad);
+        }
+        assert_eq!(stamp_date("2026-09-08 09:30:00"), Some("2026-09-08"));
+    }
+
+    #[test]
+    fn the_library_owns_only_its_own_files() {
+        let library = scratch();
+        assert!(library.owns(&library.inbox()));
+        assert!(library.owns(&day(&library, "2026-09-08")));
+        assert!(!library.owns(&library.journal_dir().join("../../etc/passwd.md")));
+        assert!(!library.owns(&library.journal_dir().join("2026/notes.txt")));
+        assert!(!library.owns(Path::new("/etc/passwd")));
+        assert!(!library.owns(&library.base.join("other.md")));
+    }
+
+    fn entries_in(library: &Library, path: &Path) -> Vec<Entry> {
+        let content = fs::read_to_string(path).unwrap_or_default();
+        parse_entries(&content, path, &library.inbox())
+    }
+
+    #[test]
+    fn a_move_across_files_leaves_exactly_one_copy() {
+        let library = scratch();
+        let inbox = library.inbox();
+        let entry = library.compose("2026-09-08 09:00:00", "draft", "words", false, &inbox);
+        library.persist(&entry).unwrap();
+        let other = library.compose("2026-09-08 10:00:00", "stays", "", false, &inbox);
+        library.persist(&other).unwrap();
+
+        let target = day(&library, "2026-09-08");
+        let moved = library.compose(&entry.ts, &entry.title, &entry.body, false, &target);
+        library.persist(&moved).unwrap();
+        library.remove(&entry).unwrap();
+
+        assert_eq!(entries_in(&library, &target).len(), 1);
+        let left: Vec<String> = entries_in(&library, &inbox).into_iter().map(|e| e.title).collect();
+        assert_eq!(left, vec!["stays"]);
+    }
+
+    #[test]
+    fn a_retime_within_one_file_leaves_exactly_one_copy() {
+        let library = scratch();
+        let target = day(&library, "2026-09-08");
+        let entry = library.compose("2026-09-08 09:00:00", "one", "", false, &target);
+        library.persist(&entry).unwrap();
+
+        let free = library.free_stamp("2026-09-08 17:00:00", &target, Some(&entry.ts)).unwrap();
+        let moved = library.compose(&free, "one", "", false, &target);
+        library.rewrite(&target, Some(&entry.ts), Some(&moved)).unwrap();
+        let found = entries_in(&library, &target);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].ts, "2026-09-08 17:00:00");
+
+        // Retimed to the stamp it already has: still one.
+        library.rewrite(&target, Some(&moved.ts), Some(&moved)).unwrap();
+        assert_eq!(entries_in(&library, &target).len(), 1);
+    }
+
+    #[test]
+    fn a_file_emptied_by_a_remove_is_deleted() {
+        let library = scratch();
+        let target = day(&library, "2026-09-08");
+        let entry = library.compose("2026-09-08 09:00:00", "only", "", false, &target);
+        library.persist(&entry).unwrap();
+        library.remove(&entry).unwrap();
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn parse_then_render_is_idempotent() {
+        let inbox = PathBuf::from("/x/inbox.md");
+        let source = PathBuf::from("/x/journal/2026/09/08.md");
+        for text in [
+            "",
+            "[2026-09-08 09:00:00]\n",
+            "[2026-09-08 09:00:00] title *\nbody @tag\n\n[2026-09-08 10:00:00] two\n",
+            "a preamble\n\n[2026-09-08 09:00:00] one\n\n\nspaced\n",
+        ] {
+            let once = render_entries(&leading_preamble(text), &parse_entries(text, &source, &inbox));
+            let twice = render_entries(&leading_preamble(&once), &parse_entries(&once, &source, &inbox));
+            assert_eq!(once, twice, "{:?}", text);
+        }
+    }
 }

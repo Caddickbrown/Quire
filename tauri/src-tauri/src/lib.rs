@@ -24,13 +24,34 @@ struct Journal {
 }
 
 fn library(state: &tauri::State<State>) -> Library {
-    let base = state.base.lock().unwrap().clone();
+    // The lock only ever guards a clone and an assignment, neither of which can
+    // panic; if it were poisoned anyway, the path inside is still good.
+    let base = state.base.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let library = Library::new(base);
     library.ensure();
     library
 }
 
-#[tauri::command]
+/// The file the webview named, if it is one this library may write.
+fn owned(library: &Library, source: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(source);
+    if library.owns(&path) {
+        Ok(path)
+    } else {
+        Err("That file isn't in the journal folder.".to_string())
+    }
+}
+
+/// A stamp from the webview, checked before it can name a file or a header.
+fn checked(ts: &str) -> Result<&str, String> {
+    journal::stamp_date(ts).ok_or_else(|| format!("\"{}\" isn't a timestamp", ts))
+}
+
+// Every command that touches the disk is `async` in Tauri's sense: it runs on a
+// worker thread, not the one the window is drawn on, so reading ten years of
+// journal doesn't freeze the page while it happens.
+
+#[tauri::command(async)]
 fn load(state: tauri::State<State>) -> Journal {
     let library = library(&state);
     Journal {
@@ -41,16 +62,16 @@ fn load(state: tauri::State<State>) -> Journal {
 
 /// A blank entry, stamped now, waiting in the inbox — new writing rarely
 /// belongs to a day on the spot, so filing it is left to the writer.
-#[tauri::command]
+#[tauri::command(async)]
 fn create(state: tauri::State<State>) -> Result<Entry, String> {
     let library = library(&state);
     let stamp = Local::now().format(journal::STAMP).to_string();
     let target = library.inbox();
-    let free = library.free_stamp(&stamp, &target, None);
+    let free = library.free_stamp(&stamp, &target, None)?;
     Ok(library.compose(&free, "", "", false, &target))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn save(
     state: tauri::State<State>,
     ts: String,
@@ -60,27 +81,29 @@ fn save(
     starred: bool,
 ) -> Result<Option<Entry>, String> {
     let library = library(&state);
-    let target = PathBuf::from(&source);
+    checked(&ts)?;
+    let target = owned(&library, &source)?;
     let entry = library.compose(&ts, &title, &body, starred, &target);
     // An entry with neither title nor body is never left on disk.
     if entry.suffix.is_empty() && entry.body.is_empty() {
-        library.remove(&entry).map_err(|e| e.to_string())?;
+        library.remove(&entry)?;
         return Ok(None);
     }
-    library.persist(&entry).map(Some).map_err(|e| e.to_string())
+    library.persist(&entry).map(Some)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn remove(state: tauri::State<State>, ts: String, source: String) -> Result<(), String> {
     let library = library(&state);
-    let target = PathBuf::from(&source);
+    checked(&ts)?;
+    let target = owned(&library, &source)?;
     let entry = library.compose(&ts, "", "", false, &target);
-    library.remove(&entry).map_err(|e| e.to_string())
+    library.remove(&entry)
 }
 
 /// Move an entry to another file and/or another timestamp — the one primitive
 /// behind retiming, filing and unfiling.
-#[tauri::command]
+#[tauri::command(async)]
 fn relocate(
     state: tauri::State<State>,
     ts: String,
@@ -89,51 +112,57 @@ fn relocate(
     to_inbox: Option<bool>,
 ) -> Result<Entry, String> {
     let library = library(&state);
-    let from = PathBuf::from(&source);
+    checked(&ts)?;
+    let from = owned(&library, &source)?;
     // Only the file that owns the entry, not the whole folder: relocating one
     // entry has no business parsing ten years of journal to find it.
-    let content = std::fs::read_to_string(&from).map_err(|e| e.to_string())?;
-    let existing = journal::parse_entries(&content, &from, &library.inbox())
-        .into_iter()
-        .find(|e| e.ts == ts)
-        .ok_or_else(|| "entry not found".to_string())?;
+    let existing = library.find(&from, &ts)?;
 
     let stamp = new_ts.unwrap_or_else(|| existing.ts.clone());
+    let date = checked(&stamp)?;
+    let dated = || library.day_file(date).ok_or_else(|| "bad date".to_string());
     let target = match to_inbox {
         Some(true) => library.inbox(),
-        Some(false) => library
-            .day_file(&stamp[..10])
-            .ok_or_else(|| "bad date".to_string())?,
+        Some(false) => dated()?,
         // Retiming keeps a draft in the inbox: inbox.md isn't dated, so a new
         // date must not quietly file it.
-        None => {
-            if existing.unfiled {
-                library.inbox()
-            } else {
-                library
-                    .day_file(&stamp[..10])
-                    .ok_or_else(|| "bad date".to_string())?
-            }
-        }
+        None if existing.unfiled => library.inbox(),
+        None => dated()?,
     };
 
-    let free = library.free_stamp(&stamp, &target, Some(&existing.ts));
+    let free = library.free_stamp(&stamp, &target, Some(&existing.ts))?;
     let moved = library.compose(&free, &existing.title, &existing.body, existing.starred, &target);
-    if from != target || free != existing.ts {
-        library.remove(&existing).map_err(|e| e.to_string())?;
-    }
     // An entry with neither title nor body is never written: moving an untouched
     // new entry to another day must not leave a stub behind.
-    if moved.suffix.is_empty() && moved.body.is_empty() {
+    let blank = moved.suffix.is_empty() && moved.body.is_empty();
+
+    // Within one file it is a single rewrite: out under the old stamp, in under
+    // the new, with no moment at which the entry is in neither.
+    if from == target {
+        library.rewrite(&target, Some(&existing.ts), (!blank).then_some(&moved))?;
         return Ok(moved);
     }
-    library.persist(&moved).map_err(|e| e.to_string())
+    // Across files the destination is written first. If taking it out of the
+    // source then fails, the entry is in both — a duplicate the reader can
+    // delete, where the other order would leave it in neither.
+    if !blank {
+        library.persist(&moved)?;
+    }
+    library.remove(&existing).map_err(|e| {
+        format!(
+            "The entry was written to {} but couldn't be taken out of {}, so it is now in both: {}",
+            target.display(),
+            from.display(),
+            e
+        )
+    })?;
+    Ok(moved)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_folder(state: tauri::State<State>, path: String) -> Journal {
     {
-        let mut base = state.base.lock().unwrap();
+        let mut base = state.base.lock().unwrap_or_else(|e| e.into_inner());
         *base = PathBuf::from(&path);
     }
     // Remembered for next launch, the way the Apple builds remember theirs.
