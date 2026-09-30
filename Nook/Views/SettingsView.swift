@@ -771,9 +771,10 @@ struct SettingsView: View {
             Task {
                 let r = await store.compressExistingMedia()
                 let total = r.images + r.videos + r.audios
+                let converted = r.converted == 0 ? "" : "Converted \(r.converted) HEIC photo(s) to JPEG. "
                 cleanupMessage = total == 0
-                    ? "No new media to compress."
-                    : "Compressed \(r.images) photo(s), \(r.videos) video(s), \(r.audios) audio — saved \(ByteCountFormatter.string(fromByteCount: Int64(r.bytesSaved), countStyle: .file))."
+                    ? (converted.isEmpty ? "No new media to compress." : converted)
+                    : converted + "Compressed \(r.images) photo(s), \(r.videos) video(s), \(r.audios) audio — saved \(ByteCountFormatter.string(fromByteCount: Int64(r.bytesSaved), countStyle: .file))."
                 showingCleanup = true
             }
         } label: {

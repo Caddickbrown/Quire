@@ -1559,14 +1559,22 @@ final class JournalStore: ObservableObject {
         guard let dir = assetsDirURL else { return nil }
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let id = UUID().uuidString
-        let lower = ext.lowercased()
-        let name = "\(id).\(lower)"
+        var lower = ext.lowercased()
         var out = data
-        if UserDefaults.standard.bool(forKey: "dataSaver"),
+        let dataSaver = UserDefaults.standard.bool(forKey: "dataSaver")
+        // An iPhone photo arrives as HEIC, which Wander on Linux and Android
+        // can't show: it is stored as a JPEG instead (Data Saver's size applies
+        // in the same pass, so it isn't encoded twice).
+        if ImageDownsampler.convertible.contains(lower),
+           let jpg = ImageDownsampler.jpeg(data, dataSaver: dataSaver) {
+            out = jpg
+            lower = "jpg"
+        } else if dataSaver,
            ImageDownsampler.compressible.contains(lower),
            let shrunk = ImageDownsampler.downsample(data), shrunk.count < data.count {
             out = shrunk
         }
+        let name = "\(id).\(lower)"
         do {
             try out.write(to: dir.appendingPathComponent(name), options: .atomic)
             if out.count < data.count { recordCompression(assetID: id, saved: data.count - out.count) }
@@ -1668,7 +1676,50 @@ final class JournalStore: ObservableObject {
         }
     }
 
-    struct MediaCompressionResult { var images = 0; var videos = 0; var audios = 0; var bytesSaved = 0 }
+    struct MediaCompressionResult { var images = 0; var videos = 0; var audios = 0; var bytesSaved = 0; var converted = 0 }
+
+    /// Turn every HEIC/HEIF in assets/ into a JPEG under the same UUID, and point
+    /// every link at it, so the photo shows in Wander on Linux and Android too.
+    /// Not filtered by the Data Saver ledger: a HEIC another device has marked
+    /// handled (Nook on Linux can't read one) still wants converting.
+    ///
+    /// The JPEG is written first, then every file linking to the HEIC is
+    /// rewritten, and only then is the HEIC removed — stopped at any point, every
+    /// link still resolves. A file that can't be read (an iCloud placeholder, say)
+    /// keeps the HEIC for the next run rather than leaving that file's link dead.
+    @discardableResult
+    func convertHEICAssets() -> Int {
+        guard let dir = assetsDirURL,
+              let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return 0 }
+        let heics = items.filter { ImageDownsampler.convertible.contains($0.pathExtension.lowercased()) }
+        guard !heics.isEmpty else { return 0 }
+        let dataSaver = UserDefaults.standard.bool(forKey: "dataSaver")
+        var files: [URL] = []
+        if let inboxURL { files.append(inboxURL) }
+        files += allJournalFiles()
+        for sj in splitJournals { if let u = splitJournalURL(sj.name) { files.append(u) } }
+
+        var converted = 0
+        for heic in heics {
+            let jpgURL = dir.appendingPathComponent("\(heic.deletingPathExtension().lastPathComponent).jpg")
+            guard let data = try? Data(contentsOf: heic),
+                  let jpg = ImageDownsampler.jpeg(data, dataSaver: dataSaver),
+                  (try? jpg.write(to: jpgURL, options: .atomic)) != nil else { continue }
+            var relinked = true
+            for file in files where fm.fileExists(atPath: file.path) {
+                guard let text = try? String(contentsOf: file, encoding: .utf8) else { relinked = false; continue }
+                guard let renamed = MediaLinks.renaming(text, from: heic.lastPathComponent,
+                                                        to: jpgURL.lastPathComponent) else { continue }
+                do { try writeFile(file, renamed) } catch { relinked = false }
+            }
+            if relinked {
+                try? fm.removeItem(at: heic)
+                converted += 1
+            }
+        }
+        if converted > 0 { reload() }
+        return converted
+    }
 
     /// Compress existing media (images, video, audio) that no device has processed
     /// yet, in place (same filename/format, so markdown links are untouched). Images
@@ -1677,8 +1728,10 @@ final class JournalStore: ObservableObject {
     /// twice. Async because video/audio export is long-running.
     @discardableResult
     func compressExistingMedia() async -> MediaCompressionResult {
+        let converted = convertHEICAssets()
         guard let dir = assetsDirURL,
-              let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return MediaCompressionResult() }
+              let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        else { var r = MediaCompressionResult(); r.converted = converted; return r }
         let already = allCompressedAssetIDs()
         let candidates = items.filter { url in
             guard !url.hasDirectoryPath else { return false }
@@ -1688,6 +1741,7 @@ final class JournalStore: ObservableObject {
             return known && !already.contains(url.deletingPathExtension().lastPathComponent)
         }
         var res = MediaCompressionResult()
+        res.converted = converted
         mediaProgress = (0, candidates.count)
         for (i, url) in candidates.enumerated() {
             let ext = url.pathExtension.lowercased()
@@ -2857,6 +2911,38 @@ enum FolderAccess {
 enum ImageDownsampler {
     /// Raster formats we'll re-encode. GIF is excluded (would flatten animation).
     static let compressible: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp"]
+    /// Formats stored as JPEG instead, because not every app over the folder can
+    /// decode them.
+    static let convertible: Set<String> = ["heic", "heif"]
+
+    /// Re-encode as JPEG, orientation baked in. With Data Saver on, at Data
+    /// Saver's size and quality; off, at full size and high quality — this is
+    /// about being readable everywhere, not about space.
+    static func jpeg(_ data: Data, dataSaver: Bool) -> Data? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let edge: Int
+        if dataSaver {
+            edge = 2048
+        } else {
+            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+            edge = max(props?[kCGImagePropertyPixelWidth] as? Int ?? 0,
+                       props?[kCGImagePropertyPixelHeight] as? Int ?? 0)
+            guard edge > 0 else { return nil }
+        }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: edge,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil)
+        else { return nil }
+        CGImageDestinationAddImage(dest, cg,
+            [kCGImageDestinationLossyCompressionQuality: dataSaver ? 0.7 : 0.85] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return out as Data
+    }
 
     /// Downsample to `maxPixel` on the longest edge and re-encode in the same
     /// format at `quality` (lossy formats only). Returns nil if not a decodable
