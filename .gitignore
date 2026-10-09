@@ -1,3 +1,16 @@
-.env
-*.log
-__pycache__/
+# Dependencies and build output
+node_modules/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Editors and OS
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# Never commit a real journal
+/journal/
+/inbox.md
+/assets/
+/.nook/

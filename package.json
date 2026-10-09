@@ -1,0 +1,16 @@
+{
+  "name": "quire",
+  "private": true,
+  "version": "0.6.2",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@fontsource-variable/newsreader": "^5",
+    "@fontsource/ibm-plex-sans": "^5",
+    "@fontsource/ibm-plex-mono": "^5"
+  }
+}

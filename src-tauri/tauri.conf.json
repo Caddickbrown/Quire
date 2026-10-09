@@ -1,0 +1,62 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Quire",
+  "version": "0.6.2",
+  "identifier": "com.caddickbrown.quire",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Quire",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 560,
+        "label": "main"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost blob:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": [
+            "**"
+          ],
+          "requireLiteralLeadingDot": false
+        }
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "category": "Productivity",
+    "shortDescription": "Quire prototype",
+    "longDescription": "Quire: one journalling app (jnl + Nook + Wander) over a plain jnl markdown folder.",
+    "resources": {
+      "../sample/": "sample/"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ],
+    "linux": {
+      "deb": {
+        "recommends": [
+          "ffmpeg",
+          "libheif-examples",
+          "libheif-plugin-libde265"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quire</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app" class="app">
+  <header class="topbar" id="topbar" data-drag>
+    <div class="brand" data-drag>
+      <svg width="26" height="26" viewBox="22 18 62 70" fill="none" stroke="currentColor" stroke-width="5.5" stroke-linecap="round" aria-hidden="true"><path d="M36 24 C 76 24, 76 76, 36 76"/><path d="M36 34 C 64 34, 64 66, 36 66"/><path d="M36 44 C 52 44, 52 56, 36 56"/><path d="M36 24 L 36 76"/><path d="M58 66 L 76 82"/></svg>
+      <span>Quire</span>
+    </div>
+    <div class="counters" id="counters" aria-label="Journal totals"></div>
+    <nav class="tabs" id="tabs" aria-label="Primary" data-drag></nav>
+    <div class="topbar-right">
+      <button class="icon-btn" data-action="new" title="New entry (Ctrl+N)" aria-label="New entry">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button class="icon-btn" data-action="view" data-view="settings" id="cog" title="Settings (Ctrl+,)" aria-label="Settings">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>
+      </button>
+    </div>
+  </header>
+  <!-- Linux and Windows: the window has no bar of its own, so Quire draws one. -->
+  <div class="drag-strip" data-drag aria-hidden="true"></div>
+  <div class="window-controls" id="window-controls">
+    <button data-window="minimise" title="Minimise" aria-label="Minimise"><svg viewBox="0 0 12 12"><path d="M2.5 6h7"/></svg></button>
+    <button data-window="maximise" title="Maximise" aria-label="Maximise"><svg viewBox="0 0 12 12"><rect class="max" x="2.5" y="2.5" width="7" height="7"/><path class="restore" d="M2.5 4.5h5v5h-5zM4.5 4.5v-2h5v5h-2"/></svg></button>
+    <button data-window="close" title="Close" aria-label="Close"><svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg></button>
+  </div>
+  <div class="missing-banner" id="missing" role="alert" hidden></div>
+  <div class="body" id="body"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="popover-layer" id="popover"></div>
+</div>
+<script src="prompts.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
