@@ -1,7 +1,11 @@
 //! Everything beyond read/write of entries: templates and saved searches
-//! (Quire's sidecar in `.nook/`), media in `assets/`, cleanup, export,
+//! (Quire's sidecar in `.quire/`), media in `assets/`, cleanup, export,
 //! backup, imports and tag review. All of it keeps the journal layer in
-//! jnl's format; only `.nook/` and `assets/` are Quire's own.
+//! jnl's format; only the sidecar and `assets/` are Quire's own.
+//!
+//! Entry files and sidecars go through the `Journal`'s vault. Backups,
+//! imports from other folders and attaching files need real paths and ask
+//! the journal for its local root; they are native on shells without one.
 
 use crate::journal::*;
 use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
@@ -35,7 +39,7 @@ pub fn secs_since(ts: &str) -> Option<i64> {
     Some((Local::now().naive_local() - t).num_seconds())
 }
 
-// ---------- templates (.nook/templates/*.md) ----------
+// ---------- templates (<sidecar>/templates/*.md) ----------
 
 #[derive(Serialize)]
 pub struct Template {
@@ -43,11 +47,11 @@ pub struct Template {
     pub body: String,
 }
 
-pub fn templates_dir(root: &Path) -> PathBuf {
-    root.join(".nook").join("templates")
+pub fn templates_rel(j: &Journal) -> String {
+    format!("{}/templates", j.sidecar())
 }
 
-/// A template name becomes `<name>.md` in .nook/templates: no separators, no `..`.
+/// A template name becomes `<name>.md` in the sidecar's templates/: no separators, no `..`.
 pub fn check_template_name(name: &str) -> Result<String, String> {
     let n = name.trim();
     if n.is_empty() {
@@ -59,46 +63,45 @@ pub fn check_template_name(name: &str) -> Result<String, String> {
     Ok(n.to_string())
 }
 
-pub fn list_templates(root: &Path) -> Vec<Template> {
+pub fn list_templates(j: &Journal) -> Vec<Template> {
+    let dir = templates_rel(j);
     let mut out = Vec::new();
-    if let Ok(rd) = fs::read_dir(templates_dir(root)) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.extension().map(|x| x == "md").unwrap_or(false) {
-                out.push(Template {
-                    name: p.file_stem().unwrap().to_string_lossy().to_string(),
-                    body: fs::read_to_string(&p).unwrap_or_default(),
-                });
-            }
+    for it in j.list(&dir) {
+        if it.is_file && it.name.ends_with(".md") && !it.name.starts_with('.') {
+            out.push(Template { name: it.name.trim_end_matches(".md").to_string(), body: j.read(&format!("{}/{}", dir, it.name)) });
         }
     }
     out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     out
 }
 
-pub fn save_template(root: &Path, name: &str, body: &str) -> Result<(), String> {
+pub fn save_template(j: &Journal, name: &str, body: &str) -> Result<(), String> {
     let name = check_template_name(name)?;
-    write_atomic(&templates_dir(root).join(format!("{}.md", name)), body)
+    j.write(&format!("{}/templates/{}.md", j.sidecar_mut()?, name), body)
 }
 
-pub fn delete_template(root: &Path, name: &str) -> Result<(), String> {
+pub fn delete_template(j: &Journal, name: &str) -> Result<(), String> {
     let name = check_template_name(name)?;
-    fs::remove_file(templates_dir(root).join(format!("{}.md", name))).map_err(|e| e.to_string())
+    match j.remove(&format!("{}/templates/{}.md", j.sidecar_mut()?, name))? {
+        true => Ok(()),
+        false => Err(format!("No template called “{}”", name)),
+    }
 }
 
-pub fn rename_template(root: &Path, from: &str, to: &str) -> Result<(), String> {
+pub fn rename_template(j: &Journal, from: &str, to: &str) -> Result<(), String> {
     let from = check_template_name(from)?;
     let to = check_template_name(to)?;
-    let (a, b) = (templates_dir(root).join(format!("{}.md", from)), templates_dir(root).join(format!("{}.md", to)));
-    if a != b && b.exists() {
+    let dir = format!("{}/templates", j.sidecar_mut()?);
+    let (a, b) = (format!("{}/{}.md", dir, from), format!("{}/{}.md", dir, to));
+    if a != b && j.is_file(&b) {
         return Err(format!("A template called “{}” already exists", to));
     }
-    fs::rename(a, b).map_err(|e| e.to_string())
+    j.vault().rename(&a, &b)
 }
 
 pub const STARTER_TEMPLATE: &str = "What made today worth writing about?\n\n- [ ] One thing to remember\n- [ ] One thing to let go\n\n{{weekday}} {{date}}\n";
 
-// ---------- saved searches (.nook/searches.json) ----------
+// ---------- saved searches (<sidecar>/searches.json) ----------
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SavedSearch {
@@ -106,16 +109,12 @@ pub struct SavedSearch {
     pub query: String,
 }
 
-pub fn searches_path(root: &Path) -> PathBuf {
-    root.join(".nook").join("searches.json")
+pub fn load_searches(j: &Journal) -> Vec<SavedSearch> {
+    serde_json::from_str(&j.read(&format!("{}/searches.json", j.sidecar()))).unwrap_or_default()
 }
 
-pub fn load_searches(root: &Path) -> Vec<SavedSearch> {
-    fs::read_to_string(searches_path(root)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
-}
-
-pub fn save_searches(root: &Path, list: &[SavedSearch]) -> Result<(), String> {
-    write_atomic(&searches_path(root), &serde_json::to_string_pretty(list).map_err(|e| e.to_string())?)
+pub fn save_searches(j: &Journal, list: &[SavedSearch]) -> Result<(), String> {
+    j.write(&format!("{}/searches.json", j.sidecar_mut()?), &serde_json::to_string_pretty(list).map_err(|e| e.to_string())?)
 }
 
 // ---------- filesystem helpers ----------
@@ -132,12 +131,6 @@ fn walk_all(dir: &Path, out: &mut Vec<PathBuf>) {
             }
         }
     }
-}
-
-fn tree_bytes(dir: &Path) -> u64 {
-    let mut v = Vec::new();
-    walk_all(dir, &mut v);
-    v.iter().map(|p| fs::symlink_metadata(p).map(|m| m.len()).unwrap_or(0)).sum()
 }
 
 // ---------- media (assets/) ----------
@@ -171,35 +164,33 @@ impl LinkIndex {
 
 /// Files scanned for media references: entry files plus reserved root .md
 /// files (transfer, export…), conflict copies and templates.
-fn reference_files(root: &Path) -> Vec<String> {
-    let mut v: Vec<String> = entry_files(root).into_iter().map(|f| f.0).collect();
-    if let Ok(rd) = fs::read_dir(root) {
-        let mut extra: Vec<String> = rd
-            .flatten()
-            .filter(|e| e.path().is_file())
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|n| n.to_lowercase().ends_with(".md") && !v.contains(n))
-            .collect();
-        extra.sort();
-        v.extend(extra);
+fn reference_files(j: &Journal) -> Vec<String> {
+    let mut v: Vec<String> = j.entry_files().into_iter().map(|f| f.0).collect();
+    if j.is_file(INBOX_PREAMBLE) {
+        v.push(INBOX_PREAMBLE.to_string());
     }
-    for c in conflict_files(root) {
+    let mut extra: Vec<String> = j
+        .list("")
+        .into_iter()
+        .filter(|it| it.is_file && it.name.to_lowercase().ends_with(".md") && !v.contains(&it.name))
+        .map(|it| it.name)
+        .collect();
+    extra.sort();
+    v.extend(extra);
+    for c in j.conflict_files() {
         if !v.contains(&c) {
             v.push(c);
         }
     }
-    let mut t = Vec::new();
-    walk_all(&templates_dir(root), &mut t);
-    t.sort();
-    v.extend(t.iter().map(|p| rel_of(root, p)));
+    v.extend(j.walk_files(&templates_rel(j)));
     v
 }
 
-pub fn link_index(root: &Path) -> Result<LinkIndex, String> {
+pub fn link_index(j: &Journal) -> Result<LinkIndex, String> {
     let mut refs: HashMap<String, Vec<String>> = HashMap::new();
     let mut all_text = String::new();
-    for rel in reference_files(root) {
-        let text = try_read(&root.join(&rel))?;
+    for rel in reference_files(j) {
+        let text = j.try_read(&rel)?;
         for p in link_targets(&text) {
             for r in resolve_link_all(&rel, &p) {
                 let owners = refs.entry(r).or_default();
@@ -216,8 +207,8 @@ pub fn link_index(root: &Path) -> Result<LinkIndex, String> {
 
 /// Back-compat: the set of referenced root-relative paths.
 #[allow(dead_code)]
-pub fn referenced_assets(root: &Path) -> Result<HashSet<String>, String> {
-    Ok(link_index(root)?.refs.into_keys().filter(|k| k.starts_with("assets/")).collect())
+pub fn referenced_assets(j: &Journal) -> Result<HashSet<String>, String> {
+    Ok(link_index(j)?.refs.into_keys().filter(|k| k.starts_with("assets/")).collect())
 }
 
 #[derive(Serialize)]
@@ -230,33 +221,26 @@ pub struct Asset {
     pub owners: Vec<String>,
 }
 
-pub fn list_assets(root: &Path) -> Result<Vec<Asset>, String> {
-    let idx = link_index(root)?;
-    let mut files = Vec::new();
-    walk_all(&root.join("assets"), &mut files);
-    files.sort();
-    Ok(files
+pub fn list_assets(j: &Journal) -> Result<Vec<Asset>, String> {
+    let idx = link_index(j)?;
+    Ok(j.walk_files("assets")
         .into_iter()
-        .filter_map(|p| {
-            if p.file_name()?.to_string_lossy().starts_with('.') {
-                return None;
-            }
-            let rel = rel_of(root, &p);
-            Some(Asset {
-                kind: media_kind(&rel),
-                bytes: fs::metadata(&p).map(|m| m.len()).unwrap_or(0),
-                referenced: idx.is_referenced(&rel),
-                owners: idx.refs.get(&rel).cloned().unwrap_or_default(),
-                rel,
-            })
+        .filter(|rel| !rel.rsplit('/').next().unwrap_or(rel).starts_with('.'))
+        .map(|rel| Asset {
+            kind: media_kind(&rel),
+            bytes: j.len(&rel),
+            referenced: idx.is_referenced(&rel),
+            owners: idx.refs.get(&rel).cloned().unwrap_or_default(),
+            rel,
         })
         .collect())
 }
 
 /// Copy a file into `assets/YYYY/MM/DD-HHMMSS[-n].ext` and return its
 /// root-relative path.
-pub fn attach_rel(root: &Path, src: &Path, ts: &str) -> Result<String, String> {
+pub fn attach_rel(j: &Journal, src: &Path, ts: &str) -> Result<String, String> {
     check_ts(ts)?;
+    let root = j.local()?;
     let ext: String = src
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
@@ -290,18 +274,18 @@ pub fn attach_rel(root: &Path, src: &Path, ts: &str) -> Result<String, String> {
 /// Copy a file into assets/ and return the markdown to insert. Links are
 /// always base-relative (`assets/…`), as Nook writes them, whichever file
 /// the entry lives in (`_entry_file` is kept for API compatibility).
-pub fn attach(root: &Path, src: &Path, ts: &str, _entry_file: &str) -> Result<String, String> {
-    let rel = attach_rel(root, src, ts)?;
+pub fn attach(j: &Journal, src: &Path, ts: &str, _entry_file: &str) -> Result<String, String> {
+    let rel = attach_rel(j, src, ts)?;
     let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
     Ok(if media_kind(&rel) == "file" { format!("[{}]({})", name, rel) } else { format!("![]({})", rel) })
 }
 
-pub fn delete_orphans(root: &Path) -> Result<usize, String> {
+pub fn delete_orphans(j: &Journal) -> Result<usize, String> {
     let mut n = 0;
     // list_assets is Err if any file is unreadable: never delete on a partial view.
-    for a in list_assets(root)? {
+    for a in list_assets(j)? {
         if !a.referenced {
-            fs::remove_file(root.join(&a.rel)).map_err(|e| e.to_string())?;
+            j.remove(&a.rel)?;
             n += 1;
         }
     }
@@ -309,17 +293,18 @@ pub fn delete_orphans(root: &Path) -> Result<usize, String> {
 }
 
 /// Delete one file under assets/.
-pub fn delete_asset(root: &Path, rel: &str) -> Result<(), String> {
-    let p = safe_rel(root, rel)?;
-    let norm = normalize_rel(rel).unwrap_or_default();
-    if !norm.starts_with("assets/") {
+pub fn delete_asset(j: &Journal, rel: &str) -> Result<(), String> {
+    let rel = check_rel(rel)?;
+    if !rel.starts_with("assets/") {
         return Err("Only files under assets/ can be deleted here".into());
     }
-    let md = fs::symlink_metadata(&p).map_err(|_| "No such asset".to_string())?;
-    if md.is_dir() {
+    if j.is_dir(&rel) {
         return Err("That's a folder, not an asset".into());
     }
-    fs::remove_file(&p).map_err(|e| e.to_string())
+    match j.remove(&rel)? {
+        true => Ok(()),
+        false => Err("No such asset".into()),
+    }
 }
 
 // ---------- cleanup (jnl's cmdCleanup + Nook's dedupe) ----------
@@ -372,15 +357,11 @@ fn sort_dedupe(entries: Vec<RawEntry>) -> (Vec<RawEntry>, bool, usize) {
     (kept, reordered, removed)
 }
 
-pub fn cleanup(root: &Path, split_tags: &[String]) -> Result<CleanupReport, String> {
+pub fn cleanup(j: &Journal, split_tags: &[String]) -> Result<CleanupReport, String> {
     let mut rep = CleanupReport::default();
-    let mut files = Vec::new();
-    walk_md(&root.join("journal"), &mut files);
-    files.sort();
-    for f in files {
+    for rel in j.walk_md(JOURNAL_DIR) {
         rep.files += 1;
-        let rel = rel_of(root, &f);
-        let orig = match try_read(&f) {
+        let orig = match j.try_read(&rel) {
             Ok(s) => s,
             Err(e) => {
                 rep.errors.push(e);
@@ -407,7 +388,7 @@ pub fn cleanup(root: &Path, split_tags: &[String]) -> Result<CleanupReport, Stri
         let mut extracted = 0;
         let mut failed = false;
         for (target, raws) in &extract {
-            match insert_entries(root, target, raws, true) {
+            match j.insert_entries(target, raws, true) {
                 Ok(_) => extracted += raws.len(),
                 Err(e) => {
                     rep.errors.push(format!("{} → {}: {}", rel, target, e));
@@ -419,7 +400,7 @@ pub fn cleanup(root: &Path, split_tags: &[String]) -> Result<CleanupReport, Stri
             // Leave this file's entries in place (any that did land are
             // skipped as duplicates on the next run).
             if formatted {
-                if let Err(e) = write_atomic(&f, &fixed) {
+                if let Err(e) = j.write(&rel, &fixed) {
                     rep.errors.push(e);
                 } else {
                     rep.formatted += 1;
@@ -431,9 +412,9 @@ pub fn cleanup(root: &Path, split_tags: &[String]) -> Result<CleanupReport, Stri
         let structural = extracted > 0 || reordered || removed > 0;
         let res = if structural {
             let raws: Vec<String> = kept.into_iter().map(|e| e.raw).collect();
-            write_atomic(&f, &render(&pre, &raws))
+            j.write_file_entries(&rel, &pre, &raws)
         } else if formatted {
-            write_atomic(&f, &fixed)
+            j.write(&rel, &fixed)
         } else {
             Ok(())
         };
@@ -447,44 +428,49 @@ pub fn cleanup(root: &Path, split_tags: &[String]) -> Result<CleanupReport, Stri
             Err(e) => rep.errors.push(format!("{}: {}", rel, e)),
         }
     }
-    // Inbox: sort + dedupe only.
-    match try_read(&root.join("inbox.md")) {
-        Ok(content) => {
-            let pre = leading_preamble(&content);
-            let (kept, reordered, removed) = sort_dedupe(parse_entries(&content));
-            if reordered || removed > 0 {
-                let raws: Vec<String> = kept.into_iter().map(|e| e.raw).collect();
-                match write_atomic(&root.join("inbox.md"), &render(&pre, &raws)) {
-                    Ok(()) => {
-                        rep.reordered += reordered as usize;
-                        rep.deduped += removed;
+    // Inbox files: sort + dedupe only.
+    for rel in j.inbox_files() {
+        match j.try_read(&rel) {
+            Ok(content) => {
+                let pre = leading_preamble(&content);
+                let (kept, reordered, removed) = sort_dedupe(parse_entries(&content));
+                if reordered || removed > 0 {
+                    let raws: Vec<String> = kept.into_iter().map(|e| e.raw).collect();
+                    match j.write_file_entries(&rel, &pre, &raws) {
+                        Ok(()) => {
+                            rep.reordered += reordered as usize;
+                            rep.deduped += removed;
+                        }
+                        Err(e) => rep.errors.push(format!("{}: {}", rel, e)),
                     }
-                    Err(e) => rep.errors.push(format!("inbox.md: {}", e)),
                 }
             }
+            Err(e) => rep.errors.push(e),
         }
-        Err(e) => rep.errors.push(e),
     }
     rep.formatting = rep.formatted;
     rep.duplicates = rep.deduped;
     Ok(rep)
 }
 
-/// Sort the inbox by timestamp (stable). Writes only if the order changed;
-/// returns whether it did.
-pub fn sort_inbox(root: &Path) -> Result<bool, String> {
-    let content = try_read(&root.join("inbox.md"))?;
-    let pre = leading_preamble(&content);
-    let es = parse_entries(&content);
-    let before: Vec<String> = es.iter().map(|e| e.ts.clone()).collect();
-    let mut sorted = es;
-    sorted.sort_by(|a, b| a.ts.cmp(&b.ts));
-    if sorted.iter().zip(before.iter()).all(|(a, b)| &a.ts == b) {
-        return Ok(false);
+/// Sort every inbox file by timestamp (stable). Writes only the files whose
+/// order changed; returns whether any did.
+pub fn sort_inbox(j: &Journal) -> Result<bool, String> {
+    let mut changed = false;
+    for rel in j.inbox_files() {
+        let content = j.try_read(&rel)?;
+        let pre = leading_preamble(&content);
+        let es = parse_entries(&content);
+        let before: Vec<String> = es.iter().map(|e| e.ts.clone()).collect();
+        let sorted = sorted_by_timestamp(&es);
+        if sorted.iter().zip(before.iter()).all(|(a, b)| &a.ts == b) {
+            continue;
+        }
+        let raws: Vec<String> = sorted.into_iter().map(|e| e.raw).collect();
+        j.write_file_entries(&rel, &pre, &raws)?;
+        changed = true;
     }
-    let raws: Vec<String> = sorted.into_iter().map(|e| e.raw).collect();
-    write_atomic(&root.join("inbox.md"), &render(&pre, &raws))?;
-    Ok(true)
+    Ok(changed)
 }
 
 // ---------- moving entries between files ----------
@@ -519,23 +505,26 @@ pub struct FileAllReport {
 /// day file, inserted in time order, links rebased. One write per
 /// destination; then the inbox is re-read and only drafts that were filed
 /// are removed. Empty drafts are skipped and stay.
-pub fn file_all(root: &Path, split_tags: &[String]) -> Result<FileAllReport, String> {
+pub fn file_all(j: &Journal, split_tags: &[String]) -> Result<FileAllReport, String> {
     let mut rep = FileAllReport::default();
-    let content = try_read(&root.join("inbox.md"))?;
+    let inbox = j.inbox_files();
     let mut groups: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
-    for e in parse_entries(&content) {
-        if e.body.is_empty() && e.suffix.is_empty() {
-            rep.skipped += 1;
-            continue;
+    for file in &inbox {
+        let content = j.try_read(file)?;
+        for e in parse_entries(&content) {
+            if e.body.is_empty() && e.suffix.is_empty() {
+                rep.skipped += 1;
+                continue;
+            }
+            let target = split_target(&e.raw, split_tags).unwrap_or_else(|| journal_rel(&e.date));
+            let raw = rebase_links(&rebuild(&e), file, &target);
+            groups.entry(target).or_default().push((e.raw.trim_end().to_string(), raw));
         }
-        let target = split_target(&e.raw, split_tags).unwrap_or_else(|| journal_rel(&e.date));
-        let raw = rebase_links(&rebuild(&e), "inbox.md", &target);
-        groups.entry(target).or_default().push((e.raw.trim_end().to_string(), raw));
     }
     let mut gone: HashMap<String, usize> = HashMap::new();
     for (target, items) in &groups {
         let raws: Vec<String> = items.iter().map(|x| x.1.clone()).collect();
-        match insert_entries(root, target, &raws, true) {
+        match j.insert_entries(target, &raws, true) {
             Ok(_) => {
                 for (k, _) in items {
                     *gone.entry(k.clone()).or_default() += 1;
@@ -546,12 +535,24 @@ pub fn file_all(root: &Path, split_tags: &[String]) -> Result<FileAllReport, Str
         }
     }
     if rep.filed > 0 {
-        let fresh = try_read(&root.join("inbox.md"))?;
-        if let Some(text) = remove_raws(&fresh, &mut gone) {
-            write_atomic(&root.join("inbox.md"), &text)?;
+        for file in &inbox {
+            let fresh = j.try_read(file)?;
+            if let Some(text) = remove_raws(&fresh, &mut gone) {
+                write_removed(j, file, &text)?;
+            }
         }
     }
     Ok(rep)
+}
+
+/// Write a file `remove_raws` thinned; a day file left with no entries is
+/// deleted (its preamble, if any, is kept in place).
+fn write_removed(j: &Journal, file: &str, text: &str) -> Result<(), String> {
+    if is_day_file(file) && parse_entries(text).is_empty() && leading_preamble(text).is_empty() {
+        j.remove(file)?;
+        return Ok(());
+    }
+    j.write(file, text)
 }
 
 #[derive(Serialize, Default, Debug)]
@@ -564,16 +565,15 @@ pub struct MergeReport {
 /// Fold root `<name>.md` journals that are no longer split tags back into
 /// their day files (no split routing), destination first. A file that empties
 /// is deleted unless it has a preamble, which is kept on its own.
-pub fn merge_ex_split(root: &Path, split_tags: &[String]) -> Result<MergeReport, String> {
+pub fn merge_ex_split(j: &Journal, split_tags: &[String]) -> Result<MergeReport, String> {
     let mut rep = MergeReport::default();
     let tags: HashSet<String> = split_tags.iter().map(|t| t.trim_start_matches('@').to_lowercase()).collect();
-    for name in split_files(root) {
+    for name in j.split_files() {
         let stem = name.trim_end_matches(".md").to_lowercase();
         if tags.contains(&stem) {
             continue;
         }
-        let path = root.join(&name);
-        let content = match try_read(&path) {
+        let content = match j.try_read(&name) {
             Ok(c) => c,
             Err(e) => {
                 rep.errors.push(e);
@@ -594,7 +594,7 @@ pub fn merge_ex_split(root: &Path, split_tags: &[String]) -> Result<MergeReport,
         let mut moved = 0;
         for (dest, items) in &groups {
             let raws: Vec<String> = items.iter().map(|x| x.1.clone()).collect();
-            match insert_entries(root, dest, &raws, true) {
+            match j.insert_entries(dest, &raws, true) {
                 Ok(_) => {
                     for (k, _) in items {
                         *gone.entry(k.clone()).or_default() += 1;
@@ -610,13 +610,13 @@ pub fn merge_ex_split(root: &Path, split_tags: &[String]) -> Result<MergeReport,
         let pre = leading_preamble(&content);
         let res = if moved == entries.len() {
             if pre.trim().is_empty() {
-                fs::remove_file(&path).map_err(|e| e.to_string())
+                j.remove(&name).map(|_| ())
             } else {
-                write_atomic(&path, &render(&pre, &[]))
+                j.write(&name, &render(&pre, &[]))
             }
         } else {
             match remove_raws(&content, &mut gone) {
-                Some(t) => write_atomic(&path, &t),
+                Some(t) => j.write(&name, &t),
                 None => Ok(()),
             }
         };
@@ -634,16 +634,16 @@ pub fn merge_ex_split(root: &Path, split_tags: &[String]) -> Result<MergeReport,
 /// Merge a sync-conflict copy into its main file: entries not already there
 /// (exact raw) are added, the file is re-sorted by ts and written, and the
 /// conflict copy is deleted. Returns how many entries were added.
-pub fn merge_conflict(root: &Path, rel: &str) -> Result<usize, String> {
-    let cpath = safe_entry_rel(root, rel)?;
+pub fn merge_conflict(j: &Journal, rel: &str) -> Result<usize, String> {
+    let crel = check_entry_rel(rel)?;
     let name = rel.rsplit('/').next().unwrap_or(rel);
     if !is_conflict_name(name) {
         return Err(format!("{} isn't a conflict copy", rel));
     }
     let main_rel = conflict_main_name(rel).ok_or("Can't tell which file that conflict copy belongs to")?;
-    let mpath = safe_entry_rel(root, &main_rel)?;
-    let ctext = try_read(&cpath)?;
-    let mtext = try_read(&mpath)?;
+    let main_rel = check_entry_rel(&main_rel)?;
+    let ctext = j.try_read(&crel)?;
+    let mtext = j.try_read(&main_rel)?;
     let mut main = parse_entries(&mtext);
     let mut have: HashMap<String, usize> = HashMap::new();
     for e in &main {
@@ -669,17 +669,17 @@ pub fn merge_conflict(root: &Path, rel: &str) -> Result<usize, String> {
     if added > 0 || pre_changed {
         main.sort_by(|a, b| a.ts.cmp(&b.ts));
         let raws: Vec<String> = main.into_iter().map(|e| e.raw).collect();
-        write_atomic(&mpath, &render(&pre, &raws))?;
+        j.write(&main_rel, &render(&pre, &raws))?;
     }
-    fs::remove_file(&cpath).map_err(|e| e.to_string())?;
+    j.remove(&crel)?;
     Ok(added)
 }
 
 // ---------- export / backup ----------
 
-pub fn export_all(root: &Path, dest: &Path) -> Result<usize, String> {
+pub fn export_all(j: &Journal, dest: &Path) -> Result<usize, String> {
     // Strict: an export that silently omitted an unreadable day would look complete.
-    let mut es: Vec<Entry> = try_load_all(root)?.into_iter().filter(|e| e.source != "inbox").collect();
+    let mut es: Vec<Entry> = j.try_load_all()?.into_iter().filter(|e| e.source != "inbox").collect();
     es.sort_by(|a, b| a.ts.cmp(&b.ts));
     let raws: Vec<String> = es.iter().map(|e| e.raw.clone()).collect();
     write_atomic(dest, &render("", &raws))?;
@@ -688,12 +688,12 @@ pub fn export_all(root: &Path, dest: &Path) -> Result<usize, String> {
 
 /// Copy a folder tree. Symlinks are recreated as links (Unix) or skipped,
 /// never followed. With `skip_hidden_top`, top-level dot-items other than
-/// `.nook` are left out.
+/// the sidecars (`.quire`, `.nook`) are left out.
 pub fn copy_tree(from: &Path, to: &Path, skip_hidden_top: bool) -> Result<(), String> {
     fs::create_dir_all(to).map_err(|e| e.to_string())?;
     for e in fs::read_dir(from).map_err(|e| e.to_string())?.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
-        if skip_hidden_top && name.starts_with('.') && name != ".nook" {
+        if skip_hidden_top && name.starts_with('.') && name != SIDECAR && name != LEGACY_SIDECAR {
             continue;
         }
         let t = to.join(&name);
@@ -779,7 +779,8 @@ fn copy_to_new_backup(root: &Path, dest_dir: &Path, skip_hidden_top: bool) -> Re
 
 /// Copy the journal into `dest_dir/Quire backup YYYY-MM-DD-HHMMSS` (local
 /// time). Returns the backup's full path. Does not prune.
-pub fn backup(root: &Path, dest_dir: &Path) -> Result<String, String> {
+pub fn backup(j: &Journal, dest_dir: &Path) -> Result<String, String> {
+    let root = j.local()?;
     Ok(copy_to_new_backup(root, dest_dir, true)?.display().to_string())
 }
 
@@ -818,7 +819,8 @@ pub fn list_backups(dest_dir: &Path) -> Vec<String> {
 /// Restore `dest_dir/name` over `root`. Takes a full safety copy first (named
 /// like a normal backup, not pruned), then deletes every item in the root and
 /// copies the backup's items in. Returns the safety copy's name.
-pub fn restore(root: &Path, dest_dir: &Path, name: &str) -> Result<String, String> {
+pub fn restore(j: &Journal, dest_dir: &Path, name: &str) -> Result<String, String> {
+    let root = j.local()?;
     if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") || name.starts_with('.') {
         return Err("Bad backup name".into());
     }
@@ -827,8 +829,8 @@ pub fn restore(root: &Path, dest_dir: &Path, name: &str) -> Result<String, Strin
     if !md.is_dir() {
         return Err(format!("No backup called {}", name));
     }
-    if !src.join("inbox.md").is_file() && !src.join("journal").is_dir() {
-        return Err(format!("{} doesn't look like a journal backup (no inbox.md or journal/)", name));
+    if !src.join(LEGACY_INBOX).is_file() && !src.join(INBOX_DIR).is_dir() && !src.join(JOURNAL_DIR).is_dir() {
+        return Err(format!("{} doesn't look like a journal backup (no inbox, inbox.md or journal/)", name));
     }
     check_backup_dir(root, dest_dir)?;
     // Full copy (hidden items too), since the restore removes everything.
@@ -837,11 +839,11 @@ pub fn restore(root: &Path, dest_dir: &Path, name: &str) -> Result<String, Strin
     let safety_name = safety.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let fail = |e: String| format!("Restore failed part-way ({}). Your previous folder is saved as “{}”.", e, safety_name);
     for e in fs::read_dir(root).map_err(|e| fail(e.to_string()))?.flatten() {
-        // Leave hidden items other than .nook alone: .git, Syncthing's
+        // Leave hidden items other than the sidecars alone: .git, Syncthing's
         // .stfolder/.stignore and the like aren't in backups, so removing them
         // would break things the restore can't put back.
         let n = e.file_name().to_string_lossy().to_string();
-        if n.starts_with('.') && n != ".nook" {
+        if n.starts_with('.') && n != SIDECAR && n != LEGACY_SIDECAR {
             continue;
         }
         let ft = e.file_type().map_err(|e| fail(e.to_string()))?;
@@ -917,9 +919,9 @@ pub fn dedupe_key(ts: &str, title: &str, body: &str) -> String {
 }
 
 /// Multiset of dedupe keys for everything already in the journal.
-fn existing_key_counts(root: &Path) -> Result<HashMap<String, usize>, String> {
+fn existing_key_counts(j: &Journal) -> Result<HashMap<String, usize>, String> {
     let mut m = HashMap::new();
-    for e in try_load_all(root)? {
+    for e in j.try_load_all()? {
         *m.entry(dedupe_key(&e.ts, &e.title, &e.body)).or_default() += 1;
     }
     Ok(m)
@@ -936,9 +938,9 @@ fn take(m: &mut HashMap<String, usize>, k: &str) -> bool {
     }
 }
 
-fn write_groups(root: &Path, groups: BTreeMap<String, Vec<String>>) -> Result<(), String> {
+fn write_groups(j: &Journal, groups: BTreeMap<String, Vec<String>>) -> Result<(), String> {
     for (file, raws) in groups {
-        insert_entries(root, &file, &raws, false)?;
+        j.insert_entries(&file, &raws, false)?;
     }
     Ok(())
 }
@@ -966,9 +968,9 @@ fn file_date(p: &Path) -> Option<String> {
 /// (fallback modified) date. Time: 12:00:00, +1 s for each further file on
 /// the same date. Title: the file stem unless it is just the date. Files
 /// already in jnl format import their entries verbatim.
-pub fn import_markdown_folder(root: &Path, dir: &Path, dry_run: bool) -> Result<ImportReport, String> {
+pub fn import_markdown_folder(j: &Journal, dir: &Path, dry_run: bool) -> Result<ImportReport, String> {
     let mut rep = ImportReport::default();
-    let mut have = existing_key_counts(root)?;
+    let mut have = existing_key_counts(j)?;
     let mut files = Vec::new();
     walk_all(dir, &mut files);
     files.sort();
@@ -1017,7 +1019,7 @@ pub fn import_markdown_folder(root: &Path, dir: &Path, dry_run: bool) -> Result<
         }
     }
     if !dry_run {
-        write_groups(root, groups)?;
+        write_groups(j, groups)?;
     }
     Ok(rep)
 }
@@ -1060,7 +1062,7 @@ fn safe_part(s: &str) -> bool {
 /// Day One JSON export (Journal.json, or the folder holding it). Photos,
 /// videos and audio are copied into assets/ when the export's photos/,
 /// videos/ and audios/ folders sit beside the JSON.
-pub fn import_day_one(root: &Path, path: &Path, dry_run: bool) -> Result<ImportReport, String> {
+pub fn import_day_one(j: &Journal, path: &Path, dry_run: bool) -> Result<ImportReport, String> {
     let json_path = if path.is_dir() {
         let mut jsons: Vec<PathBuf> = fs::read_dir(path)
             .map_err(|e| e.to_string())?
@@ -1083,7 +1085,7 @@ pub fn import_day_one(root: &Path, path: &Path, dry_run: bool) -> Result<ImportR
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("Not a Day One export: {}", e))?;
     let entries = v.get("entries").and_then(|e| e.as_array()).ok_or("No entries in that file")?;
     let base = json_path.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let mut have = existing_key_counts(root)?;
+    let mut have = existing_key_counts(j)?;
     let mut rep = ImportReport::default();
     let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let s = |e: &serde_json::Value, k: &str| e.get(k).and_then(|x| x.as_str()).map(|x| x.to_string());
@@ -1144,7 +1146,7 @@ pub fn import_day_one(root: &Path, path: &Path, dry_run: bool) -> Result<ImportR
             if !src.is_file() {
                 continue;
             }
-            let rel = attach_rel(root, &src, &ts)?;
+            let rel = attach_rel(j, &src, &ts)?;
             rep.media += 1;
             let link = format!("![]({})", rel);
             let re = (!id.is_empty())
@@ -1159,7 +1161,7 @@ pub fn import_day_one(root: &Path, path: &Path, dry_run: bool) -> Result<ImportR
         groups.entry(journal_rel(&ts[..10])).or_default().push(make_raw(&ts, &title, starred, &body));
     }
     if !dry_run {
-        write_groups(root, groups)?;
+        write_groups(j, groups)?;
     }
     Ok(rep)
 }
@@ -1172,10 +1174,9 @@ static PARA_SPLIT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\n[ \t\r]*\n").unw
 /// Routing: split tags, else the day file (time-ordered insert); links are
 /// rebased. transfer.md is only rewritten when every destination wrote, and
 /// a retry skips entries already filed.
-pub fn import_transfer(root: &Path, now_ts: &str, split_tags: &[String]) -> Result<usize, String> {
+pub fn import_transfer(j: &Journal, now_ts: &str, split_tags: &[String]) -> Result<usize, String> {
     check_ts(now_ts)?;
-    let p = root.join("transfer.md");
-    let text = try_read(&p)?;
+    let text = j.try_read("transfer.md")?;
     if text.trim().is_empty() {
         return Ok(0);
     }
@@ -1201,9 +1202,9 @@ pub fn import_transfer(root: &Path, now_ts: &str, split_tags: &[String]) -> Resu
         n += 1;
     }
     for (file, raws) in &groups {
-        insert_entries(root, file, raws, true)?;
+        j.insert_entries(file, raws, true)?;
     }
-    write_atomic(&p, &render(&pre, &[]))?;
+    j.write("transfer.md", &render(&pre, &[]))?;
     Ok(n)
 }
 
@@ -1241,9 +1242,9 @@ fn one_letter_apart(a: &str, b: &str) -> bool {
     true
 }
 
-pub fn tag_review(root: &Path) -> Vec<TagGroup> {
+pub fn tag_review(j: &Journal) -> Vec<TagGroup> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for e in load_all(root) {
+    for e in j.load_all() {
         for t in e.tags {
             *counts.entry(t).or_default() += 1;
         }
@@ -1302,7 +1303,7 @@ pub fn replace_tags(s: &str, from: &[String], to: &str) -> String {
 
 /// Rename `from` tags to `to` across entry files only (inbox, day files,
 /// split journals), whole tokens only. Returns files changed.
-pub fn rename_tags(root: &Path, from: &[String], to: &str) -> Result<usize, String> {
+pub fn rename_tags(j: &Journal, from: &[String], to: &str) -> Result<usize, String> {
     let at = |t: &str| if t.starts_with('@') { t.to_string() } else { format!("@{}", t) };
     let from: Vec<String> = from.iter().map(|t| at(t.trim())).collect();
     let to = at(to.trim());
@@ -1311,15 +1312,15 @@ pub fn rename_tags(root: &Path, from: &[String], to: &str) -> Result<usize, Stri
     }
     // Read everything first so an unreadable file stops the rename before any write.
     let mut todo = Vec::new();
-    for (rel, _, _) in entry_files(root) {
-        let s = try_read(&root.join(&rel))?;
+    for (rel, _, _) in j.entry_files() {
+        let s = j.try_read(&rel)?;
         let n = replace_tags(&s, &from, &to);
         if n != s {
             todo.push((rel, n));
         }
     }
     for (rel, n) in &todo {
-        write_atomic(&root.join(rel), n)?;
+        j.write(rel, n)?;
     }
     Ok(todo.len())
 }
@@ -1335,13 +1336,10 @@ pub struct Sizes {
     pub other: u64,
 }
 
-pub fn sizes(root: &Path) -> Sizes {
+pub fn sizes(j: &Journal) -> Sizes {
     let mut s = Sizes::default();
-    let mut files = Vec::new();
-    walk_all(root, &mut files);
-    for f in files {
-        let rel = rel_of(root, &f);
-        let b = fs::symlink_metadata(&f).map(|m| m.len()).unwrap_or(0);
+    for rel in j.walk_files("") {
+        let b = j.len(&rel);
         if rel.starts_with("assets/") {
             match media_kind(&rel) {
                 "image" => s.image += b,
@@ -1380,8 +1378,8 @@ pub struct StatsExtra {
     pub sizes_by_location: SizesByLocation,
 }
 
-pub fn stats_extra(root: &Path) -> StatsExtra {
-    let all = load_all(root);
+pub fn stats_extra(j: &Journal) -> StatsExtra {
+    let all = j.load_all();
     let drafts = all.iter().filter(|e| e.source == "inbox").count();
     let tags: HashSet<&String> = all.iter().flat_map(|e| e.tags.iter()).collect();
     let filed: Vec<&Entry> = all.iter().filter(|e| e.source != "inbox").collect();
@@ -1396,8 +1394,7 @@ pub fn stats_extra(root: &Path) -> StatsExtra {
             longest = LongestDay { date: d.to_string(), words: w };
         }
     }
-    let splits = split_files(root);
-    let size = |p: &Path| fs::symlink_metadata(p).map(|m| m.len()).unwrap_or(0);
+    let splits = j.split_files();
     StatsExtra {
         drafts,
         tags: tags.len(),
@@ -1405,10 +1402,10 @@ pub fn stats_extra(root: &Path) -> StatsExtra {
         avg_words_per_entry: (avg * 10.0).round() / 10.0,
         longest_day: longest,
         sizes_by_location: SizesByLocation {
-            inbox: size(&root.join("inbox.md")),
-            journal: tree_bytes(&root.join("journal")),
-            splits: splits.iter().map(|n| size(&root.join(n))).sum(),
-            media: tree_bytes(&root.join("assets")),
+            inbox: j.len(LEGACY_INBOX) + j.tree_bytes(INBOX_DIR),
+            journal: j.tree_bytes(JOURNAL_DIR),
+            splits: splits.iter().map(|n| j.len(n)).sum(),
+            media: j.tree_bytes("assets"),
         },
     }
 }
@@ -1521,17 +1518,21 @@ mod tests {
         write_atomic(&d.join(rel), s).unwrap();
     }
 
+    fn jn(d: &Path) -> Journal {
+        Journal::open(d)
+    }
+
     // #1: whole-token, case-insensitive rename; @ optional on inputs.
     #[test]
     fn rename_tags_whole_tokens() {
         let d = tmp();
         w(d.path(), "inbox.md", "[2026-09-30 08:00:00] x @WORK\nhello @Work and @workshop me@work.com http://x/@work\n");
         w(d.path(), "transfer.md", "@work\n");
-        let n = rename_tags(d.path(), &["Work".into()], "@work").unwrap();
+        let n = rename_tags(&jn(d.path()), &["Work".into()], "@work").unwrap();
         assert_eq!(n, 1);
         assert_eq!(read(&d.path().join("inbox.md")), "[2026-09-30 08:00:00] x @work\nhello @work and @workshop me@work.com http://x/@work\n");
-        assert!(rename_tags(d.path(), &["@work".into()], "bad tag").is_err());
-        rename_tags(d.path(), &["work".into()], "job").unwrap();
+        assert!(rename_tags(&jn(d.path()), &["@work".into()], "bad tag").is_err());
+        rename_tags(&jn(d.path()), &["work".into()], "job").unwrap();
         assert_eq!(read(&d.path().join("transfer.md")), "@work\n", "transfer.md isn't an entry file");
         assert!(read(&d.path().join("inbox.md")).contains("me@work.com"));
     }
@@ -1555,12 +1556,12 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        let dry = import_day_one(d.path(), &exp, true).unwrap();
+        let dry = import_day_one(&jn(d.path()), &exp, true).unwrap();
         assert_eq!((dry.found, dry.written, dry.skipped, dry.media), (4, 2, 2, 0));
         assert!(!d.path().join("journal").exists());
-        let r1 = import_day_one(d.path(), &exp, false).unwrap();
+        let r1 = import_day_one(&jn(d.path()), &exp, false).unwrap();
         assert_eq!((r1.written, r1.skipped, r1.media), (2, 2, 2));
-        let r2 = import_day_one(d.path(), &exp, false).unwrap();
+        let r2 = import_day_one(&jn(d.path()), &exp, false).unwrap();
         assert_eq!((r2.written, r2.skipped), (0, 4));
         let day = read(&d.path().join("journal/2026/09/30.md"));
         let es = parse_entries(&day);
@@ -1574,7 +1575,7 @@ mod tests {
         assert!(es[0].body.contains("![](assets/2026/09/30-090000.m4a)"), "{}", day);
         assert!(es[0].body.contains("@day-trip"), "{}", day);
         assert!(!es[0].body.contains("@9lives") && !es[0].body.contains("dayone-moment"));
-        assert_eq!(list_assets(d.path()).unwrap().iter().filter(|a| !a.referenced).count(), 0);
+        assert_eq!(list_assets(&jn(d.path())).unwrap().iter().filter(|a| !a.referenced).count(), 0);
     }
 
     #[test]
@@ -1599,14 +1600,14 @@ mod tests {
         fs::write(src.join("jnl.md"), "[2026-09-28 07:00:00] verbatim *\nbody\n").unwrap();
         let root = d.path().join("root");
         fs::create_dir_all(&root).unwrap();
-        let r = import_markdown_folder(&root, &src, false).unwrap();
+        let r = import_markdown_folder(&jn(&root), &src, false).unwrap();
         assert_eq!((r.found, r.written), (4, 4));
         let e30 = parse_entries(&read(&root.join("journal/2026/09/30.md")));
         assert_eq!(e30.iter().map(|e| (e.ts.as_str(), e.suffix.as_str())).collect::<Vec<_>>(), vec![("2026-09-30 12:00:00", "2026-09-30 Holiday"), ("2026-09-30 12:00:01", "")]);
         let e29 = parse_entries(&read(&root.join("journal/2026/09/29.md")));
         assert_eq!(e29[0].suffix, "2026-13-45 then 2026-09-29 note");
         assert_eq!(read(&root.join("journal/2026/09/28.md")), "[2026-09-28 07:00:00] verbatim *\nbody\n");
-        let r2 = import_markdown_folder(&root, &src, false).unwrap();
+        let r2 = import_markdown_folder(&jn(&root), &src, false).unwrap();
         assert_eq!((r2.written, r2.skipped), (0, 4));
     }
 
@@ -1614,16 +1615,16 @@ mod tests {
     fn transfer_routes_split_tags_and_keeps_preamble() {
         let d = tmp();
         w(d.path(), "transfer.md", "Keep me\n\n[2026-09-30 08:00:00] Standup @work\nnotes\n\n[2026-09-30 08:30:00]\n\n[2026-09-30 09:00:00] Home\n![](./assets/x.jpg)\n");
-        assert_eq!(import_transfer(d.path(), "2026-09-30 10:00:00", &["work".into()]).unwrap(), 2);
+        assert_eq!(import_transfer(&jn(d.path()), "2026-09-30 10:00:00", &["work".into()]).unwrap(), 2);
         assert!(d.path().join("work.md").exists());
         let day = read(&d.path().join("journal/2026/09/30.md"));
         assert_eq!(parse_entries(&day).len(), 1);
         assert!(day.contains("![](assets/x.jpg)"));
         assert_eq!(read(&d.path().join("transfer.md")), "Keep me\n");
-        assert!(import_transfer(d.path(), "nope", &[]).is_err());
+        assert!(import_transfer(&jn(d.path()), "nope", &[]).is_err());
         // Plain paragraphs: one entry each, a second apart.
         w(d.path(), "transfer.md", "one\n\ntwo\n  \nthree\n");
-        assert_eq!(import_transfer(d.path(), "2026-10-01 10:00:59", &[]).unwrap(), 3);
+        assert_eq!(import_transfer(&jn(d.path()), "2026-10-01 10:00:59", &[]).unwrap(), 3);
         let ts: Vec<String> = parse_entries(&read(&d.path().join("journal/2026/10/01.md"))).into_iter().map(|e| e.ts).collect();
         assert_eq!(ts, vec!["2026-10-01 10:00:59", "2026-10-01 10:01:00", "2026-10-01 10:01:01"]);
         assert_eq!(read(&d.path().join("transfer.md")), "");
@@ -1645,14 +1646,14 @@ mod tests {
         w(d.path(), "journal/2026/09/30.md", "[2026-09-30 08:00:00]\n![](assets/2026/09/d.jpg) ![](../../../assets/2026/09/e.jpg)\n");
         // Mentioned only as text.
         w(d.path(), "work.md", "[2026-09-30 08:00:00]\nsee assets/2026/09/f.jpg\n");
-        let list = list_assets(d.path()).unwrap();
+        let list = list_assets(&jn(d.path())).unwrap();
         let unref: Vec<&str> = list.iter().filter(|a| !a.referenced).map(|a| a.rel.as_str()).collect();
         assert_eq!(unref, vec!["assets/2026/09/g.jpg"]);
         let dd = list.iter().find(|a| a.rel.ends_with("d.jpg")).unwrap();
         assert_eq!(dd.owners, vec!["journal/2026/09/30.md"]);
-        assert_eq!(delete_orphans(d.path()).unwrap(), 1);
+        assert_eq!(delete_orphans(&jn(d.path())).unwrap(), 1);
         fs::write(d.path().join("other.md"), b"[2026-09-30 08:00:00] caf\xe9\n").unwrap();
-        assert!(delete_orphans(d.path()).is_err());
+        assert!(delete_orphans(&jn(d.path())).is_err());
         assert!(d.path().join("assets/2026/09/a.jpg").exists());
     }
 
@@ -1661,18 +1662,18 @@ mod tests {
         let d = tmp();
         let src = d.path().join("pic.jpg");
         fs::write(&src, b"x").unwrap();
-        assert!(attach(d.path(), &src, "2026–09–30 08:00:00", "inbox.md").is_err());
-        assert!(attach(d.path(), &src, "2026-09", "inbox.md").is_err());
-        let link = attach(d.path(), &src, "2026-09-30 08:00:00", "journal/2026/09/30.md").unwrap();
+        assert!(attach(&jn(d.path()), &src, "2026–09–30 08:00:00", "inbox.md").is_err());
+        assert!(attach(&jn(d.path()), &src, "2026-09", "inbox.md").is_err());
+        let link = attach(&jn(d.path()), &src, "2026-09-30 08:00:00", "journal/2026/09/30.md").unwrap();
         assert_eq!(link, "![](assets/2026/09/30-080000.jpg)");
-        let link = attach(d.path(), &src, "2026-09-30 08:00:00", "inbox.md").unwrap();
+        let link = attach(&jn(d.path()), &src, "2026-09-30 08:00:00", "inbox.md").unwrap();
         assert_eq!(link, "![](assets/2026/09/30-080000-2.jpg)");
         let doc = d.path().join("notes.pdf");
         fs::write(&doc, b"x").unwrap();
-        assert_eq!(attach(d.path(), &doc, "2026-09-30 08:00:00", "x.md").unwrap(), "[30-080000.pdf](assets/2026/09/30-080000.pdf)");
-        assert!(delete_asset(d.path(), "../pic.jpg").is_err());
-        assert!(delete_asset(d.path(), "inbox.md").is_err());
-        delete_asset(d.path(), "assets/2026/09/30-080000.pdf").unwrap();
+        assert_eq!(attach(&jn(d.path()), &doc, "2026-09-30 08:00:00", "x.md").unwrap(), "[30-080000.pdf](assets/2026/09/30-080000.pdf)");
+        assert!(delete_asset(&jn(d.path()), "../pic.jpg").is_err());
+        assert!(delete_asset(&jn(d.path()), "inbox.md").is_err());
+        delete_asset(&jn(d.path()), "assets/2026/09/30-080000.pdf").unwrap();
         assert!(!d.path().join("assets/2026/09/30-080000.pdf").exists());
     }
 
@@ -1682,15 +1683,15 @@ mod tests {
         let root = d.path().join("journal-root");
         fs::create_dir_all(&root).unwrap();
         w(&root, "inbox.md", "[2026-09-30 08:00:00] x\n");
-        assert!(backup(&root, &root.join("backups")).is_err());
-        assert!(backup(&root, d.path()).is_err(), "journal inside backup dir");
+        assert!(backup(&jn(&root), &root.join("backups")).is_err());
+        assert!(backup(&jn(&root), d.path()).is_err(), "journal inside backup dir");
         let dest = d.path().join("other/backups");
         for i in 0..3 {
             fs::create_dir_all(dest.join(format!("Quire backup 2026-01-0{}-000000", i + 1))).unwrap();
         }
         fs::create_dir_all(dest.join("Nook-Backup-2026-01-02-000000")).unwrap();
         fs::create_dir_all(dest.join("Quire before-restore 2026-01-01-000000")).unwrap();
-        backup(&root, &dest).unwrap();
+        backup(&jn(&root), &dest).unwrap();
         assert_eq!(prune_backups(&dest, 2).unwrap(), 2);
         let left = list_backups(&dest);
         assert_eq!(left.len(), 3, "{:?}", left);
@@ -1702,10 +1703,10 @@ mod tests {
         let good = &left[0];
         w(&root, "inbox.md", "[2026-09-30 09:00:00] changed\n");
         w(&root, "stray.md", "[2026-09-30 09:00:00] stray\n");
-        assert!(restore(&root, &dest, "../x").is_err());
-        assert!(restore(&root, &dest, "Nook-Backup-2026-01-02-000000").is_err(), "empty backup refused");
+        assert!(restore(&jn(&root), &dest, "../x").is_err());
+        assert!(restore(&jn(&root), &dest, "Nook-Backup-2026-01-02-000000").is_err(), "empty backup refused");
         let n_before = list_backups(&dest).len();
-        let safety = restore(&root, &dest, good).unwrap();
+        let safety = restore(&jn(&root), &dest, good).unwrap();
         assert_eq!(read(&root.join("inbox.md")), "[2026-09-30 08:00:00] x\n");
         assert!(!root.join("stray.md").exists());
         assert_eq!(list_backups(&dest).len(), n_before + 1);
@@ -1734,7 +1735,7 @@ mod tests {
     fn tag_review_grouping() {
         let d = tmp();
         w(d.path(), "inbox.md", "[2026-09-30 08:00:00]\n@home @hope @cats @cars @Running @running @readng @reading @reading @reading @reading\n");
-        let g = tag_review(d.path());
+        let g = tag_review(&jn(d.path()));
         let names: Vec<Vec<String>> = g.iter().map(|g| g.tags.iter().map(|t| t.0.clone()).collect()).collect();
         assert_eq!(names.len(), 2, "{:?}", names);
         assert!(names.iter().any(|g| g.contains(&"@Running".into()) && g.contains(&"@running".into())));
@@ -1757,14 +1758,16 @@ mod tests {
         w(d.path(), "journal/2026/09/29.md", "[2026-09-29 08:00:00] fine\n");
         fs::write(d.path().join("journal/2026/09/28.md"), b"[2026-09-28 08:00:00] caf\xe9\n").unwrap();
         w(d.path(), "inbox.md", "[2026-09-30 09:00:00] i2\n\n[2026-09-30 08:00:00] i1\n\n[2026-09-30 08:00:00] i1\n");
-        let r = cleanup(d.path(), &["work".into()]).unwrap();
-        assert_eq!((r.formatted, r.reordered, r.deduped, r.extracted, r.errors.len()), (1, 2, 2, 1, 1), "{:?}", r);
+        w(d.path(), "inbox/2026/10/01.md", "[2026-10-01 09:00:00] d2\n\n[2026-10-01 08:00:00] d1\n");
+        let r = cleanup(&jn(d.path()), &["work".into()]).unwrap();
+        assert_eq!((r.formatted, r.reordered, r.deduped, r.extracted, r.errors.len()), (1, 3, 2, 1, 1), "{:?}", r);
+        assert_eq!(read(&d.path().join("inbox/2026/10/01.md")), "[2026-10-01 08:00:00] d1\n\n[2026-10-01 09:00:00] d2\n");
         assert_eq!(read(&d.path().join("journal/2026/09/30.md")), "[2026-09-30 08:00:00] a\ny\n\n[2026-09-30 10:00:00] b\u{2026}\nx\n");
         assert_eq!(read(&d.path().join("work.md")), "[2026-09-30 09:00:00] w @work\n![](assets/p.jpg)\n");
         assert_eq!(read(&d.path().join("inbox.md")), "[2026-09-30 08:00:00] i1\n\n[2026-09-30 09:00:00] i2\n");
-        let r2 = cleanup(d.path(), &["work".into()]).unwrap();
+        let r2 = cleanup(&jn(d.path()), &["work".into()]).unwrap();
         assert_eq!((r2.formatted, r2.reordered, r2.deduped, r2.extracted), (0, 0, 0, 0));
-        assert!(sort_inbox(d.path()).unwrap() == false);
+        assert!(sort_inbox(&jn(d.path())).unwrap() == false);
     }
 
     #[test]
@@ -1776,9 +1779,12 @@ mod tests {
             "inbox.md",
             "pre\n\n[2026-09-30 13:00:00] late\n\n[2026-09-30 08:00:00]\n\n[2026-09-30 09:00:00] early   *\n![](./assets/x.jpg)\n\n[2026-09-30 10:00:00] job @work\n",
         );
-        let r = file_all(d.path(), &["work".into()]).unwrap();
-        assert_eq!((r.filed, r.skipped), (3, 1));
+        w(d.path(), "inbox/2026/09/29.md", "[2026-09-29 08:00:00] day draft\n");
+        let r = file_all(&jn(d.path()), &["work".into()]).unwrap();
+        assert_eq!((r.filed, r.skipped), (4, 1));
         assert_eq!(read(&d.path().join("inbox.md")), "pre\n\n[2026-09-30 08:00:00]\n");
+        assert!(!d.path().join("inbox/2026/09/29.md").exists(), "emptied day file deleted");
+        assert_eq!(read(&d.path().join("journal/2026/09/29.md")), "[2026-09-29 08:00:00] day draft\n");
         assert_eq!(
             read(&d.path().join("journal/2026/09/30.md")),
             "[2026-09-30 09:00:00] early *\n![](assets/x.jpg)\n\n[2026-09-30 12:00:00] noon\n\n[2026-09-30 13:00:00] late\n"
@@ -1794,7 +1800,7 @@ mod tests {
         w(d.path(), "work.md", "[2026-09-30 07:00:00] w1\n");
         w(d.path(), "readme.md", "[2026-09-30 07:00:00] r1\n");
         w(d.path(), "journal/2026/09/30.md", "[2026-09-30 08:00:00] here\n");
-        let r = merge_ex_split(d.path(), &["Work".into()]).unwrap();
+        let r = merge_ex_split(&jn(d.path()), &["Work".into()]).unwrap();
         assert_eq!((r.entries, r.journals), (3, 2), "{:?}", r);
         assert!(!d.path().join("old.md").exists());
         assert_eq!(read(&d.path().join("notes.md")), "My notes\n");
@@ -1812,12 +1818,12 @@ mod tests {
         w(d.path(), "journal/2026/09/30.md", "[2026-09-30 10:00:00] a\n\n[2026-09-30 12:00:00] c\n");
         let c = "journal/2026/09/30.sync-conflict-20260930-120000-ABC.md";
         w(d.path(), c, "[2026-09-30 10:00:00] a\n\n[2026-09-30 11:00:00] b\n");
-        assert_eq!(conflict_files(d.path()), vec![c.to_string()]);
-        assert!(merge_conflict(d.path(), "journal/2026/09/30.md").is_err());
-        assert!(merge_conflict(d.path(), "../x.sync-conflict-1.md").is_err());
-        assert_eq!(merge_conflict(d.path(), c).unwrap(), 1);
+        assert_eq!(jn(d.path()).conflict_files(), vec![c.to_string()]);
+        assert!(merge_conflict(&jn(d.path()), "journal/2026/09/30.md").is_err());
+        assert!(merge_conflict(&jn(d.path()), "../x.sync-conflict-1.md").is_err());
+        assert_eq!(merge_conflict(&jn(d.path()), c).unwrap(), 1);
         assert_eq!(read(&d.path().join("journal/2026/09/30.md")), "[2026-09-30 10:00:00] a\n\n[2026-09-30 11:00:00] b\n\n[2026-09-30 12:00:00] c\n");
-        assert!(conflict_files(d.path()).is_empty());
+        assert!(jn(d.path()).conflict_files().is_empty());
     }
 
     #[test]
@@ -1853,7 +1859,7 @@ mod tests {
         w(d.path(), "journal/2026/09/30.md", "[2026-09-30 08:00:00]\na b c d\n\n[2026-09-30 09:00:00]\ne f @y\n");
         w(d.path(), "journal/2026/09/29.md", "[2026-09-29 08:00:00]\na\n");
         w(d.path(), "work.md", "[2026-09-29 08:00:00]\na b\n");
-        let s = stats_extra(d.path());
+        let s = stats_extra(&jn(d.path()));
         assert_eq!((s.drafts, s.tags, s.splits), (1, 2, 1));
         assert_eq!(s.longest_day.date, "2026-09-30");
         assert_eq!(s.longest_day.words, 7);

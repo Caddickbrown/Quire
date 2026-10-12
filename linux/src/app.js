@@ -183,6 +183,8 @@ async function load(reselect) {
   // The composer's reference must follow the reload too, or its index/raw go stale.
   if (S.draft?.ref) { const r = S.draft.ref; S.draft.ref = S.entries.find(e => sameEntry(e, r)) || S.entries.find(e => e.file === r.file && e.ts === r.ts) || r; }
   S.assets = null;
+  if (snap.migration) toast(`inbox.md folded into inbox/: ${plural(snap.migration.moved, 'draft')} moved${snap.migration.skipped ? `, ${snap.migration.skipped} already there` : ''}. The original is in ${snap.migration.backup}`);
+  if (snap.migration_error) fail(snap.migration_error);
   applyUi();
 }
 const saveUi = () => invoke('save_ui', { ui: S.ui }).catch(fail);
@@ -679,7 +681,7 @@ function renderWrite() {
       <span class="spacer"></span>
       <span id="goal">${S.ui.goalOn ? goalHtml() : ''}</span>
       ${timerHtml()}
-      <span class="mono" id="savefile">${d.ref ? esc(d.ref.file) : 'saves to inbox.md'}</span>
+      <span class="mono" id="savefile">${d.ref ? esc(d.ref.file) : 'saves to the inbox'}</span>
     </div>
   </section>`;
 }
@@ -820,7 +822,7 @@ function scheduleSave() {
   }, 700);
 }
 
-/** Drafts autosave to inbox.md. Filed entries save on Ctrl+S, or when you leave them. */
+/** Drafts autosave to their day's file under inbox/. Filed entries save on Ctrl+S, or when you leave them. */
 async function saveDraftNow() {
   const d = S.draft;
   if (!isDraftRef(d) || guardCount(d)) return;
@@ -934,7 +936,7 @@ async function fileCurrent() {
     target = S.draft.ref;
   } else target = S.sel;
   if (!target || target.source !== 'inbox') return;
-  const dest = await invoke('file_draft', { index: target.index, expectedRaw: target.raw });
+  const dest = await invoke('file_draft', { file: target.file, index: target.index, expectedRaw: target.raw });
   S.mode = 'read'; S.draft = null; S.focus = false;
   await load();
   S.sel = S.entries.find(e => e.file === dest && e.ts === target.ts) || null;
@@ -1098,7 +1100,7 @@ async function menuAction(a) {
   if (a === 'attach') {
     const p = await invoke('plugin:dialog|open', { options: { multiple: false, title: 'Attach a file' } });
     if (!p) return;
-    const link = await invoke('attach_file', { src: p, ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox.md' });
+    const link = await invoke('attach_file', { src: p, ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' });
     if (S.draft === d) { insertAtCaret(link); toast('Attached'); } else { await navigator.clipboard.writeText(link).catch(() => {}); toast('Attached — the link is on the clipboard'); }
     return;
   }
@@ -1248,7 +1250,7 @@ async function attachPaths(paths) {
   if (S.mode !== 'write' || !S.draft) { toast('Open a draft first, then drop files onto it'); return; }
   const d = S.draft;
   for (const p of paths) {
-    const link = await invoke('attach_file', { src: p, ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox.md' });
+    const link = await invoke('attach_file', { src: p, ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' });
     if (S.draft !== d) { toast('Attached, but the draft was closed first'); return; }
     insertAtCaret(link);
   }
@@ -1313,7 +1315,7 @@ document.addEventListener('keydown', ev => {
   setTimeout(async () => {
     if (pasteSeen || !d) return;
     try {
-      const link = await invoke('paste_image', { ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox.md' });
+      const link = await invoke('paste_image', { ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' });
       if (!link) return;
       if (S.draft === d && S.mode === 'write') { insertAtCaret(link); toast('Image attached'); }
       else { navigator.clipboard?.writeText(link).catch(() => {}); toast('Image saved; link copied'); }
@@ -1332,7 +1334,7 @@ document.addEventListener('paste', async ev => {
     ev.preventDefault();
     const d = S.draft; if (!d) return;
     try {
-      const link = await invoke('paste_image', { ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox.md' });
+      const link = await invoke('paste_image', { ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' });
       if (!link) return;
       if (S.draft === d && S.mode === 'write') { insertAtCaret(link); toast('Image attached'); }
       else { navigator.clipboard?.writeText(link).catch(() => {}); toast('Image saved; link copied'); }
@@ -1346,7 +1348,7 @@ document.addEventListener('paste', async ev => {
   const ext = MIME_EXT[blob.type] || (blob.type.split('/')[1] || '').replace(/[^a-z0-9]/gi, '') || 'png';
   try {
     const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
-    const link = await invoke('attach_bytes', { name: `pasted.${ext}`, bytesB64: b64, ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox.md' });
+    const link = await invoke('attach_bytes', { name: `pasted.${ext}`, bytesB64: b64, ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' });
     if (S.draft === d && S.mode === 'write') { insertAtCaret(link); toast('Image attached'); }
     else { await navigator.clipboard.writeText(link).catch(() => {}); toast('Image attached — the link is on the clipboard'); }
   } catch (e) { fail(e); }
@@ -1494,7 +1496,7 @@ function renderSettings() {
         <div class="srow"><div class="lbl"><span>Split tags</span><span class="note">Filing a draft with one of these @tags writes it to <span class="mono">&lt;tag&gt;.md</span> instead of the day, as jnl’s JNL_SPLIT_TAGS does. ${splitNote}</span></div><input id="splitin" class="picker" style="width:220px;padding:0 10px" value="${esc(S.splitTags.join(' '))}" placeholder="work private"><button class="btn" data-action="set-split">Save</button></div>
       </section>
       <section id="s-templates"><h2>Templates</h2>
-        <div class="note" style="margin-bottom:8px">Markdown files in <span class="mono">.nook/templates/</span>, inserted from the composer’s ⋯ menu. <span class="mono">{{date}}</span>, <span class="mono">{{time}}</span> and <span class="mono">{{weekday}}</span> fill in on insert.</div>
+        <div class="note" style="margin-bottom:8px">Markdown files in <span class="mono">.quire/templates/</span>, inserted from the composer’s ⋯ menu. <span class="mono">{{date}}</span>, <span class="mono">{{time}}</span> and <span class="mono">{{weekday}}</span> fill in on insert.</div>
         <div class="tpl"><div class="tpl-list">${S.templates.map(t => `<button class="row ${S.tplEdit === t.name ? 'sel' : ''}" data-action="tpl-edit" data-name="${esc(t.name)}"><span class="t">${esc(t.name)}</span><span class="ex">${esc(firstLine(t.body))}</span></button>`).join('') || '<div class="empty-note">No templates yet.</div>'}<button class="btn ghost" data-action="tpl-new">+ New template</button></div>
         ${tpl ? `<div class="tpl-edit"><div style="display:flex;gap:10px;align-items:center"><input id="tpl-name" class="picker" style="flex-grow:1;padding:0 10px" value="${esc(tpl.name)}"><button class="btn ghost danger" data-action="tpl-delete">Delete</button></div><textarea id="tpl-body" rows="12">${esc(tpl.body)}</textarea><div style="display:flex;gap:14px"><button class="btn primary" data-action="tpl-save">Save template</button><button class="btn" data-action="tpl-close">Close</button></div></div>` : ''}</div>
       </section>
@@ -1570,7 +1572,7 @@ function renderSettings() {
         <span><kbd>Ctrl</kbd> <kbd>[</kbd></span><span>Back: like Esc while writing · otherwise back to the list</span>
       </div></section>
       <section id="s-about"><h2>About</h2>
-        <p style="font-size:14px;line-height:1.6;color:var(--muted);max-width:640px">Quire 0.6 reads and writes the jnl format: <span class="mono">inbox.md</span>, <span class="mono">journal/YYYY/MM/DD.md</span> and split journals, with atomic writes like jnl. Quire’s own extras live in <span class="mono">.nook/</span> (templates, saved searches) and <span class="mono">assets/</span> (media); jnl ignores both. Not here: voice recording and transcription, iCloud sync, widgets, the phone and desk mode. Themes beyond Nook’s and Quire’s own need Wander’s source.</p>
+        <p style="font-size:14px;line-height:1.6;color:var(--muted);max-width:640px">Quire 0.7 reads and writes the jnl format: <span class="mono">journal/YYYY/MM/DD.md</span>, split journals and, for drafts, <span class="mono">inbox/YYYY/MM/DD.md</span> (an <span class="mono">inbox.md</span> left by jnl or Nook is folded in on open, the original kept under <span class="mono">.quire/migration/</span>), with atomic writes like jnl. Quire’s own extras live in <span class="mono">.quire/</span> (templates, saved searches) and <span class="mono">assets/</span> (media); jnl ignores both. Not here: voice recording and transcription, iCloud sync, widgets, the phone and desk mode. Themes beyond Nook’s and Quire’s own need Wander’s source.</p>
         <p style="font-size:13px;color:var(--muted)"><button class="btn ghost" data-action="welcome">Show the welcome note again</button></p>
       </section>
     </main></div>`;

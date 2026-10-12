@@ -11,6 +11,8 @@
 pub mod extras;
 pub mod journal;
 pub mod media;
+pub mod vault;
 
 pub use extras::*;
 pub use journal::*;
+pub use vault::{FsVault, Item, Vault};

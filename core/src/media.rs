@@ -8,7 +8,7 @@
 //!   (`assets/<UUID>.jpg`, as written by the Nook iOS app).
 //! - Content files: `root/inbox.md`, `root/journal/**/*.md`, and any other
 //!   `root/*.md` except export.md, nook-export.md, transfer.md, readme.md.
-//! - Ledger: `root/.nook/datasaver-<device_id>.json` =
+//! - Ledger: `root/.quire/datasaver-<device_id>.json` (read from `.nook/` too) =
 //!   `{"savedBytes": i64, "assets": [String]}`; each device writes only its own.
 
 use std::collections::{HashMap, HashSet};
@@ -564,8 +564,20 @@ pub fn on_attach(src_bytes: &[u8], ext: &str, data_saver: bool) -> (Vec<u8>, Str
 // Ledger
 // ---------------------------------------------------------------------------
 
+/// The sidecar the ledger is written to: `.quire/`, taking over from
+/// `.nook/` on the first write (the same rule as `Journal::sidecar_mut`).
 fn ledger_dir(root: &Path) -> PathBuf {
-    root.join(".nook")
+    let (q, n) = (root.join(crate::journal::SIDECAR), root.join(crate::journal::LEGACY_SIDECAR));
+    if !q.is_dir() && n.is_dir() {
+        let _ = fs::rename(&n, &q);
+    }
+    q
+}
+
+/// Every folder ledgers may be read from: both sidecars, since a Nook device
+/// may still be writing `.nook/` while Quire writes `.quire/`.
+fn ledger_dirs(root: &Path) -> Vec<PathBuf> {
+    [crate::journal::SIDECAR, crate::journal::LEGACY_SIDECAR].iter().map(|d| root.join(d)).filter(|p| p.is_dir()).collect()
 }
 
 fn safe_device_id(id: &str) -> String {
@@ -578,8 +590,10 @@ pub fn ledger_path(root: &Path, device_id: &str) -> PathBuf {
 
 /// This device's ledger (empty if missing or unreadable).
 pub fn read_ledger(root: &Path, device_id: &str) -> Ledger {
-    fs::read(ledger_path(root, device_id))
-        .ok()
+    let name = format!("datasaver-{}.json", safe_device_id(device_id));
+    ledger_dirs(root)
+        .iter()
+        .find_map(|d| fs::read(d.join(&name)).ok())
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
 }
@@ -592,15 +606,20 @@ pub fn write_ledger(root: &Path, device_id: &str, ledger: &Ledger) -> Result<(),
 }
 
 fn all_ledgers(root: &Path) -> Vec<Ledger> {
-    let Ok(rd) = fs::read_dir(ledger_dir(root)) else { return Vec::new() };
-    rd.flatten()
-        .filter(|e| {
-            let n = e.file_name().to_string_lossy().into_owned();
-            n.starts_with("datasaver-") && n.ends_with(".json")
-        })
-        .filter_map(|e| fs::read(e.path()).ok())
-        .filter_map(|b| serde_json::from_slice::<Ledger>(&b).ok())
-        .collect()
+    let mut out = Vec::new();
+    for dir in ledger_dirs(root) {
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        out.extend(
+            rd.flatten()
+                .filter(|e| {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    n.starts_with("datasaver-") && n.ends_with(".json")
+                })
+                .filter_map(|e| fs::read(e.path()).ok())
+                .filter_map(|b| serde_json::from_slice::<Ledger>(&b).ok()),
+        );
+    }
+    out
 }
 
 /// Sum of `savedBytes` across every device's ledger.
@@ -666,7 +685,7 @@ fn walk_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// inbox.md, journal/**/*.md and other root *.md (minus export/transfer/readme).
+/// inbox.md, inbox/**/*.md, journal/**/*.md and other root *.md (minus export/transfer/readme).
 pub fn content_files(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Ok(rd) = fs::read_dir(root) {
@@ -680,6 +699,7 @@ pub fn content_files(root: &Path) -> Vec<PathBuf> {
             }
         }
     }
+    out.extend(walk_files(&root.join("inbox")).into_iter().filter(|p| ext_of(p) == "md"));
     out.extend(walk_files(&root.join("journal")).into_iter().filter(|p| ext_of(p) == "md"));
     out.sort();
     out
@@ -1070,7 +1090,8 @@ mod tests {
         assert_eq!(data_saved_total(root), 0);
         let a = Ledger { saved_bytes: 1000, assets: vec!["X".into(), "2026/09/a".into()] };
         write_ledger(root, "mac-1", &a).unwrap();
-        // Nook-written file (camelCase, compact)
+        // Nook-written file (camelCase, compact), in Nook's own sidecar
+        fs::create_dir_all(root.join(".nook")).unwrap();
         fs::write(root.join(".nook/datasaver-iphone.json"), r#"{"savedBytes":234,"assets":["Y"]}"#).unwrap();
         fs::write(root.join(".nook/other.json"), r#"{"savedBytes":999999}"#).unwrap();
         assert_eq!(read_ledger(root, "mac-1"), a);
@@ -1081,7 +1102,8 @@ mod tests {
         let raw = fs::read_to_string(ledger_path(root, "mac-1")).unwrap();
         assert!(raw.contains("\"savedBytes\"") && raw.contains("\"assets\""));
         // no stray temp files
-        assert_eq!(fs::read_dir(root.join(".nook")).unwrap().count(), 3);
+        assert_eq!(fs::read_dir(root.join(".quire")).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(root.join(".nook")).unwrap().count(), 2);
     }
 
     #[test]

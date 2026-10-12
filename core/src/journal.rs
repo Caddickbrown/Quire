@@ -1,20 +1,32 @@
-//! The jnl on-disk format, byte-compatible with jnl's main.go:
+//! The jnl on-disk format, byte-compatible with jnl's main.go, plus the
+//! `Journal` handle every shell works through.
 //!
-//!   <dir>/inbox.md              undated drafts
+//!   <dir>/inbox/YYYY/MM/DD.md   drafts, one file per day (Quire 0.7+)
+//!   <dir>/inbox.md              drafts, the single file jnl and Nook write;
+//!                               read when present and folded into inbox/ by
+//!                               `migrate_legacy_inbox`
 //!   <dir>/journal/YYYY/MM/DD.md filed entries, one file per day
 //!   <dir>/<tag>.md              split journals (JNL_SPLIT_TAGS)
+//!   <dir>/.quire/               Quire's sidecars (templates, searches,
+//!                               Data Saver ledgers); `.nook/` is read when
+//!                               `.quire/` does not exist yet and renamed on
+//!                               the first write
 //!
 //! Each entry is `[YYYY-MM-DD HH:MM:SS] optional title` followed by its body.
 //! Entries are separated by one blank line. A trailing ` *` on the title stars
 //! it. Anything before the first header (a "preamble") is preserved on rewrite.
+//!
+//! Pure functions (parse, render, links) are free functions. Anything that
+//! reads or writes goes through `Journal`, whose storage is a `Vault`.
 
+use crate::vault::{write_atomic_bytes, FsVault, Item, Vault};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 // ASCII digits only: `\d` matches Unicode digits, which would then make the
 // byte slicing below panic.
@@ -28,6 +40,16 @@ pub static EMBEDDED_HEADER_RE: Lazy<Regex> = Lazy::new(|| {
 });
 pub static TAG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"@[a-zA-Z][a-zA-Z0-9_-]*").unwrap());
 pub static TS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$").unwrap());
+
+/// The single-file inbox jnl and Nook write.
+pub const LEGACY_INBOX: &str = "inbox.md";
+/// The folder of day files Quire keeps drafts in.
+pub const INBOX_DIR: &str = "inbox";
+/// Where preamble text from a migrated `inbox.md` is kept.
+pub const INBOX_PREAMBLE: &str = "inbox/preamble.md";
+pub const JOURNAL_DIR: &str = "journal";
+pub const SIDECAR: &str = ".quire";
+pub const LEGACY_SIDECAR: &str = ".nook";
 
 /// Validate a `YYYY-MM-DD HH:MM:SS` timestamp supplied by the front end before
 /// it is sliced or written into a header.
@@ -84,8 +106,8 @@ pub fn conflict_main_name(rel: &str) -> Option<String> {
 }
 
 /// Validate a root-relative path that came from the front end: no absolute
-/// paths, no `..`, no backslashes, not empty. Returns `root.join(rel)`.
-pub fn safe_rel(root: &Path, rel: &str) -> Result<PathBuf, String> {
+/// paths, no `..`, no backslashes, not empty. Returns the normalised rel.
+pub fn check_rel(rel: &str) -> Result<String, String> {
     let bad = || format!("Refusing unsafe path {:?}", rel);
     if rel.trim().is_empty() || rel.contains('\\') || rel.contains('\0') {
         return Err(bad());
@@ -94,24 +116,42 @@ pub fn safe_rel(root: &Path, rel: &str) -> Result<PathBuf, String> {
     if p.is_absolute() {
         return Err(bad());
     }
+    let mut parts = Vec::new();
     for c in p.components() {
         match c {
-            Component::Normal(_) | Component::CurDir => {}
+            Component::Normal(s) => parts.push(s.to_string_lossy().to_string()),
+            Component::CurDir => {}
             _ => return Err(bad()),
         }
     }
-    Ok(root.join(p))
+    if parts.is_empty() {
+        return Err(bad());
+    }
+    Ok(parts.join("/"))
 }
 
-/// safe_rel plus: must be a `.md` file outside the `.nook/` and `assets/`
-/// sidecars (an entry file: inbox, a day file or a split journal).
-pub fn safe_entry_rel(root: &Path, rel: &str) -> Result<PathBuf, String> {
-    let p = safe_rel(root, rel)?;
-    let r = rel.trim_start_matches("./");
-    if !r.to_lowercase().ends_with(".md") || r.starts_with(".nook/") || r.starts_with("assets/") {
+/// check_rel, returning `root.join(rel)`.
+pub fn safe_rel(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    Ok(root.join(check_rel(rel)?))
+}
+
+/// check_rel plus: must be a `.md` file outside the sidecars and `assets/`
+/// (an entry file: an inbox file, a day file or a split journal).
+pub fn check_entry_rel(rel: &str) -> Result<String, String> {
+    let r = check_rel(rel)?;
+    if !r.to_lowercase().ends_with(".md")
+        || r.starts_with(&format!("{}/", SIDECAR))
+        || r.starts_with(&format!("{}/", LEGACY_SIDECAR))
+        || r.starts_with("assets/")
+    {
         return Err(format!("{:?} is not an entry file", rel));
     }
-    Ok(p)
+    Ok(r)
+}
+
+/// check_entry_rel, returning `root.join(rel)`.
+pub fn safe_entry_rel(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    Ok(root.join(check_entry_rel(rel)?))
 }
 
 #[derive(Debug, Clone)]
@@ -125,7 +165,8 @@ pub struct RawEntry {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Entry {
-    /// Path relative to the journal folder, e.g. `inbox.md`, `journal/2026/09/30.md`.
+    /// Path relative to the journal folder, e.g. `inbox/2026/09/30.md`,
+    /// `journal/2026/09/30.md`, `work.md` (or the legacy `inbox.md`).
     pub file: String,
     /// Position within that file, oldest first as written.
     pub index: usize,
@@ -142,6 +183,16 @@ pub struct Entry {
     pub raw: String,
     pub tags: Vec<String>,
     pub words: usize,
+}
+
+/// What a write produced: the file an entry now lives in, its index there,
+/// and the raw text as written (what the next edit must present as
+/// `expected_raw`).
+#[derive(Debug, Clone, Serialize)]
+pub struct Written {
+    pub file: String,
+    pub index: usize,
+    pub raw: String,
 }
 
 pub fn parse_entries(content: &str) -> Vec<RawEntry> {
@@ -183,6 +234,22 @@ pub fn parse_entries(content: &str) -> Vec<RawEntry> {
     out
 }
 
+/// Drop a leading byte-order mark and turn CRLF into LF, as the Swift and
+/// Kotlin ports do before parsing. A CRLF file becomes LF the first time it
+/// is written back.
+pub fn normalised(content: &str) -> String {
+    let s = content.strip_prefix('\u{FEFF}').unwrap_or(content);
+    if s.contains('\r') {
+        s.replace("\r\n", "\n")
+    } else {
+        s.to_string()
+    }
+}
+
+pub fn is_header_line(line: &str) -> bool {
+    HEADER_RE.is_match(line)
+}
+
 pub fn leading_preamble(content: &str) -> String {
     let mut pre = Vec::new();
     for line in content.split('\n') {
@@ -197,6 +264,13 @@ pub fn leading_preamble(content: &str) -> String {
     } else {
         text
     }
+}
+
+/// Stable, oldest first (the fixed-width ts sorts lexicographically).
+pub fn sorted_by_timestamp(entries: &[RawEntry]) -> Vec<RawEntry> {
+    let mut v = entries.to_vec();
+    v.sort_by(|a, b| a.ts.cmp(&b.ts));
+    v
 }
 
 pub fn render(preamble: &str, raws: &[String]) -> String {
@@ -214,36 +288,23 @@ pub fn render(preamble: &str, raws: &[String]) -> String {
 }
 
 /// Write via a temp file in the same folder and rename, like jnl's writeFile.
+/// For files outside a journal (settings, exports). Inside one, use the
+/// `Journal`.
 pub fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
-    let dir = path.parent().ok_or("no parent folder")?;
-    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let mut tmp = tempfile::Builder::new()
-        .prefix(".quire-")
-        .suffix(".tmp")
-        .tempfile_in(dir)
-        .map_err(|e| e.to_string())?;
-    tmp.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
-    tmp.as_file().sync_all().map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o644));
-    }
-    tmp.persist(path).map_err(|e| e.to_string())?;
-    Ok(())
+    write_atomic_bytes(path, content.as_bytes())
 }
 
-/// Lenient read for display paths: anything unreadable is "".
+/// Lenient read of a local path: anything unreadable is "".
 pub fn read(path: &Path) -> String {
     try_read(path).unwrap_or_default()
 }
 
-/// Strict read for read-modify-write paths. A missing file is Ok(""); any
-/// other failure (non-UTF-8 bytes, permissions) is an error so a writer never
-/// mistakes an unreadable file for an empty one and overwrites it.
+/// Strict read of a local path. A missing file is Ok(""); any other failure
+/// (non-UTF-8 bytes, permissions) is an error so a writer never mistakes an
+/// unreadable file for an empty one and overwrites it.
 pub fn try_read(path: &Path) -> Result<String, String> {
     match fs::read_to_string(path) {
-        Ok(s) => Ok(s),
+        Ok(s) => Ok(normalised(&s)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(e) => Err(format!("Can't read {}: {}", path.display(), e)),
     }
@@ -295,7 +356,24 @@ pub fn rebuild(e: &RawEntry) -> String {
 
 pub fn journal_rel(date: &str) -> String {
     let p: Vec<&str> = date.split('-').collect();
-    format!("journal/{}/{}/{}.md", p[0], p[1], p[2])
+    format!("{}/{}/{}/{}.md", JOURNAL_DIR, p[0], p[1], p[2])
+}
+
+/// The inbox day file a draft dated `date` lives in.
+pub fn inbox_rel(date: &str) -> String {
+    let p: Vec<&str> = date.split('-').collect();
+    format!("{}/{}/{}/{}.md", INBOX_DIR, p[0], p[1], p[2])
+}
+
+/// True for any inbox file: the legacy `inbox.md` or a day file under `inbox/`.
+pub fn is_inbox_rel(rel: &str) -> bool {
+    rel == LEGACY_INBOX || rel.starts_with("inbox/")
+}
+
+/// True for a day file whose name is its date (`inbox/…/DD.md`,
+/// `journal/…/DD.md`): the files that are deleted rather than left empty.
+pub fn is_day_file(rel: &str) -> bool {
+    (rel.starts_with("inbox/") || rel.starts_with("journal/")) && rel != INBOX_PREAMBLE
 }
 
 fn to_entry(r: &RawEntry, file: &str, index: usize, source: &str, split: Option<String>) -> Entry {
@@ -323,217 +401,16 @@ fn to_entry(r: &RawEntry, file: &str, index: usize, source: &str, split: Option<
     }
 }
 
-/// Every `.md` under `dir` (no symlinked folders), conflict copies excluded.
-pub fn walk_md(dir: &Path, out: &mut Vec<PathBuf>) {
-    if let Ok(rd) = fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            let ft = match e.file_type() {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            let name = e.file_name().to_string_lossy().to_string();
-            if ft.is_dir() {
-                walk_md(&p, out);
-            } else if p.is_file() && name.ends_with(".md") && !name.starts_with('.') && !is_conflict_name(&name) {
-                out.push(p);
-            }
-        }
-    }
-}
-
 pub fn rel_of(root: &Path, p: &Path) -> String {
     p.strip_prefix(root).unwrap_or(p).to_string_lossy().replace('\\', "/")
 }
 
-/// Root `.md` files that are split journals (not reserved, not conflict
-/// copies, not hidden), sorted by name.
-pub fn split_files(root: &Path) -> Vec<String> {
-    let mut out = Vec::new();
-    if let Ok(rd) = fs::read_dir(root) {
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            if e.path().is_file()
-                && name.ends_with(".md")
-                && !name.starts_with('.')
-                && !is_reserved(&name)
-                && !is_conflict_name(&name)
-            {
-                out.push(name);
-            }
-        }
-    }
-    out.sort();
-    out
-}
-
-/// Every entry file as (root-relative path, source, split tag), in load order.
-pub fn entry_files(root: &Path) -> Vec<(String, &'static str, Option<String>)> {
-    let mut out = vec![("inbox.md".to_string(), "inbox", None)];
-    let mut files = Vec::new();
-    walk_md(&root.join("journal"), &mut files);
-    files.sort();
-    for f in files {
-        out.push((rel_of(root, &f), "journal", None));
-    }
-    for name in split_files(root) {
-        let tag = name.trim_end_matches(".md").to_string();
-        out.push((name, "split", Some(tag)));
-    }
-    out
-}
-
-/// Conflict copies of entry files (root and journal/**), root-relative.
-pub fn conflict_files(root: &Path) -> Vec<String> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>, recurse: bool) {
-        if let Ok(rd) = fs::read_dir(dir) {
-            for e in rd.flatten() {
-                let p = e.path();
-                let Ok(ft) = e.file_type() else { continue };
-                let name = e.file_name().to_string_lossy().to_string();
-                if ft.is_dir() {
-                    if recurse {
-                        walk(&p, out, true);
-                    }
-                } else if ft.is_file() && name.to_lowercase().ends_with(".md") && is_conflict_name(&name) {
-                    out.push(p);
-                }
-            }
-        }
-    }
-    let mut v = Vec::new();
-    walk(root, &mut v, false);
-    walk(&root.join("journal"), &mut v, true);
-    let mut out: Vec<String> = v.iter().map(|p| rel_of(root, p)).collect();
-    out.sort();
-    out
-}
-
-/// Lenient load: unreadable files contribute nothing.
-pub fn load_all(root: &Path) -> Vec<Entry> {
-    load_all_with(root, false).unwrap_or_default()
-}
-
-/// Strict load: Err if any entry file cannot be read (used before destructive
-/// operations such as deleting orphaned assets).
-pub fn try_load_all(root: &Path) -> Result<Vec<Entry>, String> {
-    load_all_with(root, true)
-}
-
-fn load_all_with(root: &Path, strict: bool) -> Result<Vec<Entry>, String> {
-    let mut out = Vec::new();
-    for (rel, source, split) in entry_files(root) {
-        let content = if strict { try_read(&root.join(&rel))? } else { read(&root.join(&rel)) };
-        for (i, r) in parse_entries(&content).iter().enumerate() {
-            out.push(to_entry(r, &rel, i, source, split.clone()));
-        }
-    }
-    Ok(out)
-}
-
-/// Locate an entry in a file by its raw text, preferring the expected index.
-/// Returns the file's preamble, all raws, and the matching position.
-pub fn locate(root: &Path, file: &str, index: usize, expected_raw: &str) -> Result<(String, Vec<String>, usize), String> {
-    let content = try_read(&root.join(file))?;
-    let pre = leading_preamble(&content);
-    let raws: Vec<String> = parse_entries(&content).into_iter().map(|r| r.raw).collect();
-    let norm = |s: &str| s.trim_end().to_string();
-    let want = norm(expected_raw);
-    if raws.get(index).map(|r| norm(r) == want).unwrap_or(false) {
-        return Ok((pre, raws, index));
-    }
-    if let Some(i) = raws.iter().position(|r| norm(r) == want) {
-        return Ok((pre, raws, i));
-    }
-    Err("That entry changed on disk since Quire last read it. Reloaded — try again.".into())
-}
-
-pub fn write_file_entries(root: &Path, file: &str, pre: &str, raws: &[String]) -> Result<(), String> {
-    write_atomic(&root.join(file), &render(pre, raws))
-}
-
-/// Append `raw` to a file the way jnl's fileDraft does (blank-line separated).
-/// Returns the index of the (first) appended entry in the file.
-pub fn append_raw(root: &Path, file: &str, raw: &str) -> Result<usize, String> {
-    let path = root.join(file);
-    let mut s = try_read(&path)?;
-    let before = parse_entries(&s).len();
-    if !s.trim().is_empty() {
-        if !s.ends_with("\n\n") {
-            s.push_str(if s.ends_with('\n') { "\n" } else { "\n\n" });
-        }
+fn join_rel_parts(dir: &str, name: &str) -> String {
+    if dir.is_empty() || dir == "." {
+        name.to_string()
     } else {
-        s.clear();
+        format!("{}/{}", dir, name)
     }
-    s.push_str(raw.trim_end_matches('\n'));
-    s.push('\n');
-    write_atomic(&path, &s)?;
-    Ok(before)
-}
-
-/// Insert every entry parsed from each of `raws` into `file`, each after the
-/// last entry whose ts is <= its own (stable, so a file already in order
-/// stays in order). One read and one write. With `skip_existing`, an entry
-/// whose exact raw (trim_end) is already in the file is not inserted again
-/// (makes destination-first moves safe to retry).
-///
-/// Returns the final indices of the inserted entries, in input order
-/// (`None` for skipped ones). Errors if any raw parses to zero entries.
-pub fn insert_entries(root: &Path, file: &str, raws: &[String], skip_existing: bool) -> Result<Vec<Option<usize>>, String> {
-    let content = try_read(&root.join(file))?;
-    let pre = leading_preamble(&content);
-    // (entry, Some(input position) if new)
-    let mut entries: Vec<(RawEntry, Option<usize>)> = parse_entries(&content).into_iter().map(|e| (e, None)).collect();
-    let mut have: HashMap<String, usize> = HashMap::new();
-    for (e, _) in &entries {
-        *have.entry(e.raw.trim_end().to_string()).or_default() += 1;
-    }
-    let mut n_new = 0;
-    let mut tag = 0usize;
-    let mut out_slots: Vec<Vec<usize>> = Vec::new();
-    for raw in raws {
-        let parsed = parse_entries(raw);
-        if parsed.is_empty() {
-            return Err(format!("Not an entry: {:?}", raw.chars().take(60).collect::<String>()));
-        }
-        let mut slots = Vec::new();
-        for n in parsed {
-            let key = n.raw.trim_end().to_string();
-            if skip_existing {
-                if let Some(c) = have.get_mut(&key) {
-                    if *c > 0 {
-                        *c -= 1;
-                        continue;
-                    }
-                }
-            }
-            let pos = entries.iter().rposition(|(e, _)| e.ts <= n.ts).map(|p| p + 1).unwrap_or(0);
-            entries.insert(pos, (n, Some(tag)));
-            slots.push(tag);
-            tag += 1;
-            n_new += 1;
-        }
-        out_slots.push(slots);
-    }
-    if n_new > 0 {
-        let rendered: Vec<String> = entries.iter().map(|(e, _)| e.raw.clone()).collect();
-        write_file_entries(root, file, &pre, &rendered)?;
-    }
-    let mut pos_of: HashMap<usize, usize> = HashMap::new();
-    for (i, (_, t)) in entries.iter().enumerate() {
-        if let Some(t) = t {
-            pos_of.insert(*t, i);
-        }
-    }
-    Ok(out_slots.iter().map(|s| s.first().and_then(|t| pos_of.get(t).copied())).collect())
-}
-
-/// Insert into a file keeping it in timestamp order (stable). Inserts every
-/// entry parsed from `raw`; errors if there are none. Returns the index of
-/// the first inserted entry.
-pub fn insert_sorted(root: &Path, file: &str, raw: &str) -> Result<usize, String> {
-    let r = insert_entries(root, file, &[raw.to_string()], false)?;
-    r.first().copied().flatten().ok_or_else(|| "bad entry".to_string())
 }
 
 /// The split journal a raw entry belongs in (`work.md`), honouring the order
@@ -550,6 +427,554 @@ pub fn split_target(raw: &str, split_tags: &[String]) -> Option<String> {
         }
     }
     None
+}
+
+/// Which sidecar folder a journal root uses, for local-only code (media): the
+/// same rule as `Journal::sidecar`.
+pub fn sidecar_dir_path(root: &Path) -> PathBuf {
+    if root.join(SIDECAR).is_dir() {
+        root.join(SIDECAR)
+    } else if root.join(LEGACY_SIDECAR).is_dir() {
+        root.join(LEGACY_SIDECAR)
+    } else {
+        root.join(SIDECAR)
+    }
+}
+
+/// What folding `inbox.md` into `inbox/` did.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct InboxMigration {
+    /// Drafts written into `inbox/` day files.
+    pub moved: usize,
+    /// Drafts already present there (an older app rewrote `inbox.md`).
+    pub skipped: usize,
+    /// Where the old `inbox.md` went, relative to the root.
+    pub backup: String,
+}
+
+// ---------- the handle ----------
+
+/// A journal folder and the vault that reaches it. Cheap to clone.
+#[derive(Clone)]
+pub struct Journal {
+    root: PathBuf,
+    vault: Arc<dyn Vault>,
+}
+
+impl std::fmt::Debug for Journal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Journal({})", self.root.display())
+    }
+}
+
+impl Journal {
+    /// A journal on the local filesystem.
+    pub fn open(root: impl Into<PathBuf>) -> Journal {
+        let root = root.into();
+        Journal { vault: Arc::new(FsVault::new(root.clone())), root }
+    }
+
+    /// A journal behind any vault. `root` is only a label there (shown to
+    /// the user, never opened).
+    pub fn with_vault(root: impl Into<PathBuf>, vault: Arc<dyn Vault>) -> Journal {
+        Journal { root: root.into(), vault }
+    }
+
+    /// The folder as the user knows it.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn vault(&self) -> &dyn Vault {
+        self.vault.as_ref()
+    }
+
+    /// The root as a real path, for code that needs one (media tools,
+    /// backups). Err on a vault with no local path.
+    pub fn local(&self) -> Result<&Path, String> {
+        match self.vault.local_path("") {
+            Some(_) => Ok(&self.root),
+            None => Err("This needs the journal on a local folder".into()),
+        }
+    }
+
+    /// A real path for `rel`, where the vault has one.
+    pub fn path(&self, rel: &str) -> Result<PathBuf, String> {
+        self.vault.local_path(rel).ok_or_else(|| "This needs the journal on a local folder".to_string())
+    }
+
+    pub fn exists(&self) -> bool {
+        self.vault.is_dir("")
+    }
+
+    // ----- primitives -----
+
+    /// Strict read: missing is Ok(""), unreadable is Err.
+    pub fn try_read(&self, rel: &str) -> Result<String, String> {
+        match self.vault.read(rel)? {
+            None => Ok(String::new()),
+            Some(b) => String::from_utf8(b).map(|s| normalised(&s)).map_err(|e| format!("Can't read {}: {}", rel, e)),
+        }
+    }
+
+    /// Lenient read: anything unreadable is "".
+    pub fn read(&self, rel: &str) -> String {
+        self.try_read(rel).unwrap_or_default()
+    }
+
+    pub fn write(&self, rel: &str, content: &str) -> Result<(), String> {
+        self.vault.write(rel, content.as_bytes())
+    }
+
+    pub fn remove(&self, rel: &str) -> Result<bool, String> {
+        self.vault.remove(rel)
+    }
+
+    pub fn is_file(&self, rel: &str) -> bool {
+        self.vault.is_file(rel)
+    }
+
+    pub fn is_dir(&self, rel: &str) -> bool {
+        self.vault.is_dir(rel)
+    }
+
+    pub fn len(&self, rel: &str) -> u64 {
+        self.vault.len(rel)
+    }
+
+    pub fn list(&self, rel: &str) -> Vec<Item> {
+        self.vault.list(rel).unwrap_or_default()
+    }
+
+    /// Every regular file under `dir` (rel paths, sorted), never following
+    /// symlinks, hidden files included.
+    pub fn walk_files(&self, dir: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.trim_end_matches('/').to_string()];
+        while let Some(d) = stack.pop() {
+            for it in self.list(&d) {
+                let rel = join_rel_parts(&d, &it.name);
+                if it.is_dir {
+                    stack.push(rel);
+                } else if it.is_file {
+                    out.push(rel);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Total bytes of the files under `dir`.
+    pub fn tree_bytes(&self, dir: &str) -> u64 {
+        self.walk_files(dir).iter().map(|f| self.vault.len(f)).sum()
+    }
+
+    /// Every `.md` under `dir` (no symlinked folders), hidden files and
+    /// conflict copies excluded, sorted.
+    pub fn walk_md(&self, dir: &str) -> Vec<String> {
+        self.walk_files(dir)
+            .into_iter()
+            .filter(|rel| {
+                let name = rel.rsplit('/').next().unwrap_or(rel);
+                name.ends_with(".md") && !name.starts_with('.') && !is_conflict_name(name)
+            })
+            .collect()
+    }
+
+    // ----- sidecar -----
+
+    /// The sidecar folder to read: `.quire/`, else `.nook/` while only that
+    /// exists.
+    pub fn sidecar(&self) -> &'static str {
+        if self.vault.is_dir(SIDECAR) {
+            SIDECAR
+        } else if self.vault.is_dir(LEGACY_SIDECAR) {
+            LEGACY_SIDECAR
+        } else {
+            SIDECAR
+        }
+    }
+
+    /// The sidecar folder to write: `.quire/`, renaming `.nook/` to it on the
+    /// first write.
+    pub fn sidecar_mut(&self) -> Result<&'static str, String> {
+        if !self.vault.is_dir(SIDECAR) && self.vault.is_dir(LEGACY_SIDECAR) {
+            self.vault.rename(LEGACY_SIDECAR, SIDECAR)?;
+        }
+        Ok(SIDECAR)
+    }
+
+    // ----- files -----
+
+    /// Root `.md` files that are split journals (not reserved, not conflict
+    /// copies, not hidden), sorted by name.
+    pub fn split_files(&self) -> Vec<String> {
+        self.list("")
+            .into_iter()
+            .filter(|it| it.is_file && it.name.ends_with(".md") && !it.name.starts_with('.') && !is_reserved(&it.name) && !is_conflict_name(&it.name))
+            .map(|it| it.name)
+            .collect()
+    }
+
+    /// Every inbox file in load order: the legacy `inbox.md` when present,
+    /// then the day files under `inbox/`.
+    pub fn inbox_files(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.vault.is_file(LEGACY_INBOX) {
+            out.push(LEGACY_INBOX.to_string());
+        }
+        out.extend(self.walk_md(INBOX_DIR).into_iter().filter(|r| r != INBOX_PREAMBLE));
+        out
+    }
+
+    /// Every entry file as (root-relative path, source, split tag), in load order.
+    pub fn entry_files(&self) -> Vec<(String, &'static str, Option<String>)> {
+        let mut out: Vec<(String, &'static str, Option<String>)> = self.inbox_files().into_iter().map(|f| (f, "inbox", None)).collect();
+        for f in self.walk_md(JOURNAL_DIR) {
+            out.push((f, "journal", None));
+        }
+        for name in self.split_files() {
+            let tag = name.trim_end_matches(".md").to_string();
+            out.push((name, "split", Some(tag)));
+        }
+        out
+    }
+
+    /// Conflict copies of entry files (root, inbox/** and journal/**).
+    pub fn conflict_files(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .list("")
+            .into_iter()
+            .filter(|it| it.is_file && it.name.to_lowercase().ends_with(".md") && is_conflict_name(&it.name))
+            .map(|it| it.name)
+            .collect();
+        for dir in [INBOX_DIR, JOURNAL_DIR] {
+            out.extend(self.walk_files(dir).into_iter().filter(|rel| {
+                let name = rel.rsplit('/').next().unwrap_or(rel);
+                name.to_lowercase().ends_with(".md") && is_conflict_name(name)
+            }));
+        }
+        out.sort();
+        out
+    }
+
+    /// Lenient load: unreadable files contribute nothing.
+    pub fn load_all(&self) -> Vec<Entry> {
+        self.load_all_with(false).unwrap_or_default()
+    }
+
+    /// Strict load: Err if any entry file cannot be read (used before
+    /// destructive operations such as deleting orphaned assets).
+    pub fn try_load_all(&self) -> Result<Vec<Entry>, String> {
+        self.load_all_with(true)
+    }
+
+    fn load_all_with(&self, strict: bool) -> Result<Vec<Entry>, String> {
+        let mut out = Vec::new();
+        for (rel, source, split) in self.entry_files() {
+            let content = if strict { self.try_read(&rel)? } else { self.read(&rel) };
+            for (i, r) in parse_entries(&content).iter().enumerate() {
+                out.push(to_entry(r, &rel, i, source, split.clone()));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The entries of one file.
+    pub fn load_file(&self, rel: &str) -> Vec<Entry> {
+        let source = if is_inbox_rel(rel) {
+            "inbox"
+        } else if rel.starts_with("journal/") {
+            "journal"
+        } else {
+            "split"
+        };
+        let split = (source == "split").then(|| rel.trim_end_matches(".md").to_string());
+        parse_entries(&self.read(rel)).iter().enumerate().map(|(i, r)| to_entry(r, rel, i, source, split.clone())).collect()
+    }
+
+    /// Locate an entry in a file by its raw text, preferring the expected index.
+    /// Returns the file's preamble, all raws, and the matching position.
+    pub fn locate(&self, file: &str, index: usize, expected_raw: &str) -> Result<(String, Vec<String>, usize), String> {
+        let content = self.try_read(file)?;
+        let pre = leading_preamble(&content);
+        let raws: Vec<String> = parse_entries(&content).into_iter().map(|r| r.raw).collect();
+        let norm = |s: &str| s.trim_end().to_string();
+        let want = norm(expected_raw);
+        if raws.get(index).map(|r| norm(r) == want).unwrap_or(false) {
+            return Ok((pre, raws, index));
+        }
+        if let Some(i) = raws.iter().position(|r| norm(r) == want) {
+            return Ok((pre, raws, i));
+        }
+        Err("That entry changed on disk since Quire last read it. Reloaded — try again.".into())
+    }
+
+    /// Write a file's preamble and entries. A day file (`inbox/…`,
+    /// `journal/…`) that would come out empty is deleted instead, as a day
+    /// with no entries has no file; `inbox.md` and split journals are
+    /// written empty, as jnl does.
+    pub fn write_file_entries(&self, file: &str, pre: &str, raws: &[String]) -> Result<(), String> {
+        let text = render(pre, raws);
+        if text.is_empty() && is_day_file(file) {
+            self.remove(file)?;
+            return Ok(());
+        }
+        self.write(file, &text)
+    }
+
+    /// Append `raw` to a file the way jnl's fileDraft does (blank-line
+    /// separated). Returns the index of the (first) appended entry.
+    pub fn append_raw(&self, file: &str, raw: &str) -> Result<usize, String> {
+        let mut s = self.try_read(file)?;
+        let before = parse_entries(&s).len();
+        if !s.trim().is_empty() {
+            if !s.ends_with("\n\n") {
+                s.push_str(if s.ends_with('\n') { "\n" } else { "\n\n" });
+            }
+        } else {
+            s.clear();
+        }
+        s.push_str(raw.trim_end_matches('\n'));
+        s.push('\n');
+        self.write(file, &s)?;
+        Ok(before)
+    }
+
+    /// Insert every entry parsed from each of `raws` into `file`, each after
+    /// the last entry whose ts is <= its own (stable, so a file already in
+    /// order stays in order). One read and one write. With `skip_existing`,
+    /// an entry whose exact raw (trim_end) is already in the file is not
+    /// inserted again (makes destination-first moves safe to retry).
+    ///
+    /// Returns the final indices of the inserted entries, in input order
+    /// (`None` for skipped ones). Errors if any raw parses to zero entries.
+    pub fn insert_entries(&self, file: &str, raws: &[String], skip_existing: bool) -> Result<Vec<Option<usize>>, String> {
+        let content = self.try_read(file)?;
+        let pre = leading_preamble(&content);
+        let mut entries: Vec<(RawEntry, Option<usize>)> = parse_entries(&content).into_iter().map(|e| (e, None)).collect();
+        let mut have: HashMap<String, usize> = HashMap::new();
+        for (e, _) in &entries {
+            *have.entry(e.raw.trim_end().to_string()).or_default() += 1;
+        }
+        let mut n_new = 0;
+        let mut tag = 0usize;
+        let mut out_slots: Vec<Vec<usize>> = Vec::new();
+        for raw in raws {
+            let parsed = parse_entries(raw);
+            if parsed.is_empty() {
+                return Err(format!("Not an entry: {:?}", raw.chars().take(60).collect::<String>()));
+            }
+            let mut slots = Vec::new();
+            for n in parsed {
+                let key = n.raw.trim_end().to_string();
+                if skip_existing {
+                    if let Some(c) = have.get_mut(&key) {
+                        if *c > 0 {
+                            *c -= 1;
+                            continue;
+                        }
+                    }
+                }
+                let pos = entries.iter().rposition(|(e, _)| e.ts <= n.ts).map(|p| p + 1).unwrap_or(0);
+                entries.insert(pos, (n, Some(tag)));
+                slots.push(tag);
+                tag += 1;
+                n_new += 1;
+            }
+            out_slots.push(slots);
+        }
+        if n_new > 0 {
+            let rendered: Vec<String> = entries.iter().map(|(e, _)| e.raw.clone()).collect();
+            self.write_file_entries(file, &pre, &rendered)?;
+        }
+        let mut pos_of: HashMap<usize, usize> = HashMap::new();
+        for (i, (_, t)) in entries.iter().enumerate() {
+            if let Some(t) = t {
+                pos_of.insert(*t, i);
+            }
+        }
+        Ok(out_slots.iter().map(|s| s.first().and_then(|t| pos_of.get(t).copied())).collect())
+    }
+
+    /// Insert into a file keeping it in timestamp order (stable). Inserts
+    /// every entry parsed from `raw`; errors if there are none. Returns the
+    /// index of the first inserted entry.
+    pub fn insert_sorted(&self, file: &str, raw: &str) -> Result<usize, String> {
+        let r = self.insert_entries(file, &[raw.to_string()], false)?;
+        r.first().copied().flatten().ok_or_else(|| "bad entry".to_string())
+    }
+
+    // ----- the operations every shell shares -----
+
+    /// A new draft, into its day's inbox file, in time order.
+    pub fn new_draft(&self, ts: &str, title: &str, starred: bool, body: &str) -> Result<Written, String> {
+        check_ts(ts)?;
+        if title.trim().is_empty() && body.trim().is_empty() && !starred {
+            return Err("Nothing to save".into());
+        }
+        let raw = make_raw(ts, title, starred, body);
+        let file = inbox_rel(&ts[..10]);
+        let index = self.insert_sorted(&file, &raw)?;
+        Ok(Written { file, index, raw })
+    }
+
+    /// Edit any entry in place. An entry in a day file whose date changes
+    /// moves to the new day's file (inbox to inbox, journal to journal), kept
+    /// in time order. A split-journal entry stays in its file.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_entry(&self, file: &str, index: usize, expected_raw: &str, ts: &str, title: &str, starred: bool, body: &str) -> Result<Written, String> {
+        let file = check_entry_rel(file)?;
+        check_ts(ts)?;
+        let (pre, mut raws, i) = self.locate(&file, index, expected_raw)?;
+        let new_raw = make_raw(ts, title, starred, body);
+        let new_date = &ts[..10];
+        let day_file = is_day_file(&file);
+        let dest = if file.starts_with("inbox/") { inbox_rel(new_date) } else { journal_rel(new_date) };
+        if day_file && dest != file {
+            let new_raw = rebase_links(&new_raw, &file, &dest);
+            // Write the destination first: a failure leaves a duplicate, never a loss.
+            let idx = self.insert_sorted(&dest, &new_raw)?;
+            raws.remove(i);
+            self.write_file_entries(&file, &pre, &raws)?;
+            return Ok(Written { file: dest, index: idx, raw: new_raw });
+        }
+        let old_ts = parse_entries(&raws[i]).first().map(|e| e.ts.clone()).unwrap_or_default();
+        raws[i] = new_raw.clone();
+        let mut idx = i;
+        if day_file && old_ts != ts {
+            // Re-sort the day so a retimed entry lands in order (stable).
+            let mut es: Vec<(usize, RawEntry)> =
+                raws.iter().enumerate().flat_map(|(k, x)| parse_entries(x).into_iter().map(move |e| (k, e))).collect();
+            es.sort_by(|a, b| a.1.ts.cmp(&b.1.ts));
+            idx = es.iter().position(|(k, _)| *k == i).unwrap_or(i);
+            raws = es.into_iter().map(|(_, e)| e.raw).collect();
+        }
+        self.write_file_entries(&file, &pre, &raws)?;
+        Ok(Written { file, index: idx, raw: new_raw })
+    }
+
+    pub fn delete_entry(&self, file: &str, index: usize, expected_raw: &str) -> Result<(), String> {
+        let file = check_entry_rel(file)?;
+        let (pre, mut raws, i) = self.locate(&file, index, expected_raw)?;
+        raws.remove(i);
+        self.write_file_entries(&file, &pre, &raws)
+    }
+
+    /// File a draft: jnl's fileDraft (split tags first, else the day file,
+    /// appended), then remove it from its inbox file. Returns where it went.
+    pub fn file_draft(&self, file: &str, index: usize, expected_raw: &str, split_tags: &[String]) -> Result<String, String> {
+        let file = check_entry_rel(file)?;
+        if !is_inbox_rel(&file) {
+            return Err("Only a draft in the inbox can be filed".into());
+        }
+        let (pre, mut raws, i) = self.locate(&file, index, expected_raw)?;
+        let e = parse_entries(&raws[i]).into_iter().next().ok_or("bad draft")?;
+        if e.body.is_empty() && e.suffix.is_empty() {
+            return Err("Nothing to file".into());
+        }
+        let target = split_target(&e.raw, split_tags).unwrap_or_else(|| journal_rel(&e.date));
+        let raw = rebase_links(&rebuild(&e), &file, &target);
+        self.append_raw(&target, &raw)?;
+        raws.remove(i);
+        self.write_file_entries(&file, &pre, &raws)?;
+        Ok(target)
+    }
+
+    /// Nook's "Return to Inbox": move a filed entry back to the queue, into
+    /// the inbox day file of its own date.
+    pub fn unfile_entry(&self, file: &str, index: usize, expected_raw: &str) -> Result<Written, String> {
+        let file = check_entry_rel(file)?;
+        if is_inbox_rel(&file) {
+            return Err("That entry is already in the inbox".into());
+        }
+        let (pre, mut raws, i) = self.locate(&file, index, expected_raw)?;
+        let e = parse_entries(&raws[i]).into_iter().next().ok_or("bad entry")?;
+        let dest = inbox_rel(&e.date);
+        let raw = rebase_links(raws.remove(i).trim_end(), &file, &dest);
+        // Inbox first, then remove: a failure leaves a duplicate, never a loss.
+        let index = self.insert_sorted(&dest, &raw)?;
+        self.write_file_entries(&file, &pre, &raws)?;
+        Ok(Written { file: dest, index, raw })
+    }
+
+    /// Pasted text into drafts: one per `[header]` when present, else one
+    /// draft dated `now_ts`. Returns how many.
+    pub fn import_text(&self, text: &str, now_ts: &str) -> Result<usize, String> {
+        check_ts(now_ts)?;
+        let parsed = parse_entries(text);
+        if parsed.is_empty() {
+            if text.trim().is_empty() {
+                return Ok(0);
+            }
+            self.insert_sorted(&inbox_rel(&now_ts[..10]), &make_raw(now_ts, "", false, text.trim()))?;
+            return Ok(1);
+        }
+        let n = parsed.len();
+        for e in parsed {
+            self.insert_sorted(&inbox_rel(&e.date), &rebuild(&e))?;
+        }
+        Ok(n)
+    }
+
+    /// Fold a legacy `inbox.md` into `inbox/` day files. Every draft is
+    /// re-read from the day files before `inbox.md` is moved (never deleted)
+    /// to `<sidecar>/migration/inbox-<stamp>.md`; preamble text goes to
+    /// `inbox/preamble.md`. `Ok(None)` when there is no `inbox.md`. Safe to
+    /// run again: drafts already in `inbox/` are skipped.
+    pub fn migrate_legacy_inbox(&self) -> Result<Option<InboxMigration>, String> {
+        if !self.vault.is_file(LEGACY_INBOX) {
+            return Ok(None);
+        }
+        let content = self.try_read(LEGACY_INBOX)?;
+        let entries = parse_entries(&content);
+        let pre = leading_preamble(&content);
+        let mut rep = InboxMigration::default();
+        let mut by_day: Vec<(String, Vec<String>)> = Vec::new();
+        for e in &entries {
+            match by_day.iter_mut().find(|(d, _)| *d == e.date) {
+                Some((_, v)) => v.push(e.raw.clone()),
+                None => by_day.push((e.date.clone(), vec![e.raw.clone()])),
+            }
+        }
+        for (date, raws) in &by_day {
+            let res = self.insert_entries(&inbox_rel(date), raws, true)?;
+            rep.moved += res.iter().filter(|r| r.is_some()).count();
+            rep.skipped += res.iter().filter(|r| r.is_none()).count();
+        }
+        if !pre.is_empty() {
+            let existing = self.read(INBOX_PREAMBLE);
+            if !existing.contains(pre.trim()) {
+                let text = if existing.trim().is_empty() { format!("{}\n", pre) } else { format!("{}\n\n{}\n", existing.trim_end(), pre) };
+                self.write(INBOX_PREAMBLE, &text)?;
+            }
+        }
+        // Verify before touching the original.
+        let mut have: HashMap<String, usize> = HashMap::new();
+        for rel in self.walk_md(INBOX_DIR) {
+            for e in parse_entries(&self.try_read(&rel)?) {
+                *have.entry(e.raw.trim_end().to_string()).or_default() += 1;
+            }
+        }
+        for e in &entries {
+            match have.get_mut(e.raw.trim_end()) {
+                Some(c) if *c > 0 => *c -= 1,
+                _ => return Err(format!("inbox.md was not moved: the draft {:?} could not be read back from inbox/", e.ts)),
+            }
+        }
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+        let dir = format!("{}/migration", self.sidecar_mut()?);
+        let mut backup = format!("{}/inbox-{}.md", dir, stamp);
+        let mut n = 1;
+        while self.vault.is_file(&backup) {
+            n += 1;
+            backup = format!("{}/inbox-{}-{}.md", dir, stamp, n);
+        }
+        self.vault.rename(LEGACY_INBOX, &backup)?;
+        rep.backup = backup;
+        Ok(Some(rep))
+    }
 }
 
 // ---------- links (rule shared with Nook) ----------
@@ -699,6 +1124,12 @@ pub fn rebase_links(raw: &str, from_rel: &str, _to_rel: &str) -> String {
 mod tests {
     use super::*;
 
+    fn tmp() -> (tempfile::TempDir, Journal) {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        (d, j)
+    }
+
     #[test]
     fn roundtrip_and_star() {
         let c = "note\n\n[2026-09-30 08:12:00] Walk *\nCold. @walk\n\n[2026-09-30 09:15:00]\nStandup\n";
@@ -713,17 +1144,78 @@ mod tests {
         assert_eq!(make_raw("2026-09-30 09:15:00", "", false, "Standup"), e[1].raw.trim_end());
     }
 
+    // jnl main_test.go: parseEntries, leadingPreamble, sortedByTimestamp.
+    #[test]
+    fn jnl_parity_cases() {
+        let e = parse_entries("[2026-05-10 08:00:00] A title\nfirst line\nsecond line\n");
+        assert_eq!(e.len(), 1);
+        assert_eq!((e[0].date.as_str(), e[0].ts.as_str(), e[0].suffix.as_str(), e[0].body.as_str()), ("2026-05-10", "2026-05-10 08:00:00", "A title", "first line\nsecond line"));
+        let e = parse_entries("orphan line\n\n[2026-05-10 08:00:00] one\nbody1\n\n[2026-05-11 09:00:00] two\nbody2\n");
+        assert_eq!(e.len(), 2);
+        assert_eq!((e[0].suffix.as_str(), e[1].suffix.as_str()), ("one", "two"));
+        for (content, want) in [
+            ("[2026-05-10 08:00:00] x\nbody\n", ""),
+            ("\n\n[2026-05-10 08:00:00] x\n", ""),
+            ("loose note\n\n[2026-05-10 08:00:00] x\n", "loose note"),
+            ("a\nb\n[2026-05-10 08:00:00] x\n", "a\nb"),
+            ("just text\nmore text\n", "just text\nmore text"),
+        ] {
+            assert_eq!(leading_preamble(content), want, "{:?}", content);
+        }
+        let mk = |ts: &str, s: &str| RawEntry { date: ts[..10].into(), ts: ts.into(), suffix: s.into(), body: String::new(), raw: String::new() };
+        let es = vec![mk("2026-05-20 09:00:00", "c"), mk("2026-05-10 08:00:00", "a"), mk("2026-05-15 12:30:00", "b")];
+        let got: Vec<String> = sorted_by_timestamp(&es).iter().map(|e| e.suffix.clone()).collect();
+        assert_eq!(got, vec!["a", "b", "c"]);
+        assert_eq!(es[0].suffix, "c", "input untouched");
+        let es = vec![mk("2026-05-10 08:00:00", "first"), mk("2026-05-10 08:00:00", "second"), mk("2026-05-10 08:00:00", "third")];
+        let got: Vec<String> = sorted_by_timestamp(&es).iter().map(|e| e.suffix.clone()).collect();
+        assert_eq!(got, vec!["first", "second", "third"], "stable");
+        // en-dash dates are accepted and normalised (jnl 1140729)
+        let e = parse_entries("[2026–01–02 08:00:00] En dash\nbody\n");
+        assert_eq!(e[0].ts, "2026-01-02 08:00:00");
+        assert_eq!(e[0].raw, "[2026-01-02 08:00:00] En dash\nbody\n");
+    }
+
+    // nook ParserChecks: the star marker is a standalone token.
+    #[test]
+    fn star_marker_is_a_token() {
+        let titled = |s: &str| parse_entries(&format!("[2026-05-10 08:00:00] {}\nbody\n", s)).remove(0);
+        assert!(has_star(&titled("Morning *").suffix));
+        assert!(has_star(&titled("*").suffix));
+        assert!(!has_star(&titled("**bold**").suffix));
+        assert!(!has_star(&titled("2 * 3").suffix));
+        assert!(!has_star(&titled("").suffix));
+        assert_eq!(strip_star(&titled("Morning *").suffix), "Morning");
+        assert_eq!(strip_star(&titled("*").suffix), "");
+        assert_eq!(strip_star("**bold**"), "**bold**");
+        assert!(is_header_line("[2026-05-10 08:00:00] title"));
+        assert!(is_header_line("[2026-05-10 08:00:00]"));
+        assert!(!is_header_line("\\[2026-05-10 08:00:00] escaped"));
+        assert!(!is_header_line(" [2026-05-10 08:00:00] indented"));
+        assert!(!is_header_line("[2026-05-10] no time"));
+    }
+
+    // Wander: BOM dropped, CRLF read as LF.
+    #[test]
+    fn bom_and_crlf() {
+        let e = parse_entries(&normalised("\u{FEFF}[2026-01-02 08:00:00] T\r\nbody\r\n"));
+        assert_eq!(e[0].raw, "[2026-01-02 08:00:00] T\nbody\n");
+        let (_d, j) = tmp();
+        std::fs::write(j.root().join("x.md"), b"\xEF\xBB\xBF[2026-01-02 08:00:00] T\r\nbody\r\n").unwrap();
+        assert_eq!(j.try_read("x.md").unwrap(), "[2026-01-02 08:00:00] T\nbody\n");
+    }
+
     #[test]
     fn split() {
         assert_eq!(split_target("x @work y", &["work".into()]), Some("work.md".into()));
         assert_eq!(split_target("x @workshop", &["work".into()]), None);
         assert_eq!(split_target("x @inbox", &["inbox".into()]), None);
         assert_eq!(split_target("x @Nook-Export", &["nook-export".into()]), None);
+        assert_eq!(split_target("plain", &[]), None);
     }
 
     #[test]
     fn unicode_digits_do_not_match() {
-        // Arabic-Indic digits: must not be a header (and must not panic).
         let c = "[٢٠٢٦-٠٩-٣٠ ٠٨:٠٠:٠٠] x\nbody\n";
         assert!(parse_entries(c).is_empty());
         assert!(check_ts("٢٠٢٦-09-30 08:00:00").is_err());
@@ -736,9 +1228,7 @@ mod tests {
         assert_eq!(e.len(), 1);
         assert!(e[0].body.contains("\n\\[2026-09-29 07:00:00] not a header\n"));
         assert!(e[0].body.contains("\\[2026–09–29 07:00:00] dash"));
-        // Idempotent through a rebuild.
         assert_eq!(rebuild(&e[0]), raw);
-        // A first body line is guarded too.
         let raw = make_raw("2026-09-30 08:00:00", "", false, "[2026-09-29 07:00:00]");
         assert_eq!(raw, "[2026-09-30 08:00:00]\n\\[2026-09-29 07:00:00]");
     }
@@ -752,15 +1242,15 @@ mod tests {
         assert_eq!(conflict_main_name("journal/2026/10/01.sync-conflict-20261001-101010-ABC.md").unwrap(), "journal/2026/10/01.md");
         assert_eq!(conflict_main_name("journal/2026/10/01 (Dan's conflicted copy 2026-10-01).md").unwrap(), "journal/2026/10/01.md");
         assert_eq!(conflict_main_name("inbox.md"), None);
-        let d = tempfile::tempdir().unwrap();
-        fs::create_dir_all(d.path().join("journal/2026/10")).unwrap();
-        fs::write(d.path().join("journal/2026/10/01.md"), "[2026-10-01 08:00:00] a\n").unwrap();
-        fs::write(d.path().join("journal/2026/10/01.sync-conflict-1-2-X.md"), "[2026-10-01 09:00:00] b\n").unwrap();
-        fs::write(d.path().join("inbox (conflicted copy).md"), "[2026-10-01 09:00:00] b\n").unwrap();
-        fs::write(d.path().join("readme.md"), "[2026-10-01 09:00:00] b\n").unwrap();
-        let files: Vec<String> = entry_files(d.path()).into_iter().map(|f| f.0).collect();
-        assert_eq!(files, vec!["inbox.md", "journal/2026/10/01.md"]);
-        assert_eq!(conflict_files(d.path()), vec!["inbox (conflicted copy).md", "journal/2026/10/01.sync-conflict-1-2-X.md"]);
+        let (_d, j) = tmp();
+        j.write("journal/2026/10/01.md", "[2026-10-01 08:00:00] a\n").unwrap();
+        j.write("journal/2026/10/01.sync-conflict-1-2-X.md", "[2026-10-01 09:00:00] b\n").unwrap();
+        j.write("inbox (conflicted copy).md", "[2026-10-01 09:00:00] b\n").unwrap();
+        j.write("inbox/2026/10/01.sync-conflict-1-2-Y.md", "[2026-10-01 09:00:00] b\n").unwrap();
+        j.write("readme.md", "[2026-10-01 09:00:00] b\n").unwrap();
+        let files: Vec<String> = j.entry_files().into_iter().map(|f| f.0).collect();
+        assert_eq!(files, vec!["journal/2026/10/01.md"]);
+        assert_eq!(j.conflict_files(), vec!["inbox (conflicted copy).md", "inbox/2026/10/01.sync-conflict-1-2-Y.md", "journal/2026/10/01.sync-conflict-1-2-X.md"]);
     }
 
     #[test]
@@ -774,45 +1264,45 @@ mod tests {
         assert!(safe_rel(r, "").is_err());
         assert!(safe_entry_rel(r, "assets/x.jpg").is_err());
         assert!(safe_entry_rel(r, ".nook/templates/a.md").is_err());
+        assert!(safe_entry_rel(r, ".quire/templates/a.md").is_err());
         assert!(safe_entry_rel(r, "inbox.md").is_ok());
+        assert!(safe_entry_rel(r, "inbox/2026/01/02.md").is_ok());
         assert!(safe_entry_rel(r, "inbox.txt").is_err());
+        assert_eq!(check_rel("./a/b.md").unwrap(), "a/b.md");
     }
 
     // #2: a file with invalid UTF-8 must not be mistaken for empty and overwritten.
     #[test]
     fn append_raw_refuses_unreadable_file() {
-        let d = tempfile::tempdir().unwrap();
+        let (d, j) = tmp();
         let p = d.path().join("inbox.md");
         let orig: &[u8] = b"[2026-09-30 08:00:00] caf\xe9\nold body\n";
         fs::write(&p, orig).unwrap();
-        let r = append_raw(d.path(), "inbox.md", "[2026-09-30 09:00:00] new\nbody");
-        assert!(r.is_err());
+        assert!(j.append_raw("inbox.md", "[2026-09-30 09:00:00] new\nbody").is_err());
         assert_eq!(fs::read(&p).unwrap(), orig, "file must be untouched");
-        assert!(insert_sorted(d.path(), "inbox.md", "[2026-09-30 09:00:00] new\nbody").is_err());
-        assert!(locate(d.path(), "inbox.md", 0, "x").is_err());
-        assert!(try_load_all(d.path()).is_err());
+        assert!(j.insert_sorted("inbox.md", "[2026-09-30 09:00:00] new\nbody").is_err());
+        assert!(j.locate("inbox.md", 0, "x").is_err());
+        assert!(j.try_load_all().is_err());
+        assert!(j.migrate_legacy_inbox().is_err());
         assert_eq!(fs::read(&p).unwrap(), orig);
-        // A missing file is still fine to append to.
-        append_raw(d.path(), "other.md", "[2026-09-30 09:00:00] new\nbody").unwrap();
-        assert_eq!(read(&d.path().join("other.md")), "[2026-09-30 09:00:00] new\nbody\n");
+        j.append_raw("other.md", "[2026-09-30 09:00:00] new\nbody").unwrap();
+        assert_eq!(j.read("other.md"), "[2026-09-30 09:00:00] new\nbody\n");
     }
 
     #[test]
     fn insert_sorted_keeps_all_entries() {
-        let d = tempfile::tempdir().unwrap();
-        write_atomic(&d.path().join("a.md"), "[2026-09-30 08:00:00] a\n\n[2026-09-30 10:00:00] c\n").unwrap();
-        let i = insert_sorted(d.path(), "a.md", "[2026-09-30 09:00:00] b\n\n[2026-09-30 11:00:00] d").unwrap();
+        let (_d, j) = tmp();
+        j.write("a.md", "[2026-09-30 08:00:00] a\n\n[2026-09-30 10:00:00] c\n").unwrap();
+        let i = j.insert_sorted("a.md", "[2026-09-30 09:00:00] b\n\n[2026-09-30 11:00:00] d").unwrap();
         assert_eq!(i, 1);
-        let e = parse_entries(&read(&d.path().join("a.md")));
+        let e = parse_entries(&j.read("a.md"));
         let ts: Vec<&str> = e.iter().map(|x| &x.ts[11..13]).collect();
         assert_eq!(ts, vec!["08", "09", "10", "11"]);
-        assert!(insert_sorted(d.path(), "a.md", "no header").is_err());
-        // Equal timestamps go after existing ones; skip_existing dedupes.
-        let r = insert_entries(d.path(), "a.md", &["[2026-09-30 08:00:00] a".into(), "[2026-09-30 08:00:00] a2".into()], true).unwrap();
+        assert!(j.insert_sorted("a.md", "no header").is_err());
+        let r = j.insert_entries("a.md", &["[2026-09-30 08:00:00] a".into(), "[2026-09-30 08:00:00] a2".into()], true).unwrap();
         assert_eq!(r, vec![None, Some(1)]);
     }
 
-    // #6: a title with a newline must stay on the header line.
     #[test]
     fn make_raw_collapses_title_whitespace() {
         let raw = make_raw("2026-09-30 08:00:00", "line1\n  line2\t x", false, "body");
@@ -846,5 +1336,122 @@ mod tests {
         let out = rebase_links(raw, f, "inbox.md");
         assert_eq!(out, "[2026-09-30 08:00:00]\n![](assets/2026/09/a.jpg) [f](<assets/2026/09/b c.pdf> \"t\") ![](assets/2026/09/d.jpg) [w](https://x.org/../a) ![](../../../notes/x.jpg)");
         assert_eq!(rebase_links(&out, f, "inbox.md"), out);
+    }
+
+    // ----- the inbox folder -----
+
+    #[test]
+    fn drafts_live_in_day_files() {
+        let (_d, j) = tmp();
+        let w = j.new_draft("2026-09-30 09:00:00", "Second", false, "b").unwrap();
+        assert_eq!(w.file, "inbox/2026/09/30.md");
+        let w2 = j.new_draft("2026-09-30 08:00:00", "First", false, "a").unwrap();
+        assert_eq!((w2.file.as_str(), w2.index), ("inbox/2026/09/30.md", 0), "kept in time order");
+        assert!(j.new_draft("2026-09-30 08:00:00", "", false, "  ").is_err());
+        let all = j.load_all();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().all(|e| e.source == "inbox"));
+        assert_eq!(all[0].title, "First");
+        assert_eq!(j.inbox_files(), vec!["inbox/2026/09/30.md"]);
+
+        // Filing removes it from the day file; the emptied file goes away.
+        let target = j.file_draft(&w2.file, 0, &w2.raw, &[]).unwrap();
+        assert_eq!(target, "journal/2026/09/30.md");
+        let rest = j.load_file("inbox/2026/09/30.md");
+        assert_eq!(rest.len(), 1);
+        j.file_draft(&rest[0].file, rest[0].index, &rest[0].raw, &["work".into()]).unwrap();
+        assert!(!j.is_file("inbox/2026/09/30.md"), "an empty day file is deleted");
+        assert_eq!(j.load_file("journal/2026/09/30.md").len(), 2);
+
+        // Return to inbox lands in the entry's own day.
+        let filed = j.load_file("journal/2026/09/30.md");
+        let back = j.unfile_entry(&filed[0].file, 0, &filed[0].raw).unwrap();
+        assert_eq!(back.file, "inbox/2026/09/30.md");
+        assert!(j.unfile_entry(&back.file, back.index, &back.raw).is_err());
+        assert!(j.file_draft("journal/2026/09/30.md", 0, "x", &[]).is_err());
+    }
+
+    #[test]
+    fn retiming_moves_between_day_files_in_both_trees() {
+        let (_d, j) = tmp();
+        let w = j.new_draft("2026-09-30 08:00:00", "t", false, "body").unwrap();
+        let moved = j.update_entry(&w.file, w.index, &w.raw, "2026-10-01 08:00:00", "t", false, "body").unwrap();
+        assert_eq!(moved.file, "inbox/2026/10/01.md");
+        assert!(!j.is_file("inbox/2026/09/30.md"));
+        // Same day, new time: re-sorted in place.
+        j.new_draft("2026-10-01 07:00:00", "early", false, "x").unwrap();
+        let es = j.load_file("inbox/2026/10/01.md");
+        assert_eq!(es[1].title, "t");
+        let r = j.update_entry(&es[1].file, es[1].index, &es[1].raw, "2026-10-01 06:00:00", "t", false, "body").unwrap();
+        assert_eq!(r.index, 0);
+        // Journal days behave the same.
+        j.write("journal/2026/10/01.md", "[2026-10-01 08:00:00] f\nb\n").unwrap();
+        let r = j.update_entry("journal/2026/10/01.md", 0, "[2026-10-01 08:00:00] f\nb", "2026-10-02 08:00:00", "f", false, "b").unwrap();
+        assert_eq!(r.file, "journal/2026/10/02.md");
+        assert!(!j.is_file("journal/2026/10/01.md"));
+        // A split journal keeps its file; a legacy inbox.md edits in place.
+        j.write("work.md", "[2026-10-01 08:00:00] w\n").unwrap();
+        assert_eq!(j.update_entry("work.md", 0, "[2026-10-01 08:00:00] w", "2026-10-05 08:00:00", "w", false, "").unwrap().file, "work.md");
+        j.write("inbox.md", "[2026-10-01 08:00:00] legacy\n").unwrap();
+        assert_eq!(j.update_entry("inbox.md", 0, "[2026-10-01 08:00:00] legacy", "2026-10-05 08:00:00", "legacy", false, "").unwrap().file, "inbox.md");
+        assert!(j.update_entry("assets/x.md", 0, "", "2026-10-05 08:00:00", "", false, "").is_err());
+    }
+
+    #[test]
+    fn delete_and_import_text() {
+        let (_d, j) = tmp();
+        let w = j.new_draft("2026-09-30 08:00:00", "t", false, "body").unwrap();
+        j.delete_entry(&w.file, w.index, &w.raw).unwrap();
+        assert!(!j.is_file(&w.file));
+        assert_eq!(j.import_text("plain words", "2026-09-30 09:00:00").unwrap(), 1);
+        assert_eq!(j.import_text("[2026-09-01 08:00:00] a\n\n[2026-09-02 08:00:00] b\n", "2026-09-30 09:00:00").unwrap(), 2);
+        assert_eq!(j.import_text("  ", "2026-09-30 09:00:00").unwrap(), 0);
+        assert_eq!(j.inbox_files(), vec!["inbox/2026/09/01.md", "inbox/2026/09/02.md", "inbox/2026/09/30.md"]);
+    }
+
+    #[test]
+    fn legacy_inbox_migrates_once_and_merges_later() {
+        let (_d, j) = tmp();
+        let text = "# notes\n\n[2026-01-05 09:00:00] Second day\nBody two.\n\n[2026-01-04 22:10:00]\nLate note @tag\n\n[2026-01-05 07:30:00] Early *\n- a\n";
+        j.write("inbox.md", text).unwrap();
+        j.write(".nook/searches.json", "[]").unwrap();
+        let rep = j.migrate_legacy_inbox().unwrap().unwrap();
+        assert_eq!((rep.moved, rep.skipped), (3, 0));
+        assert!(rep.backup.starts_with(".quire/migration/inbox-"), "{}", rep.backup);
+        assert!(!j.is_file("inbox.md"));
+        assert_eq!(j.read(&rep.backup), text, "the original is kept byte for byte");
+        assert!(j.is_file(".quire/searches.json") && !j.is_dir(".nook"), "sidecar renamed on first write");
+        assert_eq!(j.read("inbox/2026/01/04.md"), "[2026-01-04 22:10:00]\nLate note @tag\n");
+        assert_eq!(j.read("inbox/2026/01/05.md"), "[2026-01-05 07:30:00] Early *\n- a\n\n[2026-01-05 09:00:00] Second day\nBody two.\n");
+        assert_eq!(j.read("inbox/preamble.md"), "# notes\n");
+        assert_eq!(j.load_all().len(), 3, "preamble.md is not an entry file");
+        assert!(j.migrate_legacy_inbox().unwrap().is_none());
+        // An older app writes a fresh inbox.md: merged, duplicates skipped.
+        j.write("inbox.md", "[2026-01-05 09:00:00] Second day\nBody two.\n\n[2026-01-06 10:00:00] New\nx\n").unwrap();
+        let rep = j.migrate_legacy_inbox().unwrap().unwrap();
+        assert_eq!((rep.moved, rep.skipped), (1, 1));
+        assert_eq!(j.load_file("inbox/2026/01/05.md").len(), 2);
+        assert_eq!(j.read("inbox/2026/01/06.md"), "[2026-01-06 10:00:00] New\nx\n");
+        // Empty inbox.md: nothing to move, still tidied away.
+        j.write("inbox.md", "\n").unwrap();
+        let rep = j.migrate_legacy_inbox().unwrap().unwrap();
+        assert_eq!(rep.moved, 0);
+        assert!(!j.is_file("inbox.md"));
+    }
+
+    #[test]
+    fn sidecar_rules() {
+        let (_d, j) = tmp();
+        assert_eq!(j.sidecar(), ".quire");
+        j.write(".nook/a.json", "1").unwrap();
+        assert_eq!(j.sidecar(), ".nook");
+        assert_eq!(j.sidecar_mut().unwrap(), ".quire");
+        assert!(j.is_file(".quire/a.json") && !j.is_dir(".nook"));
+        // Both present (a sync race): read .quire, never rename over it.
+        j.write(".nook/b.json", "2").unwrap();
+        assert_eq!(j.sidecar(), ".quire");
+        j.sidecar_mut().unwrap();
+        assert!(j.is_file(".nook/b.json"));
+        assert_eq!(sidecar_dir_path(j.root()), j.root().join(".quire"));
     }
 }

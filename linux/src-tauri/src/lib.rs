@@ -41,7 +41,7 @@ struct Settings {
     /// Nook's Data Saver: compress media as it's attached.
     #[serde(default)]
     data_saver: bool,
-    /// This install's id for the shared .nook/datasaver-<id>.json ledger.
+    /// This install's id for the shared <sidecar>/datasaver-<id>.json ledger.
     #[serde(default)]
     device_id: Option<String>,
 }
@@ -131,18 +131,18 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 
 const UNAVAILABLE: &str = "Journal folder unavailable — nothing was saved";
 
-/// The journal folder for a write. Errors if it is unset or missing.
-fn root(state: &AppState) -> Result<PathBuf, String> {
+/// The journal for a write. Errors if its folder is unset or missing.
+fn root(state: &AppState) -> Result<Journal, String> {
     let f = lock(&state.settings).folder.clone().ok_or("No journal folder set")?;
     let p = PathBuf::from(f);
     if !p.is_dir() {
         return Err(UNAVAILABLE.into());
     }
-    Ok(p)
+    Ok(Journal::open(p))
 }
 
-/// The journal folder for a read.
-fn root_r(state: &AppState) -> Result<PathBuf, String> {
+/// The journal for a read.
+fn root_r(state: &AppState) -> Result<Journal, String> {
     root(state).map_err(|e| if e == UNAVAILABLE { "Journal folder unavailable".into() } else { e })
 }
 
@@ -163,8 +163,8 @@ fn run_backup(app: &AppHandle) -> Result<String, String> {
     let _g = BackupGuard::acquire()?;
     let s = settings_of(&state);
     let dir = s.backup_dir.clone().ok_or("Choose a backup folder first")?;
-    let r = root(&state)?;
-    let made = backup(&r, Path::new(&dir))?;
+    let j = root(&state)?;
+    let made = backup(&j, Path::new(&dir))?;
     prune_backups(Path::new(&dir), s.keep())?;
     let now = now_local();
     update_settings(&state, |s| s.last_backup = Some(now))?;
@@ -270,6 +270,10 @@ struct Snapshot {
     /// Bytes saved by compression, summed over every device's ledger.
     data_saved: i64,
     media_tools: media::ToolStatus,
+    /// Set when this load folded a legacy `inbox.md` into `inbox/`.
+    migration: Option<InboxMigration>,
+    /// Why a legacy `inbox.md` could not be folded in (it is still read).
+    migration_error: Option<String>,
 }
 
 #[tauri::command]
@@ -301,14 +305,25 @@ async fn load(state: State<'_, AppState>) -> Result<Snapshot, String> {
         data_saver: s.data_saver,
         data_saved: 0,
         media_tools: media::tools(),
+        migration: None,
+        migration_error: None,
     };
     if missing {
         return Ok(snap);
     }
-    let (entries, templates, searches, has_transfer, conflicts, saved) = blocking(move || {
-        Ok((load_all(&r), list_templates(&r), load_searches(&r), !read(&r.join("transfer.md")).trim().is_empty(), journal::conflict_files(&r), media::data_saved_total(&r)))
+    let (entries, templates, searches, has_transfer, conflicts, saved, migration) = blocking(move || {
+        let j = Journal::open(&r);
+        // An inbox.md left by jnl or Nook is folded into inbox/ first, so the
+        // load below sees one inbox. Failure is reported, never fatal: the
+        // file is still read in place.
+        let migration = j.migrate_legacy_inbox();
+        Ok((j.load_all(), list_templates(&j), load_searches(&j), !j.read("transfer.md").trim().is_empty(), j.conflict_files(), media::data_saved_total(&r), migration))
     })
     .await?;
+    match migration {
+        Ok(m) => snap.migration = m,
+        Err(e) => snap.migration_error = Some(e),
+    }
     snap.data_saved = saved;
     snap.entries = entries;
     snap.templates = templates;
@@ -344,31 +359,17 @@ fn save_ui(state: State<AppState>, ui: Value) -> Result<(), String> {
     update_settings(&state, |s| s.ui = ui)
 }
 
-/// What a single-entry write actually wrote, so the front end can keep an
-/// exact ref: `raw` compares equal (after trim_end) to the entry's raw on disk.
-#[derive(Serialize)]
-struct WriteResult {
-    file: String,
-    index: usize,
-    raw: String,
-}
-
-/// New draft → appended to inbox.md, exactly like `jnl`.
+/// New draft → its day's file under inbox/, in time order.
 #[tauri::command]
-fn create_draft(app: AppHandle, state: State<AppState>, ts: String, title: String, starred: bool, body: String) -> Result<WriteResult, String> {
-    let r = root(&state)?;
-    check_ts(&ts)?;
-    if title.trim().is_empty() && body.trim().is_empty() && !starred {
-        return Err("Nothing to save".into());
-    }
-    let raw = make_raw(&ts, &title, starred, &body);
-    let index = append_raw(&r, "inbox.md", &raw)?;
+fn create_draft(app: AppHandle, state: State<AppState>, ts: String, title: String, starred: bool, body: String) -> Result<Written, String> {
+    let w = root(&state)?.new_draft(&ts, &title, starred, &body)?;
     wrote(&app);
-    Ok(WriteResult { file: "inbox.md".into(), index, raw })
+    Ok(w)
 }
 
-/// Edit any entry in place. A filed entry whose date changes moves to the new
-/// day's file, kept in time order. A split-journal entry stays in its file.
+/// Edit any entry in place. An entry in a day file whose date changes moves
+/// to the new day's file (inbox or journal), kept in time order. A
+/// split-journal entry stays in its file.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn update_entry(
@@ -381,84 +382,35 @@ fn update_entry(
     title: String,
     starred: bool,
     body: String,
-) -> Result<WriteResult, String> {
-    let r = root(&state)?;
-    safe_entry_rel(&r, &file)?;
-    check_ts(&ts)?;
-    let (pre, mut raws, i) = locate(&r, &file, index, &expected_raw)?;
-    let new_raw = make_raw(&ts, &title, starred, &body);
-    let new_date = &ts[..10];
-    if file.starts_with("journal/") && journal_rel(new_date) != file {
-        let dest = journal_rel(new_date);
-        let new_raw = rebase_links(&new_raw, &file, &dest);
-        // Write the destination first: a failure leaves a duplicate, never a loss.
-        let idx = insert_sorted(&r, &dest, &new_raw)?;
-        raws.remove(i);
-        write_file_entries(&r, &file, &pre, &raws)?;
-        wrote(&app);
-        return Ok(WriteResult { file: dest, index: idx, raw: new_raw });
-    }
-    let old_ts = parse_entries(&raws[i]).first().map(|e| e.ts.clone()).unwrap_or_default();
-    raws[i] = new_raw.clone();
-    let mut idx = i;
-    if file.starts_with("journal/") && old_ts != ts {
-        // Re-sort the day so a retimed entry lands in order (stable).
-        let mut es: Vec<(usize, RawEntry)> =
-            raws.iter().enumerate().flat_map(|(k, x)| parse_entries(x).into_iter().map(move |e| (k, e))).collect();
-        es.sort_by(|a, b| a.1.ts.cmp(&b.1.ts));
-        idx = es.iter().position(|(k, _)| *k == i).unwrap_or(i);
-        raws = es.into_iter().map(|(_, e)| e.raw).collect();
-    }
-    write_file_entries(&r, &file, &pre, &raws)?;
+) -> Result<Written, String> {
+    let w = root(&state)?.update_entry(&file, index, &expected_raw, &ts, &title, starred, &body)?;
     wrote(&app);
-    Ok(WriteResult { file, index: idx, raw: new_raw })
+    Ok(w)
 }
 
 #[tauri::command]
 fn delete_entry(app: AppHandle, state: State<AppState>, file: String, index: usize, expected_raw: String) -> Result<(), String> {
-    let r = root(&state)?;
-    safe_entry_rel(&r, &file)?;
-    let (pre, mut raws, i) = locate(&r, &file, index, &expected_raw)?;
-    raws.remove(i);
-    write_file_entries(&r, &file, &pre, &raws)?;
+    root(&state)?.delete_entry(&file, index, &expected_raw)?;
     wrote(&app);
     Ok(())
 }
 
 /// File a draft: jnl's fileDraft (split tags first, else the day file,
-/// appended), then remove it from the inbox. Returns where it went.
+/// appended), then remove it from its inbox file. Returns where it went.
 #[tauri::command]
-fn file_draft(app: AppHandle, state: State<AppState>, index: usize, expected_raw: String) -> Result<String, String> {
-    let r = root(&state)?;
-    let (pre, mut raws, i) = locate(&r, "inbox.md", index, &expected_raw)?;
-    let e = parse_entries(&raws[i]).into_iter().next().ok_or("bad draft")?;
-    if e.body.is_empty() && e.suffix.is_empty() {
-        return Err("Nothing to file".into());
-    }
-    let target = split_target(&e.raw, &split_tags_of(&state)).unwrap_or_else(|| journal_rel(&e.date));
-    let raw = rebase_links(&rebuild(&e), "inbox.md", &target);
-    append_raw(&r, &target, &raw)?;
-    raws.remove(i);
-    write_file_entries(&r, "inbox.md", &pre, &raws)?;
+fn file_draft(app: AppHandle, state: State<AppState>, file: String, index: usize, expected_raw: String) -> Result<String, String> {
+    let target = root(&state)?.file_draft(&file, index, &expected_raw, &split_tags_of(&state))?;
     wrote(&app);
     Ok(target)
 }
 
-/// Nook's "Return to Inbox": move a filed entry back to the queue.
+/// Nook's "Return to Inbox": move a filed entry back to the queue, into the
+/// inbox day file of its own date.
 #[tauri::command]
-fn unfile_entry(app: AppHandle, state: State<AppState>, file: String, index: usize, expected_raw: String) -> Result<WriteResult, String> {
-    let r = root(&state)?;
-    safe_entry_rel(&r, &file)?;
-    if file == "inbox.md" {
-        return Err("That entry is already in the inbox".into());
-    }
-    let (pre, mut raws, i) = locate(&r, &file, index, &expected_raw)?;
-    let raw = rebase_links(raws.remove(i).trim_end(), &file, "inbox.md");
-    // Inbox first, then remove: a failure leaves a duplicate, never a loss.
-    let index = append_raw(&r, "inbox.md", &raw)?;
-    write_file_entries(&r, &file, &pre, &raws)?;
+fn unfile_entry(app: AppHandle, state: State<AppState>, file: String, index: usize, expected_raw: String) -> Result<Written, String> {
+    let w = root(&state)?.unfile_entry(&file, index, &expected_raw)?;
     wrote(&app);
-    Ok(WriteResult { file: "inbox.md".into(), index, raw })
+    Ok(w)
 }
 
 #[tauri::command]
@@ -485,7 +437,7 @@ async fn merge_ex_split(app: AppHandle, state: State<'_, AppState>) -> Result<Me
 
 #[tauri::command]
 fn conflict_files(state: State<AppState>) -> Result<Vec<String>, String> {
-    Ok(journal::conflict_files(&root_r(&state)?))
+    Ok(root_r(&state)?.conflict_files())
 }
 
 #[tauri::command]
@@ -507,8 +459,8 @@ fn set_split_tags(state: State<AppState>, tags: String) -> Result<(), String> {
 #[tauri::command]
 fn set_backup_dir(state: State<AppState>, path: Option<String>) -> Result<(), String> {
     let path = path.map(|p| expand_home(p.trim())).filter(|p| !p.is_empty());
-    if let (Some(p), Ok(r)) = (&path, root(&state)) {
-        check_backup_dir(&r, Path::new(p))?;
+    if let (Some(p), Ok(j)) = (&path, root(&state)) {
+        check_backup_dir(j.root(), Path::new(p))?;
     }
     update_settings(&state, |s| s.backup_dir = path)
 }
@@ -539,9 +491,10 @@ fn save_template_cmd(app: AppHandle, state: State<AppState>, name: String, body:
 #[tauri::command]
 fn new_template(app: AppHandle, state: State<AppState>) -> Result<String, String> {
     let r = root(&state)?;
+    let taken: Vec<String> = list_templates(&r).into_iter().map(|t| t.name).collect();
     let mut name = "New template".to_string();
     let mut n = 2;
-    while templates_dir(&r).join(format!("{}.md", name)).exists() {
+    while taken.contains(&name) {
         name = format!("New template {}", n);
         n += 1;
     }
@@ -581,7 +534,7 @@ async fn assets(state: State<'_, AppState>) -> Result<Vec<Asset>, String> {
 
 #[tauri::command]
 fn asset_path(state: State<AppState>, rel: String) -> Result<String, String> {
-    let p = safe_rel(&root_r(&state)?, &rel)?;
+    let p = safe_rel(root_r(&state)?.root(), &rel)?;
     if !p.exists() {
         return Err("No such asset".into());
     }
@@ -607,7 +560,7 @@ fn attach_file(app: AppHandle, state: State<AppState>, src: String, ts: String, 
         attach_prepared(&app, &state, &r, &bytes, &ext, &ts, &entry_file)?
     } else {
         let link = attach(&r, &src, &ts, &entry_file)?;
-        after_attach(&app, &state, &r, &link, None);
+        after_attach(&app, &state, r.root(), &link, None);
         link
     };
     wrote(&app);
@@ -615,14 +568,14 @@ fn attach_file(app: AppHandle, state: State<AppState>, src: String, ts: String, 
 }
 
 /// Images and HEIC go through Data Saver / HEIC→JPEG in memory first.
-fn attach_prepared(app: &AppHandle, state: &AppState, r: &Path, bytes: &[u8], ext: &str, ts: &str, entry_file: &str) -> Result<String, String> {
+fn attach_prepared(app: &AppHandle, state: &AppState, r: &Journal, bytes: &[u8], ext: &str, ts: &str, entry_file: &str) -> Result<String, String> {
     let saver = settings_of(state).data_saver;
     let (out, out_ext) = media::on_attach(bytes, ext, saver);
     let saved = bytes.len() as i64 - out.len() as i64;
     let tmp = tempfile::Builder::new().prefix(".quire-attach-").suffix(&format!(".{}", out_ext.to_lowercase())).tempfile().map_err(|e| e.to_string())?;
     fs::write(tmp.path(), &out).map_err(|e| e.to_string())?;
     let link = attach(r, tmp.path(), ts, entry_file)?;
-    after_attach(app, state, r, &link, if saver { Some(saved.max(0)) } else { None });
+    after_attach(app, state, r.root(), &link, if saver { Some(saved.max(0)) } else { None });
     Ok(link)
 }
 
@@ -710,7 +663,7 @@ fn set_data_saver(state: State<AppState>, on: bool) -> Result<(), String> {
 #[tauri::command]
 async fn data_saved(state: State<'_, AppState>) -> Result<i64, String> {
     let r = root(&state)?;
-    blocking(move || Ok(media::data_saved_total(&r))).await
+    blocking(move || Ok(media::data_saved_total(r.root()))).await
 }
 
 /// Nook's "Compress Existing Media": HEIC→JPEG with relinking first, then
@@ -721,7 +674,7 @@ async fn compress_existing(app: AppHandle, state: State<'_, AppState>) -> Result
     let device = device_id(&state);
     let a2 = app.clone();
     let rep = blocking(move || {
-        media::compress_existing(&r, &device, &mut |done, total| {
+        media::compress_existing(r.root(), &device, &mut |done, total| {
             let _ = a2.emit("media-progress", serde_json::json!({ "done": done, "total": total }));
         })
     })
@@ -752,7 +705,7 @@ fn attach_bytes(app: AppHandle, state: State<AppState>, name: String, bytes_b64:
         let tmp = tempfile::Builder::new().prefix(".quire-paste-").suffix(&format!(".{}", ext)).tempfile().map_err(|e| e.to_string())?;
         fs::write(tmp.path(), &bytes).map_err(|e| e.to_string())?;
         let link = attach(&r, tmp.path(), &ts, &entry_file)?;
-        after_attach(&app, &state, &r, &link, None);
+        after_attach(&app, &state, r.root(), &link, None);
         link
     };
     wrote(&app);
@@ -879,22 +832,10 @@ async fn file_transfer(app: AppHandle, state: State<'_, AppState>, now_ts: Strin
 /// Split pasted text into drafts: per [header] when present, else one draft.
 #[tauri::command]
 fn import_text(app: AppHandle, state: State<AppState>, text: String, now_ts: String) -> Result<usize, String> {
-    let r = root(&state)?;
-    check_ts(&now_ts)?;
-    let parsed = parse_entries(&text);
-    if parsed.is_empty() {
-        if text.trim().is_empty() {
-            return Ok(0);
-        }
-        append_raw(&r, "inbox.md", &make_raw(&now_ts, "", false, text.trim()))?;
+    let n = root(&state)?.import_text(&text, &now_ts)?;
+    if n > 0 {
         wrote(&app);
-        return Ok(1);
     }
-    let n = parsed.len();
-    for e in parsed {
-        append_raw(&r, "inbox.md", &rebuild(&e))?;
-    }
-    wrote(&app);
     Ok(n)
 }
 
@@ -965,7 +906,8 @@ fn start_watcher(app: AppHandle, folder: PathBuf) -> Result<notify::RecommendedW
     .map_err(|e| e.to_string())?;
     watcher.watch(&folder, RecursiveMode::Recursive).map_err(|e| e.to_string())?;
     let is_own = {
-        let nook = folder.join(".nook");
+        let nook = folder.join(LEGACY_SIDECAR);
+        let quire = folder.join(SIDECAR);
         let assets = folder.join("assets");
         move |ev: &Result<notify::Event, notify::Error>| match ev {
             // Sidecar and media writes, and temp files, never change entries.
@@ -973,7 +915,7 @@ fn start_watcher(app: AppHandle, folder: PathBuf) -> Result<notify::RecommendedW
                 !e.paths.is_empty()
                     && e.paths.iter().all(|p| {
                         let n = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                        p.starts_with(&nook) || p.starts_with(&assets) || n.ends_with(".tmp") || n.starts_with("._tmp_")
+                        p.starts_with(&nook) || p.starts_with(&quire) || p.starts_with(&assets) || n.ends_with(".tmp") || n.starts_with("._tmp_")
                     })
             }
             Err(_) => false,
@@ -1003,7 +945,7 @@ fn start_watcher(app: AppHandle, folder: PathBuf) -> Result<notify::RecommendedW
 
 #[tauri::command]
 fn rewatch(app: AppHandle, state: State<AppState>) -> Result<(), String> {
-    let w = start_watcher(app, root_r(&state)?)?;
+    let w = start_watcher(app, root_r(&state)?.root().to_path_buf())?;
     // Assigning drops the previous watcher (and so its thread).
     *lock(&state.watcher) = Some(w);
     Ok(())

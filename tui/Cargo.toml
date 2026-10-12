@@ -6,13 +6,26 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "quire_tui"
+path = "src/lib.rs"
+
 [[bin]]
 name = "quire"
-path = "src/main.rs"
+path = "src/bin/quire.rs"
 
 [[bin]]
 name = "jnl"
-path = "src/main.rs"
+path = "src/bin/jnl.rs"
 
 [dependencies]
 quire-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+ratatui = "0.30"
+crossterm = "0.29"
+tui-textarea = "0.7"
+unicode-width = "0.2"
+rand = "0.9"
