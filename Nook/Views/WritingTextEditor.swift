@@ -23,6 +23,13 @@
 //                        notifications, so the shortcut reaches whichever
 //                        editor is focused).
 //
+//  `mirror` turns the same view into a read-only copy for the external display:
+//  the monitor renders the editor's text through this very styling code (so
+//  `_italic_`, `**bold**`, `` `code` `` and `@tags` look exactly as they do on
+//  the phone, and can't drift), draws a caret of its own at `mirrorCaret`, and
+//  scrolls to keep it in view. `onCaretChange` is the other half: the live
+//  editor reports where its caret is so the mirror can follow it.
+//
 
 import SwiftUI
 
@@ -106,6 +113,16 @@ struct WritingTextEditor: NSViewRepresentable {
     var focusParagraph = false
     /// Known tag names (no @), frequency-ordered — offered while typing @….
     var tagSuggestions: [String] = []
+    /// Where the caret is (a UTF-16 offset, at the end of any selection),
+    /// reported on every move; nil once the editor gives up keyboard focus.
+    /// The composer forwards it to the external display.
+    var onCaretChange: ((Int?) -> Void)? = nil
+    /// Mirror mode (the external display): read-only, no Dynamic Type scaling
+    /// (the monitor's type is sized off the panel, not the phone's text
+    /// setting), with a caret of its own drawn at `mirrorCaret` and kept in
+    /// view as the text grows.
+    var mirror = false
+    var mirrorCaret: Int? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
@@ -123,6 +140,12 @@ struct WritingTextEditor: NSViewRepresentable {
         tv.allowsUndo = true
         tv.textContainerInset = .zero
         tv.textContainer?.lineFragmentPadding = 0
+        if mirror {
+            // The external display is iOS-only; this keeps the shared call
+            // site compiling. Read-only, no caret of its own.
+            tv.isEditable = false
+            tv.isSelectable = false
+        }
         context.coordinator.textView = tv
         apply(to: tv)
         return scroll
@@ -163,6 +186,7 @@ struct WritingTextEditor: NSViewRepresentable {
         context.coordinator.recenter = (typewriter && !sizeToFit) ? { Self.centerCaret(tv) } : nil
         context.coordinator.focusParagraph = focusParagraph
         context.coordinator.tagSuggestions = tagSuggestions
+        context.coordinator.onCaretChange = onCaretChange
     }
 
     /// Everything that changes how text is styled, so unchanged updates skip
@@ -297,6 +321,8 @@ struct WritingTextEditor: NSViewRepresentable {
         var tagSuggestions: [String] = []
         /// What the last full apply styled with — updateNSView's skip check.
         var lastStyleSignature = ""
+        /// Caret reporting for the external display (see `onCaretChange`).
+        var onCaretChange: ((Int?) -> Void)?
         /// The post-edit range of the in-flight user edit, recorded in
         /// shouldChangeText; nil for programmatic replacements (full restyle).
         private var pendingEditRange: NSRange?
@@ -364,6 +390,15 @@ struct WritingTextEditor: NSViewRepresentable {
         func textViewDidChangeSelection(_ notification: Notification) {
             if focusParagraph { reapply?() }   // the dimmed region follows the caret
             recenter?()
+            reportCaret()
+        }
+
+        func textDidBeginEditing(_ notification: Notification) { reportCaret() }
+        func textDidEndEditing(_ notification: Notification) { onCaretChange?(nil) }
+
+        private func reportCaret() {
+            guard let onCaretChange, let tv = textView else { return }
+            onCaretChange(tv.window?.firstResponder === tv ? NSMaxRange(tv.selectedRange()) : nil)
         }
 
         /// ↩ continues / ends a list; anything else falls through.
@@ -416,7 +451,7 @@ struct WritingTextEditor: NSViewRepresentable {
 #elseif os(iOS)
 import UIKit
 
-private func platformFont(_ raw: String, _ size: CGFloat) -> UIFont {
+private func platformFont(_ raw: String, _ size: CGFloat, scaled: Bool = true) -> UIFont {
     let base: UIFont
     switch WritingFont(rawValue: raw) ?? .lato {
     case .lato:   base = UIFont(name: "Lato-Regular", size: size) ?? .systemFont(ofSize: size)
@@ -426,7 +461,9 @@ private func platformFont(_ raw: String, _ size: CGFloat) -> UIFont {
     }
     // Track Dynamic Type: the px preference is the base size; the system's
     // text-size setting scales it, so accessibility sizes reach the editor too
-    // (SwiftUI's Font.custom already scales everywhere else).
+    // (SwiftUI's Font.custom already scales everywhere else). Not for the
+    // external-display mirror, whose size is already set off the monitor.
+    guard scaled else { return base }
     return UIFontMetrics(forTextStyle: .body).scaledFont(for: base)
 }
 private func designed(_ size: CGFloat, _ design: UIFontDescriptor.SystemDesign) -> UIFont {
@@ -451,11 +488,21 @@ struct WritingTextEditor: UIViewRepresentable {
     var focusParagraph = false
     /// Known tag names (no @), frequency-ordered — offered while typing @….
     var tagSuggestions: [String] = []
+    /// Where the caret is (a UTF-16 offset, at the end of any selection),
+    /// reported on every move; nil once the editor gives up keyboard focus.
+    /// The composer forwards it to the external display.
+    var onCaretChange: ((Int?) -> Void)? = nil
+    /// Mirror mode (the external display): read-only, no Dynamic Type scaling
+    /// (the monitor's type is sized off the panel, not the phone's text
+    /// setting), with a caret of its own drawn at `mirrorCaret` and kept in
+    /// view as the text grows.
+    var mirror = false
+    var mirrorCaret: Int? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
     func makeUIView(context: Context) -> UITextView {
-        let tv = UITextView()
+        let tv: UITextView = mirror ? MirrorTextView() : UITextView()
         tv.delegate = context.coordinator
         tv.backgroundColor = .clear
         tv.showsVerticalScrollIndicator = false
@@ -463,6 +510,14 @@ struct WritingTextEditor: UIViewRepresentable {
         tv.textContainerInset = .zero
         tv.textContainer.lineFragmentPadding = 0
         tv.isScrollEnabled = !sizeToFit
+        if mirror {
+            // Nobody can touch the monitor; the view scrolls itself to the
+            // caret instead. Selectable stays on — the caret geometry comes
+            // from the text-input machinery, which a non-selectable view
+            // doesn't keep up.
+            tv.isEditable = false
+            tv.isUserInteractionEnabled = false
+        }
         context.coordinator.textView = tv
         apply(to: tv)
         return tv
@@ -471,6 +526,7 @@ struct WritingTextEditor: UIViewRepresentable {
     func updateUIView(_ tv: UITextView, context: Context) {
         context.coordinator.text = $text
         context.coordinator.textView = tv
+        if mirror { updateMirror(tv, context: context); return }
         tv.isScrollEnabled = !sizeToFit
         // Restyle only when something actually changed — the coordinator has
         // already restyled the edited paragraph on the keystroke path, and the
@@ -500,12 +556,57 @@ struct WritingTextEditor: UIViewRepresentable {
         context.coordinator.recenter = (typewriter && !sizeToFit) ? { Self.centerCaret(tv) } : nil
         context.coordinator.focusParagraph = focusParagraph
         context.coordinator.tagSuggestions = tagSuggestions
+        context.coordinator.onCaretChange = onCaretChange
+    }
+
+    /// The mirror's update: merge the new text in as one edit, restyle what
+    /// changed, and hand the caret to the view. No typewriter, focus dim or
+    /// tag bar — none of them mean anything on a screen nobody types into.
+    private func updateMirror(_ tv: UITextView, context: Context) {
+        let signature = styleSignature
+        if tv.text != text {
+            mergeMirrorText(tv, text)
+            (tv as? MirrorTextView)?.noteTextChanged()
+        }
+        if context.coordinator.lastStyleSignature != signature {
+            apply(to: tv)
+            context.coordinator.lastStyleSignature = signature
+        }
+        // Room under the last line, so the caret can sit mid-screen at the end
+        // of the text instead of the newest words hugging the bottom edge.
+        tv.contentInset.bottom = tv.bounds.height * 0.45
+        if let m = tv as? MirrorTextView {
+            m.caretColor = UIColor(accent)
+            m.caretIndex = mirrorCaret
+        }
+    }
+
+    /// Apply the new text as a single edit — the common prefix and suffix stay
+    /// put, so a keystroke restyles only its own paragraph and the scroll
+    /// position holds. Assigning `tv.text` wholesale re-laid-out everything
+    /// and threw the offset away, which is what kept the monitor pinned to the
+    /// top or the bottom rather than to the caret.
+    private func mergeMirrorText(_ tv: UITextView, _ new: String) {
+        let old = tv.text as NSString
+        let incoming = new as NSString
+        let shortest = min(old.length, incoming.length)
+        var prefix = 0
+        while prefix < shortest, old.character(at: prefix) == incoming.character(at: prefix) { prefix += 1 }
+        var suffix = 0
+        while suffix < shortest - prefix,
+              old.character(at: old.length - 1 - suffix) == incoming.character(at: incoming.length - 1 - suffix) {
+            suffix += 1
+        }
+        let range = NSRange(location: prefix, length: old.length - prefix - suffix)
+        let replacement = incoming.substring(with: NSRange(location: prefix, length: incoming.length - prefix - suffix))
+        tv.textStorage.replaceCharacters(in: range, with: replacement)
+        styleParagraph(tv, around: NSRange(location: prefix, length: (replacement as NSString).length))
     }
 
     /// Everything that changes how text is styled, so unchanged updates skip
     /// the full re-attribute.
     private var styleSignature: String {
-        "\(fontRaw)|\(size)|\(lineSpacing)|\(highlightTags)|\(focusParagraph)|\(textColor)|\(accent)"
+        "\(fontRaw)|\(size)|\(lineSpacing)|\(highlightTags)|\(focusParagraph)|\(textColor)|\(accent)|\(mirror)"
     }
 
     /// Re-attribute just the paragraph(s) covering `range` — the per-keystroke
@@ -516,7 +617,7 @@ struct WritingTextEditor: UIViewRepresentable {
         let clamped = NSRange(location: min(range.location, ns.length),
                               length: min(range.length, ns.length - min(range.location, ns.length)))
         let target = ns.paragraphRange(for: clamped)
-        let font = platformFont(fontRaw, size)
+        let font = platformFont(fontRaw, size, scaled: !mirror)
         let color = UIColor(textColor)
         let para = NSMutableParagraphStyle(); para.lineSpacing = lineSpacing
         tv.textStorage.setAttributes([.font: font, .foregroundColor: color, .paragraphStyle: para], range: target)
@@ -543,7 +644,7 @@ struct WritingTextEditor: UIViewRepresentable {
     }
 
     private func apply(to tv: UITextView) {
-        let font = platformFont(fontRaw, size)
+        let font = platformFont(fontRaw, size, scaled: !mirror)
         let color = UIColor(textColor)
         let para = NSMutableParagraphStyle(); para.lineSpacing = lineSpacing
         tv.font = font
@@ -612,7 +713,7 @@ struct WritingTextEditor: UIViewRepresentable {
         let para = NSMutableParagraphStyle(); para.lineSpacing = lineSpacing
         let attributed = NSAttributedString(
             string: text.isEmpty ? " " : text,
-            attributes: [.font: platformFont(fontRaw, size), .paragraphStyle: para])
+            attributes: [.font: platformFont(fontRaw, size, scaled: !mirror), .paragraphStyle: para])
         let bounds = attributed.boundingRect(
             with: CGSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
@@ -634,6 +735,8 @@ struct WritingTextEditor: UIViewRepresentable {
         var tagSuggestions: [String] = []
         /// What the last full apply styled with — updateUIView's skip check.
         var lastStyleSignature = ""
+        /// Caret reporting for the external display (see `onCaretChange`).
+        var onCaretChange: ((Int?) -> Void)?
         /// The post-edit range of the in-flight user edit, recorded in
         /// shouldChangeTextIn; nil for programmatic replacements (full restyle).
         private var pendingEditRange: NSRange?
@@ -666,6 +769,18 @@ struct WritingTextEditor: UIViewRepresentable {
             if focusParagraph { reapply?() }   // the dimmed region follows the caret
             recenter?()
             updateTagBar(textView)
+            reportCaret(textView)
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) { reportCaret(textView) }
+        func textViewDidEndEditing(_ textView: UITextView) { onCaretChange?(nil) }
+
+        /// The end of the selection, or nil while the keyboard is elsewhere
+        /// (the title field, say) — the monitor shouldn't blink a caret the
+        /// phone isn't showing.
+        private func reportCaret(_ tv: UITextView) {
+            guard let onCaretChange else { return }
+            onCaretChange(tv.isFirstResponder ? NSMaxRange(tv.selectedRange) : nil)
         }
 
         // MARK: @-completion bar (keyboard accessory)
@@ -792,6 +907,102 @@ struct WritingTextEditor: UIViewRepresentable {
             tv.selectedRange = NSRange(location: sel.location + markerLen, length: sel.length)
             textViewDidChange(tv)
         }
+    }
+}
+
+/// The text view behind the external display's live entry. A read-only
+/// UITextView draws no caret, so this draws its own — a bar in the accent
+/// colour at `caretIndex`, blinking like the real one — and scrolls to keep
+/// it in view: the phone's editor follows the caret, so the monitor must too,
+/// or a correction three paragraphs up happens off-screen.
+final class MirrorTextView: UITextView {
+    /// UTF-16 offset of the caret; nil hides it (the body isn't focused).
+    var caretIndex: Int? {
+        didSet { if caretIndex != oldValue { caretMoved = true; setNeedsLayout() } }
+    }
+    var caretColor: UIColor = .tintColor {
+        didSet { caretView.backgroundColor = caretColor }
+    }
+
+    private let caretView = UIView()
+    /// Set when the caret or the text changed, so the next layout scrolls;
+    /// a layout pass on its own (every scroll tick is one) must not.
+    private var caretMoved = false
+    private var blink: Timer?
+
+    override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        configure()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configure()
+    }
+
+    deinit { blink?.invalidate() }
+
+    private func configure() {
+        caretView.isHidden = true
+        caretView.backgroundColor = caretColor
+        caretView.layer.cornerRadius = 1
+        addSubview(caretView)
+        let timer = Timer(timeInterval: 0.55, repeats: true) { [weak self] _ in
+            guard let self, self.caretIndex != nil else { return }
+            self.caretView.alpha = self.caretView.alpha < 0.5 ? 1 : 0
+        }
+        // `.common`, so the blink carries on through the scroll animation.
+        RunLoop.main.add(timer, forMode: .common)
+        blink = timer
+    }
+
+    /// The text was replaced underneath the caret: its rect has moved even if
+    /// its index hasn't, and the newest line may be off-screen.
+    func noteTextChanged() {
+        caretMoved = true
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        positionCaret()
+    }
+
+    private func positionCaret() {
+        let length = (text as NSString).length
+        guard let index = caretIndex,
+              let position = position(from: beginningOfDocument, offset: min(max(index, 0), length))
+        else {
+            caretView.isHidden = true
+            return
+        }
+        // `caretRect` is in the view's own coordinates — content space for a
+        // scroll view — which is also where subviews are placed.
+        var rect = caretRect(for: position)
+        guard rect.origin.y.isFinite, rect.height > 0 else { caretView.isHidden = true; return }
+        rect.size.width = max(2, (font?.pointSize ?? 20) * 0.08)
+        caretView.frame = rect
+        caretView.isHidden = false
+        bringSubviewToFront(caretView)
+        guard caretMoved else { return }
+        caretMoved = false
+        caretView.alpha = 1   // a caret that just moved is a solid one
+        keepVisible(rect)
+    }
+
+    /// Scroll only once the caret leaves a comfortable band — a line's worth
+    /// in from each edge — and then put it a little above centre, where a
+    /// reader's eye rests, rather than pinning the newest words to the bottom.
+    private func keepVisible(_ caret: CGRect) {
+        let height = bounds.height
+        guard height > 0 else { return }
+        let margin = min(height * 0.2, caret.height * 2)
+        let visibleTop = contentOffset.y + margin
+        let visibleBottom = contentOffset.y + height - margin
+        guard caret.minY < visibleTop || caret.maxY > visibleBottom else { return }
+        let target = caret.midY - height * 0.45
+        let maxY = max(0, contentSize.height + contentInset.bottom - height)
+        setContentOffset(CGPoint(x: 0, y: min(max(0, target), maxY)), animated: true)
     }
 }
 #endif
