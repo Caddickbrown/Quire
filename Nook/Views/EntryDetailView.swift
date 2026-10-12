@@ -41,6 +41,8 @@ struct EntryDetailView: View {
     @State private var title: String
     @State private var date: Date
     @State private var text: String
+    /// The body editor's caret, for the external display (see WritingView).
+    @State private var caret: Int?
     @State private var baselineRaw: String
     /// What this editor last wrote, and where. The store looks an entry up by
     /// its text, so the lookup key has to follow every save — passing the
@@ -191,8 +193,11 @@ struct EntryDetailView: View {
         // save, adopt it; the fields held the pre-star text and the next
         // keystroke wrote the star straight back off.
         .onChange(of: entry) { _, e in adopt(e) }
-        // Present the entry on a connected external display (iOS second screen).
-        .externalDisplay(.reading(title: title, date: date, text: text, isStarred: isStarred))
+        // Present the entry on a connected external display (iOS second
+        // screen): Edit mirrors the editor, caret and all; Preview renders it.
+        .externalDisplay(mode == .edit
+            ? .editing(title: title, date: date, text: text, caret: caret, isStarred: isStarred)
+            : .reading(title: title, date: date, text: text, isStarred: isStarred))
         .onDisappear { finishRecordingIfNeeded(); flush() }
         .alert("Transcription", isPresented: Binding(
             get: { transcribeError != nil },
@@ -397,7 +402,8 @@ struct EntryDetailView: View {
                               accent: accent,
                               typewriter: typewriterScroll,
                               focusParagraph: focusParagraph,
-                              tagSuggestions: store.tagCounts.map { String($0.tag.dropFirst()) })
+                              tagSuggestions: store.tagCounts.map { String($0.tag.dropFirst()) },
+                              onCaretChange: { caret = $0 })
                 .focused($bodyFocused)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {

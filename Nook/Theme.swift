@@ -14,9 +14,11 @@ enum Theme {
     static let fontSizes: [CGFloat] = [16, 18, 20, 22, 24, 26]
     static let defaultFontSize: CGFloat = 18
 
-    /// Resolve the user's chosen writing font at a size.
-    static func font(_ raw: String, size: CGFloat) -> Font {
-        (WritingFont(rawValue: raw) ?? .lato).font(size)
+    /// Resolve the user's chosen writing font at a size. `fixed` opts out of
+    /// Dynamic Type — for a screen whose type is already sized off the panel
+    /// (the external display), not for anything read on the device.
+    static func font(_ raw: String, size: CGFloat, fixed: Bool = false) -> Font {
+        (WritingFont(rawValue: raw) ?? .lato).font(size, fixed: fixed)
     }
 
     /// Body text colour — dark gray in light mode, off-white in dark mode.
@@ -182,9 +184,11 @@ enum WritingFont: String, CaseIterable, Identifiable {
         }
     }
 
-    func font(_ size: CGFloat) -> Font {
+    /// `fixed` skips Dynamic Type (only `.custom` fonts scale with it; the
+    /// `.system(size:)` variants are already fixed).
+    func font(_ size: CGFloat, fixed: Bool = false) -> Font {
         switch self {
-        case .lato:   return .custom("Lato-Regular", size: size)
+        case .lato:   return fixed ? .custom("Lato-Regular", fixedSize: size) : .custom("Lato-Regular", size: size)
         case .system: return .system(size: size)
         case .serif:  return .system(size: size, design: .serif)
         case .mono:   return .system(size: size, design: .monospaced)

@@ -92,6 +92,10 @@ section is dated development history rather than versioned releases.
   turns the device's own brightness down while a display is connected, with a
   slider for how far, and puts it back when you unplug or quit. Off by default.
   Because Nook no longer mirrors, dimming the phone doesn't dim the monitor.
+- **External display** (iOS): **Settings → External display → Text size** —
+  Small / Regular / Large for the monitor's type. Regular now suits a monitor
+  on a desk (about 35pt on a 1080p panel, down from 50); Large is the old
+  across-the-room size.
 - **Composer** (iOS): a Done button (and ⎋) to save the draft and go back to the
   menu. The composer is opened by switching section rather than by pushing, so
   it never had a back button — there was no way out of it.
@@ -236,6 +240,13 @@ section is dated development history rather than versioned releases.
   and **Use Default**, with the same recovery in Settings → Journal folder.
 
 ### Changed
+- **External display** (iOS): the monitor now mirrors the editor itself while
+  you write — the same code that styles the phone's text styles the monitor's,
+  so `@tags` take the accent colour and `_italics_`, `**bold**` and `` `code` ``
+  render as they do on the device (the body was a plain, unstyled wall of
+  text before). Editing an existing entry mirrors the editor too; Preview still
+  shows the rendered entry with its media. The monitor's type no longer scales
+  with the device's Dynamic Type setting on top of its own size.
 - **Performance** (large journals): section switches and edits no longer wait
   on background work — every mutation patches the on-screen lists instantly
   from the file it just wrote, and the full re-index runs debounced behind it;
@@ -363,6 +374,20 @@ section is dated development history rather than versioned releases.
   `main` both lived in that layer and neither was reachable by a test before.
 
 ### Fixed
+- **External display** (iOS): the caret on the monitor now sits where the
+  caret is in the entry, and the monitor scrolls to keep *it* in view. It was
+  drawn after the last character whatever you were editing, and the screen was
+  pinned to the end of the text — a correction three paragraphs up happened
+  off-screen. It follows a hardware keyboard's arrow keys and a mouse click
+  (AssistiveTouch on iPhone, native on iPad) on the device, and hides while the
+  title field has the keyboard. Scrolling only moves when the caret leaves a
+  band near the edges, and then settles it a little above centre.
+- **External display** (iOS): plugging in while the app is locked no longer
+  puts the last open entry on the monitor until Face ID clears — the display
+  now connects to the idle screen and picks the entry up on unlock.
+- **External display** (iOS): the composer's hint bar no longer offers `?` for
+  hints — with the editor focused that key types a question mark; it lists
+  ⌘B / ⌘I instead.
 - **Performance**: typing no longer stutters in a large journal. Autosaving a
   draft re-read and re-parsed the whole inbox every time (~28 ms on the main
   thread with ~900 drafts); it now reuses the parse when the file on disk is

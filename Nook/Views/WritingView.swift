@@ -57,6 +57,9 @@ struct WritingView: View {
     @State private var datePinned = false
     @State private var lastAutoStamp: Date?
     @State private var text = ""
+    /// The body editor's caret (UTF-16 offset), nil while the body isn't
+    /// focused — forwarded to the external display so its caret tracks ours.
+    @State private var caret: Int?
     @State private var activeTS: String?
     /// How many `[timestamp]` headers the working text carries. Non-zero means
     /// a paste that would split into several drafts: the format has no escape
@@ -137,7 +140,8 @@ struct WritingView: View {
                               accent: accent,
                               typewriter: typewriterScroll,
                               focusParagraph: focusParagraph,
-                              tagSuggestions: store.tagCounts.map { String($0.tag.dropFirst()) })
+                              tagSuggestions: store.tagCounts.map { String($0.tag.dropFirst()) },
+                              onCaretChange: { caret = $0 })
                 .focused($bodyFocused)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
@@ -319,7 +323,7 @@ struct WritingView: View {
         }
         .onChange(of: nav.newEntrySignal) { _, _ in newEntry() }
         // Put the live text on a connected external display (iOS second screen).
-        .externalDisplay(.composing(title: title, date: date, text: text))
+        .externalDisplay(.composing(title: title, date: date, text: text, caret: caret))
         .onAppear { focusStart() }
         .onDisappear { finishRecordingIfNeeded(); flush() }
         .overlay(alignment: .bottom) {

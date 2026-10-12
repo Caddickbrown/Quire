@@ -21,6 +21,7 @@ struct SettingsView: View {
     @AppStorage("showWeekNumbers") private var showWeekNumbers = false
     @AppStorage(ExternalDisplayModel.autoDimKey) private var dimWithExternalDisplay = false
     @AppStorage(ExternalDisplayModel.dimLevelKey) private var externalDisplayDimLevel = ExternalDisplayModel.dimFloor
+    @AppStorage(ExternalTextSize.key) private var externalTextSizeRaw = ExternalTextSize.regular.rawValue
     @AppStorage("inboxSwipeLeft") private var swipeLeftRaw = SwipeAction.file.rawValue
     @AppStorage("inboxSwipeRight") private var swipeRightRaw = SwipeAction.delete.rawValue
     @AppStorage("splitTags") private var splitTagsRaw: String = ""
@@ -340,6 +341,9 @@ struct SettingsView: View {
 
             #if os(iOS)
             Section {
+                Picker("Text size", selection: $externalTextSizeRaw) {
+                    ForEach(ExternalTextSize.allCases) { Text($0.label).tag($0.rawValue) }
+                }
                 // onChange sits on the controls, not the Section: a modified
                 // Section is no longer a Section to the enclosing Form.
                 Toggle("Dim this screen", isOn: $dimWithExternalDisplay)
@@ -365,7 +369,7 @@ struct SettingsView: View {
             } header: {
                 Text("External display")
             } footer: {
-                Text("Connected to a monitor, Nook shows your writing on it instead of mirroring — so this screen's brightness no longer affects what's up there, and turning it down saves power. Restored when you unplug.")
+                Text("Connected to a monitor, Nook shows your writing on it instead of mirroring. Text size is for that screen — Regular suits a monitor on a desk, Large a TV across the room. Dimming this screen no longer affects what's up there, and turning it down saves power; it's restored when you unplug.")
             }
 
             Section {

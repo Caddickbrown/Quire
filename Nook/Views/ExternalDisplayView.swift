@@ -14,9 +14,11 @@
 //  * the monitor can show something better suited to being read from across a
 //    room than a phone UI blown up.
 //
-//  The external window follows what you're doing: composing puts a live wall of
-//  the text on the monitor as you type, reading an entry lays it out with its
-//  media inline, and with neither on screen it rests on an idle screen.
+//  The external window follows what you're doing: composing (or editing an
+//  entry) mirrors the editor on the monitor as you type — same styling, and a
+//  caret that tracks the phone's, so the monitor scrolls to where you are
+//  rather than to the end — reading an entry lays it out with its media
+//  inline, and with neither on screen it rests on an idle screen.
 //
 //  Cross-platform by design — the content model and the views compile on macOS
 //  (where they go unused) and only the UIKit scene plumbing and the brightness
@@ -37,8 +39,12 @@ enum ExternalDisplayContent: Equatable {
     case idle
     /// A list being arrowed through. Stats give way to this on the first ↑/↓.
     case browsing(listTitle: String, rows: [ExternalRow], selected: Int)
-    /// The composer's live text, republished as you type.
-    case composing(title: String, date: Date, text: String)
+    /// The composer's live text, republished as you type. `caret` is the
+    /// editor's caret (a UTF-16 offset), nil while the body isn't focused.
+    case composing(title: String, date: Date, text: String, caret: Int?)
+    /// An existing entry open in its editor — the same live mirror as the
+    /// composer, with the entry editor's own key hints.
+    case editing(title: String, date: Date, text: String, caret: Int?, isStarred: Bool)
     /// An entry being read, rendered with its media inline.
     case reading(title: String, date: Date, text: String, isStarred: Bool)
 }
@@ -144,7 +150,10 @@ struct ExternalRow: Equatable, Identifiable {
 
     func displayDidConnect() {
         isConnected = true
-        content = latest
+        // Not `latest` while the app is locked or veiled: a phone plugged in
+        // from the lock screen would otherwise put the open entry straight
+        // up on the monitor. `applyLockState` restores it on unlock.
+        content = AppLockManager.shared.showsVeil ? .idle : latest
         applyAutoDim()
     }
 
@@ -267,10 +276,37 @@ private struct ExternalDisplayPresenter: ViewModifier {
 
 // MARK: - Layout metrics
 
+/// How big the monitor's type is (`Settings → External display → Text size`).
+/// One scale for everything on that screen — a desk monitor and a TV across
+/// the room want different sizes, and the panel's height alone can't tell
+/// which it is driving.
+enum ExternalTextSize: String, CaseIterable, Identifiable {
+    case small, regular, large
+    var id: String { rawValue }
+    static let key = "externalDisplayTextSize"
+
+    var label: String {
+        switch self {
+        case .small:   return "Small"
+        case .regular: return "Regular"
+        case .large:   return "Large"
+        }
+    }
+
+    var scale: CGFloat {
+        switch self {
+        case .small:   return 0.8
+        case .regular: return 1
+        case .large:   return 1.25
+        }
+    }
+}
+
 /// Type sized for the monitor rather than the phone. The app's own text-size
-/// preference is calibrated for arm's length; an external display is usually
-/// 1080p or better and read from across a room, so everything scales off the
-/// panel's own height instead.
+/// preference is calibrated for arm's length (and Dynamic Type scales it
+/// again), so everything here scales off the panel's own height instead —
+/// sized for a desk monitor by default, with `ExternalTextSize` to push it
+/// up for a screen read from across a room.
 struct ExternalDisplayMetrics {
     let text: CGFloat
     let title: CGFloat
@@ -278,13 +314,15 @@ struct ExternalDisplayMetrics {
     let padding: CGFloat
     let gap: CGFloat
 
-    init(size: CGSize) {
+    init(size: CGSize, scale: CGFloat = 1) {
         let height = max(size.height, 320)
-        text    = min(58, max(22, height * 0.046))
+        // ~35pt on a 1080p panel at Regular; it was ~50, which was built for
+        // a TV and read as a billboard on a desk.
+        text    = min(48, max(16, height * 0.032 * scale))
         title   = text * 1.45
-        caption = text * 0.52
+        caption = max(13, text * 0.52)
         // TVs overscan and monitors have bezels; keep well inside both.
-        padding = max(28, min(size.width, size.height) * 0.07)
+        padding = max(28, min(size.width, size.height) * 0.06)
         gap     = text * 0.9
     }
 }
@@ -295,6 +333,7 @@ struct ExternalDisplayRoot: View {
     @ObservedObject private var model = ExternalDisplayModel.shared
     @AppStorage("colorScheme") private var colorSchemeRaw = AppColorScheme.auto.rawValue
     @AppStorage("accentColor")  private var accentRaw     = AccentTheme.blue.rawValue
+    @AppStorage(ExternalTextSize.key) private var textSizeRaw = ExternalTextSize.regular.rawValue
 
     var body: some View {
         let accent = AccentTheme.color(forRaw: accentRaw)
@@ -304,7 +343,8 @@ struct ExternalDisplayRoot: View {
             ? (AppColorScheme(rawValue: colorSchemeRaw)?.resolved ?? model.colorScheme)
             : model.colorScheme
         GeometryReader { geo in
-            let metrics = ExternalDisplayMetrics(size: geo.size)
+            let scale = (ExternalTextSize(rawValue: textSizeRaw) ?? .regular).scale
+            let metrics = ExternalDisplayMetrics(size: geo.size, scale: scale)
             ZStack {
                 ExternalBackground()
                 // The store arrives with the app's own scene. A display plugged
@@ -340,12 +380,15 @@ struct ExternalDisplayRoot: View {
         case .browsing(let listTitle, let rows, let selected):
             ExternalBrowseView(listTitle: listTitle, rows: rows,
                                selected: selected, metrics: metrics)
-        case .composing(let title, let date, let text):
+        case .composing(let title, let date, let text, let caret):
             ExternalEntryView(title: title, date: date, text: text,
-                              isStarred: false, live: true, metrics: metrics)
+                              isStarred: false, live: true, caret: caret, metrics: metrics)
+        case .editing(let title, let date, let text, let caret, let isStarred):
+            ExternalEntryView(title: title, date: date, text: text,
+                              isStarred: isStarred, live: true, caret: caret, metrics: metrics)
         case .reading(let title, let date, let text, let isStarred):
             ExternalEntryView(title: title, date: date, text: text,
-                              isStarred: isStarred, live: false, metrics: metrics)
+                              isStarred: isStarred, live: false, caret: nil, metrics: metrics)
         }
     }
 
@@ -365,9 +408,15 @@ struct ExternalDisplayRoot: View {
         case .composing:
             // Only one of these: in the composer ⌘N and ⌘S both run newEntry()
             // — save this draft to the inbox and start a blank one — so listing
-            // both implied a distinction that doesn't exist.
+            // both implied a distinction that doesn't exist. No `?` here: with
+            // the editor focused that key types a question mark.
             return [.init(key: "⌘S", label: "Save & New"),
-                    .init(key: "?",  label: "Hints")]
+                    .init(key: "⌘B", label: "Bold"),
+                    .init(key: "⌘I", label: "Italic")]
+        case .editing:
+            return [.init(key: "⌘B", label: "Bold"),
+                    .init(key: "⌘I", label: "Italic"),
+                    .init(key: "⎋",  label: "Back")]
         case .reading:
             return [.init(key: "⎋",  label: "Back"),
                     .init(key: "⌘N", label: "New")]
@@ -471,7 +520,7 @@ private struct ExternalBrowseView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: metrics.text * 6, alignment: .leading)
             Text(row.title.isEmpty ? "Untitled" : row.title)
-                .font(Theme.font(writingFontRaw, size: metrics.text * 0.78))
+                .font(Theme.font(writingFontRaw, size: metrics.text * 0.78, fixed: true))
                 .foregroundStyle(row.title.isEmpty
                                  ? Theme.placeholder(colorScheme)
                                  : Theme.bodyText(colorScheme))
@@ -517,29 +566,31 @@ private struct ExternalBackground: View {
 /// The single layout the external display uses for an entry, whether you're
 /// writing it or reading it. Composing and reading used to be two views that
 /// drifted apart — same screen, different margins and header shapes — so they
-/// are one view with a `live` flag now: the only differences are the caret and
-/// whether the body renders media.
+/// are one view with a `live` flag now: the only difference is the body —
+/// a mirror of the editor with its caret, or the rendered entry with media.
 private struct ExternalEntryView: View {
     let title: String
     let date: Date
     let text: String
     let isStarred: Bool
-    /// True while composing: adds the blinking caret and keeps the newest words
-    /// in view. False when reading: the body renders its media inline instead.
+    /// True while writing: the body is a read-only copy of the editor —
+    /// styled by the editor's own code, markers and all, with a caret that
+    /// follows the phone's and scrolls to stay in view. False when reading:
+    /// the body renders its markdown and media inline instead.
     let live: Bool
+    /// The editor's caret while live (UTF-16 offset); nil hides it.
+    let caret: Int?
     let metrics: ExternalDisplayMetrics
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accent) private var accent
-    @AppStorage("writingFont") private var writingFontRaw = WritingFont.lato.rawValue
-    @AppStorage("dateStyle")   private var dateStyleRaw   = DateStyle.weekday.rawValue
+    @AppStorage("writingFont")   private var writingFontRaw = WritingFont.lato.rawValue
+    @AppStorage("dateStyle")     private var dateStyleRaw   = DateStyle.weekday.rawValue
+    @AppStorage("highlightTags") private var highlightTags  = true
 
-    @State private var caretVisible = true
-    private let blink = Timer.publish(every: 0.55, on: .main, in: .common).autoconnect()
-
-    private static let bottomAnchor = "nook.external.bottom"
-
-    private var writingFont: Font { Theme.font(writingFontRaw, size: metrics.text) }
+    /// Fixed sizes throughout: the metrics already come from the panel, and
+    /// Dynamic Type scaling them again is what made the monitor shout.
+    private var writingFont: Font { Theme.font(writingFontRaw, size: metrics.text, fixed: true) }
     private var displayTitle: String { Entry.strippingStarMarker(title) }
     private var starred: Bool { isStarred || Entry.hasStarMarker(title) }
     private var tags: [String] { JournalParser.splitTags(title + "\n" + text) }
@@ -579,7 +630,7 @@ private struct ExternalEntryView: View {
 
             if !displayTitle.isEmpty {
                 Text(displayTitle)
-                    .font(Theme.font(writingFontRaw, size: metrics.title).weight(.bold))
+                    .font(Theme.font(writingFontRaw, size: metrics.title, fixed: true).weight(.bold))
                     .foregroundStyle(Theme.bodyText(colorScheme))
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -597,22 +648,28 @@ private struct ExternalEntryView: View {
     @ViewBuilder
     private func entryBody(for text: String) -> some View {
         if live {
-            ScrollViewReader { proxy in
-                ScrollView(.vertical, showsIndicators: false) {
-                    liveText
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    // Keep the newest words in view — nobody watching the
-                    // monitor can scroll it themselves.
-                    Color.clear
-                        .frame(height: 1)
-                        .id(Self.bottomAnchor)
-                }
-                .onChange(of: text) { _, _ in
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+            // The editor itself, in mirror mode: the same regexes colour the
+            // @tags and slant the _italics_ here as on the phone, and the
+            // view keeps the caret — not the end of the text — in view. A
+            // plain `Text` of the body used to sit here, with neither.
+            WritingTextEditor(text: .constant(text),
+                              fontRaw: writingFontRaw,
+                              size: metrics.text,
+                              textColor: Theme.bodyText(colorScheme),
+                              lineSpacing: Theme.lineSpacing(for: metrics.text),
+                              highlightTags: highlightTags,
+                              accent: accent,
+                              mirror: true,
+                              mirrorCaret: caret)
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text(Theme.placeholderPrompts[0])
+                            .font(writingFont)
+                            .foregroundStyle(Theme.placeholder(colorScheme))
+                            .allowsHitTesting(false)
                     }
                 }
-            }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
             // contentPadding 0: this view already supplies the margin, and a
             // second inset would indent a read entry further than a composed
@@ -621,24 +678,8 @@ private struct ExternalEntryView: View {
                          font: writingFont,
                          textColor: Theme.bodyText(colorScheme),
                          contentPadding: 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        Spacer(minLength: 0)
-    }
-
-    /// Body text with a blinking caret pinned to the end, so a reader can see
-    /// the writing is live rather than a stale screenshot. The caret is a block
-    /// element (U+258C) drawn in the system font rather than the writing font:
-    /// Lato has no glyph for it, and the substituted one sat off the baseline.
-    private var liveText: some View {
-        let written = text.isEmpty
-            ? Text(Theme.placeholderPrompts[0]).foregroundColor(Theme.placeholder(colorScheme))
-            : Text(text).foregroundColor(Theme.bodyText(colorScheme))
-        let caret = Text("▌")
-            .font(.system(size: metrics.text))
-            .foregroundColor(caretVisible ? accent : .clear)
-        return (written.font(writingFont) + caret)
-            .lineSpacing(Theme.lineSpacing(for: metrics.text))
-            .onReceive(blink) { _ in caretVisible.toggle() }
     }
 
     // MARK: Footer
@@ -682,7 +723,7 @@ private struct ExternalIdleView: View {
     }
 
     private var tiles: [(value: String, label: String, accented: Bool)] {
-        [(Self.short(snapshot.currentStreak), snapshot.currentStreak == 1 ? "day streak" : "day streak", true),
+        [(Self.short(snapshot.currentStreak), "day streak", true),
          (Self.short(snapshot.totalDays),     "days written",  false),
          (Self.short(snapshot.totalWords),    "words",         false),
          (Self.short(snapshot.inboxDrafts),   snapshot.inboxDrafts == 1 ? "draft" : "drafts", false)]
@@ -741,7 +782,7 @@ private struct ExternalIdleView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text("Nook")
-                .font(Theme.font(writingFontRaw, size: metrics.title).weight(.bold))
+                .font(Theme.font(writingFontRaw, size: metrics.title, fixed: true).weight(.bold))
                 .foregroundStyle(Theme.bodyText(colorScheme))
                 .frame(maxWidth: .infinity, alignment: .leading)
             Rectangle()

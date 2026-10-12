@@ -249,12 +249,23 @@ The wiring, all in `Views/ExternalDisplayView.swift`:
   `.externalDisplay(...)` — a no-op on macOS, and it only republishes while a
   display is attached, so the composer doesn't broadcast every keystroke into
   the void. `WritingView` pushes `.composing`, `EntryDetailView` pushes
-  `.reading`, the keyboard-navigation modifier pushes `.browsing`; otherwise
+  `.editing` in Edit and `.reading` in Preview, the keyboard-navigation
+  modifier pushes `.browsing`; otherwise
   `.idle`, a stats screen fed by the App Group `NookSnapshot` rather than by
   touching the journal.
 - Composing and reading share one `ExternalEntryView` (a `live` flag is the only
   difference) — they were two views once and drifted apart on the same screen.
-  Keep it that way.
+  Keep it that way. The live body is **`WritingTextEditor` in `mirror` mode**:
+  a read-only `MirrorTextView` styled by the editor's own regexes (tags,
+  `_italic_`, `**bold**`, code — so the monitor can't drift from the phone),
+  with no Dynamic Type scaling, a caret of its own at `mirrorCaret`, and
+  scroll-to-caret. The caret comes from the live editor's `onCaretChange`
+  (UTF-16 offset, nil when the body isn't focused) through `WritingView` /
+  `EntryDetailView` into `.composing(caret:)` / `.editing(caret:)`. Text is
+  merged into the mirror as one prefix/suffix diff edit, never assigned
+  wholesale (that reset the scroll). Type is sized off the panel height ×
+  `ExternalTextSize` (Settings → External display → Text size); all the fonts
+  there use `Theme.font(_:size:fixed: true)` so Dynamic Type stays out of it.
 - Dimming (`Settings → External display`, off by default) writes the app
   scene's `UIScreen.brightness`, remembers the user's level, and restores it on
   disconnect *and* on `willTerminate`.
