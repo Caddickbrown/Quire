@@ -31,104 +31,139 @@ do not exist in the Quire repo yet.
 Both presentation branches came out of one session on the same day; they are
 the same feature on two platforms and should land together.
 
-## 3. Target shape for Quire
+## 3. Target shape for Quire — one Rust core, thin native shells
 
-One repo, three front ends, one format, shared theme file.
+Decision (2026-10-12): every feature lives in the Quire repo and the backend
+is Rust. The shells are native: SwiftUI on iOS/macOS, Tauri's webview on
+Linux, Compose on Android later, ratatui in the terminal.
+
+### Why this is the right call, with evidence
+
+There are **seven** independent implementations of the jnl format today:
+
+| Port | Language | Lines (parser + store) |
+|---|---|---|
+| jnl | Go | ~1.7k |
+| nook | Swift | 3.5k |
+| nook/linux | Rust | 3.2k |
+| Wander | Swift | 0.5k |
+| Wander/tauri | Rust | 0.6k |
+| Wander/android | Kotlin | 1.0k |
+| Quire | Rust | 4.1k |
+
+All seven carry the en-dash fix from jnl `1140729` today, but that is luck
+and diligence, not structure: every fix has to be made seven times, and every
+cleanup/dedupe/split-routing rule is argued seven times. Wander's own review
+(`docs/review-spec.md`, 84 findings) spent most of its P0s on the three ports
+disagreeing about writes. One core ends that.
+
+Quire's Rust is already that core in all but packaging: `journal.rs`,
+`extras.rs` and `media.rs` import nothing from Tauri (0, 0 and 1 reference —
+the one is a progress-event emitter). Everything Tauri-specific is in
+`lib.rs`. Extracting a `quire-core` crate is a move, not a rewrite.
+
+### The one design rule that makes it work: the core never opens a file itself
+
+```rust
+pub trait Vault: Send + Sync {
+    fn read(&self, rel: &str) -> io::Result<Vec<u8>>;
+    fn write_atomic(&self, rel: &str, bytes: &[u8]) -> io::Result<()>;
+    fn list(&self, rel: &str) -> io::Result<Vec<DirEntry>>;
+    fn remove(&self, rel: &str) -> io::Result<()>;
+    fn modified(&self, rel: &str) -> io::Result<SystemTime>;
+}
+```
+
+The core speaks paths relative to the journal root over this trait. Each
+shell supplies the implementation its platform needs:
+
+| Shell | `Vault` impl | Why it can't be plain `std::fs` |
+|---|---|---|
+| Linux / TUI | `std::fs` + temp-and-rename (today's code) | it can |
+| macOS / iOS | Swift callback: `NSFileCoordinator` around `replaceItemAt`, inside the security-scoped bookmark's access | iCloud sync daemon races uncoordinated writes; nook already coordinates its in-place media swap and should coordinate all of them |
+| Android | Kotlin callback over `DocumentFile` / `contentResolver` | SAF hands out `content://` URIs, not paths; Rust `std::fs` cannot see them at all |
+
+Without this trait the Android build is impossible and the iCloud build is
+unsafe. With it, the same tested core runs on all five fronts.
+
+### What stays native (shell-side), by necessity
+
+Folder choice and bookmarks · iCloud `NSMetadataQuery` watcher and ubiquity
+container discovery · `notify` directory watcher on Linux · AVFoundation /
+ImageIO transcoding on Apple (the Rust `media.rs` shells out to `ffmpeg`,
+which iOS does not have) · Speech transcription · widgets, share extension,
+Spotlight, notifications, Live Activity, Face ID · external display / second
+window · the editor widget itself (NSTextView / UITextView / textarea /
+Compose TextField) · theme rendering. All of these call into the core for
+data and never touch markdown.
+
+### Bridge
+
+[UniFFI](https://mozilla.github.io/uniffi-rs/) generates the Swift and Kotlin
+bindings from the Rust API, including callback interfaces (that is how
+`Vault` crosses the boundary). The core builds as an `xcframework` for
+Apple (`cargo-xcode` or a `make core` step that `gen_pbxproj.py` links) and
+as a `.so` via `cargo-ndk` for Android. Tauri links it directly. The TUI is a
+second binary in the same workspace.
+
+### Repo layout
 
 ```
 Quire/
-  CLAUDE.md / AGENTS.md         (nook's discipline — currently absent)
-  CHANGELOG.md                  (nook's format)
-  themes.json                   Wander's 14 + Quire's Marathon/Marathon Day → ONE source of truth
-  apple/
-    QuireCore/                  Swift package: parser, store, search grammar, list continuation,
-                                templates, importers, backup, media (from nook's Models/, packaged
-                                the way WanderCore is)
-    Quire/                      SwiftUI views (nook's feature set wearing Wander's type + themes)
-    QuireiOS/, QuireWidget/, QuireShare/
-    gen_pbxproj.py              (nook's generator; keeps the hand-written iOS scene manifest)
-  linux/                        today's src/ + src-tauri/ unchanged, moved down one level
-  cli/                          jnl, vendored as-is (Go), renamed `quire` later if wanted
-  sample/                       as now
+  CLAUDE.md / AGENTS.md / CHANGELOG.md     (nook's discipline)
+  themes.json                              Wander's 14 + Marathon ×2 — one source of truth
+  core/                                    quire-core crate: parser, store, search grammar,
+                                           list continuation, templates, importers, backup,
+                                           cleanup, stats, Vault trait. cargo test here.
+  bindings/                                UniFFI .udl / proc-macros, xcframework + ndk build
+  linux/                                   today's src/ + src-tauri/, lib.rs shrunk to glue
+  tui/                                     ratatui: jnl's review / browse / editor over core
+  apple/                                   nook's targets renamed, Store/ replaced by core calls,
+                                           Views wearing Wander's themes + MarkdownStyle
+  android/                                 Wander's Compose shell over core (last)
+  sample/
 ```
-
-### Why nook's Swift is the base, not Wander's
-
-| | nook | Wander |
-|---|---|---|
-| Features | everything on your list | journal/inbox/starred, themes, focus, editor |
-| Store | 3.1k-line `JournalStore` incl. iCloud watcher, conflicts, share drain, backups | 674 lines, polling reload (its own review flags this) |
-| Tests | hostless XCTest over real files + parser parity | `CoreTests.swift` 303 lines (recent) |
-| Project | generated pbxproj, 4 targets, entitlements done | xcodegen + SwiftPM, cleaner package split |
-| Design | freewrite/Lato, functional | the point of Wander |
-
-Take nook's *code*, Wander's *package layout* (`WanderCore` → `QuireCore`), and
-Wander's *skin*: `Theme.swift`, `MarkdownStyle.swift`, `ProseEditor.swift`,
-`ThemesSheet`/`ThemeSwiper`, `Fonts.swift`, `themes.json`. nook's
-`WritingTextEditor` already does tag colouring, inline bold/italic/code and the
-mirror mode; Wander's `MarkdownStyle` is the richer styling table (headings,
-quotes, code, hairline `##`). Merge the styling table into nook's editor rather
-than swapping editors — nook's editor carries the list-continuation, caret
-reporting and external-display plumbing you want to keep.
-
-### What each source contributes
-
-| Want | Comes from | Already in Quire-Linux? | Apple |
-|---|---|---|---|
-| Format + parser + parity tests | jnl `main_test.go` → nook `ParserChecks` / Wander `CoreTests` / Quire `journal.rs` tests | yes | with nook |
-| TUI (review, browse, editor) | jnl | no — vendor the Go binary | n/a (CLI runs on macOS already) |
-| Editor macros (↩ in lists, ⌘B/I/`, @autocomplete, templates `{{date}}`, promote first line, import as entries) | nook | yes | with nook |
-| Desk / presentation mode | nook iOS external display + Quire Linux second window | branch | iOS: nook branch. **macOS: missing** — build it as a second `WindowGroup` fed the same way the Linux window is (one push per frame, caret-follow scroll). |
-| Media, Data Saver, importers, backup, cleanup, split journals, saved searches | nook | yes | with nook |
-| Widgets, share sheet, Spotlight, reminders, Face ID, Live Activity | nook | n/a | with nook |
-| 14 themes from one JSON, drawn-not-listed theme picker, themed app icons | Wander | 7 themes, hand-coded CSS | port |
-| Markdown styled in place (headings/quotes/code) | Wander | partly (bold/italic/code/tags) | merge into nook editor |
-| Window chrome without title bar, masthead-as-drag-handle | Wander | yes | macOS keeps traffic lights |
-| Android | Wander | — | keep Wander's Kotlin as the future `android/`; it already shares `themes.json` |
 
 ## 4. Order of work
 
-1. **Branch tidy** (section 2). Then tag `quire-linux-0.6.2` so the Linux-only
-   era has a name.
-2. **Repo skeleton**: move `src/`, `src-tauri/` under `linux/`; add `cli/` with
-   jnl's tree (git subtree so history survives); add `CLAUDE.md`, `AGENTS.md`,
-   `CHANGELOG.md` modelled on nook's; promote `themes.json` to the root with a
-   check script that the Linux CSS and the Swift theme table both read it.
-3. **Apple port, phase 1 — rename, don't redesign**: copy nook's `Nook/`,
-   `NookWidget/`, `NookShare/`, `Tests/`, `gen_pbxproj.py`, `Makefile` into
-   `apple/`, rename bundle ids to `com.caddickbrown.quire`, App Group and
-   iCloud container likewise, build green. This is a day of sed and Xcode, and
-   it gets every nook feature into Quire with zero behaviour change. Keep
-   `.nook/` as the sidecar directory name on disk (nook, Quire-Linux and the
-   savings ledger all already read it; renaming it breaks sync with existing
-   journals).
-4. **Apple port, phase 2 — Wander's skin**: `themes.json` loader + Wander's
-   `Theme.swift`, fonts (Newsreader, IBM Plex, plus Archivo/DM Mono for
-   Marathon), the drawn theme picker, `MarkdownStyle` merged into
-   `WritingTextEditor`, masthead layout from Wander's `RootView`. Ship Almanac
-   as default like Wander.
-5. **macOS desk mode**: second window, same payload contract as
-   `linux/src/present.js` (kind / title / body / caret / theme / stats), so the
-   three platforms share one spec.
-6. **TUI decision** (after 1–5, not before): either keep `cli/` as Go for ever
-   (cheapest, already works on macOS/Linux/Pi), or rewrite it in Rust with
-   ratatui on top of `linux/src-tauri/src/journal.rs` so the desktop app and
-   the TUI share one core. Only worth it if you want `quire tui` to gain the
-   Linux app's extras (search grammar, templates, media) — jnl's own scope is
-   deliberately smaller.
-7. **Android**: Wander's `android/` moves in last; it needs the feature pass
-   nook never gave it and it is the one platform with no desk mode or media.
+1. **Branch tidy** (section 2). Tag `linux-0.6.2`.
+2. **Extract `core/`** from `src-tauri/`: move the three files, introduce
+   `Vault`, port Quire's `cargo test` + jnl's `main_test.go` cases + nook's
+   `ParserChecks` + `search.rs` cases into one suite. Linux app rebuilt on it;
+   behaviour identical. Testable in this container.
+3. **TUI** in `tui/` over the core: jnl's `review`, `browse`, `log`, `stats`,
+   `search`, `random`, the bubbletea editor as ratatui. This is the cheapest
+   proof that the core is really shell-agnostic, and it replaces jnl's Go
+   (jnl stays published for its users; it is the reference, not a dependency).
+4. **Apple, phase 1**: nook's targets into `apple/`, renamed; `JournalStore`
+   kept as the `@MainActor` façade but its file logic swapped for core calls
+   through UniFFI, with a Swift `Vault` doing coordinated writes. nook's
+   hostless XCTest keeps running against the façade, so regressions show.
+5. **Apple, phase 2**: Wander's skin — `themes.json`, fonts, drawn theme
+   picker, `MarkdownStyle` merged into nook's `WritingTextEditor`, masthead.
+6. **Desk mode everywhere**: iOS from nook's branch; macOS as a second
+   `WindowGroup`; Linux from Quire's branch; one payload contract.
+7. **Android**: Wander's Compose shell over core via a SAF `Vault`.
+
+### What this costs that the two-port plan did not
+
+- A Rust toolchain and an xcframework step in the Apple build. One-time.
+- UniFFI's boundary rules: plain data types, no SwiftUI types cross, async is
+  `async fn` on both sides. nook's store is already `@MainActor` + value
+  types, so this fits.
+- Latency of a call across the bridge is microseconds; the only thing that
+  must stay out of the per-keystroke path is a full inbox re-render, and
+  Quire's Rust already avoids that the way nook's Swift does.
 
 ## 5. Assumptions
 
-- Quire is the surviving name; nook, Wander and jnl become read-only
-  references once their code is in. jnl may stay published as a standalone
-  binary because other people use it.
+- Quire is the surviving name; nook and Wander become read-only references
+  once their code is in. jnl stays published as a standalone Go binary because
+  other people use it, and remains the format's reference implementation.
 - The on-disk format never changes: `inbox.md`, `journal/YYYY/MM/DD.md`,
-  `<tag>.md`, `assets/`, `.nook/` sidecars.
-- iOS 17 / macOS 14 floors (nook's), Swift 5.9+.
-- You build and sign on your Mac; nothing Apple-side can be compiled in this
-  container (no Swift). Rust and Go can be tested here; Tauri itself cannot
-  link (no webkit2gtk).
-- The two Claude branches are wanted, not experiments. If the iOS one was a
-  bug-fix attempt that didn't pan out, say so and it gets closed instead.
+  `<tag>.md`, `assets/`, `.nook/` sidecars (renaming the sidecar breaks
+  journals nook already syncs).
+- iOS 17 / macOS 14 floors, Swift 5.9+, Rust stable, UniFFI 0.28+.
+- You build and sign on your Mac; no Swift here. Rust and Go are testable in
+  this container; Tauri itself cannot link (no webkit2gtk).
+- The two Claude branches are wanted, not experiments.
