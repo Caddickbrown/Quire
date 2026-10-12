@@ -1,7 +1,7 @@
 # Dependencies and build output
 node_modules/
-src-tauri/target/
-src-tauri/gen/schemas/
+linux/src-tauri/target/
+linux/src-tauri/gen/schemas/
 
 # Editors and OS
 .DS_Store
@@ -14,6 +14,7 @@ src-tauri/gen/schemas/
 /inbox.md
 /assets/
 /.nook/
+/.quire/
 
 # Python test cache
 __pycache__/

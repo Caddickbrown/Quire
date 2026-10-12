@@ -288,3 +288,27 @@ are the parity suite the core must pass.
 colour with a 256-colour fallback mapped from the same tokens. Follows the
 Linux app's `~/.config/quire/settings.json` for theme and folder, and jnl's
 `~/.config/jnl/config` for `JNL_DIR` / `JNL_SPLIT_TAGS`, in that order.
+
+## 9. Status (2026-10-12, end of the build session)
+
+Done on branch `quire-core`:
+
+| Step | State |
+|---|---|
+| Workspace: `core/`, `tui/`, `linux/` | done |
+| `quire-core` behind a `Vault` (FsVault); `Journal` handle with the shared operations | done, 64 tests |
+| `inbox/YYYY/MM/DD.md`; legacy `inbox.md` folded in and verified; `.quire/` with `.nook/` fallback and rename | done |
+| Linux app rewired onto the core; frontend texts and the `file_draft` call updated; sample on the new layout | done, `cargo check -p quire` clean (the full bundle needs webkit2gtk on the build machine) |
+| Terminal app, both names, seven screens, jnl parity for printed commands | done, 4 tests + the pty smoke test 20/20 at 100×30 and 80×24 |
+| `themes.json` as the single theme source | done for the terminal; the Linux CSS still carries a copy |
+| Docs: README, linux/README, CLAUDE.md = AGENTS.md, CHANGELOG, Makefile | done |
+
+Not done, in order:
+
+1. Generate the Linux `style.css` theme blocks from `themes.json` (a small
+   script) so there is truly one source.
+2. The Apple shell (section 4, steps 4–6): UniFFI bindings for the core,
+   Nook's targets into `apple/`, the Swift `Vault`.
+3. A jnl patch to read `inbox/` when `inbox.md` is absent, for jnl's other
+   users.
+4. Android (section 4, step 7).
