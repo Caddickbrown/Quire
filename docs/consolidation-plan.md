@@ -298,7 +298,7 @@ Done on branch `quire-core`:
 | Workspace: `core/`, `tui/`, `linux/` | done |
 | `quire-core` behind a `Vault` (FsVault); `Journal` handle with the shared operations | done, 64 tests |
 | `inbox/YYYY/MM/DD.md`; legacy `inbox.md` folded in and verified; `.quire/` with `.nook/` fallback and rename | done |
-| Linux app rewired onto the core; frontend texts and the `file_draft` call updated; sample on the new layout | done, `cargo check -p quire` clean (the full bundle needs webkit2gtk on the build machine) |
+| Linux app rewired onto the core; frontend texts and the `file_draft` call updated; sample on the new layout | done, `cargo build -p quire-desktop` links (the .deb/AppImage bundle still needs a `npx tauri build` on a machine with webkit2gtk) |
 | Terminal app, both names, seven screens, jnl parity for printed commands | done, 4 tests + the pty smoke test 20/20 at 100×30 and 80×24 |
 | `themes.json` as the single theme source | done for the terminal; the Linux CSS still carries a copy |
 | Docs: README, linux/README, CLAUDE.md = AGENTS.md, CHANGELOG, Makefile | done |

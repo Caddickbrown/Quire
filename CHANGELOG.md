@@ -53,6 +53,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   are thin calls on the shared store. `file_draft` now takes the draft's
   file. Opening a journal reports an inbox migration as a toast.
 - **Linux**: the bundled sample journal is on the new layout.
+- **Linux**: the desktop binary is `quire-desktop` (the package name), so it
+  no longer shares a name with the terminal's `quire`.
 - **Repository**: a Cargo workspace (`core`, `tui`, `linux/src-tauri`);
   `README.md` describes the whole, `linux/README.md` the desktop app.
 

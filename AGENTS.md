@@ -101,7 +101,9 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   reports it in the snapshot (`migration`, `migration_error`). The front end
   keys everything off `entry.source` ("inbox" | "journal" | "split") and
   `entry.file`, so day files under `inbox/` needed no view changes. Needs
-  `libwebkit2gtk-4.1-dev` to build; `cargo check -p quire` type-checks it.
+  `libwebkit2gtk-4.1-dev` to build; `cargo build -p quire-desktop` builds it
+  (the desktop binary is `quire-desktop`, so it never collides with the
+  terminal's `quire` in the workspace target or on PATH).
 - **Terminal** (`tui/`): ratatui 0.30 + crossterm 0.29. Screens: Today,
   Inbox (review), Browse (year/month/day/entries + Main/split/all picker),
   Write, Look back, Search; a help overlay; a one-line modal for date & time

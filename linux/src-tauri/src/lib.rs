@@ -4,7 +4,7 @@ use base64::Engine;
 use extras::*;
 use journal::*;
 use notify::{RecursiveMode, Watcher};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};

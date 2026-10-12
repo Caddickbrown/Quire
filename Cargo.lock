@@ -3553,7 +3553,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "quire"
+name = "quire-core"
+version = "0.7.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "dirs 5.0.1",
+ "image",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "quire-desktop"
 version = "0.7.0"
 dependencies = [
  "arboard",
@@ -3573,21 +3588,6 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-notification",
  "tauri-plugin-opener",
- "tempfile",
-]
-
-[[package]]
-name = "quire-core"
-version = "0.7.0"
-dependencies = [
- "chrono",
- "chrono-tz",
- "dirs 5.0.1",
- "image",
- "once_cell",
- "regex",
- "serde",
- "serde_json",
  "tempfile",
 ]
 
