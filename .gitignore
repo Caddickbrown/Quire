@@ -17,3 +17,6 @@ src-tauri/gen/schemas/
 
 # Python test cache
 __pycache__/
+
+# Cargo workspace build output
+/target/

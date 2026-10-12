@@ -1,6 +1,6 @@
 [package]
 name = "quire"
-version = "0.6.2"
+version = "0.7.0"
 description = "Quire prototype: one journalling app over a jnl folder"
 edition = "2021"
 
@@ -12,6 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+quire-core = { path = "../../core" }
 arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "bmp"] }
 tauri = { version = "2", features = ["protocol-asset"] }
@@ -29,9 +30,3 @@ base64 = "0.22"
 chrono = "0.4"
 chrono-tz = "0.10.4"
 
-[profile.release]
-strip = true
-lto = "thin"
-
-[profile.dev.package."*"]
-opt-level = 3

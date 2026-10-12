@@ -1,0 +1,18 @@
+[package]
+name = "quire-tui"
+description = "Quire in the terminal — installed as both `quire` and `jnl`"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "quire"
+path = "src/main.rs"
+
+[[bin]]
+name = "jnl"
+path = "src/main.rs"
+
+[dependencies]
+quire-core.workspace = true

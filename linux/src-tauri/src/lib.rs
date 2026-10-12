@@ -1,6 +1,4 @@
-mod extras;
-mod journal;
-mod media;
+use quire_core::{extras, journal, media};
 
 use base64::Engine;
 use extras::*;
