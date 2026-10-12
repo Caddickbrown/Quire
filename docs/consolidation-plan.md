@@ -179,3 +179,65 @@ Quire/
 | Functionality | nook's full feature set is the floor. Nothing nook does is dropped. |
 | Core | Quire's Rust (`journal.rs`, `extras.rs`, `media.rs`) becomes `core/`, behind the `Vault` trait. The TUI is a Rust binary over it; jnl is not copied into the repo (it stays its own project and the format's reference). |
 | Sidecar folder | `.nook/` → **`.quire/`**. Done once, in the core, so every shell behaves the same: read `.quire/` first, fall back to `.nook/`; on the first write, rename the directory if `.quire/` does not exist yet. Contents unchanged (`templates/*.md`, `searches.json`, `datasaver-<device>.json`). nook itself stops seeing them after the move, which is fine once nook is retired; until then run one app per journal. jnl ignores both names. |
+
+## 7. Inbox as a folder (decided 2026-10-12)
+
+`inbox.md` becomes `inbox/YYYY/MM/DD.md`, the journal's own shape. Every
+draft already carries a timestamp header, so nothing is invented: the file a
+draft lives in is just its date. A journal folder then looks like
+
+```
+<base>/
+  inbox/YYYY/MM/DD.md      drafts, one file per day (was inbox.md)
+  inbox/preamble.md        only if inbox.md had text before its first header
+  journal/YYYY/MM/DD.md    filed days, unchanged
+  <tag>.md                 split journals, unchanged
+  assets/                  unchanged
+  .quire/                  sidecars (was .nook/); .quire/migration/ holds the old inbox.md
+```
+
+**Why it is worth breaking the oldest file in the format.** `inbox.md` is the
+one file every device writes to every day, which is why nook needed a
+keep-both conflict merge for it alone and why Quire detects Syncthing and
+Dropbox conflict copies. Spreading drafts across day files turns the
+hot-spot into the same low-contention shape the journal already has.
+
+**Cost.** jnl, nook and Wander read `inbox.md` and will not see drafts in
+`inbox/` until taught to. jnl is the reference and its users are other
+people, so jnl gets a small patch (read `inbox/**/*.md` when `inbox.md` is
+absent) rather than being left behind; nook and Wander are being retired
+into Quire and are not updated.
+
+**The script.** `tools/migrate_journal.py` (dependency-free Python, dry run
+by default, `--apply` to write, 16 unit tests in `tools/test_migrate_journal.py`):
+
+- parses with jnl's regex and rules, keeps every entry's raw text byte for
+  byte, orders each day oldest-first, writes atomically;
+- re-reads everything it wrote and refuses to move `inbox.md` until every
+  original draft is found in `inbox/`;
+- never deletes: `inbox.md` goes to `.quire/migration/inbox-<stamp>.md`;
+- is re-runnable: a later `inbox.md` written by an old app is merged in,
+  duplicates skipped by raw text;
+- renames `.nook/` to `.quire/`, or merges file by file without overwriting
+  when both exist (`--keep-nook` to skip).
+
+Verified here on a copy of `sample/` and by the test suite. Run it on a
+**copy** of your real folder first, read the dry run, then on the real one.
+
+**What changes in the core** (goes into `core/` in step 2 of section 4):
+
+| Today | After |
+|---|---|
+| read `inbox.md`, parse, cache | glob `inbox/**/DD.md`, parse each, cache per file; `inbox.md` still read if present and migrated on first write |
+| new draft appends to `inbox.md` | appends to `inbox/<today>.md` |
+| file a draft: append to `journal/<day>.md`, rewrite `inbox.md` without it | append to `journal/<day>.md`, rewrite `inbox/<day>.md` without it (delete the file when empty, as journal days do) |
+| retime a draft | moves it between `inbox/` day files, as retiming a filed entry moves it between `journal/` days — the same code path |
+| return to inbox | the mirror image of filing, now symmetric |
+| inbox conflict merge | per-file, the journal's existing path |
+| `sort inbox` | per-file; mostly a no-op since filing keeps order |
+| counts, Today, calendar grey days | unchanged in meaning; the calendar's "drafts on this day" becomes a file-exists check |
+| `transfer.md` | unchanged (jnl's batch file; filed from Today or Settings) |
+| watcher | watches `inbox/` recursively like `journal/` |
+
+Entry identity stays `(timestamp, occurrence within file)`; it is now unique
+across the inbox for free, since two drafts with one timestamp are in one file.
