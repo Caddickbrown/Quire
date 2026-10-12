@@ -71,7 +71,7 @@ pub fn list_templates(j: &Journal) -> Vec<Template> {
             out.push(Template { name: it.name.trim_end_matches(".md").to_string(), body: j.read(&format!("{}/{}", dir, it.name)) });
         }
     }
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.sort_by_key(|a| a.name.to_lowercase());
     out
 }
 
@@ -1274,7 +1274,7 @@ pub fn tag_review(j: &Journal) -> Vec<TagGroup> {
         if g.len() > 1 {
             g.iter().for_each(|&k| used[k] = true);
             let mut members: Vec<(String, usize)> = g.iter().map(|&k| tags[k].clone()).collect();
-            members.sort_by(|a, b| b.1.cmp(&a.1));
+            members.sort_by_key(|m| std::cmp::Reverse(m.1));
             groups.push(TagGroup { suggested: members[0].0.clone(), tags: members });
         }
     }

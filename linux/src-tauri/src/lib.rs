@@ -14,68 +14,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-/// Settings live in ~/.config/quire/settings.json. `folder` is the journal
-/// folder; `ui` is preferences owned by the front end.
-#[derive(Default, Serialize, Deserialize, Clone)]
-struct Settings {
-    folder: Option<String>,
-    #[serde(default)]
-    ui: Value,
-    #[serde(default)]
-    split_tags: Option<String>,
-    #[serde(default)]
-    backup_dir: Option<String>,
-    /// Use the desktop's own title bar instead of Quire's. Off by default on
-    /// Linux and Windows, where Quire draws its controls in the top bar.
-    #[serde(default)]
-    system_titlebar: bool,
-    /// "off" | "daily" | "weekly" | "change"
-    #[serde(default)]
-    backup_interval: Option<String>,
-    /// How many "Quire backup …" folders to keep (1–50).
-    #[serde(default)]
-    backup_keep: Option<u32>,
-    /// Local "YYYY-MM-DD HH:MM:SS" of the last successful backup.
-    #[serde(default)]
-    last_backup: Option<String>,
-    /// Nook's Data Saver: compress media as it's attached.
-    #[serde(default)]
-    data_saver: bool,
-    /// This install's id for the shared <sidecar>/datasaver-<id>.json ledger.
-    #[serde(default)]
-    device_id: Option<String>,
-}
-
-const INTERVALS: &[&str] = &["off", "daily", "weekly", "change"];
-
-impl Settings {
-    fn interval(&self) -> String {
-        self.backup_interval.clone().filter(|i| INTERVALS.contains(&i.as_str())).unwrap_or_else(|| "off".into())
-    }
-    fn keep(&self) -> usize {
-        self.backup_keep.unwrap_or(10).clamp(1, 50) as usize
-    }
-    /// Pull backup prefs the front end used to keep in `ui`. Returns true if
-    /// anything changed.
-    fn migrate(&mut self) -> bool {
-        let mut changed = false;
-        if self.backup_interval.is_none() {
-            let v = self.ui.get("backupEvery").and_then(|v| v.as_str()).filter(|v| INTERVALS.contains(v)).unwrap_or("off");
-            self.backup_interval = Some(v.to_string());
-            changed = true;
-        }
-        if self.last_backup.is_none() {
-            if let Some(d) = self.ui.get("lastBackup").and_then(|v| v.as_str()) {
-                let ts = if d.len() == 10 { format!("{} 00:00:00", d) } else { d.to_string() };
-                if check_ts(&ts).is_ok() {
-                    self.last_backup = Some(ts);
-                    changed = true;
-                }
-            }
-        }
-        changed
-    }
-}
+use quire_core::settings::{Settings, INTERVALS};
 
 struct AppState {
     settings: Mutex<Settings>,
@@ -97,12 +36,8 @@ fn settings_of(state: &AppState) -> Settings {
     lock(&state.settings).clone()
 }
 
-fn settings_path() -> PathBuf {
-    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("quire").join("settings.json")
-}
-
 fn save_settings(s: &Settings) -> Result<(), String> {
-    write_atomic(&settings_path(), &serde_json::to_string_pretty(s).map_err(|e| e.to_string())?)
+    s.save()
 }
 
 /// Change settings: applied to a copy, saved, and only then made live.
@@ -982,8 +917,7 @@ pub fn run() {
                 }
                 let _ = fs::create_dir_all(&sample_dir);
             }
-            let mut settings: Settings =
-                fs::read_to_string(settings_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+            let mut settings = Settings::load();
             let mut dirty = settings.migrate();
             // Only an unset folder falls back to the sample. A configured
             // folder that's missing stays configured (folder_missing).

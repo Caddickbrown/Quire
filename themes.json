@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "note": "Quire's looks, one source for every shell. Colours are the Linux app's style.css tokens; the terminal reads page/ink/muted/faint/line/card/accent. Add a theme here and it reaches the Linux app, the terminal and the Swift shell together.",
+  "themes": [
+    {
+      "id": "almanac", "name": "Almanac", "dark": false, "writing_font": "Newsreader",
+      "page": "#F7F1E4", "ground": "#F5F0E6", "chrome": "#EFE8DB", "card": "#FFFDF8",
+      "ink": "#1F1A14", "muted": "#6B6257", "faint": "#8A8073", "line": "#E3DACB", "line2": "#EFE8DB",
+      "accent": "#8E2F1C", "accent_soft": "#F1E0D6", "accent_ink": "#6E2414", "on_accent": "#FFFDF8",
+      "head_weight": 500, "rule_h": 2
+    },
+    {
+      "id": "broadsheet", "name": "Broadsheet", "dark": false, "writing_font": "Newsreader",
+      "page": "#FBFAF7", "ground": "#F4F3EF", "chrome": "#ECEBE6", "card": "#FFFFFF",
+      "ink": "#111111", "muted": "#595959", "faint": "#7A7A7A", "line": "#DDDCD6", "line2": "#ECEBE6",
+      "accent": "#111111", "accent_soft": "#E9E8E3", "accent_ink": "#111111", "on_accent": "#FBFAF7",
+      "head_weight": 650, "rule_h": 4
+    },
+    {
+      "id": "linen", "name": "Linen", "dark": false, "writing_font": "Newsreader",
+      "page": "#F3F4F1", "ground": "#ECEEE9", "chrome": "#E6E8E2", "card": "#FAFBF8",
+      "ink": "#1B1F23", "muted": "#5C6368", "faint": "#7D858B", "line": "#D5D9D2", "line2": "#E3E6E0",
+      "accent": "#1F5F8B", "accent_soft": "#DCE7F0", "accent_ink": "#174A6D", "on_accent": "#FFFFFF",
+      "head_weight": 500, "rule_h": 2
+    },
+    {
+      "id": "cinema", "name": "Cinema", "dark": true, "writing_font": "Newsreader",
+      "page": "#16130F", "ground": "#1B1814", "chrome": "#211D18", "card": "#242019",
+      "ink": "#EDE6D8", "muted": "#A39A8C", "faint": "#8A8073", "line": "#3A332B", "line2": "#2E2923",
+      "accent": "#E08A6B", "accent_soft": "#3A2A22", "accent_ink": "#F0A98E", "on_accent": "#16130F",
+      "head_weight": 400, "rule_h": 1
+    },
+    {
+      "id": "night", "name": "Night", "dark": true, "writing_font": "Newsreader",
+      "page": "#121416", "ground": "#16191C", "chrome": "#1B1F22", "card": "#1E2226",
+      "ink": "#E6E6E3", "muted": "#9A9C9F", "faint": "#7E8184", "line": "#2E3236", "line2": "#262A2E",
+      "accent": "#7FB685", "accent_soft": "#223126", "accent_ink": "#9CCBA1", "on_accent": "#121416",
+      "head_weight": 400, "rule_h": 1
+    },
+    {
+      "id": "marathon", "name": "Marathon", "dark": true, "writing_font": "DM Mono",
+      "page": "#141516", "ground": "#121314", "chrome": "#1B1C1E", "card": "#1B1C1E",
+      "ink": "#ECECEA", "muted": "#8D9096", "faint": "#6A6D72", "line": "#2C2E31", "line2": "#222326",
+      "accent": "#C8FF00", "accent_soft": "#2A3310", "accent_ink": "#DFFF66", "on_accent": "#0B0C0C",
+      "head_weight": 800, "rule_h": 6
+    },
+    {
+      "id": "marathon-day", "name": "Marathon Day", "dark": false, "writing_font": "DM Mono",
+      "page": "#E6E8E3", "ground": "#DDE0DA", "chrome": "#F4F5F1", "card": "#F4F5F1",
+      "ink": "#0B0C0C", "muted": "#4F5551", "faint": "#6A706B", "line": "#B9BDB7", "line2": "#CDD1CA",
+      "accent": "#3F5600", "accent_soft": "#D9F28A", "accent_ink": "#2F4000", "on_accent": "#F4F5F1",
+      "head_weight": 800, "rule_h": 6
+    }
+  ]
+}

@@ -91,13 +91,12 @@ pub fn conflict_main_name(rel: &str) -> Option<String> {
         let rest = &name[i + ".sync-conflict-".len()..];
         let ext = rest.find('.').map(|j| &rest[j..]).unwrap_or("");
         format!("{}{}", &name[..i], ext)
-    } else if let Some(c) = l.find("conflicted copy") {
+    } else {
+        let c = l.find("conflicted copy")?;
         let open = l[..c].rfind('(')?;
         let close = c + l[c..].find(')')?;
         let before = name[..open].trim_end();
         format!("{}{}", before, &name[close + 1..])
-    } else {
-        return None;
     };
     if main.is_empty() || main == name {
         return None;

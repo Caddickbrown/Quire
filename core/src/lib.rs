@@ -8,11 +8,18 @@
 //! Shells: the Linux Tauri app (`linux/`), the terminal app (`tui/`), and the
 //! Swift and Kotlin shells to come, which reach this crate over a bridge.
 
+pub mod editing;
 pub mod extras;
 pub mod journal;
 pub mod media;
+pub mod prompts;
+pub mod search;
+pub mod settings;
+pub mod stats;
+pub mod themes;
 pub mod vault;
 
 pub use extras::*;
 pub use journal::*;
+pub use settings::Settings;
 pub use vault::{FsVault, Item, Vault};

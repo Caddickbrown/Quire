@@ -1,0 +1,1095 @@
+//! The screens, their state, and what every key does. Drawing is in `ui`.
+
+use crate::editor::Editor;
+use crate::theme::{truecolor, Palette};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use quire_core::prompts;
+use quire_core::search::Query;
+use quire_core::stats;
+use quire_core::themes;
+use quire_core::*;
+use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Screen {
+    Today,
+    Inbox,
+    Browse,
+    Write,
+    LookBack,
+    Search,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Pick {
+    Main,
+    All,
+    Split(String),
+}
+
+pub struct Browse {
+    pub pick: Pick,
+    /// 0 year · 1 month · 2 day · 3 entries
+    pub col: usize,
+    pub yi: usize,
+    pub mi: usize,
+    pub di: usize,
+    pub ei: usize,
+    pub filter: String,
+    pub filtering: bool,
+}
+
+pub struct Draft {
+    pub ed: Editor,
+    pub ts: String,
+    pub starred: bool,
+    /// (file, index, raw) once it is on disk.
+    pub ref_: Option<(String, usize, String)>,
+    /// Editing something already filed (or in a split journal).
+    pub filed: bool,
+    pub saved_at: Option<String>,
+    /// A brand-new draft keeps its timestamp "now" until the first keystroke.
+    pub floating: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Confirm {
+    DeleteSelected,
+    DiscardDraft,
+}
+
+pub enum Modal {
+    Retime(String),
+    Confirm { text: String, action: Confirm },
+}
+
+pub struct App {
+    pub j: Journal,
+    pub settings: Settings,
+    pub split_tags: Vec<String>,
+    pub pal: Palette,
+    pub entries: Vec<Entry>,
+    pub screen: Screen,
+    pub stack: Vec<Screen>,
+    pub today: String,
+    pub prompt_n: usize,
+    pub inbox_i: usize,
+    pub browse: Browse,
+    pub draft: Option<Draft>,
+    pub year: i32,
+    pub query: String,
+    pub search_i: usize,
+    pub modal: Option<Modal>,
+    pub help: bool,
+    pub toast: Option<(String, Instant, bool)>,
+    pub quit: bool,
+    pub timer_end: Option<Instant>,
+    pub focus: bool,
+    pub tag_pick: usize,
+    pub width: u16,
+    pub height: u16,
+    last_check: Instant,
+    fingerprint: u64,
+}
+
+pub struct Sel {
+    pub year: Option<String>,
+    pub month: Option<String>,
+    pub date: Option<String>,
+    pub entry: Option<Entry>,
+}
+
+impl App {
+    pub fn new(j: Journal, settings: Settings, split_tags: Vec<String>, theme_id: &str) -> App {
+        let pal = Palette::from_theme(&themes::theme(theme_id), truecolor());
+        let today = stats::today();
+        let year: i32 = today[..4].parse().unwrap_or(2026);
+        let mut a = App {
+            j,
+            settings,
+            split_tags,
+            pal,
+            entries: Vec::new(),
+            screen: Screen::Today,
+            stack: Vec::new(),
+            today,
+            prompt_n: 0,
+            inbox_i: 0,
+            browse: Browse { pick: Pick::Main, col: 2, yi: 0, mi: 0, di: 0, ei: 0, filter: String::new(), filtering: false },
+            draft: None,
+            year,
+            query: String::new(),
+            search_i: 0,
+            modal: None,
+            help: false,
+            toast: None,
+            quit: false,
+            timer_end: None,
+            focus: false,
+            tag_pick: 0,
+            width: 100,
+            height: 30,
+            last_check: Instant::now(),
+            fingerprint: 0,
+        };
+        a.reload();
+        a
+    }
+
+    pub fn reload(&mut self) {
+        self.entries = self.j.load_all();
+        self.fingerprint = self.fingerprint_now();
+        self.clamp();
+    }
+
+    fn fingerprint_now(&self) -> u64 {
+        let mut h: u64 = 1469598103934665603;
+        for (rel, _, _) in self.j.entry_files() {
+            for b in rel.bytes() {
+                h = (h ^ b as u64).wrapping_mul(1099511628211);
+            }
+            h = (h ^ self.j.vault().modified(&rel).unwrap_or(0)).wrapping_mul(1099511628211);
+            h = (h ^ self.j.len(&rel)).wrapping_mul(1099511628211);
+        }
+        h
+    }
+
+    fn clamp(&mut self) {
+        let n = self.drafts().len();
+        self.inbox_i = if n == 0 { 0 } else { self.inbox_i.min(n - 1) };
+        let n = self.results().len();
+        self.search_i = if n == 0 { 0 } else { self.search_i.min(n - 1) };
+        self.clamp_browse();
+    }
+
+    pub fn toast(&mut self, msg: String, error: bool) {
+        self.toast = Some((msg, Instant::now(), error));
+    }
+
+    fn push(&mut self, s: Screen) {
+        if self.screen != s {
+            self.stack.push(self.screen);
+            self.screen = s;
+        }
+        self.help = false;
+    }
+
+    fn back(&mut self) {
+        self.screen = self.stack.pop().unwrap_or(Screen::Today);
+        self.help = false;
+    }
+
+    // ----- data for the screens -----
+
+    pub fn drafts(&self) -> Vec<&Entry> {
+        let mut v: Vec<&Entry> = self.entries.iter().filter(|e| e.source == "inbox").collect();
+        v.sort_by(|a, b| b.ts.cmp(&a.ts));
+        v
+    }
+
+    pub fn filed(&self) -> Vec<&Entry> {
+        self.entries.iter().filter(|e| e.source != "inbox").collect()
+    }
+
+    pub fn current_prompt(&self) -> &'static str {
+        prompts::prompt_after(&self.today, self.prompt_n)
+    }
+
+    pub fn tag_counts(&self) -> Vec<(String, usize)> {
+        stats::count_tags(self.entries.iter())
+    }
+
+    pub fn split_names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.entries.iter().filter_map(|e| e.split.clone()).collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    pub fn browse_pool(&self) -> Vec<&Entry> {
+        self.entries
+            .iter()
+            .filter(|e| match &self.browse.pick {
+                Pick::Main => e.source == "journal",
+                Pick::All => true,
+                Pick::Split(t) => e.split.as_deref() == Some(t.as_str()),
+            })
+            .collect()
+    }
+
+    fn filtered(&self, items: Vec<(String, usize)>, label: impl Fn(&str) -> String) -> Vec<(String, usize)> {
+        if !self.browse.filtering || self.browse.filter.is_empty() {
+            return items;
+        }
+        let f = self.browse.filter.to_lowercase();
+        items.into_iter().filter(|(k, _)| k.to_lowercase().starts_with(&f) || label(k).to_lowercase().starts_with(&f)).collect()
+    }
+
+    /// Years, newest first, with entry counts.
+    pub fn browse_years(&self) -> Vec<(String, usize)> {
+        let mut m: BTreeMap<String, usize> = BTreeMap::new();
+        for e in self.browse_pool() {
+            *m.entry(e.date[..4].to_string()).or_default() += 1;
+        }
+        let v: Vec<(String, usize)> = m.into_iter().rev().collect();
+        if self.browse.col == 0 {
+            self.filtered(v, |k| k.to_string())
+        } else {
+            v
+        }
+    }
+
+    pub fn browse_months(&self, year: &str) -> Vec<(String, usize)> {
+        let mut m: BTreeMap<String, usize> = BTreeMap::new();
+        for e in self.browse_pool().into_iter().filter(|e| e.date.starts_with(year)) {
+            *m.entry(e.date[5..7].to_string()).or_default() += 1;
+        }
+        let v: Vec<(String, usize)> = m.into_iter().rev().collect();
+        if self.browse.col == 1 {
+            self.filtered(v, |k| stats::month_name(k.parse().unwrap_or(1)).to_string())
+        } else {
+            v
+        }
+    }
+
+    pub fn browse_days(&self, year: &str, month: &str) -> Vec<(String, usize)> {
+        let prefix = format!("{}-{}", year, month);
+        let mut m: BTreeMap<String, usize> = BTreeMap::new();
+        for e in self.browse_pool().into_iter().filter(|e| e.date.starts_with(&prefix)) {
+            *m.entry(e.date.clone()).or_default() += 1;
+        }
+        let v: Vec<(String, usize)> = m.into_iter().rev().collect();
+        if self.browse.col == 2 {
+            self.filtered(v, |k| k[8..].to_string())
+        } else {
+            v
+        }
+    }
+
+    pub fn browse_day_entries(&self, date: &str) -> Vec<&Entry> {
+        let mut v: Vec<&Entry> = self.browse_pool().into_iter().filter(|e| e.date == date).collect();
+        v.sort_by(|a, b| a.ts.cmp(&b.ts));
+        v
+    }
+
+    pub fn browse_sel(&self) -> Sel {
+        let years = self.browse_years();
+        let year = years.get(self.browse.yi).map(|y| y.0.clone());
+        let months = year.as_deref().map(|y| self.browse_months(y)).unwrap_or_default();
+        let month = months.get(self.browse.mi).map(|m| m.0.clone());
+        let days = match (&year, &month) {
+            (Some(y), Some(m)) => self.browse_days(y, m),
+            _ => vec![],
+        };
+        let date = days.get(self.browse.di).map(|d| d.0.clone());
+        let entry = date.as_deref().and_then(|d| self.browse_day_entries(d).get(self.browse.ei).map(|e| (*e).clone()));
+        Sel { year, month, date, entry }
+    }
+
+    fn clamp_browse(&mut self) {
+        let years = self.browse_years();
+        self.browse.yi = years.len().saturating_sub(1).min(self.browse.yi);
+        let Some(y) = years.get(self.browse.yi).map(|y| y.0.clone()) else {
+            self.browse.mi = 0;
+            self.browse.di = 0;
+            self.browse.ei = 0;
+            return;
+        };
+        let months = self.browse_months(&y);
+        self.browse.mi = months.len().saturating_sub(1).min(self.browse.mi);
+        let Some(m) = months.get(self.browse.mi).map(|m| m.0.clone()) else { return };
+        let days = self.browse_days(&y, &m);
+        self.browse.di = days.len().saturating_sub(1).min(self.browse.di);
+        let Some(d) = days.get(self.browse.di).map(|d| d.0.clone()) else { return };
+        let n = self.browse_day_entries(&d).len();
+        self.browse.ei = n.saturating_sub(1).min(self.browse.ei);
+    }
+
+    pub fn results(&self) -> Vec<&Entry> {
+        let q = Query::parse(&self.query);
+        if q.is_empty() {
+            return vec![];
+        }
+        let mut v: Vec<&Entry> = self.entries.iter().filter(|e| q.matches(e)).collect();
+        v.sort_by(|a, b| b.ts.cmp(&a.ts));
+        v.truncate(300);
+        v
+    }
+
+    /// Matching tags for the `@word` under the caret, most used first.
+    pub fn tag_suggestions(&self) -> Vec<String> {
+        let Some(d) = &self.draft else { return vec![] };
+        let Some((_, prefix)) = d.ed.tag_prefix() else { return vec![] };
+        let p = prefix.to_lowercase();
+        let want = format!("@{}", p);
+        self.tag_counts().into_iter().filter(|(t, _)| t.to_lowercase().starts_with(&want) && t.to_lowercase() != want).map(|(t, _)| t).take(5).collect()
+    }
+
+    pub fn words_today(&self) -> usize {
+        let mut n: usize = self.entries.iter().filter(|e| e.date == self.today && !self.is_draft_ref(e)).map(|e| e.words).sum();
+        if let Some(d) = &self.draft {
+            if d.ts.starts_with(&self.today) {
+                n += d.ed.word_count();
+            }
+        }
+        n
+    }
+
+    fn is_draft_ref(&self, e: &Entry) -> bool {
+        self.draft.as_ref().and_then(|d| d.ref_.as_ref()).map(|(f, i, _)| *f == e.file && *i == e.index).unwrap_or(false)
+    }
+
+    pub fn destination_of(&self, e: &Entry) -> String {
+        split_target(&e.raw, &self.split_tags).unwrap_or_else(|| journal_rel(&e.date))
+    }
+
+    // ----- actions -----
+
+    pub fn start_draft(&mut self, title: &str, body: &str) {
+        let mut ed = Editor::new(title, body);
+        ed.to_end();
+        if title.is_empty() && body.is_empty() {
+            ed.row = 0;
+            ed.col = 0;
+        }
+        let empty = ed.is_empty();
+        self.draft = Some(Draft { ed, ts: now_local(), starred: false, ref_: None, filed: false, saved_at: None, floating: empty });
+        self.focus = false;
+        self.push(Screen::Write);
+    }
+
+    pub fn edit_entry(&mut self, e: &Entry) {
+        let mut ed = Editor::new(&e.title, &e.body);
+        ed.to_end();
+        self.draft = Some(Draft {
+            ed,
+            ts: e.ts.clone(),
+            starred: e.starred,
+            ref_: Some((e.file.clone(), e.index, e.raw.clone())),
+            filed: e.source != "inbox",
+            saved_at: None,
+            floating: false,
+        });
+        self.focus = false;
+        self.push(Screen::Write);
+    }
+
+    /// Write the composer to disk if anything changed. Ok(true) when it did.
+    pub fn save_draft(&mut self) -> Result<bool, String> {
+        let Some(d) = self.draft.as_mut() else { return Ok(false) };
+        if !d.ed.dirty {
+            return Ok(false);
+        }
+        let (title, body) = (d.ed.title(), d.ed.body());
+        if title.trim().is_empty() && body.trim().is_empty() && !d.starred && d.ref_.is_none() {
+            return Ok(false);
+        }
+        let w = match &d.ref_ {
+            None => self.j.new_draft(&d.ts, &title, d.starred, &body)?,
+            Some((f, i, raw)) => self.j.update_entry(f, *i, raw, &d.ts, &title, d.starred, &body)?,
+        };
+        d.ref_ = Some((w.file, w.index, w.raw));
+        d.ed.dirty = false;
+        d.saved_at = Some(stats::now_time());
+        self.reload();
+        Ok(true)
+    }
+
+    fn leave_write(&mut self) {
+        match self.save_draft() {
+            Ok(_) => {
+                self.draft = None;
+                self.focus = false;
+                self.back();
+            }
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    fn file_from_write(&mut self) {
+        if let Err(e) = self.save_draft() {
+            self.toast(e, true);
+            return;
+        }
+        let Some(d) = &self.draft else { return };
+        if d.filed {
+            self.toast("Already filed — Esc to leave it".into(), false);
+            return;
+        }
+        let Some((f, i, raw)) = d.ref_.clone() else {
+            self.toast("Nothing to file".into(), false);
+            return;
+        };
+        match self.j.file_draft(&f, i, &raw, &self.split_tags) {
+            Ok(dest) => {
+                self.draft = None;
+                self.focus = false;
+                self.reload();
+                self.back();
+                self.toast(format!("Filed to {}", dest), false);
+            }
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    fn file_selected_draft(&mut self) {
+        let Some(e) = self.drafts().get(self.inbox_i).map(|e| (*e).clone()) else { return };
+        match self.j.file_draft(&e.file, e.index, &e.raw, &self.split_tags) {
+            Ok(dest) => {
+                self.reload();
+                self.toast(format!("Filed to {}", dest), false);
+            }
+            Err(err) => self.toast(err, true),
+        }
+    }
+
+    fn toggle_star_selected(&mut self) {
+        let sel = match self.screen {
+            Screen::Inbox => self.drafts().get(self.inbox_i).map(|e| (*e).clone()),
+            Screen::Browse => self.browse_sel().entry,
+            _ => None,
+        };
+        let Some(e) = sel else { return };
+        match self.j.update_entry(&e.file, e.index, &e.raw, &e.ts, &e.title, !e.starred, &e.body) {
+            Ok(_) => self.reload(),
+            Err(err) => self.toast(err, true),
+        }
+    }
+
+    fn selected_entry(&self) -> Option<Entry> {
+        match self.screen {
+            Screen::Inbox => self.drafts().get(self.inbox_i).map(|e| (*e).clone()),
+            Screen::Browse => self.browse_sel().entry,
+            Screen::Search => self.results().get(self.search_i).map(|e| (*e).clone()),
+            _ => None,
+        }
+    }
+
+    fn delete_selected(&mut self) {
+        let Some(e) = self.selected_entry() else { return };
+        match self.j.delete_entry(&e.file, e.index, &e.raw) {
+            Ok(()) => {
+                self.reload();
+                self.toast("Deleted".into(), false);
+            }
+            Err(err) => self.toast(err, true),
+        }
+    }
+
+    fn unfile_selected(&mut self) {
+        let Some(e) = self.browse_sel().entry else { return };
+        if e.source == "inbox" {
+            self.toast("Already in the inbox".into(), false);
+            return;
+        }
+        match self.j.unfile_entry(&e.file, e.index, &e.raw) {
+            Ok(w) => {
+                self.reload();
+                self.toast(format!("Back in the inbox: {}", w.file), false);
+            }
+            Err(err) => self.toast(err, true),
+        }
+    }
+
+    fn apply_retime(&mut self, value: &str) {
+        let v = value.trim();
+        let ts = if v.len() == 16 { format!("{}:00", v) } else { v.to_string() };
+        if check_ts(&ts).is_err() {
+            self.toast("Use YYYY-MM-DD HH:MM".into(), true);
+            return;
+        }
+        if self.screen == Screen::Write {
+            if let Some(d) = self.draft.as_mut() {
+                d.ts = ts;
+                d.floating = false;
+                d.ed.dirty = true;
+            }
+            if let Err(e) = self.save_draft() {
+                self.toast(e, true);
+            }
+            return;
+        }
+        let Some(e) = self.selected_entry() else { return };
+        match self.j.update_entry(&e.file, e.index, &e.raw, &ts, &e.title, e.starred, &e.body) {
+            Ok(w) => {
+                self.reload();
+                self.toast(format!("Moved to {}", w.file), false);
+            }
+            Err(err) => self.toast(err, true),
+        }
+    }
+
+    pub fn random(&mut self) {
+        use rand::Rng;
+        let pool: Vec<Entry> = self.filed().into_iter().cloned().collect();
+        if pool.is_empty() {
+            self.toast("No journal entries yet".into(), false);
+            return;
+        }
+        let e = pool[rand::rng().random_range(0..pool.len())].clone();
+        self.goto_entry(&e);
+    }
+
+    /// Open Browse with this entry selected.
+    pub fn goto_entry(&mut self, e: &Entry) {
+        self.browse.pick = match (&e.source[..], &e.split) {
+            ("split", Some(t)) => Pick::Split(t.clone()),
+            ("inbox", _) => Pick::All,
+            _ => Pick::Main,
+        };
+        self.browse.filtering = false;
+        self.browse.filter.clear();
+        self.browse.yi = self.browse_years().iter().position(|y| y.0 == e.date[..4]).unwrap_or(0);
+        self.browse.mi = self.browse_months(&e.date[..4]).iter().position(|m| m.0 == e.date[5..7]).unwrap_or(0);
+        self.browse.di = self.browse_days(&e.date[..4], &e.date[5..7]).iter().position(|d| d.0 == e.date).unwrap_or(0);
+        self.browse.ei = self.browse_day_entries(&e.date).iter().position(|x| x.file == e.file && x.index == e.index).unwrap_or(0);
+        self.browse.col = 3;
+        if self.screen != Screen::Browse {
+            self.push(Screen::Browse);
+        }
+    }
+
+    fn cycle_pick(&mut self) {
+        let splits = self.split_names();
+        self.browse.pick = match &self.browse.pick {
+            Pick::Main => splits.first().map(|s| Pick::Split(s.clone())).unwrap_or(Pick::All),
+            Pick::Split(t) => match splits.iter().position(|s| s == t) {
+                Some(i) if i + 1 < splits.len() => Pick::Split(splits[i + 1].clone()),
+                _ => Pick::All,
+            },
+            Pick::All => Pick::Main,
+        };
+        self.browse.yi = 0;
+        self.browse.mi = 0;
+        self.browse.di = 0;
+        self.browse.ei = 0;
+        self.clamp_browse();
+    }
+
+    // ----- the loop -----
+
+    pub fn tick(&mut self) {
+        if let Some((_, at, err)) = &self.toast {
+            if at.elapsed() > Duration::from_millis(if *err { 5000 } else { 3000 }) {
+                self.toast = None;
+            }
+        }
+        if let Some(end) = self.timer_end {
+            if Instant::now() >= end {
+                self.timer_end = None;
+                self.toast("Time. Finish the sentence.".into(), false);
+            }
+        }
+        let autosave_due = self.draft.as_ref().map(|d| d.ed.dirty && d.ed.last_edit.elapsed() > Duration::from_millis(700)).unwrap_or(false);
+        if autosave_due {
+            if let Err(e) = self.save_draft() {
+                self.toast(e, true);
+                if let Some(d) = self.draft.as_mut() {
+                    d.ed.last_edit = Instant::now(); // try again in a while, not every tick
+                }
+            }
+        }
+        if self.screen != Screen::Write && self.last_check.elapsed() > Duration::from_secs(4) {
+            self.last_check = Instant::now();
+            let today = stats::today();
+            if today != self.today {
+                self.today = today;
+            }
+            if self.fingerprint_now() != self.fingerprint {
+                self.reload();
+            }
+        }
+    }
+
+    pub fn handle_key(&mut self, k: KeyEvent) {
+        if k.kind != KeyEventKind::Press && k.kind != KeyEventKind::Repeat {
+            return;
+        }
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = k.modifiers.contains(KeyModifiers::ALT);
+        if ctrl && k.code == KeyCode::Char('c') {
+            self.quit = true;
+            return;
+        }
+        if self.modal.is_some() {
+            self.modal_key(k);
+            return;
+        }
+        if self.help {
+            self.help = false;
+            return;
+        }
+        if k.code == KeyCode::F(1) || (k.code == KeyCode::Char('?') && self.screen != Screen::Write && self.screen != Screen::Search && !self.browse.filtering) {
+            self.help = true;
+            return;
+        }
+        match self.screen {
+            Screen::Today => self.today_key(k),
+            Screen::Inbox => self.inbox_key(k),
+            Screen::Browse => self.browse_key(k),
+            Screen::Write => self.write_key(k, ctrl, alt),
+            Screen::LookBack => self.lookback_key(k),
+            Screen::Search => self.search_key(k),
+        }
+    }
+
+    fn common_nav(&mut self, k: &KeyEvent) -> bool {
+        match k.code {
+            KeyCode::Char('n') => {
+                self.start_draft("", "");
+                true
+            }
+            KeyCode::Char('i') => {
+                self.push(Screen::Inbox);
+                true
+            }
+            KeyCode::Char('j') => {
+                self.push(Screen::Browse);
+                true
+            }
+            KeyCode::Char('l') => {
+                self.push(Screen::LookBack);
+                true
+            }
+            KeyCode::Char('/') => {
+                self.push(Screen::Search);
+                true
+            }
+            KeyCode::Char('r') => {
+                self.random();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn today_key(&mut self, k: KeyEvent) {
+        if self.common_nav(&k) {
+            return;
+        }
+        match k.code {
+            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            KeyCode::Char('p') => self.prompt_n += 1,
+            KeyCode::Enter => {
+                let p = self.current_prompt();
+                self.start_draft("", &format!("> {}\n\n", p));
+            }
+            _ => {}
+        }
+    }
+
+    fn inbox_key(&mut self, k: KeyEvent) {
+        let n = self.drafts().len();
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.back(),
+            KeyCode::Up | KeyCode::Char('k') => self.inbox_i = self.inbox_i.saturating_sub(1),
+            KeyCode::Down => {
+                if n > 0 {
+                    self.inbox_i = (self.inbox_i + 1).min(n - 1)
+                }
+            }
+            KeyCode::Char('f') => self.file_selected_draft(),
+            KeyCode::Char('e') | KeyCode::Enter => {
+                if let Some(e) = self.drafts().get(self.inbox_i).map(|e| (*e).clone()) {
+                    self.edit_entry(&e);
+                }
+            }
+            KeyCode::Char('*') => self.toggle_star_selected(),
+            KeyCode::Char('t') => {
+                if let Some(e) = self.selected_entry() {
+                    self.modal = Some(Modal::Retime(e.ts[..16].to_string()));
+                }
+            }
+            KeyCode::Char('d') => {
+                if self.selected_entry().is_some() {
+                    self.modal = Some(Modal::Confirm { text: "Delete this draft?".into(), action: Confirm::DeleteSelected });
+                }
+            }
+            _ => {
+                self.common_nav(&k);
+            }
+        }
+    }
+
+    fn browse_key(&mut self, k: KeyEvent) {
+        if self.browse.filtering {
+            match k.code {
+                KeyCode::Esc => {
+                    self.browse.filtering = false;
+                    self.browse.filter.clear();
+                    self.clamp_browse();
+                }
+                KeyCode::Enter => self.browse.filtering = false,
+                KeyCode::Backspace => {
+                    self.browse.filter.pop();
+                    self.clamp_browse();
+                }
+                KeyCode::Char(c) => {
+                    self.browse.filter.push(c);
+                    self.clamp_browse();
+                }
+                _ => {}
+            }
+            return;
+        }
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.back(),
+            KeyCode::Left | KeyCode::Char('h') => self.browse.col = self.browse.col.saturating_sub(1),
+            KeyCode::Right => self.browse.col = (self.browse.col + 1).min(3),
+            KeyCode::Up | KeyCode::Char('k') => {
+                match self.browse.col {
+                    0 => self.browse.yi = self.browse.yi.saturating_sub(1),
+                    1 => self.browse.mi = self.browse.mi.saturating_sub(1),
+                    2 => self.browse.di = self.browse.di.saturating_sub(1),
+                    _ => self.browse.ei = self.browse.ei.saturating_sub(1),
+                }
+                self.after_browse_move();
+            }
+            KeyCode::Down => {
+                match self.browse.col {
+                    0 => self.browse.yi += 1,
+                    1 => self.browse.mi += 1,
+                    2 => self.browse.di += 1,
+                    _ => self.browse.ei += 1,
+                }
+                self.after_browse_move();
+            }
+            KeyCode::Enter => {
+                if self.browse.col < 3 {
+                    self.browse.col += 1;
+                } else if let Some(e) = self.browse_sel().entry {
+                    self.edit_entry(&e);
+                }
+            }
+            KeyCode::Char('/') => {
+                self.browse.filtering = true;
+                self.browse.filter.clear();
+            }
+            KeyCode::Char('s') => self.cycle_pick(),
+            KeyCode::Char('u') => self.unfile_selected(),
+            KeyCode::Char('*') => self.toggle_star_selected(),
+            KeyCode::Char('t') => {
+                if let Some(e) = self.selected_entry() {
+                    self.modal = Some(Modal::Retime(e.ts[..16].to_string()));
+                }
+            }
+            KeyCode::Char('d') => {
+                if self.selected_entry().is_some() {
+                    self.modal = Some(Modal::Confirm { text: "Delete this entry?".into(), action: Confirm::DeleteSelected });
+                }
+            }
+            _ => {
+                self.common_nav(&k);
+            }
+        }
+    }
+
+    fn after_browse_move(&mut self) {
+        match self.browse.col {
+            0 => {
+                self.browse.mi = 0;
+                self.browse.di = 0;
+                self.browse.ei = 0;
+            }
+            1 => {
+                self.browse.di = 0;
+                self.browse.ei = 0;
+            }
+            2 => self.browse.ei = 0,
+            _ => {}
+        }
+        self.clamp_browse();
+    }
+
+    fn write_key(&mut self, k: KeyEvent, ctrl: bool, alt: bool) {
+        let width = self.editor_width();
+        let suggestions = self.tag_suggestions();
+        let Some(d) = self.draft.as_mut() else { return };
+        if d.floating && matches!(k.code, KeyCode::Char(_) | KeyCode::Enter) && !ctrl {
+            d.ts = now_local();
+            d.floating = false;
+        }
+        if ctrl {
+            match k.code {
+                KeyCode::Char('s') => match self.save_draft() {
+                    Ok(true) => self.toast("Saved".into(), false),
+                    Ok(false) => self.toast("Nothing new to save".into(), false),
+                    Err(e) => self.toast(e, true),
+                },
+                KeyCode::Char('j') => self.file_from_write(),
+                KeyCode::Char('t') => {
+                    let ts = d.ts[..16].to_string();
+                    self.modal = Some(Modal::Retime(ts));
+                }
+                KeyCode::Char('f') => self.focus = !self.focus,
+                KeyCode::Char('p') => {
+                    self.prompt_n += 1;
+                    let p = self.current_prompt();
+                    let d = self.draft.as_mut().unwrap();
+                    if d.ed.col > 0 {
+                        d.ed.insert_str("\n\n");
+                    }
+                    d.ed.insert_str(&format!("> {}\n\n", p));
+                }
+                KeyCode::Char('o') => {
+                    self.timer_end = match self.timer_end {
+                        Some(_) => None,
+                        None => Some(Instant::now() + Duration::from_secs(60 * self.settings.timer_minutes())),
+                    };
+                }
+                KeyCode::Char('b') => d.ed.toggle_wrap_word("**", "**"),
+                KeyCode::Char('i') => d.ed.toggle_wrap_word("_", "_"),
+                KeyCode::Char('g') => d.ed.toggle_wrap_word("`", "`"),
+                KeyCode::Char('w') | KeyCode::Backspace => d.ed.delete_word_back(),
+                KeyCode::Char('a') => d.ed.home(),
+                KeyCode::Char('e') => d.ed.end(),
+                KeyCode::Left => d.ed.word_left(),
+                KeyCode::Right => d.ed.word_right(),
+                KeyCode::Char('d') => {
+                    if d.ref_.is_none() && d.ed.is_empty() {
+                        self.draft = None;
+                        self.back();
+                    } else {
+                        self.modal = Some(Modal::Confirm { text: "Discard this draft?".into(), action: Confirm::DiscardDraft });
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if alt {
+            match k.code {
+                KeyCode::Left | KeyCode::Char('b') => d.ed.word_left(),
+                KeyCode::Right | KeyCode::Char('f') => d.ed.word_right(),
+                KeyCode::Backspace => d.ed.delete_word_back(),
+                _ => {}
+            }
+            return;
+        }
+        match k.code {
+            KeyCode::Esc => {
+                if !suggestions.is_empty() {
+                    d.ed.insert_char(' ');
+                } else {
+                    self.leave_write();
+                }
+            }
+            KeyCode::Tab => {
+                if let Some(t) = suggestions.get(self.tag_pick.min(suggestions.len().saturating_sub(1))) {
+                    d.ed.accept_tag(t);
+                    self.tag_pick = 0;
+                } else if d.ed.row > 0 && quire_core::editing::list_continuation(&d.ed.lines[d.ed.row]).is_some() {
+                    let col = d.ed.col;
+                    d.ed.home();
+                    d.ed.insert_str("  ");
+                    d.ed.col = col + 2;
+                }
+            }
+            KeyCode::BackTab => {
+                if d.ed.row > 0 && d.ed.lines[d.ed.row].starts_with("  ") {
+                    d.ed.lines[d.ed.row].drain(..2);
+                    d.ed.col = d.ed.col.saturating_sub(2);
+                    d.ed.dirty = true;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(t) = suggestions.get(self.tag_pick.min(suggestions.len().saturating_sub(1))) {
+                    d.ed.accept_tag(t);
+                    self.tag_pick = 0;
+                } else if d.ed.row == 0 {
+                    // Leaving the title: into the body, past the blank line.
+                    if d.ed.lines.len() == 1 {
+                        d.ed.lines.push(String::new());
+                        d.ed.lines.push(String::new());
+                        d.ed.dirty = true;
+                    }
+                    d.ed.row = 2.min(d.ed.lines.len() - 1);
+                    d.ed.col = 0;
+                } else {
+                    d.ed.newline();
+                }
+            }
+            KeyCode::Backspace => d.ed.backspace(),
+            KeyCode::Delete => d.ed.delete(),
+            KeyCode::Left => d.ed.left(),
+            KeyCode::Right => d.ed.right(),
+            KeyCode::Up => {
+                if !suggestions.is_empty() {
+                    self.tag_pick = self.tag_pick.saturating_sub(1);
+                } else {
+                    d.ed.up(width);
+                }
+            }
+            KeyCode::Down => {
+                if !suggestions.is_empty() {
+                    self.tag_pick = (self.tag_pick + 1).min(suggestions.len() - 1);
+                } else {
+                    d.ed.down(width);
+                }
+            }
+            KeyCode::Home => d.ed.home(),
+            KeyCode::End => d.ed.end(),
+            KeyCode::PageUp => {
+                for _ in 0..10 {
+                    d.ed.up(width);
+                }
+            }
+            KeyCode::PageDown => {
+                for _ in 0..10 {
+                    d.ed.down(width);
+                }
+            }
+            KeyCode::Char(c) => {
+                d.ed.insert_char(c);
+                self.tag_pick = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// The composer's text width: a measure, not the whole terminal.
+    pub fn editor_width(&self) -> usize {
+        let w = self.width as usize;
+        let margin = if w > 90 { 8 } else if w > 60 { 4 } else { 2 };
+        (w.saturating_sub(margin * 2)).clamp(20, 72)
+    }
+
+    fn lookback_key(&mut self, k: KeyEvent) {
+        let years = stats::years(&self.entries, self.today[..4].parse().unwrap_or(2026));
+        let i = years.iter().position(|y| *y == self.year).unwrap_or(0);
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.back(),
+            KeyCode::Left => {
+                if i + 1 < years.len() {
+                    self.year = years[i + 1];
+                }
+            }
+            KeyCode::Right => {
+                if i > 0 {
+                    self.year = years[i - 1];
+                }
+            }
+            _ => {
+                self.common_nav(&k);
+            }
+        }
+    }
+
+    fn search_key(&mut self, k: KeyEvent) {
+        let n = self.results().len();
+        match k.code {
+            KeyCode::Esc => {
+                if self.query.is_empty() {
+                    self.back();
+                } else {
+                    self.query.clear();
+                    self.search_i = 0;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(e) = self.results().get(self.search_i).map(|e| (*e).clone()) {
+                    self.edit_entry(&e);
+                }
+            }
+            KeyCode::Up => self.search_i = self.search_i.saturating_sub(1),
+            KeyCode::Down => {
+                if n > 0 {
+                    self.search_i = (self.search_i + 1).min(n - 1)
+                }
+            }
+            KeyCode::Backspace => {
+                self.query.pop();
+                self.search_i = 0;
+            }
+            KeyCode::Char(c) => {
+                self.query.push(c);
+                self.search_i = 0;
+            }
+            _ => {}
+        }
+    }
+
+    fn modal_key(&mut self, k: KeyEvent) {
+        let Some(m) = self.modal.as_mut() else { return };
+        match m {
+            Modal::Retime(v) => match k.code {
+                KeyCode::Esc => self.modal = None,
+                KeyCode::Enter => {
+                    let v = v.clone();
+                    self.modal = None;
+                    self.apply_retime(&v);
+                }
+                KeyCode::Backspace => {
+                    v.pop();
+                }
+                KeyCode::Char(c) if (c.is_ascii_digit() || c == '-' || c == ':' || c == ' ')
+                    && v.len() < 19 => {
+                        v.push(c)
+                    }
+                _ => {}
+            },
+            Modal::Confirm { action, .. } => {
+                let action = *action;
+                match k.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                        self.modal = None;
+                        match action {
+                            Confirm::DeleteSelected => self.delete_selected(),
+                            Confirm::DiscardDraft => {
+                                if let Some(d) = self.draft.take() {
+                                    if let Some((f, i, raw)) = d.ref_ {
+                                        if !d.filed {
+                                            if let Err(e) = self.j.delete_entry(&f, i, &raw) {
+                                                self.toast(e, true);
+                                            }
+                                        }
+                                    }
+                                }
+                                self.focus = false;
+                                self.reload();
+                                self.back();
+                                self.toast("Discarded".into(), false);
+                            }
+                        }
+                    }
+                    _ => self.modal = None,
+                }
+            }
+        }
+    }
+}
+
+pub fn run(mut app: App) -> std::io::Result<()> {
+    let mut terminal = ratatui::init();
+    let result = (|| -> std::io::Result<()> {
+        loop {
+            let size = terminal.size()?;
+            app.width = size.width;
+            app.height = size.height;
+            terminal.draw(|f| crate::ui::draw(f, &mut app))?;
+            if event::poll(Duration::from_millis(200))? {
+                match event::read()? {
+                    Event::Key(k) => app.handle_key(k),
+                    Event::Resize(w, h) => {
+                        app.width = w;
+                        app.height = h;
+                    }
+                    _ => {}
+                }
+            }
+            app.tick();
+            if app.quit {
+                if app.draft.is_some() {
+                    if let Err(e) = app.save_draft() {
+                        eprintln!("  {}", e);
+                    }
+                }
+                break;
+            }
+        }
+        Ok(())
+    })();
+    ratatui::restore();
+    result
+}
