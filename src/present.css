@@ -1,0 +1,59 @@
+/* The presentation window (present.html). style.css supplies the themes,
+   fonts and @tag colour; this sizes everything off the window's height, the
+   way Nook's external display does, so the same draft reads at a desk
+   monitor's size by default and scales up for a projector with +/−. */
+.present { overflow: hidden; }
+.present {
+  --p-base: clamp(16px, 3.2vh, 48px);
+  --p-scale: 1;
+  --p-text: calc(var(--p-base) * var(--p-scale));
+  --p-pad: clamp(28px, 6vmin, 96px);
+}
+html[data-scale="s"] .present { --p-scale: .8; }
+html[data-scale="l"] .present { --p-scale: 1.25; }
+html[data-scale="xl"] .present { --p-scale: 1.5; }
+
+.present .stage { position: absolute; inset: 0; display: flex; flex-direction: column; gap: calc(var(--p-text) * .9); padding: var(--p-pad); background: var(--page); color: var(--ink); }
+.present .spacer { flex-grow: 1; }
+
+.p-head { display: flex; flex-direction: column; gap: calc(var(--p-text) * .35); flex-shrink: 0; }
+.p-eyebrow { display: flex; align-items: baseline; gap: 1em; font-size: max(13px, calc(var(--p-text) * .52)); font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+#p-star { color: var(--accent); letter-spacing: 0; }
+.present h1 { margin: 0; font-family: var(--writing); font-weight: var(--head-weight, 600); letter-spacing: var(--head-track, 0); font-size: calc(var(--p-text) * 1.45); line-height: 1.15; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.p-rule { height: max(1px, calc(var(--p-text) * .04)); background: color-mix(in srgb, var(--accent) 35%, transparent); }
+
+/* The body scrolls itself to the caret (present.js keepVisible); the bottom
+   padding is what lets the last line sit mid-screen instead of on the edge. */
+.p-scroll { flex-grow: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.p-scroll::-webkit-scrollbar { display: none; }
+.p-body { font-family: var(--writing); font-size: var(--p-text); line-height: 1.6; white-space: pre-wrap; overflow-wrap: break-word; padding-bottom: 45vh; cursor: text; }
+.p-body .placeholder { color: var(--faint); font-style: italic; }
+.p-body .tag { color: var(--accent); }
+[data-tags="off"] .p-body .tag { color: inherit; }
+.p-body code { font-family: "Plex Mono", ui-monospace, monospace; font-size: .92em; }
+
+/* The caret: an inline bar at the main window's caret, blinking like it,
+   solid for a moment whenever it moves. */
+.p-caret { display: inline-block; width: max(2px, .08em); height: 1.05em; margin: 0 -1px -.2em 0; vertical-align: baseline; background: var(--accent); border-radius: 1px; animation: p-blink 1.1s step-end infinite; }
+.p-caret.still { animation: none; }
+@keyframes p-blink { 50% { opacity: 0; } }
+
+.p-foot { display: flex; align-items: baseline; gap: 1em; flex-shrink: 0; font-size: max(13px, calc(var(--p-text) * .52)); color: var(--muted); }
+.p-tags { color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+[data-tags="off"] .p-tags { color: var(--muted); }
+
+/* Idle: the journal at a glance, until there's something to show. */
+.p-brand { font-style: italic; }
+.p-tiles { display: flex; margin-top: auto; }
+.p-tile { flex: 1; display: flex; flex-direction: column; align-items: center; gap: .3em; }
+.p-tile b { font-size: calc(var(--p-text) * 1.7); font-weight: 700; line-height: 1; }
+.p-tile:first-child b { color: var(--accent); }
+.p-tile span { font-size: max(13px, calc(var(--p-text) * .52)); color: var(--muted); }
+.p-waiting { margin: auto 0 0; text-align: center; font-size: max(13px, calc(var(--p-text) * .52)); color: var(--faint); }
+
+/* The key hints along the bottom; H hides them. */
+.p-hints { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 2em; padding: .6em var(--p-pad) calc(var(--p-pad) * .4); font-size: max(12px, calc(var(--p-text) * .42)); color: var(--muted); pointer-events: none; }
+.p-hints kbd { font: inherit; font-weight: 600; color: var(--accent); margin-right: .35em; }
+.present .stage { padding-bottom: calc(var(--p-pad) + 1.6em); }
+.p-hints[hidden] { display: none; }
+body.no-hints .stage { padding-bottom: var(--p-pad); }

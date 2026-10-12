@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 /// Settings live in ~/.config/quire/settings.json. `folder` is the journal
 /// folder; `ui` is preferences owned by the front end.
@@ -1028,6 +1028,28 @@ fn set_system_titlebar(app: AppHandle, state: State<AppState>, on: bool) -> Resu
     Ok(custom)
 }
 
+// ---------- presentation window ----------
+
+/// Open (or raise) the presentation window: a second, plain window that
+/// mirrors the composer in large type — drag it onto a projector or a second
+/// monitor and write in the main window. The front end feeds it over events
+/// (`present`); see src/present.js. Built here rather than from JS so the
+/// front end needs no window-creation capability.
+#[tauri::command]
+fn open_presentation(app: AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("present") {
+        w.unminimize().map_err(|e| e.to_string())?;
+        return w.set_focus().map_err(|e| e.to_string());
+    }
+    WebviewWindowBuilder::new(&app, "present", WebviewUrl::App("present.html".into()))
+        .title("Quire — Presentation")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(480.0, 320.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1123,7 +1145,8 @@ pub fn run() {
             pin_hash,
             rewatch,
             undecorated,
-            set_system_titlebar
+            set_system_titlebar,
+            open_presentation
         ])
         .run(tauri::generate_context!())
         .expect("error while running Quire");

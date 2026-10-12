@@ -20,6 +20,7 @@ const DEFAULT_UI = {
   sortNewest: true, grouped: true, welcomed: false, showCal: false, showTags: false,
   dateFormat: 'weekday', weekStart: 'mon', weekNumbers: false, highlightTags: true,
   assetSort: 'newest', assetGroup: 'none', ignoredTagGroups: [],
+  presentSize: 'm',
 };
 const ACCENTS = { theme: null, blue: '#1C7ED6', indigo: '#5C5CD6', purple: '#945CD6', pink: '#E0568C', red: '#E04A4A', orange: '#F08C38', teal: '#24AAA8', green: '#34A86C' };
 const THEMES = [
@@ -54,6 +55,7 @@ const S = {
   folderMissing: false, conflicts: [], stale: false, menuAsset: null,
   backupInterval: 'off', backupKeep: 10, lastBackup: null, backupRunning: false,
   dataSaver: false, dataSaved: 0, mediaTools: { ffmpeg: true, heif: true }, compress: null, compressReport: null,
+  present: false,
 };
 
 /* ---------- helpers ---------- */
@@ -199,6 +201,7 @@ function applyUi() {
   const acc = ACCENTS[S.ui.accent];
   if (acc) { r.style.setProperty('--accent', acc); r.style.setProperty('--accent-ink', acc); r.style.setProperty('--on-accent', '#FFFFFF'); r.style.setProperty('--accent-soft', acc + '26'); }
   else ['--accent', '--accent-ink', '--on-accent', '--accent-soft'].forEach(p => r.style.removeProperty(p));
+  presentPush();
 }
 
 /* ---------- search grammar (Nook's SearchQuery) ----------
@@ -725,6 +728,7 @@ function paintBackdrop() {
     bd.innerHTML = html + (text.endsWith('\n') ? '​' : '');
   }
   ta.style.height = bd.offsetHeight + 'px';
+  presentPush();
 }
 function typewriter() {
   if (!(S.focus && S.ui.typewriter)) return;
@@ -732,6 +736,44 @@ function typewriter() {
   if (!m || !page) return;
   const r = m.getBoundingClientRect(), pr = page.getBoundingClientRect();
   page.scrollTop += (r.top - pr.top) - page.clientHeight * 0.45;
+}
+
+/* ---------- presentation window (present.html) ----------
+   A second window that mirrors the composer in large type for a projector or
+   a monitor — Nook's external display, for a desk. It's fed over the `present`
+   event with what to show (the draft, its caret, the theme), coalesced to one
+   push per frame; it sends back `present-caret` when its text is clicked and
+   `present-size` for +/−. Nothing is pushed until it says hello, so the
+   composer costs nothing extra with the window closed. */
+const PRESENT_SIZES = ['s', 'm', 'l', 'xl'];
+const tagsIn = s => [...new Set(s.match(/@[a-zA-Z][a-zA-Z0-9_-]*/g) || [])];
+function presentPayload() {
+  const theme = { theme: document.documentElement.dataset.theme || S.ui.theme, size: S.ui.size, font: S.ui.font, tags: S.ui.highlightTags ? 'on' : 'off', accent: ACCENTS[S.ui.accent] || null, scale: S.ui.presentSize || 'm' };
+  const stats = { entries: filed().length, drafts: inbox().length, wordsToday: todaysWords() };
+  // Locked means locked on every screen: the idle card only.
+  if (S.mode === 'write' && S.draft && !S.locked) {
+    const d = S.draft, ta = $('#bodyta');
+    const caret = ta && document.activeElement === ta ? ta.selectionEnd : null;
+    return { kind: 'write', title: d.title, date: fmtDate(d.ts.slice(0, 10)), starred: d.starred, body: d.body, caret, words: words(d.body), tags: tagsIn(d.title + '\n' + d.body), theme, stats };
+  }
+  if (S.mode === 'read' && S.sel && !S.locked) {
+    const e = S.sel;
+    return { kind: 'read', title: e.title, date: fmtDate(e.date), starred: e.starred, body: e.body, caret: null, words: e.words, tags: tagsIn(e.title + '\n' + e.body), theme, stats };
+  }
+  return { kind: 'idle', date: fmtDate(today()), theme, stats };
+}
+let presentRaf = 0;
+function presentPush() {
+  if (!S.present || presentRaf) return;
+  presentRaf = requestAnimationFrame(() => {
+    presentRaf = 0;
+    T.event.emitTo('present', 'present', presentPayload()).catch(() => { S.present = false; });
+  });
+}
+async function openPresentation() {
+  await invoke('open_presentation');
+  // Already open: it won't say hello again, so push now in case it was idle.
+  if (S.present) presentPush();
 }
 
 /* editor macros: list continuation (Nook's ListContinuation), wrap selection, insert at caret */
@@ -1026,11 +1068,13 @@ function openMenu(anchor, ctx) {
     items.push(['Import as separate entries…', 'import-text']);
     items.push(['Copy text', 'copy']);
     items.push(['Print…', 'print']);
+    items.push(['Presentation window', 'present']);
     if (!d.ref || d.ref.source === 'inbox') items.push(['Discard draft', 'discard', false, true]);
   } else if (ctx === 'read') {
     items.push(['Copy text', 'copy']);
     items.push(['Print entry…', 'print']);
     items.push(['Print this day…', 'print-day']);
+    items.push(['Presentation window', 'present']);
     items.push(['', null]);
     items.push(['Change date & time', 'retime']);
     items.push(['Open file in your editor', 'open-file']);
@@ -1105,6 +1149,7 @@ async function menuAction(a) {
   if (a === 'import-text') { openImportText(); return; }
   if (a === 'copy') { const src = S.mode === 'write' ? d : e; await navigator.clipboard.writeText([src.title, src.body].filter(Boolean).join('\n\n')); toast('Copied'); return; }
   if (a === 'print') { window.print(); return; }
+  if (a === 'present') { await openPresentation(); return; }
   if (a === 'print-day') { S.printDay = e.date; S.sel = null; render(); setTimeout(() => { window.print(); S.printDay = null; S.sel = e; render(); }, 150); return; }
   if (a === 'open-file') { await invoke('plugin:opener|open_path', { path: S.folder + '/' + e.file }); return; }
   if (a === 'reveal') { await invoke('plugin:opener|reveal_item_in_dir', { path: S.folder + '/' + e.file }); return; }
@@ -1523,6 +1568,8 @@ function renderSettings() {
         ${seg('goal', 'Goal', [[100, '100'], [250, '250'], [500, '500'], [750, '750'], [1000, '1000']])}
         ${seg('timerMins', 'Timer', [[5, '5 min'], [10, '10'], [15, '15'], [25, '25'], [45, '45']])}
         ${sw('chime', 'Chime when the timer ends')}
+        ${seg('presentSize', 'Presentation window text', [['s', 'S'], ['m', 'M'], ['l', 'L'], ['xl', 'XL']], 'A second window that mirrors the composer in large type — for a projector or a monitor. Sized off that window’s height; + and − there change this too')}
+        <div class="srow"><div class="lbl"><span>Presentation window</span><span class="note">Ctrl+Alt+P, or the composer’s ⋯ menu. Drag it to the other screen and press F for full screen; clicking its text moves the caret in the composer</span></div><button class="btn" data-action="present">Open</button></div>
       </section>
       <section id="s-reminder"><h2>Reminder</h2>
         ${sw('reminderOn', 'Daily reminder', 'A system notification while Quire is running, and a line on Today afterwards if nothing’s written')}
@@ -1558,6 +1605,7 @@ function renderSettings() {
         <span><kbd>↹</kbd> in a list</span><span>Indents the item (<kbd>Shift</kbd> <kbd>↹</kbd> outdents); a multi-line selection indents every line. Elsewhere ↹ moves focus</span>
         <span><kbd>@</kbd></span><span>Tag autocomplete; ↹ or ↵ accepts</span>
         <span><kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>F</kbd></span><span>Focus</span>
+        <span><kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>P</kbd></span><span>Presentation window</span>
         <span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>F</kbd></span><span>Search the journal</span>
         <span><kbd>Ctrl</kbd> <kbd>T</kbd></span><span>Date &amp; time</span>
         <span><kbd>Ctrl</kbd> <kbd>R</kbd></span><span>Random entry</span>
@@ -1650,7 +1698,8 @@ function afterRender() {
       const again = $('[data-action="prompt"]'); if (again && ta.value.trim()) again.remove();
     });
     ['keyup', 'click', 'select'].forEach(ev => ta.addEventListener(ev, () => { paintBackdrop(); typewriter(); }));
-    ta.addEventListener('blur', () => { $('#tagpick')?.remove(); S.tagPick = null; });
+    ta.addEventListener('blur', () => { $('#tagpick')?.remove(); S.tagPick = null; presentPush(); });
+    ta.addEventListener('focus', presentPush);
     ta.addEventListener('keydown', ev => {
       if (ev.isComposing || ev.keyCode === 229) return; // an IME is composing: its keys aren't ours
       if (S.tagPick && !ev.ctrlKey) {
@@ -1680,13 +1729,14 @@ function afterRender() {
         ta.dispatchEvent(new Event('input'));
       }
     });
-    ti.addEventListener('input', () => { restampIfFloating(true); S.draft.title = ti.value; refreshChrome(); scheduleSave(); });
+    ti.addEventListener('input', () => { restampIfFloating(true); S.draft.title = ti.value; refreshChrome(); scheduleSave(); presentPush(); });
     ti.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); ta.focus(); } });
     new ResizeObserver(() => paintBackdrop()).observe($('#editor'));
   }
   if ($('#body [data-asset]')) resolveVisibleMedia().catch(() => {});
   const sel = $('.row.sel'); if (sel) sel.scrollIntoView({ block: 'nearest' });
   if (S.locked) $('#pin')?.focus();
+  presentPush();
 }
 
 /* ---------- events ---------- */
@@ -1753,6 +1803,7 @@ document.addEventListener('click', async ev => {
       case 'retime': openRetime(el); break;
       case 'menu': openMenu(el, el.dataset.menu); break;
       case 'focus': toggleFocus(); break;
+      case 'present': await openPresentation(); break;
       case 'prompt': S.promptReroll++; paintBackdrop(); $('#bodyta')?.focus(); break;
       case 'timer': toggleTimer(); break;
       case 'tag-accept': acceptTag(+el.dataset.i); break;
@@ -2010,6 +2061,7 @@ document.addEventListener('keydown', async ev => {
       return;
     }
     if (ctrl && ev.altKey && ev.key.toLowerCase() === 'f') { ev.preventDefault(); toggleFocus(); return; }
+    if (ctrl && ev.altKey && ev.key.toLowerCase() === 'p') { ev.preventDefault(); await openPresentation(); return; }
     if (ctrl && ev.shiftKey && ev.key.toLowerCase() === 'f') { ev.preventDefault(); if (S.mode === 'write' && !(await leaveWrite())) return; S.view = 'journal'; S.jview = 'list'; S.showList = true; render(); $('#search')?.focus(); return; }
     if (ctrl && !ev.shiftKey && !ev.altKey) {
       const k = ev.key.toLowerCase();
@@ -2096,6 +2148,24 @@ async function externalChange() {
   } catch (e) { /* keep what we have */ }
 }
 T.event.listen('journal-changed', externalChange);
+T.event.listen('present-hello', () => { S.present = true; presentPush(); });
+T.event.listen('present-bye', () => { S.present = false; });
+T.event.listen('present-caret', async ev => {
+  // A click on the presentation window's text: put the composer's caret
+  // there and bring the keyboard back here, so typing carries straight on.
+  const ta = $('#bodyta');
+  if (!ta || S.mode !== 'write') return;
+  const o = Math.max(0, Math.min(ta.value.length, Number(ev.payload?.offset) || 0));
+  await appWindow.setFocus().catch(() => {});
+  ta.focus(); ta.setSelectionRange(o, o); paintBackdrop(); typewriter();
+});
+T.event.listen('present-size', async ev => {
+  const i = PRESENT_SIZES.indexOf(S.ui.presentSize || 'm');
+  const next = PRESENT_SIZES[Math.max(0, Math.min(PRESENT_SIZES.length - 1, i + (Number(ev.payload?.delta) || 0)))];
+  if (next === S.ui.presentSize) return;
+  S.ui.presentSize = next; await saveUi(); presentPush();
+  if (S.view === 'settings') $$('[data-k="presentSize"]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === next)));
+});
 window.addEventListener('focus', () => {
   restampIfFloating(false);
   maybeBackup();

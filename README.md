@@ -74,6 +74,21 @@ A full parity pass against Nook and jnl, plus a bug review. Highlights:
 
 Settings › Appearance › **Marathon** (dark) or **Marathon Day** (light). After Bungie's 2026 Marathon: wide Archivo Expanded headlines, DM Mono readouts, square corners, numbered tabs, one signal colour (lime; the accent picker changes it on the dark side), a dot-dither field on Today, a lattice behind photos, a segmented rule under titles. Marathon Day uses lime only as a fill, never as text, because lime on pale grey is unreadable. With "Go dark when the system is dark" on, Marathon Day switches to Marathon (other themes still go to Cinema). The writing font follows the theme unless you pick Sans, System or Mono. Fonts are bundled (SIL Open Font Licence); no marks or names from the game.
 
+## Presentation window (unreleased)
+
+Nook's iOS second screen, for a desk: **Ctrl+Alt+P** (or the composer's ⋯ menu, or Settings › Writing › Open) opens a second window that mirrors the composer in large type. Drag it onto the projector or the other monitor and keep writing in the main window.
+
+| | |
+|---|---|
+| What it shows | The draft you're writing — title, date, star, the text with the same live styling as the composer (`**bold**`, `__italic__`, `` `code` ``, `@tags` in the accent), a blinking caret where *your* caret is, tags and word count along the bottom. Reading an entry shows that entry; otherwise an idle card with today's words, entries and drafts. Locked means locked there too |
+| Scrolling | Follows the caret, not the end of the text: it only moves once the caret leaves a band near the top or bottom edge, then settles it a little above centre. A wheel-scroll by hand holds until the next keystroke |
+| Size | Off the window's height, so full screen on a 1080p monitor reads at about 35 px. **+** / **−** in the window (or Settings › Writing › Presentation window text: S / M / L / XL) scale it; the choice is saved |
+| Mouse | Click anywhere in its text and the composer's caret moves there (focus comes back to the main window, so you just carry on typing). Wheel scrolls |
+| Keys | **F** / F11 full screen · **+** / **−** text size · **H** hide the hint bar · **Esc** leave full screen, then close |
+| Theme | Follows the main window's theme, accent, font and tag highlighting, live |
+
+It costs nothing while closed: the composer only pushes to it once it's open, one update per frame at most.
+
 ## Window chrome (0.4.1)
 
 As in Wander: on Linux the window has no system title bar. Quire's top bar is the drag handle (drag anywhere that isn't a button; double-click to maximise or restore) and carries its own minimise, maximise and close at the right. In Focus the bar goes but the controls stay, faint until you hover, with a thin drag strip along the top. Close waits for the last edit to be saved. Settings › Appearance › "Use the system title bar" switches back to your desktop's bar, live, and is remembered.

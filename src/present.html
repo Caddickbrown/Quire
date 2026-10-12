@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en" data-theme="almanac" data-size="m" data-font="serif" data-scale="m" data-tags="on">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quire — Presentation</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="present.css">
+</head>
+<body class="present">
+<!-- The presentation window: a second window that mirrors the composer in
+     large type, fed by the main window over the `present` event (see
+     present.js and app.js's presentPush). Drag it onto a projector or a
+     second monitor; write in the main window. -->
+<main id="stage" class="stage" hidden>
+  <header class="p-head">
+    <div class="p-eyebrow"><span id="p-date"></span><span class="spacer"></span><span id="p-star" hidden aria-label="Starred">★</span></div>
+    <h1 id="p-title" hidden></h1>
+    <div class="p-rule"></div>
+  </header>
+  <section id="p-scroll" class="p-scroll"><div id="p-body" class="p-body" title="Click to put the caret here"></div></section>
+  <footer class="p-foot"><span id="p-tags" class="p-tags"></span><span class="spacer"></span><span id="p-words"></span></footer>
+</main>
+<main id="idle" class="stage p-idle" hidden>
+  <header class="p-head">
+    <div class="p-eyebrow"><span id="i-date"></span></div>
+    <h1 class="p-brand">Quire</h1>
+    <div class="p-rule"></div>
+  </header>
+  <div class="p-tiles">
+    <div class="p-tile"><b id="i-words"></b><span>words today</span></div>
+    <div class="p-tile"><b id="i-entries"></b><span>entries</span></div>
+    <div class="p-tile"><b id="i-drafts"></b><span>drafts</span></div>
+  </div>
+  <p class="p-waiting">Start writing in the main window and it shows up here.</p>
+</main>
+<footer id="hints" class="p-hints">
+  <span><kbd>F</kbd> Full screen</span>
+  <span><kbd>+</kbd><kbd>−</kbd> Text size</span>
+  <span><kbd>Click</kbd> Put the caret there</span>
+  <span><kbd>Esc</kbd> Close</span>
+  <span><kbd>H</kbd> Hide this</span>
+</footer>
+<script src="present.js"></script>
+</body>
+</html>
