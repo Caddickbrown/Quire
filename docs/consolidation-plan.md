@@ -241,3 +241,50 @@ Verified here on a copy of `sample/` and by the test suite. Run it on a
 
 Entry identity stays `(timestamp, occurrence within file)`; it is now unique
 across the inbox for free, since two drafts with one timestamp are in one file.
+
+## 8. The TUI (designed 2026-10-12)
+
+Design canvas: https://claude.ai/artifact/SCdiATzSBUmVnzwQowyy8p — seven
+screens (Today, Review, Browse, Write, Look back, Today in Almanac, a split
+journal), 100 × 30 cells, drawn in Quire's own theme tokens.
+
+**Two names, one binary.** The Rust TUI builds as `quire` and is also
+installed as **`jnl`** (a second `[[bin]]` on the same crate, or a symlink
+from the installer; the binary reads `argv[0]` only to print its own name in
+`--help`). Every jnl subcommand keeps its spelling and its meaning, so muscle
+memory and the existing bash/zsh completions carry over:
+
+```
+jnl                 quire               what it does
+jnl / jnl "Title"   quire / quire new   new draft, in the inbox
+jnl review          quire review        one draft at a time
+jnl browse          quire browse        year · month · day, split journals via s
+jnl inbox           quire inbox
+jnl log / yesterday quire log / yesterday
+jnl stats           quire stats         Look back
+jnl search / tags / tag / random / cleanup / export / open / config / sort
+                                        unchanged
+(no jnl equivalent) quire               with no arguments: the Today screen
+```
+
+Installing Quire's `jnl` replaces the Go binary on `PATH`. The Go jnl stays
+published for its other users and remains the format's reference; its tests
+are the parity suite the core must pass.
+
+**Rules the screens follow** (also pinned on the canvas):
+
+- One typeface, the terminal's. Hierarchy from weight, colour and space; no
+  boxes.
+- One accent from `themes.json`. Keys are drawn in the accent, their labels
+  muted, same order on every screen, `?` and `esc`/`q` always at the right.
+- One rule under the masthead; hairline section rules with a left label.
+- Markdown styled where you type it: `##` fades, the heading takes weight,
+  quotes go italic and muted, `@tags` take the accent, checked items strike.
+- Nothing blinks or scrolls on its own; the caret is a block in the accent.
+- Narrower than 100 columns: Browse drops its right pane, Look back drops its
+  second column. Italic degrades to the muted colour where unsupported.
+
+**Stack:** ratatui + crossterm over `core/`; a `Vault` on `std::fs`; 24-bit
+colour with a 256-colour fallback mapped from the same tokens. Follows the
+Linux app's `~/.config/quire/settings.json` for theme and folder, and jnl's
+`~/.config/jnl/config` for `JNL_DIR` / `JNL_SPLIT_TAGS`, in that order.
