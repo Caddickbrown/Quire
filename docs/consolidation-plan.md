@@ -160,10 +160,22 @@ Quire/
 - Quire is the surviving name; nook and Wander become read-only references
   once their code is in. jnl stays published as a standalone Go binary because
   other people use it, and remains the format's reference implementation.
-- The on-disk format never changes: `inbox.md`, `journal/YYYY/MM/DD.md`,
-  `<tag>.md`, `assets/`, `.nook/` sidecars (renaming the sidecar breaks
-  journals nook already syncs).
+- The on-disk *journal* format never changes: `inbox.md`,
+  `journal/YYYY/MM/DD.md`, `<tag>.md`, `assets/`. The sidecar directory
+  moves from `.nook/` to `.quire/` (see Decisions below).
 - iOS 17 / macOS 14 floors, Swift 5.9+, Rust stable, UniFFI 0.28+.
 - You build and sign on your Mac; no Swift here. Rust and Go are testable in
   this container; Tauri itself cannot link (no webkit2gtk).
 - The two Claude branches are wanted, not experiments.
+
+## 6. Decisions, second pass (2026-10-12)
+
+| Topic | Decision |
+|---|---|
+| Branches | nook's external-display branch **merged to main** (`0b9c9d9`). Quire's `laughing-archimedes` and Wander's `trusting-clarke` are dead and should be deleted — this session's credential may not delete branches, so that is a one-line job on your side (`git push origin --delete <name>` or the GitHub branches page). |
+| Quire "presentation window" branch | **Parked, not merged.** It was built in the same session as nook's iOS external-display fix and generalised that feature to a second desktop window. Nobody asked for it; it stays on its branch until wanted or deleted. The iOS external display in nook is the desk mode that is kept. |
+| Design | Quire's existing look is the design. Wander is not a requirement; it is where Quire's look came from and a library of fourteen more looks. "Thoughtful" is the bar, not Wander's palette. |
+| Themes | Adopt a `themes.json` as the single theme source so the Swift shell and the Linux CSS draw the same thing. Quire's seven ship first (Almanac, Broadsheet, Linen, Cinema, Night, Marathon, Marathon Day). Wander's others get **Quire-ified** into that file one at a time, as wanted, never wholesale. |
+| Functionality | nook's full feature set is the floor. Nothing nook does is dropped. |
+| Core | Quire's Rust (`journal.rs`, `extras.rs`, `media.rs`) becomes `core/`, behind the `Vault` trait. The TUI is a Rust binary over it; jnl is not copied into the repo (it stays its own project and the format's reference). |
+| Sidecar folder | `.nook/` → **`.quire/`**. Done once, in the core, so every shell behaves the same: read `.quire/` first, fall back to `.nook/`; on the first write, rename the directory if `.quire/` does not exist yet. Contents unchanged (`templates/*.md`, `searches.json`, `datasaver-<device>.json`). nook itself stops seeing them after the move, which is fine once nook is retired; until then run one app per journal. jnl ignores both names. |
