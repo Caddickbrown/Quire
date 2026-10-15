@@ -113,5 +113,38 @@ class Sidecar(Base):
         self.w(".nook/searches.json", "[]"); self.run_(); n = len(self.log); self.run_()
         self.assertFalse(os.path.exists(os.path.join(self.d, ".nook")))
 
+class Splits(Base):
+    WORK = "Work log\n\n[2026-10-14 09:00:00] Standup @work\n![](./assets/a.jpg)\n\n[2026-10-13 17:00:00] Retro\nGood week.\n\nSecond paragraph.\n"
+
+    def test_split_journal_into_day_files(self):
+        self.w("work.md", self.WORK)
+        self.w("ideas.md", "Just notes, no entries.\n")
+        self.w("transfer.md", "[2026-10-14 09:00:00] not a split journal\n")
+        self.assertEqual(self.run_(), 0)
+        self.assertFalse(os.path.exists(os.path.join(self.d, "work.md")))
+        self.assertEqual(self.r("split/work/2026/10/14.md"), "[2026-10-14 09:00:00] Standup @work\n![](assets/a.jpg)\n")
+        self.assertEqual(self.r("split/work/2026/10/13.md"), "[2026-10-13 17:00:00] Retro\nGood week.\n\nSecond paragraph.\n")
+        self.assertEqual(self.r("split/work/preamble.md"), "Work log\n")
+        self.assertEqual(self.r("ideas.md"), "Just notes, no entries.\n")
+        self.assertTrue(os.path.exists(os.path.join(self.d, "transfer.md")))
+        backups = os.listdir(os.path.join(self.d, ".quire", "migration"))
+        self.assertTrue(any(b.startswith("split-work-") for b in backups), backups)
+
+    def test_dry_run_and_keep_splits(self):
+        self.w("work.md", self.WORK)
+        self.run_(apply=False)
+        self.assertTrue(os.path.exists(os.path.join(self.d, "work.md")))
+        mj.run(self.d, True, False, log=self.log.append, keep_splits=True)
+        self.assertTrue(os.path.exists(os.path.join(self.d, "work.md")))
+
+    def test_rerun_merges_split_without_duplicates(self):
+        self.w("work.md", self.WORK)
+        self.run_()
+        self.w("work.md", "[2026-10-14 09:00:00] Standup @work\n![](assets/a.jpg)\n\n[2026-10-15 08:00:00] New @work\n")
+        self.run_()
+        self.assertEqual(len(mj.parse_entries(self.r("split/work/2026/10/14.md"))), 1)
+        self.assertEqual(self.r("split/work/2026/10/15.md"), "[2026-10-15 08:00:00] New @work\n")
+
+
 if __name__ == "__main__":
     unittest.main()

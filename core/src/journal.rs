@@ -48,6 +48,10 @@ pub const INBOX_DIR: &str = "inbox";
 /// Where preamble text from a migrated `inbox.md` is kept.
 pub const INBOX_PREAMBLE: &str = "inbox/preamble.md";
 pub const JOURNAL_DIR: &str = "journal";
+/// The folder split journals live in, one folder of day files per tag:
+/// `split/<tag>/YYYY/MM/DD.md`. jnl and Nook write a single root `<tag>.md`
+/// instead; Journal::migrate_legacy_splits folds those in.
+pub const SPLIT_DIR: &str = "split";
 pub const SIDECAR: &str = ".quire";
 pub const LEGACY_SIDECAR: &str = ".nook";
 
@@ -369,10 +373,35 @@ pub fn is_inbox_rel(rel: &str) -> bool {
     rel == LEGACY_INBOX || rel.starts_with("inbox/")
 }
 
+/// The day file of split journal `tag` for `date`.
+pub fn split_rel(tag: &str, date: &str) -> String {
+    let p: Vec<&str> = date.split('-').collect();
+    format!("{}/{}/{}/{}/{}.md", SPLIT_DIR, tag, p[0], p[1], p[2])
+}
+
+/// `split/<tag>/preamble.md`: where text above the first entry of a migrated
+/// `<tag>.md` is kept. Not an entry file.
+pub fn is_split_preamble(rel: &str) -> bool {
+    let parts: Vec<&str> = rel.split('/').collect();
+    parts.len() == 3 && parts[0] == SPLIT_DIR && parts[2] == "preamble.md"
+}
+
+/// The split journal a file belongs to: `split/work/2026/10/14.md` → `work`;
+/// a legacy root `work.md` → `work`. None for anything else.
+pub fn split_tag_of(rel: &str) -> Option<String> {
+    if let Some(rest) = rel.strip_prefix("split/") {
+        let (tag, tail) = rest.split_once('/')?;
+        return (!tag.is_empty() && !tail.is_empty()).then(|| tag.to_string());
+    }
+    let legacy = !rel.contains('/') && rel.ends_with(".md") && !rel.starts_with('.') && !is_reserved(rel) && !is_conflict_name(rel);
+    legacy.then(|| rel.trim_end_matches(".md").to_string())
+}
+
 /// True for a day file whose name is its date (`inbox/…/DD.md`,
-/// `journal/…/DD.md`): the files that are deleted rather than left empty.
+/// `journal/…/DD.md`, `split/<tag>/…/DD.md`): the files that are deleted
+/// rather than left empty.
 pub fn is_day_file(rel: &str) -> bool {
-    (rel.starts_with("inbox/") || rel.starts_with("journal/")) && rel != INBOX_PREAMBLE
+    (rel.starts_with("inbox/") || rel.starts_with("journal/") || rel.starts_with("split/")) && rel != INBOX_PREAMBLE && !is_split_preamble(rel)
 }
 
 fn to_entry(r: &RawEntry, file: &str, index: usize, source: &str, split: Option<String>) -> Entry {
@@ -412,9 +441,9 @@ fn join_rel_parts(dir: &str, name: &str) -> String {
     }
 }
 
-/// The split journal a raw entry belongs in (`work.md`), honouring the order
-/// of `split_tags`. Reserved names are never targets.
-pub fn split_target(raw: &str, split_tags: &[String]) -> Option<String> {
+/// The split tag a raw entry is routed by (`work`), honouring the order of
+/// `split_tags`. Reserved names are never split tags.
+pub fn split_tag(raw: &str, split_tags: &[String]) -> Option<String> {
     let present: Vec<&str> = TAG_RE.find_iter(raw).map(|m| m.as_str()).collect();
     for t in split_tags {
         let t = if t.starts_with('@') { t.clone() } else { format!("@{}", t) };
@@ -422,10 +451,18 @@ pub fn split_target(raw: &str, split_tags: &[String]) -> Option<String> {
             continue;
         }
         if present.contains(&t.as_str()) {
-            return Some(format!("{}.md", t.trim_start_matches('@')));
+            return Some(t.trim_start_matches('@').to_string());
         }
     }
     None
+}
+
+/// The split-journal day file a raw entry belongs in
+/// (`split/work/2026/10/14.md`), or None when no split tag matches.
+pub fn split_target(raw: &str, split_tags: &[String]) -> Option<String> {
+    let tag = split_tag(raw, split_tags)?;
+    let date = parse_entries(raw).into_iter().next()?.date;
+    Some(split_rel(&tag, &date))
 }
 
 /// Which sidecar folder a journal root uses, for local-only code (media): the
@@ -438,6 +475,19 @@ pub fn sidecar_dir_path(root: &Path) -> PathBuf {
     } else {
         root.join(SIDECAR)
     }
+}
+
+/// What Journal::migrate_legacy_splits did.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct SplitMigration {
+    /// Root `<tag>.md` files folded into `split/<tag>/`.
+    pub journals: usize,
+    /// Entries written into day files.
+    pub moved: usize,
+    /// Entries already there (an older app rewrote `<tag>.md`).
+    pub skipped: usize,
+    /// Where each original went, relative to the root.
+    pub backups: Vec<String>,
 }
 
 /// What folding `inbox.md` into `inbox/` did.
@@ -606,14 +656,31 @@ impl Journal {
 
     // ----- files -----
 
-    /// Root `.md` files that are split journals (not reserved, not conflict
-    /// copies, not hidden), sorted by name.
-    pub fn split_files(&self) -> Vec<String> {
+    /// Root `.md` files in jnl's one-file split-journal shape (not reserved,
+    /// not conflict copies, not hidden), sorted by name. Quire folds them
+    /// into `split/` (migrate_legacy_splits) but reads them where they are
+    /// until then.
+    pub fn legacy_split_files(&self) -> Vec<String> {
         self.list("")
             .into_iter()
-            .filter(|it| it.is_file && it.name.ends_with(".md") && !it.name.starts_with('.') && !is_reserved(&it.name) && !is_conflict_name(&it.name))
+            .filter(|it| it.is_file && split_tag_of(&it.name).is_some())
             .map(|it| it.name)
             .collect()
+    }
+
+    /// Every split-journal file as (rel, tag): legacy root `<tag>.md` files,
+    /// then the day files under `split/<tag>/`.
+    pub fn split_files(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self.legacy_split_files().into_iter().map(|n| (n.clone(), split_tag_of(&n).unwrap_or_default())).collect();
+        for rel in self.walk_md(SPLIT_DIR) {
+            if is_split_preamble(&rel) {
+                continue;
+            }
+            if let Some(tag) = split_tag_of(&rel) {
+                out.push((rel, tag));
+            }
+        }
+        out
     }
 
     /// Every inbox file in load order: the legacy `inbox.md` when present,
@@ -633,14 +700,13 @@ impl Journal {
         for f in self.walk_md(JOURNAL_DIR) {
             out.push((f, "journal", None));
         }
-        for name in self.split_files() {
-            let tag = name.trim_end_matches(".md").to_string();
-            out.push((name, "split", Some(tag)));
+        for (rel, tag) in self.split_files() {
+            out.push((rel, "split", Some(tag)));
         }
         out
     }
 
-    /// Conflict copies of entry files (root, inbox/** and journal/**).
+    /// Conflict copies of entry files (root, inbox/**, journal/** and split/**).
     pub fn conflict_files(&self) -> Vec<String> {
         let mut out: Vec<String> = self
             .list("")
@@ -648,7 +714,7 @@ impl Journal {
             .filter(|it| it.is_file && it.name.to_lowercase().ends_with(".md") && is_conflict_name(&it.name))
             .map(|it| it.name)
             .collect();
-        for dir in [INBOX_DIR, JOURNAL_DIR] {
+        for dir in [INBOX_DIR, JOURNAL_DIR, SPLIT_DIR] {
             out.extend(self.walk_files(dir).into_iter().filter(|rel| {
                 let name = rel.rsplit('/').next().unwrap_or(rel);
                 name.to_lowercase().ends_with(".md") && is_conflict_name(name)
@@ -689,7 +755,7 @@ impl Journal {
         } else {
             "split"
         };
-        let split = (source == "split").then(|| rel.trim_end_matches(".md").to_string());
+        let split = if source == "split" { split_tag_of(rel) } else { None };
         parse_entries(&self.read(rel)).iter().enumerate().map(|(i, r)| to_entry(r, rel, i, source, split.clone())).collect()
     }
 
@@ -711,9 +777,9 @@ impl Journal {
     }
 
     /// Write a file's preamble and entries. A day file (`inbox/…`,
-    /// `journal/…`) that would come out empty is deleted instead, as a day
-    /// with no entries has no file; `inbox.md` and split journals are
-    /// written empty, as jnl does.
+    /// `journal/…`, `split/<tag>/…`) that would come out empty is deleted
+    /// instead, as a day with no entries has no file; `inbox.md` and a legacy
+    /// root `<tag>.md` are written empty, as jnl does.
     pub fn write_file_entries(&self, file: &str, pre: &str, raws: &[String]) -> Result<(), String> {
         let text = render(pre, raws);
         if text.is_empty() && is_day_file(file) {
@@ -820,8 +886,9 @@ impl Journal {
     }
 
     /// Edit any entry in place. An entry in a day file whose date changes
-    /// moves to the new day's file (inbox to inbox, journal to journal), kept
-    /// in time order. A split-journal entry stays in its file.
+    /// moves to the new day's file in the same tree (inbox, journal, or the
+    /// same split journal), kept in time order. An entry in a legacy root
+    /// `<tag>.md` stays in its file.
     #[allow(clippy::too_many_arguments)]
     pub fn update_entry(&self, file: &str, index: usize, expected_raw: &str, ts: &str, title: &str, starred: bool, body: &str) -> Result<Written, String> {
         let file = check_entry_rel(file)?;
@@ -830,7 +897,13 @@ impl Journal {
         let new_raw = make_raw(ts, title, starred, body);
         let new_date = &ts[..10];
         let day_file = is_day_file(&file);
-        let dest = if file.starts_with("inbox/") { inbox_rel(new_date) } else { journal_rel(new_date) };
+        let dest = if file.starts_with("inbox/") {
+            inbox_rel(new_date)
+        } else if let (true, Some(tag)) = (file.starts_with("split/"), split_tag_of(&file)) {
+            split_rel(&tag, new_date)
+        } else {
+            journal_rel(new_date)
+        };
         if day_file && dest != file {
             let new_raw = rebase_links(&new_raw, &file, &dest);
             // Write the destination first: a failure leaves a duplicate, never a loss.
@@ -973,6 +1046,78 @@ impl Journal {
         self.vault.rename(LEGACY_INBOX, &backup)?;
         rep.backup = backup;
         Ok(Some(rep))
+    }
+
+    /// Fold each legacy root `<tag>.md` split journal into
+    /// `split/<tag>/YYYY/MM/DD.md`, the way migrate_legacy_inbox folds
+    /// `inbox.md`: links rebased, preamble text kept in
+    /// `split/<tag>/preamble.md`, every entry read back from the day files
+    /// before the original is moved (never deleted) to
+    /// `<sidecar>/migration/split-<tag>-<stamp>.md`. A root `.md` with no
+    /// entries is not a journal and is left alone. `Ok(None)` when there was
+    /// nothing to fold. Safe to run again: entries already there are skipped.
+    pub fn migrate_legacy_splits(&self) -> Result<Option<SplitMigration>, String> {
+        let mut rep = SplitMigration::default();
+        for name in self.legacy_split_files() {
+            let content = self.try_read(&name)?;
+            let entries = parse_entries(&content);
+            if entries.is_empty() {
+                continue;
+            }
+            let tag = split_tag_of(&name).unwrap_or_default();
+            let mut by_day: Vec<(String, Vec<String>)> = Vec::new();
+            let mut want: HashMap<String, usize> = HashMap::new();
+            for e in &entries {
+                let dest = split_rel(&tag, &e.date);
+                let raw = rebase_links(e.raw.trim_end(), &name, &dest);
+                *want.entry(raw.trim_end().to_string()).or_default() += 1;
+                match by_day.iter_mut().find(|(d, _)| *d == dest) {
+                    Some((_, v)) => v.push(raw),
+                    None => by_day.push((dest, vec![raw])),
+                }
+            }
+            for (dest, raws) in &by_day {
+                let res = self.insert_entries(dest, raws, true)?;
+                rep.moved += res.iter().filter(|r| r.is_some()).count();
+                rep.skipped += res.iter().filter(|r| r.is_none()).count();
+            }
+            let pre = leading_preamble(&content);
+            if !pre.trim().is_empty() {
+                let at = format!("{}/{}/preamble.md", SPLIT_DIR, tag);
+                let existing = self.read(&at);
+                if !existing.contains(pre.trim()) {
+                    let text = if existing.trim().is_empty() { format!("{}\n", pre) } else { format!("{}\n\n{}\n", existing.trim_end(), pre) };
+                    self.write(&at, &text)?;
+                }
+            }
+            // Verify before touching the original.
+            let mut have: HashMap<String, usize> = HashMap::new();
+            for rel in self.walk_md(&format!("{}/{}", SPLIT_DIR, tag)) {
+                if is_split_preamble(&rel) {
+                    continue;
+                }
+                for e in parse_entries(&self.try_read(&rel)?) {
+                    *have.entry(e.raw.trim_end().to_string()).or_default() += 1;
+                }
+            }
+            for (raw, n) in &want {
+                if have.get(raw).copied().unwrap_or(0) < *n {
+                    return Err(format!("{} was not moved: an entry could not be read back from {}/{}/", name, SPLIT_DIR, tag));
+                }
+            }
+            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+            let dir = format!("{}/migration", self.sidecar_mut()?);
+            let mut backup = format!("{}/split-{}-{}.md", dir, tag, stamp);
+            let mut n = 1;
+            while self.vault.is_file(&backup) {
+                n += 1;
+                backup = format!("{}/split-{}-{}-{}.md", dir, tag, stamp, n);
+            }
+            self.vault.rename(&name, &backup)?;
+            rep.journals += 1;
+            rep.backups.push(backup);
+        }
+        Ok((rep.journals > 0).then_some(rep))
     }
 }
 
@@ -1206,7 +1351,8 @@ mod tests {
 
     #[test]
     fn split() {
-        assert_eq!(split_target("x @work y", &["work".into()]), Some("work.md".into()));
+        assert_eq!(split_target("[2026-10-14 08:00:00] x @work y", &["work".into()]), Some("split/work/2026/10/14.md".into()));
+        assert_eq!(split_tag("x @work y", &["work".into()]), Some("work".into()));
         assert_eq!(split_target("x @workshop", &["work".into()]), None);
         assert_eq!(split_target("x @inbox", &["inbox".into()]), None);
         assert_eq!(split_target("x @Nook-Export", &["nook-export".into()]), None);
@@ -1406,6 +1552,54 @@ mod tests {
         assert_eq!(j.import_text("[2026-09-01 08:00:00] a\n\n[2026-09-02 08:00:00] b\n", "2026-09-30 09:00:00").unwrap(), 2);
         assert_eq!(j.import_text("  ", "2026-09-30 09:00:00").unwrap(), 0);
         assert_eq!(j.inbox_files(), vec!["inbox/2026/09/01.md", "inbox/2026/09/02.md", "inbox/2026/09/30.md"]);
+    }
+
+    #[test]
+    fn split_journals_live_in_day_files() {
+        let (_d, j) = tmp();
+        let tags = vec!["work".to_string()];
+        let w = j.new_draft("2026-10-14 09:00:00", "Standup", false, "notes @work").unwrap();
+        assert_eq!(j.file_draft(&w.file, w.index, &w.raw, &tags).unwrap(), "split/work/2026/10/14.md");
+        let e = &j.load_file("split/work/2026/10/14.md")[0];
+        assert_eq!((e.source.as_str(), e.split.as_deref()), ("split", Some("work")));
+        assert_eq!(j.load_all().iter().filter(|e| e.split.as_deref() == Some("work")).count(), 1);
+        // Retimed to another day: moves within the same split journal.
+        let moved = j.update_entry(&e.file, e.index, &e.raw, "2026-10-15 09:00:00", "Standup", false, "notes @work").unwrap();
+        assert_eq!(moved.file, "split/work/2026/10/15.md");
+        assert!(!j.is_file("split/work/2026/10/14.md"), "an emptied split day file is deleted");
+        j.delete_entry(&moved.file, moved.index, &moved.raw).unwrap();
+        assert!(!j.is_file("split/work/2026/10/15.md"));
+        assert_eq!(split_tag_of("split/work/2026/10/15.md").as_deref(), Some("work"));
+        assert_eq!(split_tag_of("work.md").as_deref(), Some("work"));
+        assert_eq!(split_tag_of("inbox.md"), None);
+        assert_eq!(split_tag_of("journal/2026/10/15.md"), None);
+        assert!(is_split_preamble("split/work/preamble.md") && !is_day_file("split/work/preamble.md"));
+    }
+
+    #[test]
+    fn legacy_split_files_fold_into_split_folders() {
+        let (_d, j) = tmp();
+        let text = "Work log\n\n[2026-10-14 09:00:00] Standup @work\n![](./assets/a.jpg)\n\n[2026-10-13 17:00:00] Retro\nGood week.\n\nSecond paragraph.\n";
+        j.write("work.md", text).unwrap();
+        j.write("ideas.md", "Just notes, no entries.\n").unwrap();
+        j.write("inbox.md", "").unwrap();
+        let rep = j.migrate_legacy_splits().unwrap().unwrap();
+        assert_eq!((rep.journals, rep.moved, rep.skipped), (1, 2, 0));
+        assert!(rep.backups[0].starts_with(".quire/migration/split-work-"), "{:?}", rep.backups);
+        assert_eq!(j.read(&rep.backups[0]), text, "the original is kept byte for byte");
+        assert!(!j.is_file("work.md"));
+        assert_eq!(j.read("split/work/2026/10/14.md"), "[2026-10-14 09:00:00] Standup @work\n![](assets/a.jpg)\n");
+        assert_eq!(j.read("split/work/2026/10/13.md"), "[2026-10-13 17:00:00] Retro\nGood week.\n\nSecond paragraph.\n");
+        assert_eq!(j.read("split/work/preamble.md"), "Work log\n");
+        assert_eq!(j.read("ideas.md"), "Just notes, no entries.\n", "a root .md with no entries is not a journal");
+        assert!(j.is_file("inbox.md"), "reserved names are never split journals");
+        assert_eq!(j.load_all().len(), 2, "preamble.md is not an entry file");
+        assert!(j.migrate_legacy_splits().unwrap().is_none());
+        // jnl files another @work entry into work.md: merged, duplicates skipped.
+        j.write("work.md", "[2026-10-14 09:00:00] Standup @work\n![](assets/a.jpg)\n\n[2026-10-15 08:00:00] New @work\n").unwrap();
+        let rep = j.migrate_legacy_splits().unwrap().unwrap();
+        assert_eq!((rep.moved, rep.skipped), (1, 1));
+        assert_eq!(j.load_file("split/work/2026/10/15.md").len(), 1);
     }
 
     #[test]
