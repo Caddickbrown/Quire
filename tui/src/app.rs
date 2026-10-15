@@ -1,14 +1,20 @@
 //! The screens, their state, and what every key does. Drawing is in `ui`.
 
-use crate::editor::Editor;
+use crate::editor::{Editor, VisualRow};
+use crate::paste::{self, Clip};
 use crate::theme::{truecolor, Palette};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use quire_core::media;
 use quire_core::prompts;
 use quire_core::search::Query;
 use quire_core::stats;
 use quire_core::themes;
 use quire_core::*;
+use ratatui::layout::{Position, Rect};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -19,6 +25,7 @@ pub enum Screen {
     Write,
     LookBack,
     Search,
+    Settings,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -53,15 +60,70 @@ pub struct Draft {
     pub floating: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Confirm {
     DeleteSelected,
     DiscardDraft,
+    Cleanup,
+    FileAll,
+    ClearOrphans,
+    /// Restore this backup over the journal.
+    Restore(String),
+}
+
+/// What a one-line text prompt is for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Ask {
+    BackupDir,
+    ExportPath,
 }
 
 pub enum Modal {
     Retime(String),
     Confirm { text: String, action: Confirm },
+    Input { label: &'static str, value: String, ask: Ask },
+    /// Pick a backup to restore: (names newest first, chosen).
+    Restore(Vec<String>, usize),
+}
+
+/// What a cell on screen does when clicked. `ui` records these as it draws;
+/// the last one drawn over a cell wins.
+#[derive(Clone, Debug)]
+pub enum Hit {
+    /// As if the key were pressed: the hint bar, a modal's answers.
+    Key(KeyEvent),
+    /// Open this entry (file, index) in the composer.
+    Edit(String, usize),
+    /// The same click, on a pane of text: no hover highlight.
+    Preview(String, usize),
+    /// Show this entry in Browse.
+    Show(String, usize),
+    /// Today's prompt: start writing from it.
+    Prompt,
+    /// The QUIRE mark: back to Today.
+    Home,
+    /// A row of the inbox's draft list.
+    Draft(usize),
+    /// A Browse column (year · month · day · entries), for the wheel.
+    Column(usize),
+    /// A row in a Browse column: (column, index).
+    Item(usize, usize),
+    Pick(Pick),
+    Result(usize),
+    Year(i32),
+    /// A row of the composer's text: the visual row, its left edge, and
+    /// whether it is the last segment of its line.
+    Text(VisualRow, u16, bool),
+    /// The composer below its text.
+    TextEnd,
+    Suggestion(usize),
+    /// A row of the settings page.
+    Setting(usize),
+}
+
+enum Attachment {
+    Path(PathBuf),
+    Bytes(Vec<u8>, &'static str),
 }
 
 pub struct App {
@@ -69,6 +131,7 @@ pub struct App {
     pub settings: Settings,
     pub split_tags: Vec<String>,
     pub pal: Palette,
+    pub theme_id: String,
     pub entries: Vec<Entry>,
     pub screen: Screen,
     pub stack: Vec<Screen>,
@@ -80,15 +143,24 @@ pub struct App {
     pub year: i32,
     pub query: String,
     pub search_i: usize,
+    pub settings_i: usize,
     pub modal: Option<Modal>,
     pub help: bool,
     pub toast: Option<(String, Instant, bool)>,
     pub quit: bool,
+    /// When the running timer ends; `None` when it is off or paused.
     pub timer_end: Option<Instant>,
+    /// Time left on a paused timer.
+    pub timer_paused: Option<Duration>,
     pub focus: bool,
     pub tag_pick: usize,
     pub width: u16,
     pub height: u16,
+    /// Mouse capture on (F2 toggles it; `terminalMouse` in settings.json).
+    pub mouse: bool,
+    pub hits: RefCell<Vec<(Rect, Hit)>>,
+    /// Where the pointer last was, for highlighting what a click would hit.
+    pub hover: Option<(u16, u16)>,
     last_check: Instant,
     fingerprint: u64,
 }
@@ -102,14 +174,17 @@ pub struct Sel {
 
 impl App {
     pub fn new(j: Journal, settings: Settings, split_tags: Vec<String>, theme_id: &str) -> App {
-        let pal = Palette::from_theme(&themes::theme(theme_id), truecolor());
+        let theme = themes::theme(theme_id);
+        let pal = Palette::from_theme(&theme, truecolor());
         let today = stats::today();
         let year: i32 = today[..4].parse().unwrap_or(2026);
+        let mouse = settings.ui_bool("terminalMouse").unwrap_or(true);
         let mut a = App {
             j,
             settings,
             split_tags,
             pal,
+            theme_id: theme.id,
             entries: Vec::new(),
             screen: Screen::Today,
             stack: Vec::new(),
@@ -121,15 +196,20 @@ impl App {
             year,
             query: String::new(),
             search_i: 0,
+            settings_i: 0,
             modal: None,
             help: false,
             toast: None,
             quit: false,
             timer_end: None,
+            timer_paused: None,
+            hover: None,
             focus: false,
             tag_pick: 0,
             width: 100,
             height: 30,
+            mouse,
+            hits: RefCell::new(Vec::new()),
             last_check: Instant::now(),
             fingerprint: 0,
         };
@@ -161,6 +241,13 @@ impl App {
         let n = self.results().len();
         self.search_i = if n == 0 { 0 } else { self.search_i.min(n - 1) };
         self.clamp_browse();
+    }
+
+    /// Record what a region of the screen does when clicked.
+    pub fn hit(&self, r: Rect, h: Hit) {
+        if r.width > 0 && r.height > 0 {
+            self.hits.borrow_mut().push((r, h));
+        }
     }
 
     pub fn toast(&mut self, msg: String, error: bool) {
@@ -578,6 +665,10 @@ impl App {
         if let Some(end) = self.timer_end {
             if Instant::now() >= end {
                 self.timer_end = None;
+                if self.settings.ui_bool("chime").unwrap_or(true) {
+                    use std::io::Write;
+                    let _ = std::io::stdout().write_all(b"\x07").and_then(|_| std::io::stdout().flush());
+                }
                 self.toast("Time. Finish the sentence.".into(), false);
             }
         }
@@ -612,6 +703,10 @@ impl App {
             self.quit = true;
             return;
         }
+        if k.code == KeyCode::F(2) {
+            self.toggle_mouse();
+            return;
+        }
         if self.modal.is_some() {
             self.modal_key(k);
             return;
@@ -631,6 +726,7 @@ impl App {
             Screen::Write => self.write_key(k, ctrl, alt),
             Screen::LookBack => self.lookback_key(k),
             Screen::Search => self.search_key(k),
+            Screen::Settings => self.settings_key(k),
         }
     }
 
@@ -654,6 +750,10 @@ impl App {
             }
             KeyCode::Char('/') => {
                 self.push(Screen::Search);
+                true
+            }
+            KeyCode::Char(',') => {
+                self.push(Screen::Settings);
                 true
             }
             KeyCode::Char('r') => {
@@ -802,6 +902,25 @@ impl App {
         self.clamp_browse();
     }
 
+    /// ^o: start the timer, pause it while it runs, resume it when paused.
+    fn toggle_timer(&mut self) {
+        if let Some(end) = self.timer_end.take() {
+            self.timer_paused = Some(end.saturating_duration_since(Instant::now()));
+        } else {
+            let left = self.timer_paused.take().unwrap_or_else(|| Duration::from_secs(60 * self.settings.timer_minutes()));
+            self.timer_end = Some(Instant::now() + left);
+        }
+    }
+
+    /// Time left and whether the timer is paused, when one is on.
+    pub fn timer_left(&self) -> Option<(Duration, bool)> {
+        match (self.timer_end, self.timer_paused) {
+            (Some(end), _) => Some((end.saturating_duration_since(Instant::now()), false)),
+            (None, Some(left)) => Some((left, true)),
+            _ => None,
+        }
+    }
+
     fn write_key(&mut self, k: KeyEvent, ctrl: bool, alt: bool) {
         let width = self.editor_width();
         let suggestions = self.tag_suggestions();
@@ -809,6 +928,12 @@ impl App {
         if d.floating && matches!(k.code, KeyCode::Char(_) | KeyCode::Enter) && !ctrl {
             d.ts = now_local();
             d.floating = false;
+        }
+        if alt && k.code == KeyCode::Char('o') {
+            self.timer_end = None;
+            self.timer_paused = None;
+            self.toast("Timer reset".into(), false);
+            return;
         }
         if ctrl {
             match k.code {
@@ -823,6 +948,7 @@ impl App {
                     self.modal = Some(Modal::Retime(ts));
                 }
                 KeyCode::Char('f') => self.focus = !self.focus,
+                KeyCode::Char('v') => self.paste_clipboard(),
                 KeyCode::Char('p') => {
                     self.prompt_n += 1;
                     let p = self.current_prompt();
@@ -832,12 +958,7 @@ impl App {
                     }
                     d.ed.insert_str(&format!("> {}\n\n", p));
                 }
-                KeyCode::Char('o') => {
-                    self.timer_end = match self.timer_end {
-                        Some(_) => None,
-                        None => Some(Instant::now() + Duration::from_secs(60 * self.settings.timer_minutes())),
-                    };
-                }
+                KeyCode::Char('o') => self.toggle_timer(),
                 KeyCode::Char('b') => d.ed.toggle_wrap_word("**", "**"),
                 KeyCode::Char('i') => d.ed.toggle_wrap_word("_", "_"),
                 KeyCode::Char('g') => d.ed.toggle_wrap_word("`", "`"),
@@ -1029,12 +1150,44 @@ impl App {
                     }
                 _ => {}
             },
+            Modal::Input { value, ask, .. } => {
+                let ask = *ask;
+                match k.code {
+                    KeyCode::Esc => self.modal = None,
+                    KeyCode::Enter => {
+                        let v = value.trim().to_string();
+                        self.modal = None;
+                        self.apply_ask(ask, &v);
+                    }
+                    KeyCode::Backspace => {
+                        value.pop();
+                    }
+                    KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => value.push(c),
+                    _ => {}
+                }
+            }
+            Modal::Restore(names, i) => match k.code {
+                KeyCode::Esc => self.modal = None,
+                KeyCode::Up | KeyCode::Left | KeyCode::Char('k') | KeyCode::Char('h') => *i = i.saturating_sub(1),
+                KeyCode::Down | KeyCode::Right | KeyCode::Char('j') | KeyCode::Char('l') => *i = (*i + 1).min(names.len().saturating_sub(1)),
+                KeyCode::Enter => {
+                    if let Some(name) = names.get(*i).cloned() {
+                        let text = format!("Restore {}? A safety copy is made first.", name);
+                        self.modal = Some(Modal::Confirm { text, action: Confirm::Restore(name) });
+                    }
+                }
+                _ => {}
+            },
             Modal::Confirm { action, .. } => {
-                let action = *action;
+                let action = action.clone();
                 match k.code {
                     KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                         self.modal = None;
                         match action {
+                            Confirm::Cleanup => self.run_cleanup(),
+                            Confirm::FileAll => self.run_file_all(),
+                            Confirm::ClearOrphans => self.run_clear_orphans(),
+                            Confirm::Restore(name) => self.run_restore(&name),
                             Confirm::DeleteSelected => self.delete_selected(),
                             Confirm::DiscardDraft => {
                                 if let Some(d) = self.draft.take() {
@@ -1058,19 +1211,585 @@ impl App {
             }
         }
     }
+
+    // ----- mouse -----
+
+    /// Change a preference here and in the file, read fresh from disk so a
+    /// change the desktop app made meanwhile survives.
+    fn persist(&mut self, f: impl Fn(&mut Settings)) {
+        f(&mut self.settings);
+        let mut s = Settings::load();
+        f(&mut s);
+        if let Err(e) = s.save() {
+            self.toast(e, true);
+        }
+    }
+
+    fn toggle_mouse(&mut self) {
+        self.mouse = !self.mouse;
+        let on = self.mouse;
+        self.persist(|s| s.set_ui("terminalMouse", serde_json::Value::Bool(on)));
+        self.toast(if self.mouse { "Mouse on — shift-drag selects text" } else { "Mouse off — the terminal selects text" }.into(), false);
+    }
+
+    // ----- settings -----
+
+    pub const SETTING_ROWS: usize = 14;
+
+    /// Where each group of rows starts, with its heading.
+    pub const SETTING_GROUPS: [(usize, &'static str); 3] = [(0, "WRITING"), (6, "BACKUPS"), (9, "MAINTENANCE")];
+
+    /// Rows that do something when pressed instead of stepping a value.
+    pub fn setting_is_action(i: usize) -> bool {
+        i >= 6
+    }
+
+    /// The value shown for a row of the settings page.
+    pub fn setting_value(&self, i: usize) -> (&'static str, String) {
+        let onoff = |b: bool| if b { "on" } else { "off" }.to_string();
+        let go = || "↵".to_string();
+        match i {
+            0 => ("Theme", themes::theme(&self.theme_id).name),
+            1 => ("Daily word goal", format!("{} words", self.settings.word_goal())),
+            2 => ("Timer", format!("{} minutes", self.settings.timer_minutes())),
+            3 => ("Timer chime", onoff(self.settings.ui_bool("chime").unwrap_or(true))),
+            4 => ("Mouse", onoff(self.mouse)),
+            5 => ("Data Saver", onoff(self.settings.data_saver)),
+            6 => ("Backup folder", self.settings.backup_dir.clone().unwrap_or_else(|| "not set".into())),
+            7 => ("Back up now", self.settings.last_backup.as_ref().map(|t| format!("last {}", &t[..t.len().min(16)])).unwrap_or_else(go)),
+            8 => ("Restore a backup", go()),
+            9 => ("Clean up", go()),
+            10 => ("Sort inbox", go()),
+            11 => ("File all drafts", go()),
+            12 => ("Clear orphan media", go()),
+            _ => ("Export all", go()),
+        }
+    }
+
+    /// Step row `i` forward (+1) or back (-1); an action row runs on +1.
+    fn adjust_setting(&mut self, i: usize, dir: i64) {
+        match i {
+            0 => {
+                let all = themes::themes();
+                if all.is_empty() {
+                    return;
+                }
+                let n = all.len() as i64;
+                let cur = all.iter().position(|t| t.id == self.theme_id).unwrap_or(0) as i64;
+                let t = &all[(cur + dir).rem_euclid(n) as usize];
+                self.pal = Palette::from_theme(t, truecolor());
+                self.theme_id = t.id.clone();
+                let id = t.id.clone();
+                self.persist(|s| s.set_ui("theme", serde_json::Value::String(id.clone())));
+            }
+            1 => {
+                let v = (self.settings.word_goal() as i64 + dir * 50).clamp(50, 5000);
+                self.persist(|s| s.set_ui("goal", serde_json::Value::from(v)));
+            }
+            2 => {
+                let v = (self.settings.timer_minutes() as i64 + dir * 5).clamp(5, 180);
+                self.persist(|s| s.set_ui("timerMins", serde_json::Value::from(v)));
+            }
+            3 => {
+                let on = !self.settings.ui_bool("chime").unwrap_or(true);
+                self.persist(|s| s.set_ui("chime", serde_json::Value::Bool(on)));
+            }
+            4 => self.toggle_mouse(),
+            5 => {
+                let on = !self.settings.data_saver;
+                self.persist(|s| s.data_saver = on);
+            }
+            _ if dir < 0 => {}
+            6 => {
+                let cur = self.settings.backup_dir.clone().unwrap_or_default();
+                self.modal = Some(Modal::Input { label: "Backup folder", value: cur, ask: Ask::BackupDir });
+            }
+            7 => self.run_backup(),
+            8 => self.open_restore(),
+            9 => self.modal = Some(Modal::Confirm { text: "Standardise punctuation, reorder and dedupe every day file?".into(), action: Confirm::Cleanup }),
+            10 => match sort_inbox(&self.j) {
+                Ok(true) => {
+                    self.reload();
+                    self.toast("Inbox sorted by time".into(), false);
+                }
+                Ok(false) => self.toast("Inbox was already in order".into(), false),
+                Err(e) => self.toast(e, true),
+            },
+            11 => self.modal = Some(Modal::Confirm { text: "File every draft to its day?".into(), action: Confirm::FileAll }),
+            12 => self.modal = Some(Modal::Confirm { text: "Delete media no entry links to?".into(), action: Confirm::ClearOrphans }),
+            _ => {
+                let home = dirs::home_dir().unwrap_or_default();
+                let dest = home.join(format!("quire-export-{}.md", &now_local()[..10]));
+                self.modal = Some(Modal::Input { label: "Export to", value: dest.display().to_string(), ask: Ask::ExportPath });
+            }
+        }
+    }
+
+    fn apply_ask(&mut self, ask: Ask, v: &str) {
+        match ask {
+            Ask::BackupDir => {
+                if v.is_empty() {
+                    self.persist(|s| s.backup_dir = None);
+                    self.toast("Backup folder cleared".into(), false);
+                    return;
+                }
+                let path = expand_home(v);
+                match self.j.local().and_then(|root| check_backup_dir(root, std::path::Path::new(&path))) {
+                    Ok(()) => {
+                        self.persist(|s| s.backup_dir = Some(path.clone()));
+                        self.toast("Backup folder set".into(), false);
+                    }
+                    Err(e) => self.toast(e, true),
+                }
+            }
+            Ask::ExportPath => {
+                if v.is_empty() {
+                    return;
+                }
+                match export_all(&self.j, std::path::Path::new(&expand_home(v))) {
+                    Ok(n) => self.toast(format!("Exported {} entries", n), false),
+                    Err(e) => self.toast(e, true),
+                }
+            }
+        }
+    }
+
+    fn backup_dir(&mut self) -> Option<PathBuf> {
+        match self.settings.backup_dir.clone() {
+            Some(d) => Some(PathBuf::from(d)),
+            None => {
+                self.toast("Set a backup folder first".into(), true);
+                None
+            }
+        }
+    }
+
+    fn run_backup(&mut self) {
+        let Some(dir) = self.backup_dir() else { return };
+        let _g = match BackupGuard::acquire() {
+            Ok(g) => g,
+            Err(e) => return self.toast(e, true),
+        };
+        let keep = self.settings.keep();
+        match backup(&self.j, &dir).and_then(|made| prune_backups(&dir, keep).map(|_| made)) {
+            Ok(made) => {
+                let now = now_local();
+                self.persist(|s| s.last_backup = Some(now.clone()));
+                self.toast(format!("Backed up to {}", made), false);
+            }
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    fn open_restore(&mut self) {
+        let Some(dir) = self.backup_dir() else { return };
+        let names = list_backups(&dir);
+        if names.is_empty() {
+            self.toast("No backups in that folder".into(), true);
+        } else {
+            self.modal = Some(Modal::Restore(names, 0));
+        }
+    }
+
+    fn run_restore(&mut self, name: &str) {
+        let Some(dir) = self.backup_dir() else { return };
+        let _g = match BackupGuard::acquire() {
+            Ok(g) => g,
+            Err(e) => return self.toast(e, true),
+        };
+        match restore(&self.j, &dir, name) {
+            Ok(safety) => {
+                self.draft = None;
+                self.reload();
+                self.toast(format!("Restored. Previous folder kept as {}", safety), false);
+            }
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    fn run_cleanup(&mut self) {
+        match cleanup(&self.j, &self.split_tags) {
+            Ok(r) => {
+                self.reload();
+                let msg = format!("Cleanup: {} formatted, {} reordered, {} duplicates removed, {} extracted", r.formatted, r.reordered, r.deduped, r.extracted);
+                match r.errors.first() {
+                    Some(e) => self.toast(format!("{} — {}", msg, e), true),
+                    None => self.toast(msg, false),
+                }
+            }
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    fn run_file_all(&mut self) {
+        match file_all(&self.j, &self.split_tags) {
+            Ok(r) => {
+                self.reload();
+                let skipped = if r.skipped > 0 { format!(", {} empty left", r.skipped) } else { String::new() };
+                match r.errors.first() {
+                    Some(e) => self.toast(format!("Filed {}{} — {}", r.filed, skipped, e), true),
+                    None => self.toast(format!("Filed {} draft(s){}", r.filed, skipped), false),
+                }
+            }
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    fn run_clear_orphans(&mut self) {
+        match delete_orphans(&self.j) {
+            Ok(n) => self.toast(format!("Removed {} unlinked file(s)", n), false),
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    fn settings_key(&mut self, k: KeyEvent) {
+        let last = Self::SETTING_ROWS - 1;
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.back(),
+            KeyCode::Up | KeyCode::Char('k') => self.settings_i = self.settings_i.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => self.settings_i = (self.settings_i + 1).min(last),
+            KeyCode::Left | KeyCode::Char('h') => self.adjust_setting(self.settings_i, -1),
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter | KeyCode::Char(' ') => self.adjust_setting(self.settings_i, 1),
+            _ => {}
+        }
+    }
+
+    fn hit_at(&self, x: u16, y: u16) -> Option<Hit> {
+        self.hits.borrow().iter().rev().find(|(r, _)| r.contains(Position::new(x, y))).map(|(_, h)| h.clone())
+    }
+
+    /// The rect of the menu-like thing under a cell: hint keys, list rows,
+    /// pickers. Not the composer's text or a pane of an entry's text.
+    pub fn hit_rect_at(&self, x: u16, y: u16) -> Option<Rect> {
+        let hits = self.hits.borrow();
+        let (r, h) = hits.iter().rev().find(|(r, _)| r.contains(Position::new(x, y)))?;
+        match h {
+            // Text you read or write is not a menu.
+            Hit::Text(..) | Hit::TextEnd | Hit::Column(_) | Hit::Preview(..) | Hit::Item(3, _) => None,
+            _ => Some(*r),
+        }
+    }
+
+    pub fn handle_mouse(&mut self, m: MouseEvent) {
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.help {
+                    self.help = false;
+                    return;
+                }
+                if let Some(h) = self.hit_at(m.column, m.row) {
+                    self.click(h, m.column);
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.screen == Screen::Write && self.modal.is_none() => {
+                if let Some(h @ Hit::Text(..)) = self.hit_at(m.column, m.row) {
+                    self.click(h, m.column);
+                }
+            }
+            MouseEventKind::Moved => self.hover = Some((m.column, m.row)),
+            MouseEventKind::ScrollUp => self.wheel(m.column, m.row, KeyCode::Up),
+            MouseEventKind::ScrollDown => self.wheel(m.column, m.row, KeyCode::Down),
+            _ => {}
+        }
+    }
+
+    fn entry_at(&self, file: &str, index: usize) -> Option<Entry> {
+        self.entries.iter().find(|e| e.file == file && e.index == index).cloned()
+    }
+
+    fn click(&mut self, h: Hit, x: u16) {
+        match h {
+            Hit::Key(k) => self.handle_key(k),
+            Hit::Home => {
+                if self.screen == Screen::Write {
+                    self.leave_write();
+                    if self.screen == Screen::Write {
+                        return; // the save failed; stay with the draft
+                    }
+                }
+                self.stack.clear();
+                self.screen = Screen::Today;
+                self.help = false;
+            }
+            Hit::Edit(f, i) | Hit::Preview(f, i) => {
+                if let Some(e) = self.entry_at(&f, i) {
+                    self.edit_entry(&e);
+                }
+            }
+            Hit::Show(f, i) => {
+                if let Some(e) = self.entry_at(&f, i) {
+                    self.goto_entry(&e);
+                }
+            }
+            Hit::Prompt => {
+                let p = self.current_prompt();
+                self.start_draft("", &format!("> {}\n\n", p));
+            }
+            Hit::Draft(i) => {
+                if self.inbox_i == i {
+                    // A second click goes on, as ↵ does.
+                    self.handle_key(KeyEvent::from(KeyCode::Enter));
+                } else {
+                    self.inbox_i = i;
+                }
+            }
+            Hit::Column(c) => self.browse.col = c.min(3),
+            Hit::Item(c, i) => {
+                let b = &mut self.browse;
+                let slot = match c {
+                    0 => &mut b.yi,
+                    1 => &mut b.mi,
+                    2 => &mut b.di,
+                    _ => &mut b.ei,
+                };
+                let again = b.col == c && *slot == i;
+                *slot = i;
+                b.col = c.min(3);
+                if again {
+                    // A second click goes on, as ↵ does.
+                    self.handle_key(KeyEvent::from(KeyCode::Enter));
+                } else {
+                    self.after_browse_move();
+                }
+            }
+            Hit::Pick(p) => {
+                if self.browse.pick != p {
+                    self.browse.pick = p;
+                    self.browse.yi = 0;
+                    self.browse.mi = 0;
+                    self.browse.di = 0;
+                    self.browse.ei = 0;
+                    self.clamp_browse();
+                }
+            }
+            Hit::Result(i) => {
+                if self.search_i == i {
+                    self.handle_key(KeyEvent::from(KeyCode::Enter));
+                } else {
+                    self.search_i = i;
+                }
+            }
+            Hit::Year(y) => self.year = y,
+            Hit::Setting(i) => {
+                self.settings_i = i;
+                self.adjust_setting(i, 1);
+            }
+            Hit::Text(vr, left, last) => {
+                if let Some(d) = self.draft.as_mut() {
+                    d.ed.place(vr, x.saturating_sub(left) as usize, last);
+                    self.tag_pick = 0;
+                }
+            }
+            Hit::TextEnd => {
+                if let Some(d) = self.draft.as_mut() {
+                    d.ed.to_end();
+                }
+            }
+            Hit::Suggestion(i) => {
+                let suggestions = self.tag_suggestions();
+                if let (Some(t), Some(d)) = (suggestions.get(i), self.draft.as_mut()) {
+                    d.ed.accept_tag(t);
+                    self.tag_pick = 0;
+                }
+            }
+        }
+    }
+
+    /// The wheel moves what is under it, three rows at a time in the composer.
+    fn wheel(&mut self, x: u16, y: u16, code: KeyCode) {
+        if self.help || self.modal.is_some() {
+            return;
+        }
+        let key = KeyEvent::from(code);
+        match self.screen {
+            Screen::Browse => {
+                let col = self.hits.borrow().iter().rev().find_map(|(r, h)| match h {
+                    Hit::Column(c) if r.contains(Position::new(x, y)) => Some(*c),
+                    _ => None,
+                });
+                if let Some(c) = col {
+                    self.browse.col = c;
+                }
+                self.handle_key(key);
+            }
+            Screen::Write => {
+                for _ in 0..3 {
+                    self.handle_key(key);
+                }
+            }
+            Screen::Inbox | Screen::Search => self.handle_key(key),
+            _ => {}
+        }
+    }
+
+    // ----- paste and attachments -----
+
+    /// A bracketed paste: text into whatever is taking it; in the composer,
+    /// dropped media files become attachments.
+    pub fn handle_paste(&mut self, s: String) {
+        self.help = false;
+        let s = s.replace("\r\n", "\n").replace('\r', "\n");
+        let line = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        match self.modal.as_mut() {
+            Some(Modal::Retime(v)) => {
+                for c in line.chars().filter(|c| c.is_ascii_digit() || matches!(c, '-' | ':' | ' ')) {
+                    if v.len() < 19 {
+                        v.push(c);
+                    }
+                }
+                return;
+            }
+            Some(Modal::Input { value, .. }) => {
+                value.push_str(s.trim().lines().next().unwrap_or(""));
+                return;
+            }
+            Some(_) => return,
+            None => {}
+        }
+        match self.screen {
+            Screen::Write => self.paste_text(&s),
+            Screen::Search => {
+                self.query.push_str(&line);
+                self.search_i = 0;
+            }
+            Screen::Browse if self.browse.filtering => {
+                self.browse.filter.push_str(&line);
+                self.clamp_browse();
+            }
+            _ => {}
+        }
+    }
+
+    fn paste_text(&mut self, s: &str) {
+        if let Some(paths) = paste::dropped_paths(s) {
+            self.attach_to_draft(paths.into_iter().map(Attachment::Path).collect());
+            return;
+        }
+        let Some(d) = self.draft.as_mut() else { return };
+        if d.floating {
+            d.ts = now_local();
+            d.floating = false;
+        }
+        d.ed.insert_str(s);
+        self.tag_pick = 0;
+    }
+
+    /// ^V in the composer: an image on the clipboard is attached; text is
+    /// pasted (or attached, if it names media files).
+    fn paste_clipboard(&mut self) {
+        match paste::read_clipboard() {
+            Ok(Clip::Image(bytes, ext)) => self.attach_to_draft(vec![Attachment::Bytes(bytes, ext)]),
+            Ok(Clip::Text(t)) => self.paste_text(&t.replace("\r\n", "\n")),
+            Ok(Clip::Empty) => self.toast("Nothing on the clipboard".into(), false),
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    /// Copy into assets/ (Data Saver applied, as in the desktop app) and put
+    /// each link in the body.
+    fn attach_to_draft(&mut self, items: Vec<Attachment>) {
+        let Some(d) = self.draft.as_mut() else { return };
+        if d.floating {
+            d.ts = now_local();
+            d.floating = false;
+        }
+        let ts = d.ts.clone();
+        // Fresh from disk: Data Saver is switched in the desktop app.
+        let mut s = Settings::load();
+        let device = if s.data_saver {
+            let (id, new) = s.ensure_device_id();
+            if new {
+                let _ = s.save();
+            }
+            id
+        } else {
+            String::new()
+        };
+        let n = items.len();
+        for it in items {
+            let res = match it {
+                Attachment::Path(p) => attach_media(&self.j, &p, &ts, s.data_saver, &device),
+                Attachment::Bytes(b, ext) => attach_bytes(&self.j, &b, ext, &ts, s.data_saver, &device),
+            };
+            match res {
+                Ok(a) => {
+                    if a.compress_later {
+                        if let Ok(root) = self.j.local() {
+                            compress_in_background(root.to_path_buf(), a.rel.clone(), device.clone());
+                        }
+                    }
+                    if let Some(d) = self.draft.as_mut() {
+                        d.ed.insert_block(&a.link);
+                    }
+                }
+                Err(e) => {
+                    self.toast(e, true);
+                    return;
+                }
+            }
+        }
+        self.toast(if n == 1 { "Attached".into() } else { format!("Attached {}", n) }, false);
+    }
+}
+
+/// Data Saver for video and audio: ffmpeg in the background, one at a time.
+fn compress_in_background(root: PathBuf, rel: String, device: String) {
+    std::thread::spawn(move || {
+        static QUEUE: Mutex<()> = Mutex::new(());
+        let _g = QUEUE.lock().unwrap_or_else(|p| p.into_inner());
+        let path = root.join(&rel);
+        if let Ok(res) = media::compress_file_in_place(&path) {
+            media::record_saving(&root, &device, &path, res.unwrap_or(0));
+        }
+    });
+}
+
+fn set_mouse(on: bool) -> std::io::Result<()> {
+    use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+    if on {
+        crossterm::execute!(std::io::stdout(), EnableMouseCapture)
+    } else {
+        crossterm::execute!(std::io::stdout(), DisableMouseCapture)
+    }
 }
 
 pub fn run(mut app: App) -> std::io::Result<()> {
+    use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste};
     let mut terminal = ratatui::init();
+    // ratatui's panic hook restores the screen; this one first gives the
+    // terminal back its mouse and plain paste.
+    let restore_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+        restore_hook(info);
+    }));
+    crossterm::execute!(std::io::stdout(), EnableBracketedPaste)?;
+    let mut mouse_on = false;
     let result = (|| -> std::io::Result<()> {
+        let mut redraw = true;
         loop {
-            let size = terminal.size()?;
-            app.width = size.width;
-            app.height = size.height;
-            terminal.draw(|f| crate::ui::draw(f, &mut app))?;
+            if app.mouse != mouse_on {
+                set_mouse(app.mouse)?;
+                mouse_on = app.mouse;
+            }
+            if redraw {
+                let size = terminal.size()?;
+                app.width = size.width;
+                app.height = size.height;
+                terminal.draw(|f| crate::ui::draw(f, &mut app))?;
+            }
+            redraw = true;
             if event::poll(Duration::from_millis(200))? {
                 match event::read()? {
                     Event::Key(k) => app.handle_key(k),
+                    Event::Paste(s) => app.handle_paste(s),
+                    // Bare movement only matters if it lands on something else clickable.
+                    Event::Mouse(m) if m.kind == MouseEventKind::Moved => {
+                        let before = app.hover.and_then(|(x, y)| app.hit_rect_at(x, y));
+                        app.handle_mouse(m);
+                        redraw = before != app.hit_rect_at(m.column, m.row);
+                    }
+                    Event::Mouse(m) => app.handle_mouse(m),
                     Event::Resize(w, h) => {
                         app.width = w;
                         app.height = h;
@@ -1090,6 +1809,7 @@ pub fn run(mut app: App) -> std::io::Result<()> {
         }
         Ok(())
     })();
+    let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
     result
 }

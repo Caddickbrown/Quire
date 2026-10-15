@@ -560,6 +560,23 @@ pub fn on_attach(src_bytes: &[u8], ext: &str, data_saver: bool) -> (Vec<u8>, Str
     (src_bytes.to_vec(), ext.to_string())
 }
 
+/// Encode a clipboard image (RGBA rows, as clipboards hand them over):
+/// opaque images become JPEG (q92), others PNG. Returns (bytes, extension).
+pub fn encode_clipboard_image(width: u32, height: u32, rgba: Vec<u8>) -> Result<(Vec<u8>, &'static str), String> {
+    let img = image::RgbaImage::from_raw(width, height, rgba).ok_or("Clipboard image was malformed")?;
+    let opaque = img.pixels().all(|p| p.0[3] == 255);
+    let mut out = Cursor::new(Vec::new());
+    let ext = if opaque {
+        let rgb = DynamicImage::ImageRgba8(img).to_rgb8();
+        JpegEncoder::new_with_quality(&mut out, 92).encode_image(&rgb).map_err(|e| e.to_string())?;
+        "jpg"
+    } else {
+        DynamicImage::ImageRgba8(img).write_to(&mut out, ImageFormat::Png).map_err(|e| e.to_string())?;
+        "png"
+    };
+    Ok((out.into_inner(), ext))
+}
+
 // ---------------------------------------------------------------------------
 // Ledger
 // ---------------------------------------------------------------------------
@@ -603,6 +620,17 @@ pub fn write_ledger(root: &Path, device_id: &str, ledger: &Ledger) -> Result<(),
     fs::create_dir_all(ledger_dir(root)).map_err(|e| e.to_string())?;
     let json = serde_json::to_vec_pretty(ledger).map_err(|e| e.to_string())?;
     write_atomic(&ledger_path(root, device_id), &json)
+}
+
+/// Count one asset's saving in this device's ledger, once.
+pub fn record_saving(root: &Path, device_id: &str, path: &Path, saved: i64) {
+    let Some(id) = asset_id(root, path) else { return };
+    let mut l = read_ledger(root, device_id);
+    if !l.assets.contains(&id) {
+        l.assets.push(id);
+        l.saved_bytes += saved.max(0);
+        let _ = write_ledger(root, device_id, &l);
+    }
 }
 
 fn all_ledgers(root: &Path) -> Vec<Ledger> {

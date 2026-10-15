@@ -274,6 +274,46 @@ impl Editor {
         self.want_col = Some(want);
     }
 
+    /// A click `dx` cells into visual row `r`: the caret goes before the
+    /// character there, or to the row's end. `last` says `r` is the line's
+    /// last segment; otherwise its end belongs to the row below.
+    pub fn place(&mut self, r: VisualRow, dx: usize, last: bool) {
+        let Some(line) = self.lines.get(r.row) else { return };
+        let chars: Vec<char> = line.chars().collect();
+        let (mut col, mut w) = (r.start, 0);
+        while col < r.end.min(chars.len()) {
+            let cw = chars[col].width().unwrap_or(1);
+            if w + cw > dx {
+                break;
+            }
+            w += cw;
+            col += 1;
+        }
+        if col == r.end && !last && r.end > r.start {
+            col = r.end - 1;
+        }
+        self.row = r.row;
+        self.col = col;
+        self.want_col = None;
+    }
+
+    /// Insert an attachment's link into the body, on its own paragraph when
+    /// the caret is mid-line (as the desktop app does); from the title, at
+    /// the end of the body.
+    pub fn insert_block(&mut self, text: &str) {
+        if self.row == 0 {
+            if self.lines.len() == 1 {
+                self.lines.push(String::new());
+                self.lines.push(String::new());
+            }
+            self.to_end();
+        }
+        if self.col > 0 {
+            self.insert_str("\n\n");
+        }
+        self.insert_str(text);
+    }
+
     /// Toggle `open…close` around the word under the caret (`**`, `_`, `` ` ``).
     pub fn toggle_wrap_word(&mut self, open: &str, close: &str) {
         let line = self.lines[self.row].clone();
@@ -464,5 +504,32 @@ mod tests {
         assert_eq!(e2.visual_index(&rows), Some(3));
         e2.up(10);
         assert_eq!((e2.row, e2.col), (2, 9));
+    }
+
+    #[test]
+    fn clicks_place_the_caret() {
+        let mut e = Editor::new("t", "aaaa bbbb cccc dddd");
+        let rows = e.layout(10);
+        e.place(rows[2], 2, false);
+        assert_eq!((e.row, e.col), (2, 2));
+        e.place(rows[2], 40, false);
+        assert_eq!((e.row, e.col), (2, 9), "past a wrapped row: before its trailing space");
+        e.place(rows[3], 40, true);
+        assert_eq!((e.row, e.col), (2, 19), "past the last row: the line's end");
+        e.place(rows[0], 0, true);
+        assert_eq!((e.row, e.col), (0, 0));
+    }
+
+    #[test]
+    fn attachments_get_their_own_paragraph() {
+        let mut e = Editor::new("Title", "");
+        e.to_end();
+        e.insert_block("![](assets/a.jpg)");
+        assert_eq!(e.body(), "![](assets/a.jpg)");
+        e.insert_block("![](assets/b.jpg)");
+        assert_eq!(e.body(), "![](assets/a.jpg)\n\n![](assets/b.jpg)");
+        e.newline();
+        e.insert_block("![](assets/c.jpg)");
+        assert_eq!(e.body(), "![](assets/a.jpg)\n\n![](assets/b.jpg)\n![](assets/c.jpg)");
     }
 }

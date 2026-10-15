@@ -280,6 +280,58 @@ pub fn attach(j: &Journal, src: &Path, ts: &str, _entry_file: &str) -> Result<St
     Ok(if media_kind(&rel) == "file" { format!("[{}]({})", name, rel) } else { format!("![]({})", rel) })
 }
 
+/// A file `attach_media` / `attach_bytes` stored under assets/.
+#[derive(Debug, Clone)]
+pub struct Attached {
+    /// The markdown to insert.
+    pub link: String,
+    /// Root-relative path of the stored file.
+    pub rel: String,
+    /// Video or audio that Data Saver should compress in the background
+    /// (`media::compress_file_in_place`, then `media::record_saving`).
+    pub compress_later: bool,
+}
+
+fn attached(link: String, saver: bool) -> Attached {
+    let rel = link.rsplit_once("](").map(|(_, t)| t.trim_end_matches(')').to_string()).unwrap_or_default();
+    let ext = rel.rsplit('.').next().unwrap_or("");
+    let compress_later = saver && crate::media::is_compressible_av(ext) && crate::media::tools().ffmpeg;
+    Attached { link, rel, compress_later }
+}
+
+/// Attach in-memory bytes (a clipboard image, say) the way every shell does:
+/// HEIC becomes JPEG, Data Saver recompresses images when that is smaller
+/// and counts the saving in this device's ledger. `ext` names the type; the
+/// stored name comes from `ts`. Local folders only.
+pub fn attach_bytes(j: &Journal, bytes: &[u8], ext: &str, ts: &str, saver: bool, device: &str) -> Result<Attached, String> {
+    if bytes.is_empty() {
+        return Err("Nothing to attach".into());
+    }
+    let ext: String = ext.trim().trim_start_matches('.').to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    let ext = if ext.is_empty() { "png".to_string() } else { ext };
+    let image = crate::media::is_heic(&ext) || crate::media::is_compressible_image(&ext);
+    let (out, out_ext) = if image { crate::media::on_attach(bytes, &ext, saver) } else { (bytes.to_vec(), ext) };
+    let tmp = tempfile::Builder::new().prefix(".quire-attach-").suffix(&format!(".{}", out_ext.to_lowercase())).tempfile().map_err(|e| e.to_string())?;
+    fs::write(tmp.path(), &out).map_err(|e| e.to_string())?;
+    let a = attached(attach(j, tmp.path(), ts, "")?, saver);
+    if image && saver {
+        let root = j.local()?;
+        crate::media::record_saving(root, device, &root.join(&a.rel), bytes.len() as i64 - out.len() as i64);
+    }
+    Ok(a)
+}
+
+/// Attach a file from disk: images and HEIC through `attach_bytes`, anything
+/// else copied as it is.
+pub fn attach_media(j: &Journal, src: &Path, ts: &str, saver: bool, device: &str) -> Result<Attached, String> {
+    let ext = src.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+    if crate::media::is_heic(&ext) || crate::media::is_compressible_image(&ext) {
+        let bytes = fs::read(src).map_err(|e| format!("Can't read {}: {}", src.display(), e))?;
+        return attach_bytes(j, &bytes, &ext, ts, saver, device);
+    }
+    Ok(attached(attach(j, src, ts, "")?, saver))
+}
+
 pub fn delete_orphans(j: &Journal) -> Result<usize, String> {
     let mut n = 0;
     // list_assets is Err if any file is unreadable: never delete on a partial view.
@@ -1675,6 +1727,28 @@ mod tests {
         assert!(delete_asset(&jn(d.path()), "inbox.md").is_err());
         delete_asset(&jn(d.path()), "assets/2026/09/30-080000.pdf").unwrap();
         assert!(!d.path().join("assets/2026/09/30-080000.pdf").exists());
+    }
+
+    #[test]
+    fn clipboard_images_attach_through_data_saver() {
+        let d = tmp();
+        let j = jn(d.path());
+        let opaque = [200u8, 180, 160, 255].repeat(16);
+        let (bytes, ext) = crate::media::encode_clipboard_image(4, 4, opaque).unwrap();
+        assert_eq!(ext, "jpg");
+        let a = attach_bytes(&j, &bytes, ext, "2026-09-30 08:00:00", true, "DEV").unwrap();
+        assert_eq!(a.link, "![](assets/2026/09/30-080000.jpg)");
+        assert_eq!(a.rel, "assets/2026/09/30-080000.jpg");
+        assert!(!a.compress_later);
+        assert_eq!(crate::media::read_ledger(d.path(), "DEV").assets.len(), 1, "counted once on this device");
+        let mut clear = vec![0u8; 2 * 2 * 4];
+        clear[3] = 10;
+        assert_eq!(crate::media::encode_clipboard_image(2, 2, clear).unwrap().1, "png");
+        assert!(crate::media::encode_clipboard_image(3, 3, vec![0; 5]).is_err());
+        assert!(attach_bytes(&j, &[], "png", "2026-09-30 08:00:00", false, "DEV").is_err());
+        let doc = d.path().join("notes.pdf");
+        fs::write(&doc, b"x").unwrap();
+        assert_eq!(attach_media(&j, &doc, "2026-09-30 08:00:00", true, "DEV").unwrap().link, "[30-080000.pdf](assets/2026/09/30-080000.pdf)");
     }
 
     #[test]

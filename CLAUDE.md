@@ -60,7 +60,8 @@ core/               quire-core
                     migrate_legacy_inbox; sidecar() / sidecar_mut()
   src/extras.rs     templates, saved searches, assets + orphans, cleanup,
                     sort_inbox, file_all, merge_ex_split, merge_conflict,
-                    export, backup/restore, importers (markdown folder, Day
+                    export, backup/restore, attach (attach_media /
+                    attach_bytes: Data Saver + ledger), importers (markdown folder, Day
                     One, transfer.md), tag review/rename, sizes, stats_extra,
                     split-tag + jnl-config resolution. Takes &Journal.
   src/media.rs      Data Saver: image downsampling (image crate), video/audio
@@ -79,6 +80,7 @@ tui/                quire-tui: lib + two bins (src/bin/quire.rs, src/bin/jnl.rs)
   src/ui.rs         drawing (ratatui)
   src/editor.rs     the composer buffer: wrapping, caret, macros
   src/md.rs         markdown styled in place, one Style per char
+  src/paste.rs      clipboard images (arboard), dropped-path detection
   src/cli.rs        the printed commands (jnl parity)
   src/theme.rs      Palette from a Theme; truecolor or nearest-256
 linux/              the Tauri app
@@ -108,7 +110,12 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   Inbox (review), Browse (year/month/day/entries + Main/split/all picker),
   Write, Look back, Search; a help overlay; a one-line modal for date & time
   and confirmations. Autosave 700 ms after the last keystroke, on Esc, and
-  on quit. Non-tty invocations print (jnl parity). The design the screens
+  on quit. Mouse: `ui` records a `Hit` for each clickable cell as it draws
+  (`App::hits`, last drawn wins); `app` turns clicks and the wheel into the
+  same actions as keys. F2 toggles capture (`terminalMouse`). Bracketed paste
+  is on: dropped media paths and `^v` clipboard images go through
+  `extras::attach_media` / `attach_bytes` (`src/paste.rs`).
+  Non-tty invocations print (jnl parity). The design the screens
   follow is on the canvas linked from the plan's section 8.
 - **Apple / Android**: not in the repo yet. The plan: Nook's targets into
   `apple/`, `JournalStore` kept as the `@MainActor` façade with its file
@@ -131,6 +138,6 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
 - **Format and layout are decided**: `inbox/YYYY/MM/DD.md`, `.quire/`. Don't
   add a third sidecar name or a second place for drafts.
 - `make test` (cargo test), `make check` (clippy, keep it clean), `make smoke`
-  (the pty driver, must pass 20/20 at 100×30 and 80×24) before a push.
+  (the pty driver, must pass 22/22 at 100×30 and 80×24) before a push.
 - The one-line Tauri rule from before still holds: the Linux frontend has
   no build step; keep it that way.

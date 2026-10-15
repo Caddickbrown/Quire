@@ -487,107 +487,58 @@ fn delete_asset(app: AppHandle, state: State<AppState>, rel: String) -> Result<(
 /// (`![](assets/…)`, or `[name](assets/…)` for non-media), base-relative.
 #[tauri::command]
 fn attach_file(app: AppHandle, state: State<AppState>, src: String, ts: String, entry_file: String) -> Result<String, String> {
+    let _ = entry_file;
     let r = root(&state)?;
-    let src = PathBuf::from(&src);
-    let ext = src.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
-    let link = if media::is_heic(&ext) || media::is_compressible_image(&ext) {
-        let bytes = fs::read(&src).map_err(|e| format!("Can't read {}: {}", src.display(), e))?;
-        attach_prepared(&app, &state, &r, &bytes, &ext, &ts, &entry_file)?
-    } else {
-        let link = attach(&r, &src, &ts, &entry_file)?;
-        after_attach(&app, &state, r.root(), &link, None);
-        link
-    };
+    let a = extras::attach_media(&r, Path::new(&src), &ts, settings_of(&state).data_saver, &device_id(&state))?;
+    compress_later(&app, &state, &r, &a);
     wrote(&app);
-    Ok(link)
+    Ok(a.link)
 }
 
-/// Images and HEIC go through Data Saver / HEIC→JPEG in memory first.
-fn attach_prepared(app: &AppHandle, state: &AppState, r: &Journal, bytes: &[u8], ext: &str, ts: &str, entry_file: &str) -> Result<String, String> {
-    let saver = settings_of(state).data_saver;
-    let (out, out_ext) = media::on_attach(bytes, ext, saver);
-    let saved = bytes.len() as i64 - out.len() as i64;
-    let tmp = tempfile::Builder::new().prefix(".quire-attach-").suffix(&format!(".{}", out_ext.to_lowercase())).tempfile().map_err(|e| e.to_string())?;
-    fs::write(tmp.path(), &out).map_err(|e| e.to_string())?;
-    let link = attach(r, tmp.path(), ts, entry_file)?;
-    after_attach(app, state, r.root(), &link, if saver { Some(saved.max(0)) } else { None });
-    Ok(link)
-}
-
-/// Ledger bookkeeping for a fresh attachment, and background video/audio
-/// compression when Data Saver is on (one at a time, like Nook's serial queue).
-fn after_attach(app: &AppHandle, state: &AppState, r: &Path, link: &str, image_saved: Option<i64>) {
-    let Some(rel) = link.rsplit_once("](").map(|(_, t)| t.trim_end_matches(')').to_string()) else { return };
-    let s = settings_of(state);
-    let device = device_id(state);
-    let path = r.join(&rel);
-    if let Some(saved) = image_saved {
-        record_saving(r, &device, &path, saved);
+/// Background video/audio compression when Data Saver is on (one at a time,
+/// like Nook's serial queue).
+fn compress_later(app: &AppHandle, state: &AppState, r: &Journal, a: &extras::Attached) {
+    if !a.compress_later {
         return;
     }
-    let ext = path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
-    if !s.data_saver || !media::is_compressible_av(&ext) || !media::tools().ffmpeg {
-        return;
-    }
-    let (app, r) = (app.clone(), r.to_path_buf());
+    let (app, root, rel, device) = (app.clone(), r.root().to_path_buf(), a.rel.clone(), device_id(state));
     std::thread::spawn(move || {
         static QUEUE: Mutex<()> = Mutex::new(());
         let _g = QUEUE.lock().unwrap_or_else(|p| p.into_inner());
+        let path = root.join(&rel);
         if let Ok(res) = media::compress_file_in_place(&path) {
             let saved = res.unwrap_or(0);
-            record_saving(&r, &device, &path, saved);
+            media::record_saving(&root, &device, &path, saved);
             let _ = app.emit("media-compressed", serde_json::json!({ "rel": rel, "saved": saved }));
         }
     });
 }
 
-fn record_saving(r: &Path, device: &str, path: &Path, saved: i64) {
-    let Some(id) = media::asset_id(r, path) else { return };
-    let mut l = media::read_ledger(r, device);
-    if !l.assets.contains(&id) {
-        l.assets.push(id);
-        l.saved_bytes += saved.max(0);
-        let _ = media::write_ledger(r, device, &l);
-    }
-}
-
 fn device_id(state: &AppState) -> String {
-    if let Some(id) = settings_of(state).device_id {
-        return id;
+    let mut s = settings_of(state);
+    let (id, new) = s.ensure_device_id();
+    if new {
+        let _ = update_settings(state, |s| s.device_id = Some(id.clone()));
     }
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let id = format!("{:016x}{:08x}", nanos as u64, std::process::id()).to_uppercase();
-    let _ = update_settings(state, |s| s.device_id = Some(id.clone()));
     id
 }
 
 /// Native clipboard-image paste: WebKitGTK often doesn't hand images to the
 /// page's paste event on Linux. Returns the link, or None if the clipboard has
-/// no image. Opaque images become JPEG (q92), others PNG; then the usual
-/// Data Saver / attach path.
+/// no image; then the usual Data Saver / attach path.
 #[tauri::command]
 fn paste_image(app: AppHandle, state: State<AppState>, ts: String, entry_file: String) -> Result<Option<String>, String> {
+    let _ = entry_file;
     let r = root(&state)?;
     check_ts(&ts)?;
     let img = match arboard::Clipboard::new().and_then(|mut c| c.get_image()) {
         Ok(i) => i,
         Err(_) => return Ok(None),
     };
-    let (w, h) = (img.width as u32, img.height as u32);
-    let rgba = image::RgbaImage::from_raw(w, h, img.bytes.into_owned()).ok_or("Clipboard image was malformed")?;
-    let opaque = rgba.pixels().all(|p| p.0[3] == 255);
-    let mut out = std::io::Cursor::new(Vec::new());
-    let ext = if opaque {
-        let rgb = image::DynamicImage::ImageRgba8(rgba).to_rgb8();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92).encode_image(&rgb).map_err(|e| e.to_string())?;
-        "jpg"
-    } else {
-        image::DynamicImage::ImageRgba8(rgba).write_to(&mut out, image::ImageFormat::Png).map_err(|e| e.to_string())?;
-        "png"
-    };
-    let link = attach_prepared(&app, &state, &r, &out.into_inner(), ext, &ts, &entry_file)?;
+    let (bytes, ext) = media::encode_clipboard_image(img.width as u32, img.height as u32, img.bytes.into_owned())?;
+    let a = extras::attach_bytes(&r, &bytes, ext, &ts, settings_of(&state).data_saver, &device_id(&state))?;
     wrote(&app);
-    Ok(Some(link))
+    Ok(Some(a.link))
 }
 
 #[tauri::command]
@@ -622,6 +573,7 @@ async fn compress_existing(app: AppHandle, state: State<'_, AppState>) -> Result
 /// extension; the stored name comes from `ts` as in attach_file.
 #[tauri::command]
 fn attach_bytes(app: AppHandle, state: State<AppState>, name: String, bytes_b64: String, ts: String, entry_file: String) -> Result<String, String> {
+    let _ = entry_file;
     let r = root(&state)?;
     check_ts(&ts)?;
     let b64 = bytes_b64.split_once(";base64,").map(|(_, b)| b).unwrap_or(&bytes_b64);
@@ -629,22 +581,11 @@ fn attach_bytes(app: AppHandle, state: State<AppState>, name: String, bytes_b64:
     if bytes.is_empty() {
         return Err("Nothing to attach".into());
     }
-    let ext = Path::new(name.trim())
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .filter(|e| !e.is_empty() && e.chars().all(|c| c.is_ascii_alphanumeric()))
-        .unwrap_or_else(|| "png".into());
-    let link = if media::is_heic(&ext) || media::is_compressible_image(&ext) {
-        attach_prepared(&app, &state, &r, &bytes, &ext, &ts, &entry_file)?
-    } else {
-        let tmp = tempfile::Builder::new().prefix(".quire-paste-").suffix(&format!(".{}", ext)).tempfile().map_err(|e| e.to_string())?;
-        fs::write(tmp.path(), &bytes).map_err(|e| e.to_string())?;
-        let link = attach(&r, tmp.path(), &ts, &entry_file)?;
-        after_attach(&app, &state, r.root(), &link, None);
-        link
-    };
+    let ext = Path::new(name.trim()).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+    let a = extras::attach_bytes(&r, &bytes, &ext, &ts, settings_of(&state).data_saver, &device_id(&state))?;
+    compress_later(&app, &state, &r, &a);
     wrote(&app);
-    Ok(link)
+    Ok(a.link)
 }
 
 #[tauri::command]
@@ -904,6 +845,11 @@ fn set_system_titlebar(app: AppHandle, state: State<AppState>, on: bool) -> Resu
 }
 
 pub fn run() {
+    // The Wayland app id (and X11 WM_CLASS) come from the program name. The
+    // binary is quire-desktop; naming the program after Quire.desktop lets
+    // the shell pair the window with its launcher, and so its icon.
+    #[cfg(target_os = "linux")]
+    glib::set_prgname(Some("Quire"));
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())

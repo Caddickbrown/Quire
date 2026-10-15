@@ -5,6 +5,7 @@ pub mod app;
 pub mod cli;
 pub mod editor;
 pub mod md;
+pub mod paste;
 pub mod theme;
 pub mod ui;
 

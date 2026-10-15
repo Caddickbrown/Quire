@@ -3,9 +3,16 @@ import os, pty, sys, time, select, fcntl, termios, struct, signal, re, datetime,
 binary, folder = sys.argv[1], sys.argv[2]
 cols, rows = int(sys.argv[3]), int(sys.argv[4])
 theme = sys.argv[5] if len(sys.argv) > 5 else "cinema"
+# A photo to drop on the composer, outside the journal; and a config dir of
+# our own, so the run never reads or writes the real settings.json.
+scratch = os.path.abspath(folder) + "-scratch"
+os.makedirs(scratch, exist_ok=True)
+photo = os.path.join(scratch, "drop me.png")
+open(photo, "wb").write(b"\x89PNG\r\n\x1a\n")
 pid, fd = pty.fork()
 if pid == 0:
     os.environ["TERM"] = "xterm-256color"; os.environ["COLORTERM"] = "truecolor"
+    os.environ["XDG_CONFIG_HOME"] = scratch
     os.execv(binary, [binary, "--folder", folder, "--theme", theme])
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 out = bytearray()
@@ -22,6 +29,8 @@ def seen(s):
     text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out.decode("utf-8", "replace"))
     return s in text or s.replace(" ", "") in text.replace(" ", "")
 ESC, UP, DOWN, RIGHT, LEFT, ENTER, TAB = "\x1b", "\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D", "\r", "\t"
+def paste(s, t=0.6): send("\x1b[200~" + s + "\x1b[201~", t)
+def click(x, y, t=0.5): send(f"\x1b[<0;{x + 1};{y + 1}M\x1b[<0;{x + 1};{y + 1}m", t)   # 0-based cell, SGR mouse
 checks = []
 def check(name, cond): checks.append((name, bool(cond)))
 pump(1.0)
@@ -29,13 +38,16 @@ check("today screen drew", seen("ON THIS DAY") and seen("A PROMPT") and seen("IN
 send("n"); check("write screen", seen("saves to the inbox"))
 send("Smoke test"); send(ENTER); send("Hello from the pty, a list:"); send(ENTER); send("- one"); send(ENTER); send("two @gar", 0.5)
 check("tag popover", seen("@garden"))
-send(TAB); send("\x13", 1.2)   # ctrl+s
+send(TAB); paste("'" + photo + "' ")   # a drop, as GNOME Terminal pastes it
+check("dropped photo attached", seen("Attached") and glob.glob(os.path.join(folder, "assets", "*", "*", "*.png")))
+send("\x0f"); send("\x0f"); check("timer starts, then pauses", seen("paused"))   # ctrl+o twice
+send("\x13", 1.2)   # ctrl+s
 today = datetime.date.today().isoformat()
 p = os.path.join(folder, "inbox", today[:4], today[5:7], today[8:] + ".md")
 txt = open(p).read() if os.path.exists(p) else ""
-check("draft saved to inbox day file", "Smoke test" in txt and "- two @garden" in txt and "- one" in txt)
+check("draft saved to inbox day file", "Smoke test" in txt and "- two @garden" in txt and "- one" in txt and "![](assets/" in txt)
 send(ESC, 0.6); check("back on today after esc", seen("day streak"))
-send("i"); check("inbox screen", seen("review"))
+click(10, rows - 1); check("a click on the hint bar opens the inbox", seen("review"))
 send("t"); check("retime modal", seen("Date & time")); send(ESC)
 send("f", 1.0)
 jp = os.path.join(folder, "journal", today[:4], today[5:7], today[8:] + ".md")
@@ -51,6 +63,7 @@ send("/"); send("garden"); check("search results", seen("result")); send(DOWN); 
 send(ESC, 0.6); send(ESC); send(ESC)   # leave the editor, clear the query, leave search
 check("back on today after search", seen("A PROMPT"))
 send("r"); check("random opens browse", seen("YEAR")); send(ESC)
+send(","); check("settings page", seen("Daily word goal") and seen("Back up now") and seen("Clean up")); send(ESC, 0.6)
 send("?"); check("help overlay", seen("KEYS")); send("x")
 send("q", 0.8)
 status = None

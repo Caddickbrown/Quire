@@ -21,6 +21,18 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
+- **Terminal**: Today's On this day rows show an entry's first tag, as the inbox rows do.
+- **Terminal**: the timer pauses and resumes (`^o`), resets with `alt-o`, shows
+  `paused` in the status line, rings the terminal bell when it ends (Settings ›
+  Timer chime), and `^o timer` is on the Write hint bar.
+- **Terminal**: Settings gains Backups (folder, back up now, restore with a
+  safety copy) and Maintenance (clean up, sort inbox, file all drafts, clear
+  orphan media, export all), over the same core calls as the desktop app.
+- **Terminal**: menu items (hint keys, list rows, pickers) are underlined as you move over
+  them; the text of an entry, in the composer or the inbox preview, is not.
+- **Terminal**: a settings page (`,`) — theme (applied live), daily word goal,
+  timer length, mouse and Data Saver — saved to `settings.json`, shared with
+  the desktop app.
 - **Core**: `quire-core`, one Rust crate every shell shares — the jnl format,
   the store, search, stats, media, maintenance — behind a `Vault` trait so
   the core never opens a file itself (the Apple shell will coordinate writes;
@@ -43,8 +55,34 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Terminal**: `quire migrate`, `quire import` (drafts from stdin).
 - **Tooling**: `make smoke` drives the terminal app through every screen in a
   pseudo-terminal and checks the files it writes.
+- **Terminal**: the mouse. Click hints, list rows, Browse columns, the
+  journal picker, Look back's years, a modal's answers and tag suggestions;
+  click in the composer to place the caret; the wheel moves through lists and
+  the text. F2 turns it off (and back on) so the terminal can select text;
+  the choice is kept in `settings.json` as `terminalMouse`.
+- **Terminal**: images in the composer. `^v` attaches an image on the
+  clipboard to `assets/` and links it; dropping photos, video or audio onto
+  the window (terminals paste their paths) attaches them too. Data Saver
+  applies as in the desktop app. Pasted text arrives as typed, without list
+  continuation firing on every line.
+- **Core**: `attach_media` / `attach_bytes` — the attach path (HEIC→JPEG,
+  Data Saver, the device ledger) the desktop app had, now shared — and
+  `media::encode_clipboard_image`.
 
 ### Changed
+- **Terminal**: Browse's year, month and day columns are wide enough for their
+  longest label and biggest count (no more `Septemb…` or a cut-off year), and
+  the entries beside them no longer highlight under the pointer.
+- **Terminal**: clicking QUIRE in the masthead goes back to Today (saving a
+  draft first).
+- **Terminal**: dates on Today (the inbox and On this day rows, "entries since"),
+  the inbox list and its open draft, in Browse's day header, in Look back's
+  streak dates and in search results are ISO 8601, as in the entries; the long
+  dates in the mastheads stay.
+- **Terminal**: the inbox is a list of drafts beside the open one (above it on
+  a narrow terminal), as Browse is. Filing or deleting keeps the selection in
+  place, so the next draft is up; a second click opens it. The draft dots and
+  their 12-draft cap are gone.
 - **Format**: the sidecar is `.quire/` (templates, saved searches, Data Saver
   ledgers). `.nook/` is read while only it exists and renamed on the first
   write; ledgers are read from both. Nook stops seeing templates and saved
@@ -57,6 +95,16 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   no longer shares a name with the terminal's `quire`.
 - **Repository**: a Cargo workspace (`core`, `tui`, `linux/src-tauri`);
   `README.md` describes the whole, `linux/README.md` the desktop app.
+
+### Fixed
+- **Linux**: the running window shows Quire's icon again. Since the binary
+  became `quire-desktop` its Wayland app id no longer matched `Quire.desktop`,
+  so GNOME showed a generic one; the program now names itself `Quire`.
+- **Linux**: text inputs in Settings (folder path, split tags, template name,
+  reminder time) had no styling of their own, so dark themes showed pale text
+  on the browser's white field; they now use the theme's ground, border and ink.
+- **Terminal**: the selected tag suggestion uses the theme's on-accent colour,
+  so it is black on Marathon's green instead of white.
 
 ### Removed
 - **Linux**: the presentation window branch (a second desktop window

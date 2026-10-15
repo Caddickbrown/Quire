@@ -21,6 +21,8 @@ tempfile = "3"
 dirs = "5"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "bmp"] }
+# The clipboard, for image paste (Linux app and terminal).
+arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
 
 [profile.release]
 strip = true

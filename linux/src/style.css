@@ -418,7 +418,10 @@ button.card:hover .title { color: var(--accent); }
 .tpl-edit { display: flex; flex-direction: column; gap: 10px; }
 .tpl-edit textarea { padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--ground); color: var(--ink); font-family: var(--writing); font-size: 15px; line-height: 1.5; resize: vertical; }
 .tpl-list .row.sel .t { color: var(--accent); }
-input.picker { height: 34px; }
+input.picker { height: 34px; min-width: 0; border-radius: 9px; border: 1px solid var(--line); background: var(--ground); color: var(--ink); font-size: 13px; outline: none; }
+input.picker:focus { border-color: var(--accent); }
+input.picker::placeholder { color: var(--faint); }
+[data-theme="cinema"] input.picker, [data-theme="night"] input.picker, [data-theme="marathon"] input.picker { color-scheme: dark; }
 
 /* lock */
 .lockveil { flex-grow: 1; display: flex; align-items: center; justify-content: center; background: var(--page); }

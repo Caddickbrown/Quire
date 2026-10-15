@@ -8,9 +8,9 @@ check:
 	cargo clippy -p quire-core -p quire-tui -- -D warnings
 
 # Drive every screen of the terminal app in a pseudo-terminal, twice: a roomy
-# window in Cinema and a small one in Marathon. 20/20 each or it fails.
+# window in Cinema and a small one in Marathon. 22/22 each or it fails.
 smoke: tui-debug
-	@rm -rf target/smoke-a target/smoke-b && cp -r sample target/smoke-a && cp -r sample target/smoke-b
+	@rm -rf target/smoke-a target/smoke-b target/smoke-a-scratch target/smoke-b-scratch && cp -r sample target/smoke-a && cp -r sample target/smoke-b
 	python3 -I tools/drive_tui.py target/debug/quire target/smoke-a 100 30 cinema
 	python3 -I tools/drive_tui.py target/debug/quire target/smoke-b 80 24 marathon
 

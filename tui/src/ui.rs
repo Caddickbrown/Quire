@@ -2,7 +2,7 @@
 //! masthead; hairline section rules with a left label; keys in the accent
 //! with muted labels, in the same order on every screen.
 
-use crate::app::{App, Modal, Pick, Screen};
+use crate::app::{App, Hit, Modal, Pick, Screen};
 use crate::md;
 use crate::theme::Palette;
 use quire_core::stats;
@@ -11,6 +11,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -18,6 +19,7 @@ const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MONTHS_SHORT: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    app.hits.borrow_mut().clear();
     let area = f.area();
     let p = app.pal.clone();
     f.render_widget(Block::default().style(p.base()), area);
@@ -34,21 +36,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     match app.screen {
         Screen::Today => {
-            masthead(f, head, &p, "today", Line::from(Span::styled(stats::long_date(&app.today), p.muted())));
+            masthead(f, app, head, &p, "today", plain(Line::from(Span::styled(stats::long_date(&app.today), p.muted()))));
             rule(f, rule_row, &p);
             today(f, body, app);
-            hints(f, hint_row, &p, &[("n", "new"), ("i", "inbox"), ("j", "journal"), ("/", "search"), ("r", "random"), ("l", "look back")], &[("?", "keys"), ("q", "quit")], Some(app.drafts().len()));
+            hints(f, app, hint_row, &p, &[("n", "new"), ("i", "inbox"), ("j", "journal"), ("/", "search"), ("r", "random"), ("l", "look back"), (",", "settings")], &[("?", "keys"), ("q", "quit")], Some(app.drafts().len()));
         }
         Screen::Inbox => {
             let n = app.drafts().len();
-            let mut right = vec![Span::styled("draft ", p.muted()), Span::styled(format!("{}", (app.inbox_i + 1).min(n.max(1))), p.bold()), Span::styled(format!(" of {}   ", n), p.muted())];
-            for i in 0..n.min(12) {
-                right.push(Span::styled("●", if i == app.inbox_i { p.accent() } else { p.line() }));
-            }
-            masthead(f, head, &p, "inbox  ·  review", Line::from(right));
+            let right = plain(Line::from(vec![Span::styled("draft ", p.muted()), Span::styled(format!("{}", (app.inbox_i + 1).min(n.max(1))), p.bold()), Span::styled(format!(" of {}   ", n), p.muted())]));
+            masthead(f, app, head, &p, "inbox  ·  review", right);
             rule(f, rule_row, &p);
             inbox(f, body, app);
-            hints(f, hint_row, &p, &[("f", "file"), ("e", "edit"), ("*", "star"), ("t", "date & time"), ("d", "delete"), ("↑↓", "drafts")], &[("?", "keys"), ("esc", "back")], None);
+            hints(f, app, hint_row, &p, &[("f", "file"), ("e", "edit"), ("*", "star"), ("t", "date & time"), ("d", "delete"), ("↑↓", "drafts")], &[("?", "keys"), ("esc", "back")], None);
         }
         Screen::Browse => {
             let crumb = match &app.browse.pick {
@@ -56,13 +55,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 Pick::All => "journal  ·  all".to_string(),
                 Pick::Split(t) => format!("journal  ·  @{}", t),
             };
-            masthead(f, head, &p, &crumb, picker_line(app));
+            masthead(f, app, head, &p, &crumb, picker_line(app));
             rule(f, rule_row, &p);
             browse(f, body, app);
             if app.browse.filtering {
                 put(f, hint_row, Line::from(vec![Span::styled("/ ", p.key()), Span::styled(app.browse.filter.clone(), p.ink()), Span::styled("▏", p.accent()), Span::styled("   type to filter   ↵ keep   esc clear", p.muted())]));
             } else {
-                hints(f, hint_row, &p, &[("↵", "open"), ("← →", "columns"), ("↑↓", "move"), ("/", "filter"), ("s", "journal"), ("u", "to inbox"), ("r", "random")], &[("?", "keys"), ("esc", "back")], None);
+                hints(f, app, hint_row, &p, &[("↵", "open"), ("← →", "columns"), ("↑↓", "move"), ("/", "filter"), ("s", "journal"), ("u", "to inbox"), ("r", "random")], &[("?", "keys"), ("esc", "back")], None);
             }
         }
         Screen::Write => {
@@ -72,41 +71,85 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 _ => "new draft".to_string(),
             };
             let when = app.draft.as_ref().map(|d| format!("{}  ·  {}", stats::long_date(&d.ts[..10]), &d.ts[11..16])).unwrap_or_default();
-            masthead(f, head, &p, &crumb, Line::from(Span::styled(when, p.muted())));
+            masthead(f, app, head, &p, &crumb, plain(Line::from(Span::styled(when, p.muted()))));
             rule(f, rule_row, &p);
             write(f, Rect::new(inner.x, 3, inner.width, area.height.saturating_sub(6)), app);
             if app.modal.is_none() {
-                hints(f, hint_row, &p, &[("^j", "file"), ("^s", "save"), ("^t", "date & time"), ("^f", "focus"), ("^p", "prompt"), ("^b ^i ^g", "wrap"), ("↵↵", "ends a list")], &[("F1", "keys"), ("esc", "back")], None);
+                hints(f, app, hint_row, &p, &[("^j", "file"), ("^s", "save"), ("^t", "date & time"), ("^f", "focus"), ("^p", "prompt"), ("^o", "timer"), ("^b ^i ^g", "wrap"), ("↵↵", "ends a list")], &[("F1", "keys"), ("esc", "back")], None);
             }
         }
         Screen::LookBack => {
             let years = stats::years(&app.entries, app.today[..4].parse().unwrap_or(2026));
-            let mut right: Vec<Span> = Vec::new();
+            let mut right: Vec<Item> = Vec::new();
             for y in years.iter().take(6) {
-                right.push(Span::styled(format!("{}   ", y), if *y == app.year { p.bold() } else { p.muted() }));
+                right.push((Span::styled(y.to_string(), if *y == app.year { p.bold() } else { p.muted() }), Some(Hit::Year(*y))));
+                right.push((Span::styled("   ", p.muted()), None));
             }
-            masthead(f, head, &p, "look back", Line::from(right));
+            masthead(f, app, head, &p, "look back", right);
             rule(f, rule_row, &p);
             lookback(f, body, app);
-            hints(f, hint_row, &p, &[("← →", "year"), ("j", "journal"), ("i", "inbox"), ("n", "new")], &[("?", "keys"), ("esc", "back")], None);
+            hints(f, app, hint_row, &p, &[("← →", "year"), ("j", "journal"), ("i", "inbox"), ("n", "new")], &[("?", "keys"), ("esc", "back")], None);
+        }
+        Screen::Settings => {
+            masthead(f, app, head, &p, "settings", plain(Line::from(Span::styled("saved as you change them", p.muted()))));
+            rule(f, rule_row, &p);
+            settings(f, body, app);
+            hints(f, app, hint_row, &p, &[("← →", "change"), ("↑↓", "choose")], &[("?", "keys"), ("esc", "back")], None);
         }
         Screen::Search => {
             let n = app.results().len();
-            masthead(f, head, &p, "search", Line::from(Span::styled(if app.query.is_empty() { String::new() } else { format!("{} result{}", n, if n == 1 { "" } else { "s" }) }, p.muted())));
+            masthead(f, app, head, &p, "search", plain(Line::from(Span::styled(if app.query.is_empty() { String::new() } else { format!("{} result{}", n, if n == 1 { "" } else { "s" }) }, p.muted()))));
             rule(f, rule_row, &p);
             search(f, body, app);
-            hints(f, hint_row, &p, &[("↵", "open"), ("↑↓", "results")], &[("esc", if app.query.is_empty() { "back" } else { "clear" })], None);
+            hints(f, app, hint_row, &p, &[("↵", "open"), ("↑↓", "results")], &[("esc", if app.query.is_empty() { "back" } else { "clear" })], None);
         }
     }
 
     if let Some(m) = &app.modal {
-        let line = match m {
-            Modal::Retime(v) => Line::from(vec![Span::styled("Date & time  ", p.muted()), Span::styled(v.clone(), p.ink()), Span::styled("▏", p.accent()), Span::styled("   YYYY-MM-DD HH:MM   ↵ apply   esc cancel", p.muted())]),
-            Modal::Confirm { text, .. } => Line::from(vec![Span::styled(text.clone(), p.ink()), Span::styled("   ", p.ink()), Span::styled("y", p.key()), Span::styled(" yes   ", p.muted()), Span::styled("n", p.key()), Span::styled(" no", p.muted())]),
+        // Only the modal's answers are clickable while it is up.
+        app.hits.borrow_mut().clear();
+        let (enter, esc) = (Some(Hit::Key(KeyEvent::from(KeyCode::Enter))), Some(Hit::Key(KeyEvent::from(KeyCode::Esc))));
+        let items: Vec<Item> = match m {
+            Modal::Retime(v) => vec![
+                (Span::styled("Date & time  ", p.muted()), None),
+                (Span::styled(v.clone(), p.ink()), None),
+                (Span::styled("▏", p.accent()), None),
+                (Span::styled("   YYYY-MM-DD HH:MM   ", p.muted()), None),
+                (Span::styled("↵ apply", p.muted()), enter),
+                (Span::styled("   ", p.muted()), None),
+                (Span::styled("esc cancel", p.muted()), esc),
+            ],
+            Modal::Input { label, value, .. } => vec![
+                (Span::styled(format!("{}  ", label), p.muted()), None),
+                (Span::styled(value.clone(), p.ink()), None),
+                (Span::styled("▏", p.accent()), None),
+                (Span::styled("   ", p.muted()), None),
+                (Span::styled("↵ ok", p.muted()), enter),
+                (Span::styled("   ", p.muted()), None),
+                (Span::styled("esc cancel", p.muted()), esc),
+            ],
+            Modal::Restore(names, i) => vec![
+                (Span::styled("Restore  ", p.muted()), None),
+                (Span::styled(format!("‹ {} ›", names.get(*i).map(|s| s.as_str()).unwrap_or("")), p.accent()), None),
+                (Span::styled(format!("  {}/{}   ", i + 1, names.len()), p.faint()), None),
+                (Span::styled("↵ restore", p.muted()), enter),
+                (Span::styled("   ", p.muted()), None),
+                (Span::styled("esc cancel", p.muted()), esc),
+            ],
+            Modal::Confirm { text, .. } => vec![
+                (Span::styled(text.clone(), p.ink()), None),
+                (Span::styled("   ", p.ink()), None),
+                (Span::styled("y", p.key()), Some(Hit::Key(KeyEvent::from(KeyCode::Char('y'))))),
+                (Span::styled(" yes", p.muted()), Some(Hit::Key(KeyEvent::from(KeyCode::Char('y'))))),
+                (Span::styled("   ", p.muted()), None),
+                (Span::styled("n", p.key()), Some(Hit::Key(KeyEvent::from(KeyCode::Char('n'))))),
+                (Span::styled(" no", p.muted()), Some(Hit::Key(KeyEvent::from(KeyCode::Char('n'))))),
+            ],
         };
         f.render_widget(Block::default().style(p.base()), hint_row);
-        put(f, hint_row, line);
+        put_items(f, app, hint_row, items);
     }
+    hover_highlight(f, app);
     if let Some((msg, _, err)) = &app.toast {
         let w = (msg.width() as u16 + 4).min(inner.width);
         let r = Rect::new(inner.x + inner.width.saturating_sub(w), area.height - 3, w, 1);
@@ -115,7 +158,30 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         put(f, r, Line::from(Span::styled(format!("  {}  ", msg), st)));
     }
     if app.help {
+        app.hits.borrow_mut().clear(); // any click closes it
         help_overlay(f, area, app);
+    }
+}
+
+/// Underline what a click under the pointer would press. Text areas are left
+/// alone, and so is anything while a modal or the help overlay is up.
+fn hover_highlight(f: &mut Frame, app: &App) {
+    use ratatui::layout::Position;
+    use ratatui::style::Modifier;
+    let Some((x, y)) = app.hover else { return };
+    if !app.mouse || app.help {
+        return;
+    }
+    let Some(rect) = app.hit_rect_at(x, y) else { return };
+    let area = f.area();
+    let buf = f.buffer_mut();
+    for yy in rect.y..(rect.y + rect.height).min(area.height) {
+        for xx in rect.x..(rect.x + rect.width).min(area.width) {
+            if let Some(c) = buf.cell_mut(Position::new(xx, yy)) {
+                let st = c.style().add_modifier(Modifier::UNDERLINED);
+                c.set_style(st);
+            }
+        }
     }
 }
 
@@ -135,12 +201,51 @@ fn put_lines(f: &mut Frame, r: Rect, lines: Vec<Line>) {
     f.render_widget(Paragraph::new(lines), r);
 }
 
-fn masthead(f: &mut Frame, r: Rect, p: &Palette, crumb: &str, right: Line) {
+/// A span, and what clicking it does.
+type Item<'a> = (Span<'a>, Option<Hit>);
+
+fn plain(l: Line<'_>) -> Vec<Item<'_>> {
+    l.spans.into_iter().map(|s| (s, None)).collect()
+}
+
+fn items_width(items: &[Item]) -> u16 {
+    items.iter().map(|(s, _)| s.width() as u16).sum()
+}
+
+/// Draw a row of spans, recording each clickable one where it lands.
+fn put_items(f: &mut Frame, app: &App, r: Rect, items: Vec<Item>) {
+    let mut x = r.x;
+    let end = r.x + r.width;
+    for (s, h) in &items {
+        let w = (s.width() as u16).min(end.saturating_sub(x));
+        if let Some(h) = h {
+            app.hit(Rect::new(x, r.y, w, 1), h.clone());
+        }
+        x += w;
+    }
+    put(f, r, Line::from(items.into_iter().map(|(s, _)| s).collect::<Vec<_>>()));
+}
+
+fn masthead(f: &mut Frame, app: &App, r: Rect, p: &Palette, crumb: &str, right: Vec<Item>) {
     let left = Line::from(vec![Span::styled("QUIRE", p.brand()), Span::styled(format!("  ·  {}", crumb), p.faint())]);
     put(f, r, left);
-    let rw = right.width() as u16;
+    app.hit(Rect::new(r.x, r.y, 5, 1), Hit::Home);
+    let rw = items_width(&right);
     if rw + 10 < r.width {
-        put(f, Rect::new(r.x + r.width - rw, r.y, rw, 1), right);
+        put_items(f, app, Rect::new(r.x + r.width - rw, r.y, rw, 1), right);
+    }
+}
+
+/// The key a hint label stands for, when a click can press it.
+fn hint_key(k: &str) -> Option<KeyEvent> {
+    let mut cs = k.chars();
+    match (cs.next()?, cs.next(), cs.next()) {
+        _ if k == "esc" => Some(KeyEvent::from(KeyCode::Esc)),
+        _ if k == "F1" => Some(KeyEvent::from(KeyCode::F(1))),
+        ('↵', None, _) => Some(KeyEvent::from(KeyCode::Enter)),
+        ('^', Some(c), None) => Some(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)),
+        (c, None, _) if !c.is_whitespace() => Some(KeyEvent::from(KeyCode::Char(c))),
+        _ => None,
     }
 }
 
@@ -153,35 +258,35 @@ fn section(label: &str, width: usize, p: &Palette) -> Line<'static> {
     Line::from(vec![Span::styled(label.to_string(), p.muted()), Span::styled(format!(" {}", "─".repeat(n)), p.line())])
 }
 
-fn hints(f: &mut Frame, r: Rect, p: &Palette, left: &[(&str, &str)], right: &[(&str, &str)], inbox_count: Option<usize>) {
-    let mut l: Vec<Span> = Vec::new();
+fn hints(f: &mut Frame, app: &App, r: Rect, p: &Palette, left: &[(&str, &str)], right: &[(&str, &str)], inbox_count: Option<usize>) {
+    let mut l: Vec<Item> = Vec::new();
     for (k, v) in left {
-        l.push(Span::styled(k.to_string(), p.key()));
-        l.push(Span::styled(format!(" {}", v), p.muted()));
+        let h = hint_key(k).map(Hit::Key);
+        l.push((Span::styled(k.to_string(), p.key()), h.clone()));
+        l.push((Span::styled(format!(" {}", v), p.muted()), h.clone()));
         if *v == "inbox" {
             if let Some(n) = inbox_count {
                 if n > 0 {
-                    l.push(Span::styled(format!(" {}", n), p.faint()));
+                    l.push((Span::styled(format!(" {}", n), p.faint()), h));
                 }
             }
         }
-        l.push(Span::styled("   ", p.muted()));
+        l.push((Span::styled("   ", p.muted()), None));
     }
-    let mut rt: Vec<Span> = Vec::new();
+    let mut rt: Vec<Item> = Vec::new();
     for (i, (k, v)) in right.iter().enumerate() {
         if i > 0 {
-            rt.push(Span::styled("   ", p.muted()));
+            rt.push((Span::styled("   ", p.muted()), None));
         }
-        rt.push(Span::styled(k.to_string(), p.key()));
-        rt.push(Span::styled(format!(" {}", v), p.muted()));
+        let h = hint_key(k).map(Hit::Key);
+        rt.push((Span::styled(k.to_string(), p.key()), h.clone()));
+        rt.push((Span::styled(format!(" {}", v), p.muted()), h));
     }
-    let rl = Line::from(rt);
-    let rw = rl.width() as u16;
-    let ll = Line::from(l);
-    let lw = (ll.width() as u16).min(r.width.saturating_sub(rw + 2));
-    put(f, Rect::new(r.x, r.y, lw, 1), ll);
+    let rw = items_width(&rt);
+    let lw = items_width(&l).min(r.width.saturating_sub(rw + 2));
+    put_items(f, app, Rect::new(r.x, r.y, lw, 1), l);
     if rw < r.width {
-        put(f, Rect::new(r.x + r.width - rw, r.y, rw, 1), rl);
+        put_items(f, app, Rect::new(r.x + r.width - rw, r.y, rw, 1), rt);
     }
 }
 
@@ -254,7 +359,7 @@ fn title_of(e: &Entry) -> (String, bool) {
 fn entry_row<'a>(e: &Entry, p: &Palette, width: usize, show_date: bool) -> (Line<'a>, Line<'a>) {
     let (t, untitled) = title_of(e);
     let mut left: Vec<Span> = Vec::new();
-    left.push(Span::styled(if show_date { format!("{} {}  ", stats::short_date(&e.date), e.time) } else { format!("{}  ", e.time) }, p.muted()));
+    left.push(Span::styled(if show_date { format!("{} {}  ", e.date, e.time) } else { format!("{}  ", e.time) }, p.muted()));
     if e.starred {
         left.push(Span::styled("★ ", p.accent()));
     }
@@ -291,7 +396,7 @@ fn today(f: &mut Frame, r: Rect, app: &App) {
     let streak = stats::current_streak(&days, &app.today);
     let drafts = app.drafts().len();
     let filed = app.filed();
-    let first = filed.iter().map(|e| e.date.as_str()).min().map(|d| format!(" since {}", stats::parse_date(d).map(|x| x.format("%B %Y").to_string()).unwrap_or_default())).unwrap_or_default();
+    let first = filed.iter().map(|e| e.date.as_str()).min().map(|d| format!(" since {}", d.get(..7).unwrap_or(d))).unwrap_or_default();
     put(
         f,
         Rect::new(r.x, y, r.width, 1),
@@ -318,8 +423,14 @@ fn today(f: &mut Frame, r: Rect, app: &App) {
                 break;
             }
             let (t, untitled) = title_of(e);
-            let left = Line::from(vec![Span::styled(format!("  {}  ", &e.date[..4]), p.accent()), Span::styled(trunc(&t, w.saturating_sub(30)), if untitled { p.muted_italic() } else { p.ink() })]);
-            two_sided(f, Rect::new(r.x, y, r.width, 1), left, Line::from(Span::styled(format!("{} words", e.words), p.muted())));
+            let left = Line::from(vec![Span::styled(format!("  {}  ", e.date), p.accent()), Span::styled(trunc(&t, w.saturating_sub(30)), if untitled { p.muted_italic() } else { p.ink() })]);
+            let mut right: Vec<Span> = Vec::new();
+            if let Some(tag) = e.tags.first() {
+                right.push(Span::styled(format!("{}  ", tag), p.accent()));
+            }
+            right.push(Span::styled(format!("{} words", e.words), p.muted()));
+            two_sided(f, Rect::new(r.x, y, r.width, 1), left, Line::from(right));
+            app.hit(Rect::new(r.x, y, r.width, 1), Hit::Show(e.file.clone(), e.index));
             y += 1;
         }
         y += gap;
@@ -328,8 +439,11 @@ fn today(f: &mut Frame, r: Rect, app: &App) {
         put(f, Rect::new(r.x + 2, y, r.width - 2, 1), section("A PROMPT", w - 2, p));
         y += gap;
         put(f, Rect::new(r.x + 2, y, r.width - 2, 1), Line::from(Span::styled(trunc(app.current_prompt(), w - 4), p.italic())));
+        app.hit(Rect::new(r.x + 2, y, (app.current_prompt().width() as u16).min(r.width - 2), 1), Hit::Prompt);
         y += 1;
         put(f, Rect::new(r.x + 2, y, r.width - 2, 1), Line::from(Span::styled("↵ to start writing from it   ·   p for another", p.faint())));
+        app.hit(Rect::new(r.x + 2, y, 26, 1), Hit::Prompt);
+        app.hit(Rect::new(r.x + 2 + 33, y, 13, 1), Hit::Key(KeyEvent::from(KeyCode::Char('p'))));
         y += gap + 1;
     }
     if y + 2 < max_y {
@@ -347,6 +461,7 @@ fn today(f: &mut Frame, r: Rect, app: &App) {
             let mut l2 = vec![Span::styled("  ", p.ink())];
             l2.extend(l.spans);
             two_sided(f, Rect::new(r.x, y, r.width, 1), Line::from(l2), rt);
+            app.hit(Rect::new(r.x, y, r.width, 1), Hit::Edit(e.file.clone(), e.index));
             y += 1;
         }
     }
@@ -360,11 +475,69 @@ fn inbox(f: &mut Frame, r: Rect, app: &App) {
         put(f, Rect::new(r.x + 2, r.y + 3, r.width - 2, 1), Line::from(vec![Span::styled("n", p.key()), Span::styled(" starts a draft", p.muted())]));
         return;
     }
-    let e = ds[app.inbox_i.min(ds.len() - 1)];
+    let sel = app.inbox_i.min(ds.len() - 1);
+    if r.width >= 80 {
+        // The list beside the draft, as Browse puts its entries.
+        let lw = (r.width / 3).clamp(28, 40);
+        inbox_list(f, Rect::new(r.x, r.y, lw, r.height), app, &ds, sel, false);
+        let sep: Vec<Line> = (0..r.height).map(|_| Line::from(Span::styled("│", p.line()))).collect();
+        put_lines(f, Rect::new(r.x + lw, r.y, 1, r.height), sep);
+        draft_preview(f, Rect::new(r.x + lw + 2, r.y, r.width - lw - 2, r.height), app, ds[sel]);
+    } else {
+        // Narrow: the list above the draft.
+        let rows = (ds.len() as u16).min(if r.height >= 20 { 5 } else { 3 });
+        inbox_list(f, Rect::new(r.x, r.y, r.width, rows), app, &ds, sel, true);
+        rule(f, Rect::new(r.x, r.y + rows, r.width, 1), p);
+        draft_preview(f, Rect::new(r.x, r.y + rows + 1, r.width, r.height.saturating_sub(rows + 1)), app, ds[sel]);
+    }
+}
+
+/// One row a draft: date and time, a star, the title. `wide` adds its first
+/// tag and word count on the right.
+fn inbox_list(f: &mut Frame, r: Rect, app: &App, ds: &[&Entry], sel: usize, wide: bool) {
+    let p = &app.pal;
+    let h = r.height as usize;
+    let top = (sel + 1).saturating_sub(h);
+    for (k, e) in ds.iter().enumerate().skip(top).take(h) {
+        let y = r.y + (k - top) as u16;
+        let row = Rect::new(r.x, y, r.width, 1);
+        let on = k == sel;
+        if on {
+            f.render_widget(Block::default().style(p.selected_bg()), row);
+        }
+        let (t, untitled) = title_of(e);
+        let when = format!("{} {}  ", e.date, e.time);
+        let mut right: Vec<Span> = Vec::new();
+        if wide {
+            if let Some(tag) = e.tags.first() {
+                right.push(Span::styled(format!("{}  ", tag), p.accent()));
+            }
+            right.push(Span::styled(format!("{} words", e.words), p.muted()));
+        }
+        let rw = Line::from(right.clone()).width();
+        let room = (r.width as usize).saturating_sub(2 + when.width() + if e.starred { 2 } else { 0 } + if wide { rw + 2 } else { 0 });
+        let mut left = vec![Span::styled(if on { "▸ " } else { "  " }, p.accent()), Span::styled(when, p.muted())];
+        if e.starred {
+            left.push(Span::styled("★ ", p.accent()));
+        }
+        let title_st = if untitled { p.muted_italic() } else if on { p.bold() } else { p.ink() };
+        left.push(Span::styled(trunc(&t, room), title_st));
+        let bg = |l: Vec<Span<'static>>| -> Vec<Span<'static>> { if on { l.into_iter().map(|s| { let st = s.style.bg(p.card); s.style(st) }).collect() } else { l } };
+        two_sided(f, row, Line::from(bg(left)), Line::from(bg(right)));
+        app.hit(row, Hit::Draft(k));
+    }
+}
+
+fn draft_preview(f: &mut Frame, r: Rect, app: &App, e: &Entry) {
+    let p = &app.pal;
+    if r.width < 10 || r.height < 6 {
+        return;
+    }
+    app.hit(r, Hit::Preview(e.file.clone(), e.index));
     let w = r.width as usize;
     let mut y = r.y;
     let dest = app.destination_of(e);
-    let mut head = vec![Span::styled(format!("  {}  ·  {}", stats::long_date(&e.date), e.time), p.muted()), Span::styled("   →  ", p.faint())];
+    let mut head = vec![Span::styled(format!("  {}  ·  {}", e.date, e.time), p.muted()), Span::styled("   →  ", p.faint())];
     if dest.starts_with("journal/") {
         head.push(Span::styled(dest.clone(), p.faint()));
     } else {
@@ -407,30 +580,31 @@ fn inbox(f: &mut Frame, r: Rect, app: &App) {
     two_sided(f, Rect::new(r.x + 2, y, r.width - 2, 1), Line::from(foot), Line::from(Span::styled(e.file.clone(), p.faint())));
 }
 
-fn picker_line(app: &App) -> Line<'static> {
+fn picker_line(app: &App) -> Vec<Item<'static>> {
     let p = &app.pal;
-    let mut v: Vec<Span> = Vec::new();
-    let mark = |on: bool, label: String, count: Option<usize>| -> Vec<Span<'static>> {
+    let mut v: Vec<Item> = Vec::new();
+    let mark = |pick: Pick, label: String, count: Option<usize>| -> Vec<Item<'static>> {
+        let h = Some(Hit::Pick(pick.clone()));
         let mut s = vec![];
-        if on {
-            s.push(Span::styled("▌", p.accent()));
-            s.push(Span::styled(label, p.bold()));
+        if app.browse.pick == pick {
+            s.push((Span::styled("▌", p.accent()), h.clone()));
+            s.push((Span::styled(label, p.bold()), h.clone()));
         } else {
-            s.push(Span::styled(label, if count.is_some() { p.accent() } else { p.faint() }));
+            s.push((Span::styled(label, if count.is_some() { p.accent() } else { p.faint() }), h.clone()));
         }
         if let Some(c) = count {
-            s.push(Span::styled(format!(" {}", c), p.faint()));
+            s.push((Span::styled(format!(" {}", c), p.faint()), h));
         }
-        s.push(Span::styled("   ", p.muted()));
+        s.push((Span::styled("   ", p.muted()), None));
         s
     };
-    v.extend(mark(app.browse.pick == Pick::Main, "Main".into(), None));
+    v.extend(mark(Pick::Main, "Main".into(), None));
     for t in app.split_names() {
         let n = app.entries.iter().filter(|e| e.split.as_deref() == Some(t.as_str())).count();
-        v.extend(mark(app.browse.pick == Pick::Split(t.clone()), format!("@{}", t), Some(n)));
+        v.extend(mark(Pick::Split(t.clone()), format!("@{}", t), Some(n)));
     }
-    v.extend(mark(app.browse.pick == Pick::All, "all".into(), None));
-    Line::from(v)
+    v.extend(mark(Pick::All, "all".into(), None));
+    v
 }
 
 fn column<'a>(items: &[(String, usize)], sel: usize, active: bool, label: impl Fn(&str) -> String, width: usize, p: &Palette) -> Vec<Line<'a>> {
@@ -471,15 +645,24 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
         return;
     }
     let wide = r.width >= 96;
-    let (wy, wm, wd) = (9u16, 16u16, 13u16);
+    // Wide enough for the longest label and the biggest count, so neither is cut.
+    let colw = |items: &[(String, usize)], label: u16| -> u16 {
+        let digits = items.iter().map(|(_, n)| n.to_string().len()).max().unwrap_or(1) as u16;
+        label + digits + 6
+    };
+    let (wy, wm, wd) = (colw(&years, 4), colw(&months, 9), colw(&days, 6));
     let sep = 3u16;
     let mut x = r.x;
     let h = r.height;
-    let draw_col = |f: &mut Frame, x: u16, w: u16, title: &str, lines: Vec<Line>, scroll_to: usize| {
+    let draw_col = |f: &mut Frame, col: usize, x: u16, w: u16, title: &str, lines: Vec<Line>, scroll_to: usize| {
         put(f, Rect::new(x, r.y, w, 1), Line::from(Span::styled(title.to_string(), p.muted())));
+        app.hit(Rect::new(x, r.y, w, h), Hit::Column(col));
         let avail = h.saturating_sub(2) as usize;
         let start = scroll_to.saturating_sub(avail.saturating_sub(1));
         let shown: Vec<Line> = lines.into_iter().skip(start).take(avail).collect();
+        for k in 0..shown.len() {
+            app.hit(Rect::new(x, r.y + 2 + k as u16, w, 1), Hit::Item(col, start + k));
+        }
         put_lines(f, Rect::new(x, r.y + 2, w, avail as u16), shown);
     };
     let vline = |f: &mut Frame, x: u16| {
@@ -487,15 +670,15 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
             put(f, Rect::new(x + 1, yy, 1, 1), Line::from(Span::styled("│", p.line())));
         }
     };
-    draw_col(f, x, wy, "YEAR", column(&years, app.browse.yi, app.browse.col == 0, |k| k.to_string(), wy as usize, p), app.browse.yi);
+    draw_col(f, 0, x, wy, "YEAR", column(&years, app.browse.yi, app.browse.col == 0, |k| k.to_string(), wy as usize, p), app.browse.yi);
     x += wy;
     vline(f, x);
     x += sep;
-    draw_col(f, x, wm, "MONTH", column(&months, app.browse.mi, app.browse.col == 1, |k| stats::month_name(k.parse().unwrap_or(1)).to_string(), wm as usize, p), app.browse.mi);
+    draw_col(f, 1, x, wm, "MONTH", column(&months, app.browse.mi, app.browse.col == 1, |k| stats::month_name(k.parse().unwrap_or(1)).to_string(), wm as usize, p), app.browse.mi);
     x += wm;
     vline(f, x);
     x += sep;
-    draw_col(f, x, wd, "DAY", column(&days, app.browse.di, app.browse.col == 2, |k| stats::parse_date(k).map(|d| d.format("%a %d").to_string()).unwrap_or_else(|| k.to_string()), wd as usize, p), app.browse.di);
+    draw_col(f, 2, x, wd, "DAY", column(&days, app.browse.di, app.browse.col == 2, |k| stats::parse_date(k).map(|d| d.format("%a %d").to_string()).unwrap_or_else(|| k.to_string()), wd as usize, p), app.browse.di);
     x += wd;
     if !wide {
         return;
@@ -505,8 +688,10 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
     let pw = (r.x + r.width).saturating_sub(x);
     let Some(date) = &sel.date else { return };
     let es = app.browse_day_entries(date);
-    two_sided(f, Rect::new(x, r.y, pw, 1), Line::from(Span::styled(stats::long_date(date).to_uppercase(), p.muted())), Line::from(Span::styled(es.first().map(|e| e.file.clone()).unwrap_or_default(), p.faint())));
+    two_sided(f, Rect::new(x, r.y, pw, 1), Line::from(Span::styled(date.to_string(), p.muted())), Line::from(Span::styled(es.first().map(|e| e.file.clone()).unwrap_or_default(), p.faint())));
     let mut lines: Vec<Line> = Vec::new();
+    // Which entry each line belongs to, for clicks.
+    let mut owner: Vec<usize> = Vec::new();
     let mut sel_line = 0usize;
     for (i, e) in es.iter().enumerate() {
         let active = i == app.browse.ei;
@@ -542,9 +727,14 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
             meta.push(Span::styled(e.tags.join(" "), p.accent()));
         }
         lines.push(Line::from(meta));
+        owner.resize(lines.len(), i);
     }
     let avail = h.saturating_sub(2) as usize;
     let start = if sel_line + 3 > avail { sel_line.saturating_sub(2) } else { 0 };
+    app.hit(Rect::new(x, r.y, pw, h), Hit::Column(3));
+    for (k, i) in owner.iter().skip(start).take(avail).enumerate() {
+        app.hit(Rect::new(x, r.y + 2 + k as u16, pw, 1), Hit::Item(3, *i));
+    }
     let shown: Vec<Line> = lines.into_iter().skip(start).take(avail).collect();
     put_lines(f, Rect::new(x, r.y + 2, pw, avail as u16), shown);
 }
@@ -595,7 +785,8 @@ fn write(f: &mut Frame, r: Rect, app: &mut App) {
     let focus = app.focus;
     let words_today = app.words_today();
     let goal = app.settings.word_goal();
-    let timer = app.timer_end.map(|t| t.saturating_duration_since(std::time::Instant::now()));
+    let timer = app.timer_left();
+    let mut hits: Vec<(Rect, Hit)> = vec![(Rect::new(r.x, r.y, r.width, r.height.saturating_sub(2)), Hit::TextEnd)];
     let Some(d) = app.draft.as_mut() else { return };
     let left = r.x + (r.width.saturating_sub(width as u16)) / 2;
     let text_h = r.height.saturating_sub(2) as usize;
@@ -620,6 +811,8 @@ fn write(f: &mut Frame, r: Rect, app: &mut App) {
             l = Line::from(Span::styled("Title — or leave it, and the first line will do", p.faint()));
         }
         put(f, Rect::new(left, y, width as u16, 1), l);
+        let last = rows.get(vi + 1).is_none_or(|n| n.row != vr.row);
+        hits.push((Rect::new(r.x, y, r.width, 1), Hit::Text(*vr, left, last)));
         if Some(vi) == caret_vi {
             let x = d.ed.visual_x(vr) as u16;
             caret_pos = Some((left + x.min(width as u16 - 1), y));
@@ -646,11 +839,14 @@ fn write(f: &mut Frame, r: Rect, app: &mut App) {
                 .iter()
                 .enumerate()
                 .map(|(i, t)| {
-                    let st = if i == tag_pick { Style::default().fg(p.fg).bg(p.accent) } else { Style::default().fg(p.fg).bg(p.card) };
+                    let st = if i == tag_pick { Style::default().fg(p.on_accent).bg(p.accent) } else { Style::default().fg(p.fg).bg(p.card) };
                     Line::from(Span::styled(format!(" {:<w$} ", t, w = (w - 2) as usize), st))
                 })
                 .collect();
             put_lines(f, area, lines);
+            for i in 0..hgt {
+                hits.push((Rect::new(px, py + i, w, 1), Hit::Suggestion(i as usize)));
+            }
         }
     }
     // status line
@@ -658,11 +854,11 @@ fn write(f: &mut Frame, r: Rect, app: &mut App) {
     let mut st: Vec<Span> = vec![Span::styled(commas(words_today), p.bold()), Span::styled(" words   ", p.muted())];
     st.extend(goal_bar(words_today, goal, &p));
     st.push(Span::styled(format!("  {}", goal), p.muted()));
-    if let Some(t) = timer {
+    if let Some((t, paused)) = timer {
         let secs = t.as_secs();
         st.push(Span::styled("   ·   ", p.muted()));
-        st.push(Span::styled("◔ ", p.accent()));
-        st.push(Span::styled(format!("{:02}:{:02} left", secs / 60, secs % 60), p.muted()));
+        st.push(Span::styled(if paused { "‖ " } else { "◔ " }, p.accent()));
+        st.push(Span::styled(format!("{:02}:{:02} {}", secs / 60, secs % 60, if paused { "paused" } else { "left" }), p.muted()));
     }
     let mut right: Vec<Span> = Vec::new();
     if focus {
@@ -679,6 +875,49 @@ fn write(f: &mut Frame, r: Rect, app: &mut App) {
     }
     two_sided(f, Rect::new(r.x, sy, r.width, 1), Line::from(st), Line::from(right));
     put(f, Rect::new(r.x, sy + 1, r.width, 1), Line::from(Span::styled("─".repeat(r.width as usize), p.line())));
+    for (rect, h) in hits {
+        app.hit(rect, h);
+    }
+}
+
+fn settings(f: &mut Frame, r: Rect, app: &App) {
+    let p = app.pal.clone();
+    // One line a row, a heading and a gap before each group. Scroll so the
+    // chosen row stays in view.
+    let mut lines: Vec<(Option<usize>, &str)> = Vec::new();
+    for i in 0..App::SETTING_ROWS {
+        if let Some((_, head)) = App::SETTING_GROUPS.iter().find(|(at, _)| *at == i) {
+            if i > 0 {
+                lines.push((None, ""));
+            }
+            lines.push((None, head));
+        }
+        lines.push((Some(i), ""));
+    }
+    let h = r.height as usize;
+    let sel_line = lines.iter().position(|(i, _)| *i == Some(app.settings_i)).unwrap_or(0);
+    let top = (sel_line + 1).saturating_sub(h);
+    for (k, (row, head)) in lines.iter().skip(top).take(h).enumerate() {
+        let y = r.y + k as u16;
+        let rect = Rect::new(r.x, y, r.width, 1);
+        let Some(i) = row else {
+            if !head.is_empty() {
+                put(f, rect, section(head, r.width as usize, &p));
+            }
+            continue;
+        };
+        let i = *i;
+        let (label, value) = app.setting_value(i);
+        let sel = i == app.settings_i;
+        let shown = if App::setting_is_action(i) { value } else { format!("‹ {} ›", value) };
+        let room = (r.width as usize).saturating_sub(22);
+        let items: Vec<Item> = vec![
+            (Span::styled(if sel { "▸ " } else { "  " }, p.accent()), Some(Hit::Setting(i))),
+            (Span::styled(format!("{:<20}", label), if sel { p.bold() } else { p.ink() }), Some(Hit::Setting(i))),
+            (Span::styled(trunc(&shown, room), if sel { p.accent() } else { p.muted() }), Some(Hit::Setting(i))),
+        ];
+        put_items(f, app, rect, items);
+    }
 }
 
 fn lookback(f: &mut Frame, r: Rect, app: &App) {
@@ -692,7 +931,7 @@ fn lookback(f: &mut Frame, r: Rect, app: &App) {
     let total_days = all_filed.iter().map(|e| e.date.as_str()).collect::<std::collections::BTreeSet<_>>().len();
     let w = r.width as usize;
     let mut y = r.y;
-    let span_txt = span.map(|(a, b)| format!("       longest {}, {} – {}", longest, stats::day_year(&a), stats::day_year(&b))).unwrap_or_default();
+    let span_txt = span.map(|(a, b)| format!("       longest {}, {} – {}", longest, a, b)).unwrap_or_default();
     let left = Line::from(vec![Span::styled(format!("  {}", streak), p.bold()), Span::styled(" day streak", p.muted()), Span::styled(span_txt, p.faint())]);
     let right = Line::from(vec![Span::styled(commas(total_words), p.bold()), Span::styled(" words", p.muted()), Span::styled(format!("   in {} entries, {} days", commas(all_filed.len()), commas(total_days)), p.faint())]);
     two_sided(f, Rect::new(r.x, y, r.width, 1), left, right);
@@ -825,6 +1064,7 @@ fn search(f: &mut Frame, r: Rect, app: &App) {
             line = line.style(p.selected_bg());
         }
         two_sided(f, Rect::new(r.x, y, r.width, 1), line, rt);
+        app.hit(Rect::new(r.x, y, r.width, 1), Hit::Result(i));
     }
     if res.is_empty() && !app.query.trim().is_empty() {
         put(f, Rect::new(r.x + 2, r.y + 3, r.width - 2, 1), Line::from(Span::styled("Nothing found.", p.muted())));
@@ -834,13 +1074,16 @@ fn search(f: &mut Frame, r: Rect, app: &App) {
 fn help_overlay(f: &mut Frame, area: Rect, app: &App) {
     let p = &app.pal;
     let rows: Vec<(&str, &str)> = match app.screen {
-        Screen::Today => vec![("n", "new draft"), ("↵", "write from the prompt"), ("p", "another prompt"), ("i", "inbox"), ("j", "journal"), ("l", "look back"), ("/", "search"), ("r", "a random entry"), ("q", "quit")],
+        Screen::Today => vec![("n", "new draft"), ("↵", "write from the prompt"), ("p", "another prompt"), ("i", "inbox"), ("j", "journal"), ("l", "look back"), ("/", "search"), ("r", "a random entry"), (",", "settings"), ("q", "quit")],
         Screen::Inbox => vec![("↑ ↓", "move between drafts"), ("f", "file the draft"), ("e  ↵", "edit it"), ("*", "star"), ("t", "change its date and time"), ("d", "delete"), ("n", "new draft"), ("esc", "back")],
         Screen::Browse => vec![("← →", "year · month · day · entries"), ("↑ ↓", "move"), ("↵", "open (edit) the entry"), ("/", "filter the column"), ("s", "main · split journals · all"), ("u", "return to the inbox"), ("*", "star"), ("t", "date and time"), ("d", "delete"), ("r", "random"), ("esc", "back")],
-        Screen::Write => vec![("^j", "file to its day (or split journal)"), ("^s", "save now (it autosaves)"), ("^t", "date and time"), ("^f", "focus: dim all but this paragraph"), ("^p", "insert a prompt"), ("^o", "timer on / off"), ("^b ^i ^g", "bold · italic · code on the word"), ("@", "tag autocomplete, ↹ or ↵ accepts"), ("↹", "indent a list item"), ("↵ ↵", "an empty item ends the list"), ("^d", "discard the draft"), ("esc", "back (saved)")],
+        Screen::Write => vec![("^j", "file to its day (or split journal)"), ("^s", "save now (it autosaves)"), ("^t", "date and time"), ("^f", "focus: dim all but this paragraph"), ("^p", "insert a prompt"), ("^o", "timer: start · pause · resume"), ("alt-o", "reset the timer"), ("^b ^i ^g", "bold · italic · code on the word"), ("@", "tag autocomplete, ↹ or ↵ accepts"), ("↹", "indent a list item"), ("↵ ↵", "an empty item ends the list"), ("^v", "paste; a clipboard image is attached"), ("drop", "a photo or video on the window attaches it"), ("^d", "discard the draft"), ("esc", "back (saved)")],
         Screen::LookBack => vec![("← →", "earlier · later year"), ("esc", "back")],
+        Screen::Settings => vec![("↑ ↓", "choose a setting"), ("← →", "change it"), ("↵", "next value / toggle"), ("esc", "back")],
         Screen::Search => vec![("type", "to search"), ("↑ ↓", "results"), ("↵", "open"), ("esc", "clear, then back")],
     };
+    let mut rows = rows;
+    rows.push(("F2", if app.mouse { "mouse off (lets the terminal select)" } else { "mouse on: click, scroll" }));
     let w = 56u16.min(area.width - 4);
     let h = rows.len() as u16 + 4;
     let x = (area.width - w) / 2;
@@ -855,6 +1098,7 @@ fn help_overlay(f: &mut Frame, area: Rect, app: &App) {
         Screen::Write => "writing",
         Screen::LookBack => "look back",
         Screen::Search => "search",
+        Screen::Settings => "settings",
     }), p.muted().bg(p.card))), Line::from("")];
     for (k, v) in rows {
         lines.push(Line::from(vec![Span::styled(format!("  {:<9}", k), p.key().bg(p.card)), Span::styled(v.to_string(), Style::default().fg(p.fg).bg(p.card))]));

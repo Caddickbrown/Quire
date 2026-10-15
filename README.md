@@ -67,7 +67,7 @@ jnl log 2026-09-30              # every jnl command keeps its spelling
 | Today | `n` new · `↵` write from the prompt · `p` another · `i` inbox · `j` journal · `l` look back · `/` search · `r` random · `q` quit |
 | Review | `↑↓` drafts · `f` file · `e` edit · `*` star · `t` date & time · `d` delete |
 | Browse | `← →` columns · `↑↓` move · `↵` open · `/` filter · `s` main / split / all · `u` return to inbox |
-| Write | `^j` file · `^s` save · `^t` date & time · `^f` focus · `^p` prompt · `^o` timer · `^b ^i ^g` bold / italic / code · `@` tag autocomplete · `↹` indent · `↵↵` ends a list · `esc` back (saved) |
+| Write | `^j` file · `^s` save · `^t` date & time · `^f` focus · `^p` prompt · `^o` timer (start · pause · resume, `alt-o` resets) · `^b ^i ^g` bold / italic / code · `@` tag autocomplete · `↹` indent · `↵↵` ends a list · `^v` paste (a clipboard image is attached) · `esc` back (saved) |
 | Look back | `← →` year |
 | Anywhere | `?` or `F1` keys · `esc` back |
 

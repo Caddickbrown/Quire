@@ -117,6 +117,18 @@ impl Settings {
         self.ui_u64("timerMins").unwrap_or(25)
     }
 
+    /// This install's Data Saver device id, minted on first use (the caller
+    /// saves the settings when the bool says it is new).
+    pub fn ensure_device_id(&mut self) -> (String, bool) {
+        if let Some(id) = &self.device_id {
+            return (id.clone(), false);
+        }
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let id = format!("{:016x}{:08x}", nanos as u64, std::process::id()).to_uppercase();
+        self.device_id = Some(id.clone());
+        (id, true)
+    }
+
     /// Is `folder` the Linux app's bundled sample journal?
     pub fn is_sample_folder(folder: &str) -> bool {
         folder.ends_with("/sample-journal") || folder.ends_with("\\sample-journal")
