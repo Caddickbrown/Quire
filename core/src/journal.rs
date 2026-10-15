@@ -748,15 +748,21 @@ impl Journal {
 
     /// The entries of one file.
     pub fn load_file(&self, rel: &str) -> Vec<Entry> {
-        let source = if is_inbox_rel(rel) {
+        self.try_load_file(rel).unwrap_or_default()
+    }
+
+    /// Read one file without treating unreadable bytes as an empty entry list.
+    pub fn try_load_file(&self, rel: &str) -> Result<Vec<Entry>, String> {
+        let rel = check_entry_rel(rel)?;
+        let source = if is_inbox_rel(&rel) {
             "inbox"
         } else if rel.starts_with("journal/") {
             "journal"
         } else {
             "split"
         };
-        let split = if source == "split" { split_tag_of(rel) } else { None };
-        parse_entries(&self.read(rel)).iter().enumerate().map(|(i, r)| to_entry(r, rel, i, source, split.clone())).collect()
+        let split = if source == "split" { split_tag_of(&rel) } else { None };
+        Ok(parse_entries(&self.try_read(&rel)?).iter().enumerate().map(|(i, r)| to_entry(r, &rel, i, source, split.clone())).collect())
     }
 
     /// Locate an entry in a file by its raw text, preferring the expected index.

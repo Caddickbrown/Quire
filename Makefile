@@ -2,11 +2,12 @@
 
 # The core and the terminal app (the default workspace members).
 test:
-	cargo test
+	cargo test -p quire-core -p quire-tui -p quire-bindings
 
 # The desktop app too when this machine can build it (libwebkit2gtk-4.1-dev).
 check:
 	cargo clippy -p quire-core -p quire-tui -- -D warnings
+	cargo clippy -p quire-bindings --all-targets --all-features -- -D warnings
 	@if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then \
 		cargo clippy -p quire-desktop -- -D warnings; \
 	else \
@@ -46,3 +47,10 @@ migrate:
 
 fmt:
 	cargo fmt --all
+
+.PHONY: apple apple-test
+apple:
+	$(MAKE) -C apple build
+
+apple-test:
+	$(MAKE) -C apple test

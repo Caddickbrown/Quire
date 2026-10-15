@@ -32,7 +32,7 @@ pub fn list_continuation(line: &str) -> Option<ListStep> {
             ListStep::End(m[1].chars().count() + m[2].chars().count() + m[3].chars().count())
         } else {
             let n: u64 = m[2].parse().unwrap_or(0);
-            ListStep::Continue(format!("{}{}{}", &m[1], n + 1, &m[3]))
+            ListStep::Continue(format!("{}{}{}", &m[1], n.saturating_add(1), &m[3]))
         });
     }
     if let Some(m) = BULLET.captures(line) {
@@ -92,6 +92,7 @@ mod tests {
         assert_eq!(list_continuation("3) "), Some(ListStep::End(3)));
         assert_eq!(list_continuation("- [x] done"), Some(ListStep::Continue("- [ ] ".into())));
         assert_eq!(list_continuation("- [ ] "), Some(ListStep::End(6)));
+        assert_eq!(list_continuation("18446744073709551615. x"), Some(ListStep::Continue("18446744073709551615. ".into())));
         assert_eq!(list_continuation("plain"), None);
         assert_eq!(list_continuation("-no space"), None);
     }

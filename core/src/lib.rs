@@ -6,7 +6,7 @@
 //! media and Data Saver, cleanup, backup, imports, stats.
 //!
 //! Shells: the Linux Tauri app (`linux/`), the terminal app (`tui/`), and the
-//! Swift and Kotlin shells to come, which reach this crate over a bridge.
+//! Swift shell (`apple/`) over UniFFI (`bindings/`); Kotlin comes later.
 
 pub mod editing;
 pub mod extras;

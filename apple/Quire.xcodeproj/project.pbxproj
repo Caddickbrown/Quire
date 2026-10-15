@@ -1,0 +1,1039 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		6606B4477E985A23800DA3AE /* QuireApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D57F0BFB9EE55953B2D0B216 /* QuireApp.swift */; };
+		647CB608DC6E5EBD83EFC602 /* QuireIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AE4363F901650F48950731A /* QuireIntents.swift */; };
+		1D1DE1E2D45B58B2AA654D86 /* QuireShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73CB28DCB3C5538DBCC5535A /* QuireShared.swift */; };
+		0EDCAC2951A356A5888C267A /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C9DD5A8B4265FD780DDBFA5 /* Theme.swift */; };
+		90C81BBA03AD5BBA92F46471 /* Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217D5564D1C6519C98208EBC /* Entry.swift */; };
+		0163E8E4F6EF525186CACA27 /* JournalParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AAEE782897C5B90B8EDADF7 /* JournalParser.swift */; };
+		03D129E38A9A53FC94D40B21 /* Media.swift in Sources */ = {isa = PBXBuildFile; fileRef = E96653BE1116532A9F3AA70A /* Media.swift */; };
+		4028D0B82AF25463B54185A2 /* SearchQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A46BCF298F15920B60123F7 /* SearchQuery.swift */; };
+		26D1241AF445512281F08D8F /* ListContinuation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1519EDC250CB540183D54A2F /* ListContinuation.swift */; };
+		C33255FA5CBE52908C555FA5 /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64DA39CFB5BC597A836E29E3 /* JournalStore.swift */; };
+		A1B080BDCF62550F9BD28602 /* CoreJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D621AD259615470A0332C22 /* CoreJournal.swift */; };
+		D6ADFB3B9BC158F2BFA265B5 /* AppleVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E04E597C279590983417F37 /* AppleVault.swift */; };
+		C0215CCB8FCE571198FB7DA3 /* QuireCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24347EB8D1EF54DBA0B13FCD /* QuireCore.swift */; };
+		7648246DC5BF5967923E8CA3 /* Templates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14AF8CCD2EB95A3EB7E99C40 /* Templates.swift */; };
+		FE46098381155B99B84670F7 /* Importers.swift in Sources */ = {isa = PBXBuildFile; fileRef = C64E8C9995395CF7A0352834 /* Importers.swift */; };
+		558BF13CF93C59FFADE68F7D /* Transcription.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F904588828450EAB3C8BF43 /* Transcription.swift */; };
+		178FDDE30CF957D3826041B5 /* SpotlightIndexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44504DC9F5CB5F6DB8F22888 /* SpotlightIndexer.swift */; };
+		361476C0756F57F098B8A3CB /* Reminders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CFBD196DC8953FCB63F140B /* Reminders.swift */; };
+		E841EF04C34B56E0AED86419 /* AppLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = C463621E557D5FA5978AB011 /* AppLock.swift */; };
+		0C5DD08D50C855C39CF1EAD7 /* YearReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = C715D61641055EA986669831 /* YearReview.swift */; };
+		9A205D354F955F3AA5995064 /* SavedSearches.swift in Sources */ = {isa = PBXBuildFile; fileRef = A05EF7999704542C98364CC4 /* SavedSearches.swift */; };
+		5BAA6797D9BC597A9E22298B /* TimerActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7216766E533E52CA909429A2 /* TimerActivity.swift */; };
+		602B5656515A52E998EAAA67 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BB103AAFF885B0884053118 /* RootView.swift */; };
+		9D63C21A390B51859C845D5A /* WritingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3270FC2F109351499EAEAF6F /* WritingView.swift */; };
+		54166F3DA48B59F99966E08F /* WritingTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12C0AFE9C775E95A42DBB53 /* WritingTextEditor.swift */; };
+		9BDEACB9D0AC5577A9C878D3 /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4440154E90A0573C8E507826 /* InboxView.swift */; };
+		EFFD6EF2D75550038F62D679 /* ArchiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C1908C8F31052F884E20B0D /* ArchiveView.swift */; };
+		3617259AFF17516C9154667B /* StreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D5BECE63FDE5882906F0205 /* StreamView.swift */; };
+		D3124DC62FD052B8A925653A /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CE5256127A55B0EAF8E4A32 /* SearchView.swift */; };
+		FF8D911ECADF5B6B9259325C /* OnThisDayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D8D48A5D0355CD1B0384715 /* OnThisDayView.swift */; };
+		FB5948CE0DF15510AF23B2AE /* YearReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97449269E2C054F1B3A02146 /* YearReviewView.swift */; };
+		93277004325B5A58B66593CE /* TrendsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D01C315654C548CA69F6D33 /* TrendsView.swift */; };
+		A52A57FA8C045316BC7C9A4C /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C321458634EF5F62A1DA3972 /* WelcomeView.swift */; };
+		F44B366DF33D5CCD95E70A9F /* PDFExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 253DBF213F27513E8791E1DB /* PDFExport.swift */; };
+		7442C6E1F6F95756BC414CB6 /* EntryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DFF4AFB52375C90A9850E53 /* EntryDetailView.swift */; };
+		BE71B76A7A9D52C6AC82C856 /* TagsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD74E56D00DC580CA2DCCA26 /* TagsView.swift */; };
+		5E45E5217E845FCA82FF9B88 /* TagReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B03C0B931E55B88B6B86A7 /* TagReviewView.swift */; };
+		C634EFC3E07F5DD1818DC131 /* TagField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 322E947E17275A5C99623338 /* TagField.swift */; };
+		64F89B3261195126B93C3DA4 /* CalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11434A955288546FAF3B8758 /* CalendarView.swift */; };
+		1AA8BDF472FB5B52A833EFFC /* MediaPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 809B73253D3153EB9008421C /* MediaPreview.swift */; };
+		48DC79E043315446BB1A4213 /* AssetsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71FB30878D2A5CCF82E59F4D /* AssetsView.swift */; };
+		ADC44A318E4E553A93A8403B /* ExternalDisplayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F309B31FA3B5B22B749A4BE /* ExternalDisplayView.swift */; };
+		821D0C526300547FB8156419 /* KeyboardNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB17C3FDA07D568DBF2168D2 /* KeyboardNavigation.swift */; };
+		5649C413AA6E5D4A9925C74E /* ChangelogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB5C85225A7596DAE11114E /* ChangelogView.swift */; };
+		024ECCFC99195DC1A01F3284 /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACD5539E305A532B847BAAE6 /* AudioRecorder.swift */; };
+		B54B7BE9619856D4BDFD7E8D /* VideoRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84456B6A01925B4D9914C7CA /* VideoRecorderView.swift */; };
+		EA214089B9B75FC1A6BE83BD /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED47D33552DF5892B2E4D714 /* SettingsView.swift */; };
+		99482B7A97DD56FE9297F9F8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 94CAB23CC67A530BB80D9B9C /* Assets.xcassets */; };
+		8E024AFEF51D5D2E81FD76F3 /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = F3CE120A62095CDE90288AB5 /* fonts */; };
+		8EC192126CE855CFBB8718F2 /* QuireWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14326FEB75CD5E6F9DAC9DC4 /* QuireWidget.swift */; };
+		78B85277F566565C997241BD /* QuireWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A610BE49A435300A6DD3E64 /* QuireWidgetBundle.swift */; };
+		52D59FA5489C53189643989C /* QuireLockScreenWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 787687FF3A5158D9854060FB /* QuireLockScreenWidget.swift */; };
+		EAED427761BE5074B8B7A96A /* QuireControlWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C423790A4A285B54A25E0A62 /* QuireControlWidget.swift */; };
+		9B5E9E769B4352B1B19A71D5 /* QuireShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73CB28DCB3C5538DBCC5535A /* QuireShared.swift */; };
+		C21C6A486A71555D9D8B281E /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = F3CE120A62095CDE90288AB5 /* fonts */; };
+		40FBCE3FF65154A6975F8FB8 /* CHANGELOG.md in Resources */ = {isa = PBXBuildFile; fileRef = 5443F5FC029158999BE98658 /* CHANGELOG.md */; };
+		B0B7AE7D02D25514BA9F44CA /* QuireWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5FBB5194791C5966B4F2ADFD /* QuireWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		EB8B67B5C4935705ABD25713 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98B38C917B315A94B55017F8 /* ShareViewController.swift */; };
+		D29536539A5E527EB9AC8368 /* QuireShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 3F1EBAD854855B3A88406196 /* QuireShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		261E4EA104185FE59891A4AD /* QuireTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 053FC432AF4458C5ACD2B884 /* QuireTests.swift */; };
+		31903B9AD4E45010B563485A /* JournalStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C98B438B8AE353399F008104 /* JournalStoreTests.swift */; };
+		98AF8E2E4EDC53D6ADAD397A /* Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217D5564D1C6519C98208EBC /* Entry.swift */; };
+		319A2C4932EB584CABE02AA4 /* JournalParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AAEE782897C5B90B8EDADF7 /* JournalParser.swift */; };
+		63DCCB549486507CAC8A8127 /* Media.swift in Sources */ = {isa = PBXBuildFile; fileRef = E96653BE1116532A9F3AA70A /* Media.swift */; };
+		3357E305632F5EF2827BA2C4 /* SearchQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A46BCF298F15920B60123F7 /* SearchQuery.swift */; };
+		0B464C0579FF5E4A91B492C2 /* ListContinuation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1519EDC250CB540183D54A2F /* ListContinuation.swift */; };
+		D1E0CC202230586998DEC9EA /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64DA39CFB5BC597A836E29E3 /* JournalStore.swift */; };
+		B0C979230EF557A797B0925D /* CoreJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D621AD259615470A0332C22 /* CoreJournal.swift */; };
+		26B59243BA985E0C8B6CF245 /* AppleVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E04E597C279590983417F37 /* AppleVault.swift */; };
+		8AC8B2CF76B354328A04A539 /* QuireCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24347EB8D1EF54DBA0B13FCD /* QuireCore.swift */; };
+		B69FA96A064551F585B6B186 /* QuireShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73CB28DCB3C5538DBCC5535A /* QuireShared.swift */; };
+		A7B4F425B1E5555F904A50F7 /* Reminders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CFBD196DC8953FCB63F140B /* Reminders.swift */; };
+		3D2C11ADD6095B2A88F51477 /* SpotlightIndexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44504DC9F5CB5F6DB8F22888 /* SpotlightIndexer.swift */; };
+		9EC6FF84DFC35ED9BEFD7584 /* QuireCoreFFI.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1A0DBFECFB8E5C67AE6CC256; };
+		4B2ED63375C0513EA5E07558 /* QuireCoreFFI.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1A0DBFECFB8E5C67AE6CC256; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		DE9AA18919EB5AA7B5DEDCEA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5BEC5FCF3B1F57C5B951133B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E47D8A2833F5505D92E41612;
+			remoteInfo = QuireWidgetExtension;
+		};
+		9511A2DD83E55704BB5AD449 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5BEC5FCF3B1F57C5B951133B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0EA54CCF46B75AFC9E5BF5B5;
+			remoteInfo = QuireShareExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A6A187413CC55A0FAABD243B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B0B7AE7D02D25514BA9F44CA /* QuireWidgetExtension.appex in Embed Foundation Extensions */,
+				D29536539A5E527EB9AC8368 /* QuireShareExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		D57F0BFB9EE55953B2D0B216 /* QuireApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireApp.swift; sourceTree = "<group>"; };
+		1AE4363F901650F48950731A /* QuireIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireIntents.swift; sourceTree = "<group>"; };
+		73CB28DCB3C5538DBCC5535A /* QuireShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireShared.swift; sourceTree = "<group>"; };
+		1C9DD5A8B4265FD780DDBFA5 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		217D5564D1C6519C98208EBC /* Entry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Entry.swift; sourceTree = "<group>"; };
+		5AAEE782897C5B90B8EDADF7 /* JournalParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalParser.swift; sourceTree = "<group>"; };
+		E96653BE1116532A9F3AA70A /* Media.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Media.swift; sourceTree = "<group>"; };
+		4A46BCF298F15920B60123F7 /* SearchQuery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchQuery.swift; sourceTree = "<group>"; };
+		1519EDC250CB540183D54A2F /* ListContinuation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListContinuation.swift; sourceTree = "<group>"; };
+		64DA39CFB5BC597A836E29E3 /* JournalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalStore.swift; sourceTree = "<group>"; };
+		2D621AD259615470A0332C22 /* CoreJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreJournal.swift; sourceTree = "<group>"; };
+		0E04E597C279590983417F37 /* AppleVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleVault.swift; sourceTree = "<group>"; };
+		24347EB8D1EF54DBA0B13FCD /* QuireCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Generated/QuireCore.swift; sourceTree = "<group>"; };
+		14AF8CCD2EB95A3EB7E99C40 /* Templates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Templates.swift; sourceTree = "<group>"; };
+		C64E8C9995395CF7A0352834 /* Importers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Importers.swift; sourceTree = "<group>"; };
+		7F904588828450EAB3C8BF43 /* Transcription.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Transcription.swift; sourceTree = "<group>"; };
+		44504DC9F5CB5F6DB8F22888 /* SpotlightIndexer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotlightIndexer.swift; sourceTree = "<group>"; };
+		0CFBD196DC8953FCB63F140B /* Reminders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reminders.swift; sourceTree = "<group>"; };
+		C463621E557D5FA5978AB011 /* AppLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLock.swift; sourceTree = "<group>"; };
+		C715D61641055EA986669831 /* YearReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YearReview.swift; sourceTree = "<group>"; };
+		A05EF7999704542C98364CC4 /* SavedSearches.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedSearches.swift; sourceTree = "<group>"; };
+		7216766E533E52CA909429A2 /* TimerActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerActivity.swift; sourceTree = "<group>"; };
+		0BB103AAFF885B0884053118 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		3270FC2F109351499EAEAF6F /* WritingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingView.swift; sourceTree = "<group>"; };
+		D12C0AFE9C775E95A42DBB53 /* WritingTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingTextEditor.swift; sourceTree = "<group>"; };
+		4440154E90A0573C8E507826 /* InboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxView.swift; sourceTree = "<group>"; };
+		2C1908C8F31052F884E20B0D /* ArchiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveView.swift; sourceTree = "<group>"; };
+		0D5BECE63FDE5882906F0205 /* StreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamView.swift; sourceTree = "<group>"; };
+		8CE5256127A55B0EAF8E4A32 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
+		1D8D48A5D0355CD1B0384715 /* OnThisDayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnThisDayView.swift; sourceTree = "<group>"; };
+		97449269E2C054F1B3A02146 /* YearReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YearReviewView.swift; sourceTree = "<group>"; };
+		5D01C315654C548CA69F6D33 /* TrendsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrendsView.swift; sourceTree = "<group>"; };
+		C321458634EF5F62A1DA3972 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
+		253DBF213F27513E8791E1DB /* PDFExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFExport.swift; sourceTree = "<group>"; };
+		4DFF4AFB52375C90A9850E53 /* EntryDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntryDetailView.swift; sourceTree = "<group>"; };
+		AD74E56D00DC580CA2DCCA26 /* TagsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagsView.swift; sourceTree = "<group>"; };
+		01B03C0B931E55B88B6B86A7 /* TagReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagReviewView.swift; sourceTree = "<group>"; };
+		322E947E17275A5C99623338 /* TagField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagField.swift; sourceTree = "<group>"; };
+		11434A955288546FAF3B8758 /* CalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarView.swift; sourceTree = "<group>"; };
+		809B73253D3153EB9008421C /* MediaPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPreview.swift; sourceTree = "<group>"; };
+		71FB30878D2A5CCF82E59F4D /* AssetsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetsView.swift; sourceTree = "<group>"; };
+		9F309B31FA3B5B22B749A4BE /* ExternalDisplayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalDisplayView.swift; sourceTree = "<group>"; };
+		FB17C3FDA07D568DBF2168D2 /* KeyboardNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardNavigation.swift; sourceTree = "<group>"; };
+		BCB5C85225A7596DAE11114E /* ChangelogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangelogView.swift; sourceTree = "<group>"; };
+		ACD5539E305A532B847BAAE6 /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
+		84456B6A01925B4D9914C7CA /* VideoRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRecorderView.swift; sourceTree = "<group>"; };
+		ED47D33552DF5892B2E4D714 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		94CAB23CC67A530BB80D9B9C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F3CE120A62095CDE90288AB5 /* fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = fonts; sourceTree = "<group>"; };
+		BB0D188A5FF459FCBDDC5770 /* iOS/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		578C318B43785325BE1B83DD /* macOS/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		1B963E24A0DB50B880153E30 /* Quire.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Quire.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5443F5FC029158999BE98658 /* CHANGELOG.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = ../CHANGELOG.md; sourceTree = "<group>"; };
+		14326FEB75CD5E6F9DAC9DC4 /* QuireWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireWidget.swift; sourceTree = "<group>"; };
+		6A610BE49A435300A6DD3E64 /* QuireWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireWidgetBundle.swift; sourceTree = "<group>"; };
+		787687FF3A5158D9854060FB /* QuireLockScreenWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireLockScreenWidget.swift; sourceTree = "<group>"; };
+		C423790A4A285B54A25E0A62 /* QuireControlWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireControlWidget.swift; sourceTree = "<group>"; };
+		B5F15680BAA7518C8E58D1B9 /* QuireWidget/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		20313968A034512E9ED5C5E6 /* QuireWidget-iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "QuireWidget-iOS.entitlements"; sourceTree = "<group>"; };
+		B1D4775B964D5F00AD0AAC6A /* QuireWidget-macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "QuireWidget-macOS.entitlements"; sourceTree = "<group>"; };
+		5FBB5194791C5966B4F2ADFD /* QuireWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = QuireWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		98B38C917B315A94B55017F8 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		A0D15704214B58688648518F /* QuireShare/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		2FCF2211CDB95159B615583A /* QuireShare-iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "QuireShare-iOS.entitlements"; sourceTree = "<group>"; };
+		0F246EB899AB53FEB2C5593D /* QuireShare-macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "QuireShare-macOS.entitlements"; sourceTree = "<group>"; };
+		3F1EBAD854855B3A88406196 /* QuireShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = QuireShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		053FC432AF4458C5ACD2B884 /* QuireTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireTests.swift; sourceTree = "<group>"; };
+		C98B438B8AE353399F008104 /* JournalStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalStoreTests.swift; sourceTree = "<group>"; };
+		8DB3554C183B5C61ABE18010 /* ParserChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParserChecks.swift; sourceTree = "<group>"; };
+		01D00C8202A35F61865C9DED /* QuireTests.xctest */ = {isa = PBXFileReference; explicitFileType = "wrapper.cfbundle"; includeInIndex = 0; path = QuireTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A0DBFECFB8E5C67AE6CC256 /* QuireCoreFFI.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Frameworks/QuireCoreFFI.xcframework; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7C85115C473C5F84A027B6B8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9EC6FF84DFC35ED9BEFD7584 /* QuireCoreFFI.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		12C8041B5963569A93314D39 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5906F0BA431B523AB301C48F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F9B8DF2839AA505B843732DE /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B2ED63375C0513EA5E07558 /* QuireCoreFFI.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		38369663ADFE5AA9B070768B = {
+			isa = PBXGroup;
+			children = (
+				13E081AB8B69597BBAE98EDB /* Quire */,
+				CB21B03084155CBEB5A6C8CE /* QuireWidget */,
+				33D203C475DA584884CC0FE9 /* QuireShare */,
+				FECE60BC88245597BAFD3566 /* Tests */,
+				5443F5FC029158999BE98658 /* CHANGELOG.md */,
+				1A0DBFECFB8E5C67AE6CC256 /* QuireCoreFFI.xcframework */,
+				D640D3949BF95466BA828329 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		D640D3949BF95466BA828329 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1B963E24A0DB50B880153E30 /* Quire.app */,
+				5FBB5194791C5966B4F2ADFD /* QuireWidgetExtension.appex */,
+				3F1EBAD854855B3A88406196 /* QuireShareExtension.appex */,
+				01D00C8202A35F61865C9DED /* QuireTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		13E081AB8B69597BBAE98EDB /* Quire */ = {
+			isa = PBXGroup;
+			children = (
+				D57F0BFB9EE55953B2D0B216 /* QuireApp.swift */,
+				1AE4363F901650F48950731A /* QuireIntents.swift */,
+				73CB28DCB3C5538DBCC5535A /* QuireShared.swift */,
+				1C9DD5A8B4265FD780DDBFA5 /* Theme.swift */,
+				24347EB8D1EF54DBA0B13FCD /* QuireCore.swift */,
+				FDE788FC27EB52329D1E7EF8 /* Models */,
+				136E08B9542853D39F26A2E6 /* Views */,
+				94CAB23CC67A530BB80D9B9C /* Assets.xcassets */,
+				F3CE120A62095CDE90288AB5 /* fonts */,
+				A8D2D8BF201754E9BB244DD3 /* iOS */,
+				3585E52EE5BE5A8C971B3C64 /* macOS */,
+			);
+			path = Quire;
+			sourceTree = "<group>";
+		};
+		FDE788FC27EB52329D1E7EF8 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				217D5564D1C6519C98208EBC /* Entry.swift */,
+				5AAEE782897C5B90B8EDADF7 /* JournalParser.swift */,
+				E96653BE1116532A9F3AA70A /* Media.swift */,
+				4A46BCF298F15920B60123F7 /* SearchQuery.swift */,
+				1519EDC250CB540183D54A2F /* ListContinuation.swift */,
+				64DA39CFB5BC597A836E29E3 /* JournalStore.swift */,
+				2D621AD259615470A0332C22 /* CoreJournal.swift */,
+				0E04E597C279590983417F37 /* AppleVault.swift */,
+				14AF8CCD2EB95A3EB7E99C40 /* Templates.swift */,
+				C64E8C9995395CF7A0352834 /* Importers.swift */,
+				7F904588828450EAB3C8BF43 /* Transcription.swift */,
+				44504DC9F5CB5F6DB8F22888 /* SpotlightIndexer.swift */,
+				0CFBD196DC8953FCB63F140B /* Reminders.swift */,
+				C463621E557D5FA5978AB011 /* AppLock.swift */,
+				C715D61641055EA986669831 /* YearReview.swift */,
+				A05EF7999704542C98364CC4 /* SavedSearches.swift */,
+				7216766E533E52CA909429A2 /* TimerActivity.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		136E08B9542853D39F26A2E6 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				0BB103AAFF885B0884053118 /* RootView.swift */,
+				3270FC2F109351499EAEAF6F /* WritingView.swift */,
+				D12C0AFE9C775E95A42DBB53 /* WritingTextEditor.swift */,
+				4440154E90A0573C8E507826 /* InboxView.swift */,
+				2C1908C8F31052F884E20B0D /* ArchiveView.swift */,
+				0D5BECE63FDE5882906F0205 /* StreamView.swift */,
+				8CE5256127A55B0EAF8E4A32 /* SearchView.swift */,
+				1D8D48A5D0355CD1B0384715 /* OnThisDayView.swift */,
+				97449269E2C054F1B3A02146 /* YearReviewView.swift */,
+				5D01C315654C548CA69F6D33 /* TrendsView.swift */,
+				C321458634EF5F62A1DA3972 /* WelcomeView.swift */,
+				253DBF213F27513E8791E1DB /* PDFExport.swift */,
+				4DFF4AFB52375C90A9850E53 /* EntryDetailView.swift */,
+				AD74E56D00DC580CA2DCCA26 /* TagsView.swift */,
+				01B03C0B931E55B88B6B86A7 /* TagReviewView.swift */,
+				322E947E17275A5C99623338 /* TagField.swift */,
+				11434A955288546FAF3B8758 /* CalendarView.swift */,
+				809B73253D3153EB9008421C /* MediaPreview.swift */,
+				71FB30878D2A5CCF82E59F4D /* AssetsView.swift */,
+				9F309B31FA3B5B22B749A4BE /* ExternalDisplayView.swift */,
+				FB17C3FDA07D568DBF2168D2 /* KeyboardNavigation.swift */,
+				BCB5C85225A7596DAE11114E /* ChangelogView.swift */,
+				ACD5539E305A532B847BAAE6 /* AudioRecorder.swift */,
+				84456B6A01925B4D9914C7CA /* VideoRecorderView.swift */,
+				ED47D33552DF5892B2E4D714 /* SettingsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		A8D2D8BF201754E9BB244DD3 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				BB0D188A5FF459FCBDDC5770 /* Info.plist */,
+			);
+			path = iOS;
+			sourceTree = "<group>";
+		};
+		3585E52EE5BE5A8C971B3C64 /* macOS */ = {
+			isa = PBXGroup;
+			children = (
+				578C318B43785325BE1B83DD /* Info.plist */,
+			);
+			path = macOS;
+			sourceTree = "<group>";
+		};
+		CB21B03084155CBEB5A6C8CE /* QuireWidget */ = {
+			isa = PBXGroup;
+			children = (
+				14326FEB75CD5E6F9DAC9DC4 /* QuireWidget.swift */,
+				6A610BE49A435300A6DD3E64 /* QuireWidgetBundle.swift */,
+				787687FF3A5158D9854060FB /* QuireLockScreenWidget.swift */,
+				C423790A4A285B54A25E0A62 /* QuireControlWidget.swift */,
+				B5F15680BAA7518C8E58D1B9 /* Info.plist */,
+				20313968A034512E9ED5C5E6 /* QuireWidget-iOS.entitlements */,
+				B1D4775B964D5F00AD0AAC6A /* QuireWidget-macOS.entitlements */,
+			);
+			path = QuireWidget;
+			sourceTree = "<group>";
+		};
+		33D203C475DA584884CC0FE9 /* QuireShare */ = {
+			isa = PBXGroup;
+			children = (
+				98B38C917B315A94B55017F8 /* ShareViewController.swift */,
+				A0D15704214B58688648518F /* Info.plist */,
+				2FCF2211CDB95159B615583A /* QuireShare-iOS.entitlements */,
+				0F246EB899AB53FEB2C5593D /* QuireShare-macOS.entitlements */,
+			);
+			path = QuireShare;
+			sourceTree = "<group>";
+		};
+		FECE60BC88245597BAFD3566 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				053FC432AF4458C5ACD2B884 /* QuireTests.swift */,
+				C98B438B8AE353399F008104 /* JournalStoreTests.swift */,
+				8DB3554C183B5C61ABE18010 /* ParserChecks.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		570D5FD9023C5E788EBCDF9B /* Quire */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 722751CC06FD5B8EA22ABE4D /* Build configuration list for PBXNativeTarget "Quire" */;
+			buildPhases = (
+				21B100BBC9AF5C47B6EF8E1D /* Sources */,
+				7C85115C473C5F84A027B6B8 /* Frameworks */,
+				91B6B5335CF951BF9E71B4E7 /* Resources */,
+				A6A187413CC55A0FAABD243B /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CBB1B9348FCB5B3982769201 /* PBXTargetDependency */,
+				30664AD48B0B560FBE63A05D /* PBXTargetDependency */,
+			);
+			name = Quire;
+			productName = Quire;
+			productReference = 1B963E24A0DB50B880153E30 /* Quire.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E47D8A2833F5505D92E41612 /* QuireWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C99A3C4CE0ED54B4A4D28D73 /* Build configuration list for PBXNativeTarget "QuireWidgetExtension" */;
+			buildPhases = (
+				17C4AABD244A59D586504AE7 /* Sources */,
+				12C8041B5963569A93314D39 /* Frameworks */,
+				BDBFB14889645C58BB6E4A7A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QuireWidgetExtension;
+			productName = QuireWidgetExtension;
+			productReference = 5FBB5194791C5966B4F2ADFD /* QuireWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		0EA54CCF46B75AFC9E5BF5B5 /* QuireShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 99A8A682871A57CA8509C297 /* Build configuration list for PBXNativeTarget "QuireShareExtension" */;
+			buildPhases = (
+				CC8CD8A72DFA50CDB2A86ABC /* Sources */,
+				5906F0BA431B523AB301C48F /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QuireShareExtension;
+			productName = QuireShareExtension;
+			productReference = 3F1EBAD854855B3A88406196 /* QuireShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		C1C23C956C3E5D8AB007D54E /* QuireTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1B81EE09BDF95EDE8C5F741C /* Build configuration list for PBXNativeTarget "QuireTests" */;
+			buildPhases = (
+				19B41A77B17552238BE454B9 /* Sources */,
+				F9B8DF2839AA505B843732DE /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QuireTests;
+			productName = QuireTests;
+			productReference = 01D00C8202A35F61865C9DED /* QuireTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		5BEC5FCF3B1F57C5B951133B /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2650;
+				LastUpgradeCheck = 2650;
+				TargetAttributes = {
+					570D5FD9023C5E788EBCDF9B = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					E47D8A2833F5505D92E41612 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					0EA54CCF46B75AFC9E5BF5B5 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					C1C23C956C3E5D8AB007D54E = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = 7A3B611B04D85754ACE96F4D /* Build configuration list for PBXProject "Quire" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 38369663ADFE5AA9B070768B;
+			productRefGroup = D640D3949BF95466BA828329 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				570D5FD9023C5E788EBCDF9B /* Quire */,
+				E47D8A2833F5505D92E41612 /* QuireWidgetExtension */,
+				0EA54CCF46B75AFC9E5BF5B5 /* QuireShareExtension */,
+				C1C23C956C3E5D8AB007D54E /* QuireTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		91B6B5335CF951BF9E71B4E7 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				99482B7A97DD56FE9297F9F8 /* Assets.xcassets in Resources */,
+				8E024AFEF51D5D2E81FD76F3 /* fonts in Resources */,
+				40FBCE3FF65154A6975F8FB8 /* CHANGELOG.md in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BDBFB14889645C58BB6E4A7A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C21C6A486A71555D9D8B281E /* fonts in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		21B100BBC9AF5C47B6EF8E1D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6606B4477E985A23800DA3AE /* QuireApp.swift in Sources */,
+				647CB608DC6E5EBD83EFC602 /* QuireIntents.swift in Sources */,
+				1D1DE1E2D45B58B2AA654D86 /* QuireShared.swift in Sources */,
+				0EDCAC2951A356A5888C267A /* Theme.swift in Sources */,
+				90C81BBA03AD5BBA92F46471 /* Entry.swift in Sources */,
+				0163E8E4F6EF525186CACA27 /* JournalParser.swift in Sources */,
+				03D129E38A9A53FC94D40B21 /* Media.swift in Sources */,
+				4028D0B82AF25463B54185A2 /* SearchQuery.swift in Sources */,
+				26D1241AF445512281F08D8F /* ListContinuation.swift in Sources */,
+				C33255FA5CBE52908C555FA5 /* JournalStore.swift in Sources */,
+				A1B080BDCF62550F9BD28602 /* CoreJournal.swift in Sources */,
+				D6ADFB3B9BC158F2BFA265B5 /* AppleVault.swift in Sources */,
+				C0215CCB8FCE571198FB7DA3 /* QuireCore.swift in Sources */,
+				7648246DC5BF5967923E8CA3 /* Templates.swift in Sources */,
+				FE46098381155B99B84670F7 /* Importers.swift in Sources */,
+				558BF13CF93C59FFADE68F7D /* Transcription.swift in Sources */,
+				178FDDE30CF957D3826041B5 /* SpotlightIndexer.swift in Sources */,
+				361476C0756F57F098B8A3CB /* Reminders.swift in Sources */,
+				E841EF04C34B56E0AED86419 /* AppLock.swift in Sources */,
+				0C5DD08D50C855C39CF1EAD7 /* YearReview.swift in Sources */,
+				9A205D354F955F3AA5995064 /* SavedSearches.swift in Sources */,
+				5BAA6797D9BC597A9E22298B /* TimerActivity.swift in Sources */,
+				602B5656515A52E998EAAA67 /* RootView.swift in Sources */,
+				9D63C21A390B51859C845D5A /* WritingView.swift in Sources */,
+				54166F3DA48B59F99966E08F /* WritingTextEditor.swift in Sources */,
+				9BDEACB9D0AC5577A9C878D3 /* InboxView.swift in Sources */,
+				EFFD6EF2D75550038F62D679 /* ArchiveView.swift in Sources */,
+				3617259AFF17516C9154667B /* StreamView.swift in Sources */,
+				D3124DC62FD052B8A925653A /* SearchView.swift in Sources */,
+				FF8D911ECADF5B6B9259325C /* OnThisDayView.swift in Sources */,
+				FB5948CE0DF15510AF23B2AE /* YearReviewView.swift in Sources */,
+				93277004325B5A58B66593CE /* TrendsView.swift in Sources */,
+				A52A57FA8C045316BC7C9A4C /* WelcomeView.swift in Sources */,
+				F44B366DF33D5CCD95E70A9F /* PDFExport.swift in Sources */,
+				7442C6E1F6F95756BC414CB6 /* EntryDetailView.swift in Sources */,
+				BE71B76A7A9D52C6AC82C856 /* TagsView.swift in Sources */,
+				5E45E5217E845FCA82FF9B88 /* TagReviewView.swift in Sources */,
+				C634EFC3E07F5DD1818DC131 /* TagField.swift in Sources */,
+				64F89B3261195126B93C3DA4 /* CalendarView.swift in Sources */,
+				1AA8BDF472FB5B52A833EFFC /* MediaPreview.swift in Sources */,
+				48DC79E043315446BB1A4213 /* AssetsView.swift in Sources */,
+				ADC44A318E4E553A93A8403B /* ExternalDisplayView.swift in Sources */,
+				821D0C526300547FB8156419 /* KeyboardNavigation.swift in Sources */,
+				5649C413AA6E5D4A9925C74E /* ChangelogView.swift in Sources */,
+				024ECCFC99195DC1A01F3284 /* AudioRecorder.swift in Sources */,
+				B54B7BE9619856D4BDFD7E8D /* VideoRecorderView.swift in Sources */,
+				EA214089B9B75FC1A6BE83BD /* SettingsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		17C4AABD244A59D586504AE7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8EC192126CE855CFBB8718F2 /* QuireWidget.swift in Sources */,
+				78B85277F566565C997241BD /* QuireWidgetBundle.swift in Sources */,
+				52D59FA5489C53189643989C /* QuireLockScreenWidget.swift in Sources */,
+				EAED427761BE5074B8B7A96A /* QuireControlWidget.swift in Sources */,
+				9B5E9E769B4352B1B19A71D5 /* QuireShared.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CC8CD8A72DFA50CDB2A86ABC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EB8B67B5C4935705ABD25713 /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		19B41A77B17552238BE454B9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				261E4EA104185FE59891A4AD /* QuireTests.swift in Sources */,
+				31903B9AD4E45010B563485A /* JournalStoreTests.swift in Sources */,
+				98AF8E2E4EDC53D6ADAD397A /* Entry.swift in Sources */,
+				319A2C4932EB584CABE02AA4 /* JournalParser.swift in Sources */,
+				63DCCB549486507CAC8A8127 /* Media.swift in Sources */,
+				3357E305632F5EF2827BA2C4 /* SearchQuery.swift in Sources */,
+				0B464C0579FF5E4A91B492C2 /* ListContinuation.swift in Sources */,
+				D1E0CC202230586998DEC9EA /* JournalStore.swift in Sources */,
+				B0C979230EF557A797B0925D /* CoreJournal.swift in Sources */,
+				26B59243BA985E0C8B6CF245 /* AppleVault.swift in Sources */,
+				8AC8B2CF76B354328A04A539 /* QuireCore.swift in Sources */,
+				B69FA96A064551F585B6B186 /* QuireShared.swift in Sources */,
+				A7B4F425B1E5555F904A50F7 /* Reminders.swift in Sources */,
+				3D2C11ADD6095B2A88F51477 /* SpotlightIndexer.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		CBB1B9348FCB5B3982769201 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E47D8A2833F5505D92E41612 /* QuireWidgetExtension */;
+			targetProxy = DE9AA18919EB5AA7B5DEDCEA /* PBXContainerItemProxy */;
+		};
+		30664AD48B0B560FBE63A05D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0EA54CCF46B75AFC9E5BF5B5 /* QuireShareExtension */;
+			targetProxy = 9511A2DD83E55704BB5AD449 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		E34F5F1A7D1F5D35B82F0C57 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ENABLE_MODULES = YES;
+				SWIFT_INCLUDE_PATHS = "$(inherited) $(SRCROOT)/Generated/Headers";
+				HEADER_SEARCH_PATHS = "$(inherited) $(SRCROOT)/Generated/Headers";
+				OTHER_LDFLAGS = "$(inherited) -lc++ -liconv -framework CoreFoundation -framework Security";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 52W73J6V95;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "$(inherited)");
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		B6B5673968275F19A3050CBD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ENABLE_MODULES = YES;
+				SWIFT_INCLUDE_PATHS = "$(inherited) $(SRCROOT)/Generated/Headers";
+				HEADER_SEARCH_PATHS = "$(inherited) $(SRCROOT)/Generated/Headers";
+				OTHER_LDFLAGS = "$(inherited) -lc++ -liconv -framework CoreFoundation -framework Security";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 52W73J6V95;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		F2CFFB4978F65A5EA9821474 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Quire/Quire-macOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Quire/Quire-iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Quire/Quire-iOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEAD_CODE_STRIPPING = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				"INFOPLIST_FILE[sdk=iphoneos*]" = Quire/iOS/Info.plist;
+				"INFOPLIST_FILE[sdk=iphonesimulator*]" = Quire/iOS/Info.plist;
+				"INFOPLIST_FILE[sdk=macosx*]" = Quire/macOS/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Quire;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Quire records voice memos to attach to your journal entries.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Quire takes photos and records video to attach to your journal entries.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Quire transcribes your voice memos on this device so their words become searchable text.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Quire uses Face ID to unlock your journal.";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.7.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.quire;
+				REGISTER_APP_GROUPS = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A03F2156826551E995E55B25 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Quire/Quire-macOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Quire/Quire-iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Quire/Quire-iOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEAD_CODE_STRIPPING = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				"INFOPLIST_FILE[sdk=iphoneos*]" = Quire/iOS/Info.plist;
+				"INFOPLIST_FILE[sdk=iphonesimulator*]" = Quire/iOS/Info.plist;
+				"INFOPLIST_FILE[sdk=macosx*]" = Quire/macOS/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Quire;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Quire records voice memos to attach to your journal entries.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Quire takes photos and records video to attach to your journal entries.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Quire transcribes your voice memos on this device so their words become searchable text.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Quire uses Face ID to unlock your journal.";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.7.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.quire;
+				REGISTER_APP_GROUPS = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		E26DE477A5B45A54BF181715 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = QuireWidget/QuireWidget-macOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = QuireWidget/QuireWidget-iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = QuireWidget/QuireWidget-iOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEAD_CODE_STRIPPING = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = QuireWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Quire;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.7.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.quire.QuireWidget;
+				REGISTER_APP_GROUPS = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		CB598457BD3551E39A44EE9B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = QuireWidget/QuireWidget-macOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = QuireWidget/QuireWidget-iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = QuireWidget/QuireWidget-iOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEAD_CODE_STRIPPING = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = QuireWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Quire;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.7.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.quire.QuireWidget;
+				REGISTER_APP_GROUPS = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		4418672F34925058B8850C77 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = QuireShare/QuireShare-macOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = QuireShare/QuireShare-iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = QuireShare/QuireShare-iOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEAD_CODE_STRIPPING = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = QuireShare/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Quire;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.7.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.quire.QuireShare;
+				REGISTER_APP_GROUPS = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		85B46ED5782C53C79B36C429 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = QuireShare/QuireShare-macOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = QuireShare/QuireShare-iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = QuireShare/QuireShare-iOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEAD_CODE_STRIPPING = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = QuireShare/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Quire;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.7.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.quire.QuireShare;
+				REGISTER_APP_GROUPS = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		96F18432ABFE50568617289F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.7.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.quire.QuireTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		02A043795F86562CA8B02D9A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.7.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.quire.QuireTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7A3B611B04D85754ACE96F4D /* Build configuration list for PBXProject "Quire" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E34F5F1A7D1F5D35B82F0C57 /* Debug */,
+				B6B5673968275F19A3050CBD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		722751CC06FD5B8EA22ABE4D /* Build configuration list for PBXNativeTarget "Quire" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F2CFFB4978F65A5EA9821474 /* Debug */,
+				A03F2156826551E995E55B25 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C99A3C4CE0ED54B4A4D28D73 /* Build configuration list for PBXNativeTarget "QuireWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E26DE477A5B45A54BF181715 /* Debug */,
+				CB598457BD3551E39A44EE9B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		99A8A682871A57CA8509C297 /* Build configuration list for PBXNativeTarget "QuireShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4418672F34925058B8850C77 /* Debug */,
+				85B46ED5782C53C79B36C429 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1B81EE09BDF95EDE8C5F741C /* Build configuration list for PBXNativeTarget "QuireTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				96F18432ABFE50568617289F /* Debug */,
+				02A043795F86562CA8B02D9A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = 5BEC5FCF3B1F57C5B951133B /* Project object */;
+}

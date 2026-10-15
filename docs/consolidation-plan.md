@@ -349,3 +349,22 @@ an "inbox" split journal beside the real Inbox.
 Day files in `split/<tag>/` behave like `journal/`'s: a retimed entry moves to
 its new day within the same split journal, and a day file that empties is
 deleted.
+
+
+## Apple shell implementation — 2026-10-15
+
+Nook's SwiftUI app, widget, share extension, resources and hostless tests now
+live in `apple/` under the Quire name. `bindings/` exposes the shared Rust
+journal through UniFFI, with a callback Vault implemented using
+NSFileCoordinator in Swift. Parsing, search, list continuation, entry edits,
+filing, legacy migrations, templates, saved searches and maintenance use Rust;
+the shell keeps Apple services and native media/backup code. Source entries
+retain the Rust file/index/raw reference across autosaves and retiming.
+
+`make apple` produces the XCFramework, generates Swift bindings and the Xcode
+project, and builds unsigned macOS/iOS Simulator apps. `make apple-test` runs
+hostless XCTest. Rust callback integration tests and project checks run on
+Linux; the first Apple SDK build and signed-device validation are still
+pending, since this host has neither Swift nor Xcode. The Apple CI workflow
+provides a Mac build gate. The inherited Nook visual design remains for now;
+Quire theme adoption and macOS desk-mode composition are subsequent work.

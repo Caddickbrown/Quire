@@ -21,6 +21,11 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
+- **Apple**: bring Nook's native iOS/macOS SwiftUI app, widget and share
+  extension into `apple/` as Quire; journal parsing, search, editing, filing,
+  migration and maintenance use the shared Rust core through UniFFI and a
+  coordinated Swift `Vault`. Add an XCFramework build, hostless Swift tests
+  and an Apple CI workflow; Apple SDK compilation still awaits a Mac run.
 - **Install**: `install.sh` for Linux and macOS asks for the terminal app,
   the desktop app, or both; finds jnl, Nook and Wander and the journal
   folders they use; backs the chosen journal up; installs what the build
@@ -115,6 +120,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   `README.md` describes the whole, `linux/README.md` the desktop app.
 
 ### Fixed
+- **Editor**: continuing an ordered list at the largest supported number
+  repeats the number instead of overflowing.
 - **Linux**: the running window shows Quire's icon again. Since the binary
   became `quire-desktop` its Wayland app id no longer matched `Quire.desktop`,
   so GNOME showed a generic one; the program now names itself `Quire`.

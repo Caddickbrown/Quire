@@ -11,8 +11,9 @@ is the consolidation of three earlier projects — **jnl** (a Go CLI, the
 format's reference), **Nook** (SwiftUI iOS/macOS, the fullest feature set)
 and **Wander** (the designed one) — into one repository with **one Rust
 core** and thin native shells. Today: the Linux Tauri app and the terminal
-app. Next: the Apple shell built from Nook's Swift; then Android from
-Wander's Kotlin. `docs/consolidation-plan.md` records every decision.
+app. The native Apple shell is now in `apple/`, brought over from Nook and wired
+to the Rust core; its first Apple SDK build is pending. Android from Wander's
+Kotlin is next. `docs/consolidation-plan.md` records every decision.
 
 ## Data model (jnl's, with drafts in day files)
 
@@ -99,6 +100,16 @@ tui/                quire-tui: lib + two bins (src/bin/quire.rs, src/bin/jnl.rs)
 linux/              the Tauri app
   src-tauri/src/lib.rs   commands = thin calls on the Journal; watcher; backups
   src/app.js, style.css, index.html, prompts.js   the front end (no build step)
+bindings/           quire-bindings: UniFFI callback Vault + native journal API;
+                    JSON transports existing core values, closed request enum;
+                    `bindgen` feature builds the Swift generator, not on devices.
+apple/              Quire SwiftUI app + widget/share extensions from Nook
+  Quire/Models/     JournalStore façade, CoreJournal adapter, AppleVault with
+                    NSFileCoordinator; parser/search/list adapters call Rust.
+  gen_pbxproj.py    deterministic app + extensions + hostless test project
+  build-core.sh     generated Swift/C bindings + macOS/iOS/simulator XCFramework
+  Tests/            parser/search checks and journal integration XCTest
+  README.md         Mac build, signing, data flow and verification status
 tools/
   migrate_journal.py   inbox.md → inbox/, .nook/ → .quire/, from outside the app
   drive_tui.py         pseudo-terminal smoke test of every screen (make smoke)
@@ -130,10 +141,16 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   `extras::attach_media` / `attach_bytes` (`src/paste.rs`).
   Non-tty invocations print (jnl parity). The design the screens
   follow is on the canvas linked from the plan's section 8.
-- **Apple / Android**: not in the repo yet. The plan: Nook's targets into
-  `apple/`, `JournalStore` kept as the `@MainActor` façade with its file
-  logic replaced by core calls over UniFFI, a Swift `Vault` doing coordinated
-  writes; Wander's Compose shell over a SAF `Vault` for Android.
+- **Apple** (`apple/`): iOS 17 / macOS 14 SwiftUI. `JournalStore` remains the
+  `@MainActor` façade; journal reads and writes call `quire-bindings` / UniFFI.
+  `AppleVault` coordinates storage and rejects paths outside the chosen folder.
+  Each edit carries `(file, index, raw)` and adopts Rust's returned reference.
+  Native media, backup, bookmarks, watchers, widgets, sharing and reminders
+  remain Swift. `make apple` builds the Rust XCFramework and both unsigned apps;
+  `make apple-test` runs hostless XCTest. Requires macOS, full Xcode and rustup.
+  The Apple workflow covers these commands; no Apple SDK build has run on this
+  Linux host. Generated bindings/frameworks are ignored, never hand-edited.
+- **Android**: not in the repo yet; Wander's Compose shell over a SAF `Vault`.
 
 ## Conventions
 
@@ -152,7 +169,7 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   `split/<tag>/YYYY/MM/DD.md`, `.quire/`. `journal/` stays where jnl puts it.
   Don't add a third sidecar name, a second place for drafts, or a second
   place for split journals.
-- `make test` (cargo test), `make check` (clippy, keep it clean; it covers
+- `make test` (core, TUI and bindings tests), `make check` (clippy, keep it clean; it covers
   the desktop app too where WebKitGTK is installed), `make smoke`
   (the pty driver, must pass 23/23 at 100×30 and 80×24) before a push.
 - The one-line Tauri rule from before still holds: the Linux frontend has

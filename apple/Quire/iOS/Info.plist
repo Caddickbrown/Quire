@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Writing-timer Live Activity (Dynamic Island / Lock Screen countdown). -->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.caddickbrown.quire</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>quire</string>
+			</array>
+		</dict>
+	</array>
+	<!--
+	  Scene manifest, written by hand rather than generated
+	  (INFOPLIST_KEY_UIApplicationSceneManifest_Generation) so it can declare the
+	  external-display scene below. Declaring that scene is what stops iOS
+	  mirroring the app onto a connected monitor and gives Quire its own window
+	  there instead — see Quire/Views/ExternalDisplayView.swift. The application
+	  role is deliberately absent: SwiftUI's WindowGroup supplies it.
+
+	  UIApplicationSupportsMultipleScenes must be YES for the app to be handed a
+	  second scene at all. On iPad that also enables multiple app windows.
+	-->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleExternalDisplayNonInteractive</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>External Display</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).ExternalDisplaySceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+</dict>
+</plist>

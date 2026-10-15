@@ -1,8 +1,9 @@
 # Quire
 
 One journalling app over a plain folder of markdown. jnl's format, Nook's
-features, Wander's care — on Linux today, in the terminal today, on iOS and
-macOS next, Android after.
+features, Wander's care — Linux and terminal apps, plus a native iOS/macOS
+SwiftUI shell over the Rust core (awaiting its first Apple SDK build). Android
+comes next.
 
 Everything that is not a window lives in one Rust core. Every shell is a
 thin native face over it.
@@ -51,6 +52,13 @@ see drafts in `inbox/` or split entries in `split/` until taught to;
 `tools/migrate_journal.py` does the same moves from outside the app, dry run
 by default.
 
+## Native iOS and macOS
+
+The SwiftUI app is in [`apple/`](apple/README.md), brought over from Nook and
+connected to Quire's Rust core. On a Mac with Xcode and rustup, run `make apple`
+and `make apple-test`. Apple SDK compilation and device testing are still
+pending; the Linux checks verify the Rust bridge and project wiring.
+
 ## Installing
 
 ```sh
@@ -67,7 +75,7 @@ the rest. Every step is logged to `~/.local/state/quire/install-<stamp>.log`.
 Linux and macOS. It asks what to install: the **terminal app** (`quire`,
 and `jnl` with every jnl command as before), the **desktop app**, or
 **both**. (On the Mac the desktop app is the Tauri build, a preview until the
-Swift Mac app lands.) Then, all questions first:
+Swift Mac app passes its Apple build checks; see `apple/README.md`.) Then, all questions first:
 
 - **Finds** jnl (the Go CLI or the bash script), Nook and Wander — deb/rpm
   packages, AppImages, launcher entries, `.app` bundles — and the journal
@@ -129,7 +137,7 @@ cd linux && npm install && npx tauri build      # → linux/src-tauri/target/rel
 ## Building and testing
 
 ```sh
-make test        # cargo test: the core and the terminal app
+make test        # Rust core, terminal app and native bindings tests
 make check       # clippy
 make smoke       # drive the terminal app through every screen in a pseudo-terminal
 make tui         # a release build of quire and jnl into target/release/
@@ -141,6 +149,6 @@ make linux       # the Tauri bundle (needs libwebkit2gtk-4.1-dev; see linux/READ
 [jnl](https://github.com/Caddickbrown/jnl) is the format and the reference
 parser; its tests are the parity suite the core passes.
 [Nook](https://github.com/Caddickbrown/nook) is the feature set, and the
-Swift the Apple shell will be built from. [Wander](https://github.com/Caddickbrown/Wander)
+Swift used by the Apple shell. [Wander](https://github.com/Caddickbrown/Wander)
 is where the care came from, and a library of looks to Quire-ify one at a
 time. `docs/consolidation-plan.md` is the plan.
