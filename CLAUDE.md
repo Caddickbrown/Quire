@@ -22,11 +22,16 @@ Wander's Kotlin. `docs/consolidation-plan.md` records every decision.
   inbox.md                 the single-file inbox jnl and Nook write; read when
                            present and folded into inbox/ by migrate_legacy_inbox
   journal/YYYY/MM/DD.md    filed entries
-  <tag>.md                 split journals (JNL_SPLIT_TAGS)
+  split/<tag>/YYYY/MM/DD.md split journals (JNL_SPLIT_TAGS), one folder of day
+                           files per tag (Quire 0.7+)
+  <tag>.md                 the one-file split journal jnl and Nook write; read
+                           when present and folded into split/<tag>/ by
+                           migrate_legacy_splits (root .md files with no entries
+                           are not journals and are left alone)
   transfer.md              jnl's batch file
   assets/YYYY/MM/…         media, linked as ![](assets/…) from entry bodies
   .quire/                  sidecars: templates/, searches.json, datasaver-<id>.json,
-                           migration/ (the folded inbox.md). `.nook/` is read while
+                           migration/ (the folded inbox.md and <tag>.md files). `.nook/` is read while
                            only it exists and renamed on the first write.
 ```
 
@@ -37,8 +42,9 @@ normalised to hyphens. CRLF and a BOM are normalised on read.
 
 **Entry identity** is `(file, index)` plus the entry's raw text: every edit
 presents `expected_raw`, and the store re-locates the entry by it if the
-index moved. A day file (inbox or journal) that empties is deleted; the
-legacy `inbox.md` and split journals are written empty, as jnl does.
+index moved. A day file (inbox, journal or split) that empties is deleted;
+the legacy `inbox.md` and a legacy root `<tag>.md` are written empty, as jnl
+does.
 
 ## Workspace
 
@@ -128,8 +134,10 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
 - **Themes live in `themes.json` only.** The Linux CSS still carries a copy
   of the tokens for now; when you change a colour, change both until the
   CSS is generated from the JSON.
-- **Format and layout are decided**: `inbox/YYYY/MM/DD.md`, `.quire/`. Don't
-  add a third sidecar name or a second place for drafts.
+- **Format and layout are decided**: `inbox/YYYY/MM/DD.md`,
+  `split/<tag>/YYYY/MM/DD.md`, `.quire/`. `journal/` stays where jnl puts it.
+  Don't add a third sidecar name, a second place for drafts, or a second
+  place for split journals.
 - `make test` (cargo test), `make check` (clippy, keep it clean), `make smoke`
   (the pty driver, must pass 20/20 at 100×30 and 80×24) before a push.
 - The one-line Tauri rule from before still holds: the Linux frontend has

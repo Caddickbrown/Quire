@@ -209,6 +209,10 @@ struct Snapshot {
     migration: Option<InboxMigration>,
     /// Why a legacy `inbox.md` could not be folded in (it is still read).
     migration_error: Option<String>,
+    /// Set when this load folded root `<tag>.md` split journals into `split/`.
+    split_migration: Option<SplitMigration>,
+    /// Why a root `<tag>.md` could not be folded in (it is still read).
+    split_migration_error: Option<String>,
 }
 
 #[tauri::command]
@@ -242,22 +246,29 @@ async fn load(state: State<'_, AppState>) -> Result<Snapshot, String> {
         media_tools: media::tools(),
         migration: None,
         migration_error: None,
+        split_migration: None,
+        split_migration_error: None,
     };
     if missing {
         return Ok(snap);
     }
-    let (entries, templates, searches, has_transfer, conflicts, saved, migration) = blocking(move || {
+    let (entries, templates, searches, has_transfer, conflicts, saved, migration, split_migration) = blocking(move || {
         let j = Journal::open(&r);
-        // An inbox.md left by jnl or Nook is folded into inbox/ first, so the
-        // load below sees one inbox. Failure is reported, never fatal: the
-        // file is still read in place.
+        // An inbox.md or <tag>.md left by jnl or Nook is folded into inbox/
+        // or split/ first, so the load below sees one layout. Failure is
+        // reported, never fatal: the file is still read in place.
         let migration = j.migrate_legacy_inbox();
-        Ok((j.load_all(), list_templates(&j), load_searches(&j), !j.read("transfer.md").trim().is_empty(), j.conflict_files(), media::data_saved_total(&r), migration))
+        let split_migration = j.migrate_legacy_splits();
+        Ok((j.load_all(), list_templates(&j), load_searches(&j), !j.read("transfer.md").trim().is_empty(), j.conflict_files(), media::data_saved_total(&r), migration, split_migration))
     })
     .await?;
     match migration {
         Ok(m) => snap.migration = m,
         Err(e) => snap.migration_error = Some(e),
+    }
+    match split_migration {
+        Ok(m) => snap.split_migration = m,
+        Err(e) => snap.split_migration_error = Some(e),
     }
     snap.data_saved = saved;
     snap.entries = entries;

@@ -312,3 +312,40 @@ Not done, in order:
 3. A jnl patch to read `inbox/` when `inbox.md` is absent, for jnl's other
    users.
 4. Android (section 4, step 7).
+
+## 10. Split journals as folders (decided 2026-10-15)
+
+`<tag>.md` becomes `split/<tag>/YYYY/MM/DD.md`, for the reasons the inbox
+moved: one ever-growing file rewritten on every filing, a sync conflict that
+takes the whole split journal with it, and discovery by guesswork (any root
+`.md` that isn't reserved counted as a split journal, so a stray `ideas.md`
+showed up as one). Under `split/`, a split journal is what lives there.
+
+```
+<base>/
+  inbox/YYYY/MM/DD.md
+  journal/YYYY/MM/DD.md        unchanged: the path jnl, Nook and Wander agree on
+  split/<tag>/YYYY/MM/DD.md    was <tag>.md
+  split/<tag>/preamble.md      only if <tag>.md had text before its first header
+```
+
+**Considered and declined: `journals/<name>/…` for everything**, the main
+journal included. Uniform, but it moves `journal/`, which hides the whole
+archive (not just drafts) from Go jnl, Nook on the phone and Wander, and
+`journals/journal/` reads badly. `split/` also keeps clear of `journal/` by
+more than one letter. Revisit only once the Apple shell runs on the core and
+Go jnl is the last reader.
+
+**Migration** mirrors `inbox.md`: `Journal::migrate_legacy_splits` runs on
+every open (TUI and Linux), folds each root `.md` that holds entries (reserved
+names excepted), rebases `./assets/` links, reads every entry back, then
+moves the original to `.quire/migration/split-<tag>-<stamp>.md`. A `<tag>.md`
+written later by jnl or Nook is folded in the same way, duplicates skipped.
+Root `.md` files with no entries are left alone. `tools/migrate_journal.py`
+does it from outside the app. Reserved names (`inbox`, `transfer`, `export`,
+`readme`, `nook-export`) stay reserved as split tags, so the app never shows
+an "inbox" split journal beside the real Inbox.
+
+Day files in `split/<tag>/` behave like `journal/`'s: a retimed entry moves to
+its new day within the same split journal, and a day file that empties is
+deleted.
