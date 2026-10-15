@@ -294,6 +294,21 @@ journal_days() {
   find "$1/journal" "$1/inbox" -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' '
 }
 
+# Root .md files holding entries: jnl's one-file split journals (work.md),
+# which Quire folds into split/<tag>/ the way it folds inbox.md. Reserved
+# names and conflict copies are not split journals.
+legacy_splits() {
+  local f n stem
+  for f in "$1"/*.md; do
+    [ -f "$f" ] || continue
+    n=$(basename "$f")
+    stem=$(printf '%s' "${n%.md}" | tr 'A-Z' 'a-z')
+    case "$stem" in inbox|transfer|export|readme|nook-export) continue ;; esac
+    case "$n" in .*|*sync-conflict*|*"conflicted copy"*) continue ;; esac
+    grep -q '^\[[0-9]\{4\}.\{1,3\}[0-9]\{2\}.\{1,3\}[0-9]\{2\} [0-9][0-9]:[0-9][0-9]:[0-9][0-9]\]' "$f" 2>/dev/null && printf '%s\n' "$n"
+  done
+}
+
 looks_like_journal() {
   [ -d "$1/journal" ] || [ -f "$1/inbox.md" ] || [ -d "$1/inbox" ]
 }
@@ -723,23 +738,25 @@ install_main() {
     ask "Back up $FOLDER first ($(human_size "$FOLDER")) to ~/quire-preinstall-$STAMP.tar.gz?" y && DO_BACKUP=1
   fi
 
-  # Quire has opened this folder before: its drafts already live in inbox/,
-  # so any old app still installed has stopped seeing them. Say so plainly.
-  local since="" olds
+  # Quire has opened this folder before: drafts already live in inbox/ (and
+  # split journals in split/), so any old app still installed has stopped
+  # seeing them. Say so plainly.
+  local since="" olds splits
   olds=$(old_app_names)
-  if [ -n "$olds" ] && { [ -d "$FOLDER/inbox" ] || [ -d "$FOLDER/.quire/migration" ]; }; then
-    since=$(ls "$FOLDER/.quire/migration" 2>/dev/null | sed -n 's/^inbox-\([0-9]\{4\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)-.*/\1-\2-\3/p' | sort | head -n 1)
+  splits=$(legacy_splits "$FOLDER" | tr '\n' ' ' | sed 's/ $//; s/ /, /g')
+  if [ -n "$olds" ] && { [ -d "$FOLDER/inbox" ] || [ -d "$FOLDER/split" ] || [ -d "$FOLDER/.quire/migration" ]; }; then
+    since=$(ls "$FOLDER/.quire/migration" 2>/dev/null | sed -n 's/^\(inbox\|split-.*\)-\([0-9]\{4\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)-[0-9]\{6\}.*/\2-\3-\4/p' | sort | head -n 1)
     say ""
-    warn "Quire already keeps this journal's drafts in inbox/${since:+ (since $since)}."
-    say "    $olds still read only inbox.md: they don't see your drafts, and what they"
-    say "    write there waits until Quire next opens the folder. Filed entries they still see."
+    warn "Quire already keeps this journal's drafts in inbox/$([ -d "$FOLDER/split" ] && echo ' and split journals in split/')${since:+ (since $since)}."
+    say "    $olds still read only inbox.md and <tag>.md: they don't see what moved, and what"
+    say "    they write there waits until Quire next opens the folder. journal/ they still see."
   fi
 
-  DO_MIGRATE=0
+  DO_MIGRATE=0; MIGRATE_WHAT=""
   if [ -f "$FOLDER/inbox.md" ] && { [ -d "$FOLDER/inbox" ] || [ -d "$FOLDER/.quire/migration" ]; }; then
     say ""
     say "  inbox.md has $(grep -c '^\[' "$FOLDER/inbox.md" 2>/dev/null || echo 0) draft(s) written since, by an app still using it."
-    ask "Move them into inbox/ now?" y && DO_MIGRATE=1
+    MIGRATE_WHAT="inbox.md"
   elif [ -f "$FOLDER/inbox.md" ]; then
     say ""
     say "  This journal keeps drafts in inbox.md. Quire keeps them in inbox/YYYY/MM/DD.md"
@@ -747,8 +764,17 @@ install_main() {
     say "  under .quire/migration/). Apps that still read inbox.md — the Go jnl, Nook,"
     say "  Wander, Nook on your phone — stop seeing drafts there; Quire keeps folding in"
     say "  any they write later. Filed entries are untouched."
-    ask "Move the drafts now?" y && DO_MIGRATE=1
+    MIGRATE_WHAT="inbox.md"
   fi
+  if [ -n "$splits" ]; then
+    say ""
+    say "  Split journals in one file each ($splits). Quire keeps them in"
+    say "  split/<tag>/YYYY/MM/DD.md, one file per day, and moves them the same way on"
+    say "  first open (originals kept under .quire/migration/). The Go jnl and Nook stop"
+    say "  seeing those entries; journal/ is untouched."
+    MIGRATE_WHAT="${MIGRATE_WHAT:+$MIGRATE_WHAT and }$splits"
+  fi
+  [ -n "$MIGRATE_WHAT" ] && ask "Move $MIGRATE_WHAT into day files now?" y && DO_MIGRATE=1
 
   # The build's needs.
   NEED_XCODE=0; NEED_RUST=0; DO_LIBS=0; TAURI_VIA=""; DO_MEDIA=0; DO_PATH=0
@@ -844,7 +870,7 @@ install_main() {
   [ $WANT_GUI -eq 1 ] && say "  • build and install the desktop app ($BUNDLE)"
   [ "$PICK" = none ] && say "  • keep the installed Quire as it is"
   say "  • point Quire at $FOLDER"
-  [ $DO_MIGRATE -eq 1 ] && say "  • move inbox.md's drafts into inbox/"
+  [ $DO_MIGRATE -eq 1 ] && say "  • move $MIGRATE_WHAT into day files"
   [ $DO_PATH -eq 1 ] && say "  • add $BIN to your PATH"
   i=0
   while [ $i -lt ${#ITEM_APP[@]} ]; do
@@ -973,7 +999,7 @@ install_main() {
     else
       say "  The desktop app will move the drafts when it next opens the folder."
     fi
-    [ $DRY -eq 0 ] && grep -i -E "moved|draft" "$LOG" | tail -n 1 | sed 's/^ */  /'
+    [ $DRY -eq 0 ] && grep -E "Moved [0-9]| moved to " "$LOG" | tail -n 2 | sed 's/^ */  /'
   fi
   [ $DO_PATH -eq 1 ] && add_to_path
   say "  ✓ Quire opens $FOLDER"
