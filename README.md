@@ -152,3 +152,14 @@ parser; its tests are the parity suite the core passes.
 Swift used by the Apple shell. [Wander](https://github.com/Caddickbrown/Wander)
 is where the care came from, and a library of looks to Quire-ify one at a
 time. `docs/consolidation-plan.md` is the plan.
+
+Open Terminal Settings with `,` to choose a backup folder, automatic interval
+(Off, Daily, Weekly, Monthly or On change) and the number of copies to keep
+(1–50, default 10). Automatic backups are off until configured; monthly means
+30 days, and On change waits 30 seconds after changes with a five-minute minimum
+between copies. The terminal must be running for its scheduler to run.
+
+`quire --version` prints the version and build commit; Settings shows it too.
+A local `./install.sh` builds the checked-out source: run `git pull` first to
+install newer commits. The downloaded installer fetches the remote source.
+See [maintenance coverage](docs/maintenance.md) for the available settings.

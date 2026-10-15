@@ -63,7 +63,7 @@ struct ExternalRow: Equatable, Identifiable {
 
     static func rows(from entries: [Entry]) -> [ExternalRow] {
         entries.prefix(maxRows).map {
-            ExternalRow(id: $0.ts,
+            ExternalRow(id: $0.id,
                         date: $0.date,
                         title: $0.preview,
                         starred: $0.isStarred)
@@ -87,6 +87,7 @@ struct ExternalRow: Equatable, Identifiable {
     /// phone, and the last few percent of backlight are worth little anyway.
     static let dimFloor: Double = 0.02
 
+    @Published private(set) var isPaused = false
     @Published private(set) var content: ExternalDisplayContent = .idle
     @Published private(set) var isConnected = false
     /// Set once by RootView so the external window can resolve `assets/…` links.
@@ -111,7 +112,7 @@ struct ExternalRow: Equatable, Identifiable {
         // covers the device — the monitor is a window of its own, and left to
         // itself it would keep showing the entry that was open when the phone
         // was put down. `latest` is still kept, so unlocking restores it.
-        guard !AppLockManager.shared.showsVeil else { return }
+        guard !AppLockManager.shared.showsVeil, !isPaused else { return }
         if isConnected { content = new }
     }
 
@@ -120,7 +121,7 @@ struct ExternalRow: Equatable, Identifiable {
     /// left off once the app is unlocked.
     func applyLockState(locked: Bool) {
         guard isConnected else { return }
-        content = locked ? .idle : latest
+        content = locked || isPaused ? .idle : latest
     }
 
     /// Fall back to the idle screen, but only if `shown` is still what's up
@@ -130,6 +131,25 @@ struct ExternalRow: Equatable, Identifiable {
     func clear(ifShowing shown: ExternalDisplayContent) {
         guard latest == shown else { return }
         present(.idle)
+    }
+
+    func togglePause() {
+        guard isConnected else { return }
+        isPaused.toggle()
+        content = isPaused || AppLockManager.shared.showsVeil ? .idle : latest
+    }
+    func adjustTextSize(_ delta: Int) {
+        guard isConnected else { return }
+        let all = ExternalTextSize.allCases
+        let current = UserDefaults.standard.string(forKey: ExternalTextSize.key) ?? ExternalTextSize.regular.rawValue
+        let index = all.firstIndex { $0.rawValue == current } ?? 1
+        UserDefaults.standard.set(all[min(all.count - 1, max(0, index + delta))].rawValue, forKey: ExternalTextSize.key)
+    }
+    func cycleTheme() {
+        guard isConnected, !ExternalTheme.all.isEmpty else { return }
+        let current = UserDefaults.standard.string(forKey: ExternalTheme.key) ?? "almanac"
+        let index = ExternalTheme.all.firstIndex { $0.id == current } ?? 0
+        UserDefaults.standard.set(ExternalTheme.all[(index + 1) % ExternalTheme.all.count].id, forKey: ExternalTheme.key)
     }
 
     /// Drop back to stats when a list loses its selection or goes away — but
@@ -153,7 +173,7 @@ struct ExternalRow: Equatable, Identifiable {
         // Not `latest` while the app is locked or veiled: a phone plugged in
         // from the lock screen would otherwise put the open entry straight
         // up on the monitor. `applyLockState` restores it on unlock.
-        content = AppLockManager.shared.showsVeil ? .idle : latest
+        content = AppLockManager.shared.showsVeil || isPaused ? .idle : latest
         applyAutoDim()
     }
 
@@ -331,17 +351,18 @@ struct ExternalDisplayMetrics {
 
 struct ExternalDisplayRoot: View {
     @ObservedObject private var model = ExternalDisplayModel.shared
+    @ObservedObject private var appLock = AppLockManager.shared
+    @AppStorage(ExternalTheme.key) private var externalThemeRaw = "almanac"
     @AppStorage("colorScheme") private var colorSchemeRaw = AppColorScheme.auto.rawValue
     @AppStorage("accentColor")  private var accentRaw     = AccentTheme.blue.rawValue
     @AppStorage(ExternalTextSize.key) private var textSizeRaw = ExternalTextSize.regular.rawValue
 
     var body: some View {
-        let accent = AccentTheme.color(forRaw: accentRaw)
+        let palette = ExternalTheme.selected(externalThemeRaw)
+        let accent = palette?.highlight ?? AccentTheme.color(forRaw: accentRaw)
         // Prefer the scheme RootView resolved for the device window; fall back
         // to the stored preference for the moment before the app scene is up.
-        let scheme = model.store == nil
-            ? (AppColorScheme(rawValue: colorSchemeRaw)?.resolved ?? model.colorScheme)
-            : model.colorScheme
+        let scheme: ColorScheme = palette.map { $0.dark ? .dark : .light } ?? model.colorScheme
         GeometryReader { geo in
             let scale = (ExternalTextSize(rawValue: textSizeRaw) ?? .regular).scale
             let metrics = ExternalDisplayMetrics(size: geo.size, scale: scale)
@@ -350,7 +371,16 @@ struct ExternalDisplayRoot: View {
                 // The store arrives with the app's own scene. A display plugged
                 // in before launch connects first, so hold the idle screen
                 // until it does — media links can't resolve without it.
-                if let store = model.store {
+                if model.isPaused || appLock.showsVeil {
+                    VStack(alignment: .leading, spacing: metrics.gap) {
+                        Text("QUIRE").font(.system(size: metrics.caption, weight: .bold, design: .monospaced)).tracking(metrics.caption * 0.2)
+                        Rectangle().fill(accent).frame(height: max(1, palette?.rule_h ?? 1))
+                        Spacer()
+                        Text(appLock.showsVeil ? "Journal locked" : "Display paused").font(.system(size: metrics.title, design: .serif))
+                        Text(appLock.showsVeil ? "Unlock Quire on your device to continue." : "⌥⌘P to resume").font(.system(size: metrics.caption)).foregroundStyle(palette?.secondary ?? .secondary)
+                        Spacer()
+                    }.padding(metrics.padding)
+                } else if let store = model.store {
                     VStack(spacing: 0) {
                         content(metrics: metrics)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -366,6 +396,8 @@ struct ExternalDisplayRoot: View {
         .ignoresSafeArea()
         .tint(accent)
         .environment(\.accent, accent)
+        .environment(\.externalTheme, palette)
+        .foregroundStyle(palette?.text ?? Theme.bodyText(scheme))
         // Both: `environment` settles this window's own subtree immediately,
         // `preferredColorScheme` settles the window behind it.
         .environment(\.colorScheme, scheme)
@@ -395,16 +427,17 @@ struct ExternalDisplayRoot: View {
     /// Which keys are live right now. Shown on the monitor because the device
     /// screen is dimmed — there is nowhere else to read them.
     private var hints: [ShortcutHint] {
+        let common: [ShortcutHint] = [.init(key: "⌥⌘±", label: "Size"), .init(key: "⌥⌘T", label: "Theme"), .init(key: "⌥⌘P", label: "Pause")]
         switch model.content {
         case .idle:
             return [.init(key: "↑↓", label: "Browse"),
                     .init(key: "⌘N", label: "New"),
-                    .init(key: "?",  label: "Hints")]
+                    .init(key: "?",  label: "Hints")] + common
         case .browsing:
             return [.init(key: "↑↓", label: "Move"),
                     .init(key: "↩",  label: "Open"),
                     .init(key: "⎋",  label: "Back"),
-                    .init(key: "⌘N", label: "New")]
+                    .init(key: "⌘N", label: "New")] + common
         case .composing:
             // Only one of these: in the composer ⌘N and ⌘S both run newEntry()
             // — save this draft to the inbox and start a blank one — so listing
@@ -412,14 +445,14 @@ struct ExternalDisplayRoot: View {
             // the editor focused that key types a question mark.
             return [.init(key: "⌘S", label: "Save & New"),
                     .init(key: "⌘B", label: "Bold"),
-                    .init(key: "⌘I", label: "Italic")]
+                    .init(key: "⌘I", label: "Italic")] + common
         case .editing:
             return [.init(key: "⌘B", label: "Bold"),
                     .init(key: "⌘I", label: "Italic"),
-                    .init(key: "⎋",  label: "Back")]
+                    .init(key: "⎋",  label: "Back")] + common
         case .reading:
             return [.init(key: "⎋",  label: "Back"),
-                    .init(key: "⌘N", label: "New")]
+                    .init(key: "⌘N", label: "New")] + common
         }
     }
 }
@@ -430,6 +463,7 @@ private struct ExternalHintBar: View {
     let metrics: ExternalDisplayMetrics
 
     @Environment(\.accent) private var accent
+    @Environment(\.externalTheme) private var displayTheme
     @AppStorage(ShortcutHints.key) private var showHints = true
 
     var body: some View {
@@ -442,7 +476,7 @@ private struct ExternalHintBar: View {
                             .foregroundStyle(accent)
                         Text(hint.label)
                             .font(.system(size: metrics.caption * 0.95))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(displayTheme?.secondary ?? .secondary)
                     }
                 }
                 Spacer(minLength: 0)
@@ -467,6 +501,7 @@ private struct ExternalBrowseView: View {
     let metrics: ExternalDisplayMetrics
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.externalTheme) private var displayTheme
     @Environment(\.accent) private var accent
     @AppStorage("writingFont") private var writingFontRaw = WritingFont.lato.rawValue
     @AppStorage("dateStyle")   private var dateStyleRaw   = DateStyle.weekday.rawValue
@@ -503,7 +538,7 @@ private struct ExternalBrowseView: View {
                 Text("\(selected + 1) of \(rows.count)")
             }
             .font(.system(size: metrics.caption, weight: .semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(displayTheme?.secondary ?? .secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Rectangle()
@@ -515,27 +550,27 @@ private struct ExternalBrowseView: View {
 
     private func row(_ row: ExternalRow, isSelected: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: metrics.caption) {
-            Text(Theme.displayDate(row.date, style: dateStyleRaw))
+            Text(row.date)
                 .font(.system(size: metrics.caption * 1.1, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(displayTheme?.secondary ?? .secondary)
                 .frame(width: metrics.text * 6, alignment: .leading)
             Text(row.title.isEmpty ? "Untitled" : row.title)
-                .font(Theme.font(writingFontRaw, size: metrics.text * 0.78, fixed: true))
+                .font(Theme.font(displayTheme?.fontRaw ?? writingFontRaw, size: metrics.text * 0.78, fixed: true))
                 .foregroundStyle(row.title.isEmpty
-                                 ? Theme.placeholder(colorScheme)
-                                 : Theme.bodyText(colorScheme))
+                                 ? (displayTheme?.placeholder ?? Theme.placeholder(colorScheme))
+                                 : (displayTheme?.text ?? Theme.bodyText(colorScheme)))
                 .lineLimit(1)
             Spacer(minLength: 0)
             if row.starred {
                 Image(systemName: "star.fill")
                     .font(.system(size: metrics.caption))
-                    .foregroundStyle(.yellow)
+                    .foregroundStyle(accent)
             }
         }
         .padding(.vertical, metrics.caption * 0.45)
         .padding(.horizontal, metrics.caption * 0.6)
         .background(
-            RoundedRectangle(cornerRadius: metrics.caption * 0.4)
+            Rectangle()
                 .fill(isSelected ? accent.opacity(0.22) : .clear)
         )
         .overlay(alignment: .leading) {
@@ -554,9 +589,10 @@ private struct ExternalBrowseView: View {
 /// projected large, system chrome colours read as "a phone screen on a wall".
 private struct ExternalBackground: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.externalTheme) private var displayTheme
 
     var body: some View {
-        (colorScheme == .dark ? Color(white: 0.06) : Color(white: 0.97))
+        (displayTheme?.paper ?? (colorScheme == .dark ? Color.black : Color.white))
             .ignoresSafeArea()
     }
 }
@@ -583,6 +619,7 @@ private struct ExternalEntryView: View {
     let metrics: ExternalDisplayMetrics
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.externalTheme) private var displayTheme
     @Environment(\.accent) private var accent
     @AppStorage("writingFont")   private var writingFontRaw = WritingFont.lato.rawValue
     @AppStorage("dateStyle")     private var dateStyleRaw   = DateStyle.weekday.rawValue
@@ -590,7 +627,7 @@ private struct ExternalEntryView: View {
 
     /// Fixed sizes throughout: the metrics already come from the panel, and
     /// Dynamic Type scaling them again is what made the monitor shout.
-    private var writingFont: Font { Theme.font(writingFontRaw, size: metrics.text, fixed: true) }
+    private var writingFont: Font { Theme.font(displayTheme?.fontRaw ?? writingFontRaw, size: metrics.text, fixed: true) }
     private var displayTitle: String { Entry.strippingStarMarker(title) }
     private var starred: Bool { isStarred || Entry.hasStarMarker(title) }
     private var tags: [String] { JournalParser.splitTags(title + "\n" + text) }
@@ -617,21 +654,21 @@ private struct ExternalEntryView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: metrics.caption * 0.7) {
             HStack(alignment: .firstTextBaseline) {
-                Text(Theme.displayDate(isoDate, style: dateStyleRaw).uppercased())
+                Text("QUIRE  ·  " + isoDate)
                     .tracking(metrics.caption * 0.18)
                 Spacer(minLength: metrics.caption)
                 if starred {
-                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                    Image(systemName: "star.fill").foregroundStyle(accent)
                 }
             }
             .font(.system(size: metrics.caption, weight: .semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(displayTheme?.secondary ?? .secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if !displayTitle.isEmpty {
                 Text(displayTitle)
-                    .font(Theme.font(writingFontRaw, size: metrics.title, fixed: true).weight(.bold))
-                    .foregroundStyle(Theme.bodyText(colorScheme))
+                    .font(Theme.font(displayTheme?.fontRaw ?? writingFontRaw, size: metrics.title, fixed: true).weight(displayTheme?.headingWeight ?? .bold))
+                    .foregroundStyle((displayTheme?.text ?? Theme.bodyText(colorScheme)))
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -653,9 +690,9 @@ private struct ExternalEntryView: View {
             // view keeps the caret — not the end of the text — in view. A
             // plain `Text` of the body used to sit here, with neither.
             WritingTextEditor(text: .constant(text),
-                              fontRaw: writingFontRaw,
+                              fontRaw: displayTheme?.fontRaw ?? writingFontRaw,
                               size: metrics.text,
-                              textColor: Theme.bodyText(colorScheme),
+                              textColor: (displayTheme?.text ?? Theme.bodyText(colorScheme)),
                               lineSpacing: Theme.lineSpacing(for: metrics.text),
                               highlightTags: highlightTags,
                               accent: accent,
@@ -665,7 +702,7 @@ private struct ExternalEntryView: View {
                     if text.isEmpty {
                         Text(Theme.placeholderPrompts[0])
                             .font(writingFont)
-                            .foregroundStyle(Theme.placeholder(colorScheme))
+                            .foregroundStyle((displayTheme?.placeholder ?? Theme.placeholder(colorScheme)))
                             .allowsHitTesting(false)
                     }
                 }
@@ -676,7 +713,7 @@ private struct ExternalEntryView: View {
             // one on the very same screen.
             MediaPreview(text: text,
                          font: writingFont,
-                         textColor: Theme.bodyText(colorScheme),
+                         textColor: (displayTheme?.text ?? Theme.bodyText(colorScheme)),
                          contentPadding: 0)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -695,7 +732,7 @@ private struct ExternalEntryView: View {
             }
             Spacer(minLength: metrics.caption)
             Text(wordCount == 1 ? "1 word" : "\(wordCount) words")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(displayTheme?.secondary ?? .secondary)
         }
         .font(.system(size: metrics.caption))
         .frame(maxWidth: .infinity)
@@ -712,6 +749,7 @@ private struct ExternalIdleView: View {
     let metrics: ExternalDisplayMetrics
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.externalTheme) private var displayTheme
     @Environment(\.accent) private var accent
     @AppStorage("writingFont") private var writingFontRaw = WritingFont.lato.rawValue
     @AppStorage("dateStyle")   private var dateStyleRaw   = DateStyle.weekday.rawValue
@@ -746,10 +784,10 @@ private struct ExternalIdleView: View {
                     VStack(spacing: metrics.caption * 0.45) {
                         Text(tile.value)
                             .font(.system(size: metrics.title * 1.15, weight: .bold))
-                            .foregroundStyle(tile.accented ? accent : Theme.bodyText(colorScheme))
+                            .foregroundStyle(tile.accented ? accent : (displayTheme?.text ?? Theme.bodyText(colorScheme)))
                         Text(tile.label)
                             .font(.system(size: metrics.caption))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(displayTheme?.secondary ?? .secondary)
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -760,7 +798,7 @@ private struct ExternalIdleView: View {
                let ago = snapshot.onThisDayYearsAgo {
                 Text("On this day, \(ago) year\(ago == 1 ? "" : "s") ago — \(preview)")
                     .font(.system(size: metrics.caption))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(displayTheme?.secondary ?? .secondary)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .center)
             }
@@ -776,14 +814,14 @@ private struct ExternalIdleView: View {
     /// look like a different app from writing in one.
     private var header: some View {
         VStack(alignment: .leading, spacing: metrics.caption * 0.7) {
-            Text(today.uppercased())
+            Text("QUIRE  ·  " + String(JournalStore.ts(from: Date()).prefix(10)))
                 .font(.system(size: metrics.caption, weight: .semibold))
                 .tracking(metrics.caption * 0.18)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(displayTheme?.secondary ?? .secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text("Quire")
-                .font(Theme.font(writingFontRaw, size: metrics.title, fixed: true).weight(.bold))
-                .foregroundStyle(Theme.bodyText(colorScheme))
+            Text("A quiet place to write")
+                .font(Theme.font(displayTheme?.fontRaw ?? writingFontRaw, size: metrics.title, fixed: true).weight(displayTheme?.headingWeight ?? .bold))
+                .foregroundStyle((displayTheme?.text ?? Theme.bodyText(colorScheme)))
                 .frame(maxWidth: .infinity, alignment: .leading)
             Rectangle()
                 .fill(accent.opacity(0.35))

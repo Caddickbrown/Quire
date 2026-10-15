@@ -19,6 +19,8 @@ for key, rel, group in generator["swift_files"]:
         assert rel == "../Generated/QuireCore.swift"
         continue  # emitted by build-core.sh, before Xcode starts
     assert path.is_file(), f"missing app source: {path}"
+for _, rel, _ in generator["resources"]:
+    assert (APPLE / "Quire" / rel).exists(), f"missing app resource: {rel}"
 for _, rel in generator["widget_swift_files"] + generator["share_swift_files"] + generator["test_swift_files"]:
     assert (APPLE / rel).is_file(), f"missing target source: {rel}"
 ids = generator["IDs"]

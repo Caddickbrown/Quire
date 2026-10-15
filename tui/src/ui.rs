@@ -91,7 +91,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             hints(f, app, hint_row, &p, &[("← →", "year"), ("j", "journal"), ("i", "inbox"), ("n", "new")], &[("?", "keys"), ("esc", "back")], None);
         }
         Screen::Settings => {
-            masthead(f, app, head, &p, "settings", plain(Line::from(Span::styled("saved as you change them", p.muted()))));
+            masthead(f, app, head, &p, "settings", plain(Line::from(Span::styled(format!("Quire {} · saved as you change them", crate::VERSION), p.muted()))));
             rule(f, rule_row, &p);
             settings(f, body, app);
             hints(f, app, hint_row, &p, &[("← →", "change"), ("↑↓", "choose")], &[("?", "keys"), ("esc", "back")], None);
@@ -135,6 +135,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 (Span::styled("↵ restore", p.muted()), enter),
                 (Span::styled("   ", p.muted()), None),
                 (Span::styled("esc cancel", p.muted()), esc),
+            ],
+            Modal::Tags(groups, i) => vec![
+                (Span::styled(format!("Tags {}/{}  ", i + 1, groups.len()), p.muted()), None),
+                (Span::styled(groups.get(*i).map(|g| g.tags.iter().map(|(tag, count)| format!("{} ({})", tag, count)).collect::<Vec<_>>().join(", ")).unwrap_or_default(), p.accent()), None),
+                (Span::styled("  ↑↓ group  ", p.muted()), None),
+                (Span::styled("↵ merge…", p.muted()), enter),
+                (Span::styled("  esc cancel", p.muted()), esc),
             ],
             Modal::Confirm { text, .. } => vec![
                 (Span::styled(text.clone(), p.ink()), None),
@@ -356,7 +363,19 @@ fn title_of(e: &Entry) -> (String, bool) {
     }
 }
 
-fn entry_row<'a>(e: &Entry, p: &Palette, width: usize, show_date: bool) -> (Line<'a>, Line<'a>) {
+fn word_column_width(app: &App) -> usize {
+    app.entries.iter().map(|e| e.words.to_string().len()).max().unwrap_or(1).max(3)
+}
+
+fn entry_meta(e: &Entry, p: &Palette, digits: usize) -> Line<'static> {
+    let tag = trunc(e.tags.first().map(String::as_str).unwrap_or(""), 14);
+    Line::from(vec![
+        Span::styled(format!("{:<14}  ", tag), p.accent()),
+        Span::styled(format!("{:>digits$} words", e.words), p.muted()),
+    ])
+}
+
+fn entry_row<'a>(e: &Entry, p: &Palette, width: usize, show_date: bool, word_digits: usize) -> (Line<'a>, Line<'a>) {
     let (t, untitled) = title_of(e);
     let mut left: Vec<Span> = Vec::new();
     left.push(Span::styled(if show_date { format!("{} {}  ", e.date, e.time) } else { format!("{}  ", e.time) }, p.muted()));
@@ -364,12 +383,7 @@ fn entry_row<'a>(e: &Entry, p: &Palette, width: usize, show_date: bool) -> (Line
         left.push(Span::styled("★ ", p.accent()));
     }
     left.push(Span::styled(trunc(&t, width.saturating_sub(40)), if untitled { p.muted_italic() } else { p.ink() }));
-    let mut right: Vec<Span> = Vec::new();
-    if let Some(tag) = e.tags.first() {
-        right.push(Span::styled(format!("{}  ", tag), p.accent()));
-    }
-    right.push(Span::styled(format!("{} words", e.words), p.muted()));
-    (Line::from(left), Line::from(right))
+    (Line::from(left), entry_meta(e, p, word_digits))
 }
 
 // ---------- screens ----------
@@ -424,12 +438,7 @@ fn today(f: &mut Frame, r: Rect, app: &App) {
             }
             let (t, untitled) = title_of(e);
             let left = Line::from(vec![Span::styled(format!("  {}  ", e.date), p.accent()), Span::styled(trunc(&t, w.saturating_sub(30)), if untitled { p.muted_italic() } else { p.ink() })]);
-            let mut right: Vec<Span> = Vec::new();
-            if let Some(tag) = e.tags.first() {
-                right.push(Span::styled(format!("{}  ", tag), p.accent()));
-            }
-            right.push(Span::styled(format!("{} words", e.words), p.muted()));
-            two_sided(f, Rect::new(r.x, y, r.width, 1), left, Line::from(right));
+            two_sided(f, Rect::new(r.x, y, r.width, 1), left, entry_meta(e, p, word_column_width(app)));
             app.hit(Rect::new(r.x, y, r.width, 1), Hit::Show(e.file.clone(), e.index));
             y += 1;
         }
@@ -457,7 +466,7 @@ fn today(f: &mut Frame, r: Rect, app: &App) {
             if y >= max_y {
                 break;
             }
-            let (l, rt) = entry_row(e, p, w, true);
+            let (l, rt) = entry_row(e, p, w, true, word_column_width(app));
             let mut l2 = vec![Span::styled("  ", p.ink())];
             l2.extend(l.spans);
             two_sided(f, Rect::new(r.x, y, r.width, 1), Line::from(l2), rt);
@@ -507,13 +516,7 @@ fn inbox_list(f: &mut Frame, r: Rect, app: &App, ds: &[&Entry], sel: usize, wide
         }
         let (t, untitled) = title_of(e);
         let when = format!("{} {}  ", e.date, e.time);
-        let mut right: Vec<Span> = Vec::new();
-        if wide {
-            if let Some(tag) = e.tags.first() {
-                right.push(Span::styled(format!("{}  ", tag), p.accent()));
-            }
-            right.push(Span::styled(format!("{} words", e.words), p.muted()));
-        }
+        let right = if wide { entry_meta(e, p, word_column_width(app)).spans } else { Vec::new() };
         let rw = Line::from(right.clone()).width();
         let room = (r.width as usize).saturating_sub(2 + when.width() + if e.starred { 2 } else { 0 } + if wide { rw + 2 } else { 0 });
         let mut left = vec![Span::styled(if on { "▸ " } else { "  " }, p.accent()), Span::styled(when, p.muted())];
@@ -1056,7 +1059,7 @@ fn search(f: &mut Frame, r: Rect, app: &App) {
     let avail = (r.y + r.height).saturating_sub(r.y + 3) as usize;
     let start = app.search_i.saturating_sub(avail.saturating_sub(1));
     for (y, (i, e)) in (r.y + 3..).zip(res.iter().enumerate().skip(start).take(avail)) {
-        let (l, rt) = entry_row(e, p, w, true);
+        let (l, rt) = entry_row(e, p, w, true, word_column_width(app));
         let mut l2 = vec![if i == app.search_i { Span::styled("▌ ", p.accent()) } else { Span::styled("  ", p.ink()) }];
         l2.extend(l.spans);
         let mut line = Line::from(l2);
@@ -1105,4 +1108,31 @@ fn help_overlay(f: &mut Frame, area: Rect, app: &App) {
     }
     lines.push(Line::from(Span::styled("  any key closes", p.faint().bg(p.card))));
     put_lines(f, r, lines);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quire_core::{now_local, Journal, Settings};
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn today_aligns_tags_and_word_counts_across_digit_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let journal = Journal::open(temp.path());
+        let ts = now_local();
+        journal.new_draft(&ts, "First @same", false, &"word ".repeat(99)).unwrap();
+        journal.new_draft(&ts, "Second @same", false, &"word ".repeat(100)).unwrap();
+        let mut app = App::new(journal, Settings::default(), vec![], "almanac");
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows = (0..30).map(|y| (0..100).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+            .filter(|row| row.contains("First @same") || row.contains("Second @same")).collect::<Vec<_>>();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].rfind("@same"), rows[1].rfind("@same"));
+        assert_eq!(rows[0].find("words"), rows[1].find("words"));
+        assert!(rows.iter().any(|row| row.contains(" 99 words")));
+        assert!(rows.iter().any(|row| row.contains("100 words")));
+    }
 }

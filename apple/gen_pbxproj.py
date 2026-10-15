@@ -55,6 +55,7 @@ swift_files = [
     ('JournalStore',    'Models/JournalStore.swift',    'Models'),
     ('CoreJournal',     'Models/CoreJournal.swift',     'Models'),
     ('AppleVault',      'Models/AppleVault.swift',      'Models'),
+    ('ExternalTheme',   'Models/ExternalTheme.swift',   'Models'),
     ('QuireCore',       '../Generated/QuireCore.swift', 'Quire'),
     ('Templates',       'Models/Templates.swift',       'Models'),
     ('Importers',       'Models/Importers.swift',       'Models'),
@@ -96,6 +97,7 @@ swift_files = [
 resources = [
     ('Assets', 'Assets.xcassets', 'folder.assetcatalog'),
     ('Fonts',  'fonts',           'folder'),
+    ('SharedThemes', '../../themes.json', 'text.json'),
 ]
 
 # Widget extension sources (own fileRefs; live in the QuireWidget/ group).
@@ -267,7 +269,7 @@ def pbxproj():
     for name, path, _ in swift_files:
         a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {path if name == "QuireCore" else base(path)}; sourceTree = "<group>"; }};')
     for name, path, ftype in resources:
-        a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = {ftype}; path = {base(path)}; sourceTree = "<group>"; }};')
+        a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = {ftype}; path = {path if name == "SharedThemes" else base(path)}; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["iOSInfoPlist"]} /* iOS/Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["macOSInfoPlist"]} /* macOS/Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["product"]} /* Quire.app */ = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Quire.app; sourceTree = BUILT_PRODUCTS_DIR; }};')

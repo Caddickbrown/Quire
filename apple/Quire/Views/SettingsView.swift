@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject private var store: JournalStore
+    @ObservedObject private var externalDisplay = ExternalDisplayModel.shared
     @AppStorage("colorScheme") private var colorSchemeRaw: String = AppColorScheme.auto.rawValue
     @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
@@ -19,6 +20,7 @@ struct SettingsView: View {
     @AppStorage("highlightTags") private var highlightTags = true
     @AppStorage("firstWeekday") private var firstWeekday = 1
     @AppStorage("showWeekNumbers") private var showWeekNumbers = false
+    @AppStorage(ExternalTheme.key) private var externalThemeRaw = "almanac"
     @AppStorage(ExternalDisplayModel.autoDimKey) private var dimWithExternalDisplay = false
     @AppStorage(ExternalDisplayModel.dimLevelKey) private var externalDisplayDimLevel = ExternalDisplayModel.dimFloor
     @AppStorage(ExternalTextSize.key) private var externalTextSizeRaw = ExternalTextSize.regular.rawValue
@@ -185,6 +187,14 @@ struct SettingsView: View {
          """),
     ]
 
+    private enum MaintenanceAction: String, Identifiable {
+        case fileAll, transfer, conflicts
+        var id: String { rawValue }
+        var title: String {
+            switch self { case .fileAll: return "File every draft?"; case .transfer: return "File transfer.md?"; case .conflicts: return "Merge conflict copies?" }
+        }
+    }
+    @State private var maintenanceAction: MaintenanceAction?
     @State private var showingImporter = false
     @State private var showingExporter = false
     @State private var exportDoc = ExportDocument(text: "")
@@ -341,6 +351,12 @@ struct SettingsView: View {
 
             #if os(iOS)
             Section {
+                Picker("Theme", selection: $externalThemeRaw) {
+                    ForEach(ExternalTheme.all) { Text($0.name).tag($0.id) }
+                }
+                Toggle("Pause external display", isOn: Binding(get: { externalDisplay.isPaused }, set: { value in
+                    if externalDisplay.isPaused != value { externalDisplay.togglePause() }
+                })).disabled(!externalDisplay.isConnected)
                 Picker("Text size", selection: $externalTextSizeRaw) {
                     ForEach(ExternalTextSize.allCases) { Text($0.label).tag($0.rawValue) }
                 }
@@ -369,7 +385,7 @@ struct SettingsView: View {
             } header: {
                 Text("External display")
             } footer: {
-                Text("Connected to a monitor, Quire shows your writing on it instead of mirroring. Text size is for that screen — Regular suits a monitor on a desk, Large a TV across the room. Dimming this screen no longer affects what's up there, and turning it down saves power; it's restored when you unplug.")
+                Text("Connected to a monitor, Quire shows your writing on it instead of mirroring. Themes come from Quire’s shared looks. ↑↓ browses, Return opens, Esc goes back; ⌘N writes. ⌥⌘± changes text size, ⌥⌘T changes theme, ⌥⌘P pauses, and ⌥⌘H toggles key hints. These controls leave the device’s appearance alone. Dimming this screen no longer affects what's up there, and turning it down saves power; it's restored when you unplug.")
             }
 
             Section {
@@ -517,6 +533,10 @@ struct SettingsView: View {
             Section {
                 buttonRow {
                     cleanUpButton
+                    Button("Sort Inbox") { store.sortInbox() }
+                    Button("File All Drafts…") { maintenanceAction = .fileAll }
+                    Button("File transfer.md…") { maintenanceAction = .transfer }
+                    Button("Merge Conflict Copies…") { maintenanceAction = .conflicts }
                     compressMediaButton
                     transcribeAllButton
                     mergeExSplitButton
@@ -587,6 +607,17 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .task(id: store.revision) { templateNames = store.templateNames() }
+        .confirmationDialog(maintenanceAction?.title ?? "Maintenance", isPresented: Binding(get: { maintenanceAction != nil }, set: { if !$0 { maintenanceAction = nil } }), titleVisibility: .visible, presenting: maintenanceAction) { action in
+            Button("Continue") {
+                switch action {
+                case .fileAll: cleanupMessage = "Filed \(store.fileAllDrafts()) drafts."
+                case .transfer: cleanupMessage = "Filed \(store.fileTransfer()) entries from transfer.md."
+                case .conflicts: cleanupMessage = "Merged \(store.mergeConflictCopies()) entries from conflict copies."
+                }
+                maintenanceAction = nil; showingCleanup = true
+            }
+            Button("Cancel", role: .cancel) { maintenanceAction = nil }
+        }
         .alert("Backup", isPresented: Binding(
             get: { backupMessage != nil },
             set: { if !$0 { backupMessage = nil } }

@@ -139,6 +139,11 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   same actions as keys. F2 toggles capture (`terminalMouse`). Bracketed paste
   is on: dropped media paths and `^v` clipboard images go through
   `extras::attach_media` / `attach_bytes` (`src/paste.rs`).
+  `backup.rs` schedules background backups using shared interval/retention settings;
+  monthly is 30 days, change waits 30 seconds with a five-minute floor. Maintenance
+  workers share the backup guard and suspend editing until complete. Settings also
+  exposes imports, tag review/rename, media compression and conflict/split merging.
+  The version/build commit is shown in Settings and `--version`.
   Non-tty invocations print (jnl parity). The design the screens
   follow is on the canvas linked from the plan's section 8.
 - **Apple** (`apple/`): iOS 17 / macOS 14 SwiftUI. `JournalStore` remains the
@@ -150,6 +155,9 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   `make apple-test` runs hostless XCTest. Requires macOS, full Xcode and rustup.
   The Apple workflow covers these commands; no Apple SDK build has run on this
   Linux host. Generated bindings/frameworks are ignored, never hand-edited.
+  iOS external-display presentation follows the active entry/editor or browse list;
+  `ExternalTheme` loads the bundled root `themes.json`. Option-Command +/- changes
+  size, T theme, P pause, H hints. Locked/paused displays never render journal text.
 - **Android**: not in the repo yet; Wander's Compose shell over a SAF `Vault`.
 
 ## Conventions

@@ -908,11 +908,12 @@ pub fn restore(j: &Journal, dest_dir: &Path, name: &str) -> Result<String, Strin
     Ok(safety_name)
 }
 
-/// Is a daily/weekly backup due, given the last one (local ts)?
+/// Is a daily/weekly/monthly backup due, given the last one (local ts)?
 pub fn backup_due(interval: &str, last: Option<&str>) -> bool {
     let period = match interval {
         "daily" => 86_400,
         "weekly" => 7 * 86_400,
+        "monthly" => 30 * 86_400,
         _ => return false,
     };
     match last.and_then(secs_since) {

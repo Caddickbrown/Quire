@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
-pub const INTERVALS: &[&str] = &["off", "daily", "weekly", "change"];
+pub const INTERVALS: &[&str] = &["off", "daily", "weekly", "monthly", "change"];
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug)]
 pub struct Settings {
@@ -22,7 +22,7 @@ pub struct Settings {
     /// Use the desktop's own title bar instead of Quire's (Linux app).
     #[serde(default)]
     pub system_titlebar: bool,
-    /// "off" | "daily" | "weekly" | "change"
+    /// "off" | "daily" | "weekly" | "monthly" | "change"
     #[serde(default)]
     pub backup_interval: Option<String>,
     /// How many "Quire backup …" folders to keep (1–50).

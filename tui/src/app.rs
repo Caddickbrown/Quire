@@ -14,7 +14,7 @@ use ratatui::layout::{Position, Rect};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -67,6 +67,13 @@ pub enum Confirm {
     Cleanup,
     FileAll,
     ClearOrphans,
+    MergeSplits,
+    CompressMedia,
+    MergeTags(Vec<String>, String),
+    ImportMarkdown(String),
+    ImportDayOne(String),
+    FileTransfer,
+    MergeConflicts,
     /// Restore this backup over the journal.
     Restore(String),
 }
@@ -76,6 +83,9 @@ pub enum Confirm {
 pub enum Ask {
     BackupDir,
     ExportPath,
+    RenameTag,
+    ImportMarkdown,
+    ImportDayOne,
 }
 
 pub enum Modal {
@@ -84,6 +94,7 @@ pub enum Modal {
     Input { label: &'static str, value: String, ask: Ask },
     /// Pick a backup to restore: (names newest first, chosen).
     Restore(Vec<String>, usize),
+    Tags(Vec<TagGroup>, usize),
 }
 
 /// What a cell on screen does when clicked. `ui` records these as it draws;
@@ -163,6 +174,10 @@ pub struct App {
     pub hover: Option<(u16, u16)>,
     last_check: Instant,
     fingerprint: u64,
+    pub maintenance_running: bool,
+    maintenance_result: Option<mpsc::Receiver<Result<String, String>>>,
+    backup_schedule: crate::backup::Schedule,
+    backup_result: Option<mpsc::Receiver<Result<String, String>>>,
 }
 
 pub struct Sel {
@@ -212,6 +227,10 @@ impl App {
             hits: RefCell::new(Vec::new()),
             last_check: Instant::now(),
             fingerprint: 0,
+            maintenance_running: false,
+            maintenance_result: None,
+            backup_schedule: crate::backup::Schedule::default(),
+            backup_result: None,
         };
         a.reload();
         a
@@ -219,7 +238,9 @@ impl App {
 
     pub fn reload(&mut self) {
         self.entries = self.j.load_all();
-        self.fingerprint = self.fingerprint_now();
+        let fingerprint = self.fingerprint_now();
+        if fingerprint != self.fingerprint { self.backup_schedule.changed(Instant::now()); }
+        self.fingerprint = fingerprint;
         self.clamp();
     }
 
@@ -657,6 +678,11 @@ impl App {
     // ----- the loop -----
 
     pub fn tick(&mut self) {
+        self.poll_backup();
+        self.poll_maintenance();
+        if !self.maintenance_running && self.backup_result.is_none() && !self.quit && self.backup_schedule.due(&self.settings, Instant::now()) {
+            self.run_backup();
+        }
         if let Some((_, at, err)) = &self.toast {
             if at.elapsed() > Duration::from_millis(if *err { 5000 } else { 3000 }) {
                 self.toast = None;
@@ -672,7 +698,7 @@ impl App {
                 self.toast("Time. Finish the sentence.".into(), false);
             }
         }
-        let autosave_due = self.draft.as_ref().map(|d| d.ed.dirty && d.ed.last_edit.elapsed() > Duration::from_millis(700)).unwrap_or(false);
+        let autosave_due = !self.maintenance_running && self.draft.as_ref().map(|d| d.ed.dirty && d.ed.last_edit.elapsed() > Duration::from_millis(700)).unwrap_or(false);
         if autosave_due {
             if let Err(e) = self.save_draft() {
                 self.toast(e, true);
@@ -703,6 +729,7 @@ impl App {
             self.quit = true;
             return;
         }
+        if self.maintenance_running { return; }
         if k.code == KeyCode::F(2) {
             self.toggle_mouse();
             return;
@@ -1178,6 +1205,19 @@ impl App {
                 }
                 _ => {}
             },
+            Modal::Tags(groups, index) => match k.code {
+                KeyCode::Esc => self.modal = None,
+                KeyCode::Up | KeyCode::Left => *index = index.saturating_sub(1),
+                KeyCode::Down | KeyCode::Right => *index = (*index + 1).min(groups.len().saturating_sub(1)),
+                KeyCode::Enter => {
+                    if let Some(group) = groups.get(*index) {
+                        let from = group.tags.iter().map(|(tag, _)| tag.clone()).collect::<Vec<_>>();
+                        let to = group.suggested.clone();
+                        self.modal = Some(Modal::Confirm { text: format!("Merge {} into {}?", from.join(", "), to), action: Confirm::MergeTags(from, to) });
+                    }
+                }
+                _ => {}
+            },
             Modal::Confirm { action, .. } => {
                 let action = action.clone();
                 match k.code {
@@ -1187,6 +1227,33 @@ impl App {
                             Confirm::Cleanup => self.run_cleanup(),
                             Confirm::FileAll => self.run_file_all(),
                             Confirm::ClearOrphans => self.run_clear_orphans(),
+                            Confirm::MergeSplits => {
+                                let tags = self.split_tags.clone();
+                                self.start_maintenance(move |j| merge_ex_split(&j, &tags).and_then(|r| if r.errors.is_empty() { Ok(format!("Merged {} entries from {} journals", r.entries, r.journals)) } else { Err(r.errors.join("; ")) }));
+                            }
+                            Confirm::CompressMedia => {
+                                let (id, _) = self.settings.ensure_device_id();
+                                self.persist(|s| s.device_id = Some(id.clone()));
+                                self.start_maintenance(move |j| {
+                                    let r = media::compress_existing(j.local()?, &id, &mut |_, _| {})?;
+                                    let message = format!("Compressed {} media; saved {} bytes", r.images + r.videos + r.audio, r.saved_bytes);
+                                    if !r.errors.is_empty() { Err(format!("{} — {}", message, r.errors.join("; "))) }
+                                    else if !r.skipped_missing_tools.is_empty() { Err(format!("{} — missing {}", message, r.skipped_missing_tools.join(", "))) }
+                                    else { Ok(message) }
+                                });
+                            }
+                            Confirm::MergeTags(from, to) => self.start_maintenance(move |j| rename_tags(&j, &from, &to).map(|n| format!("Updated tags in {} files", n))),
+                            Confirm::ImportMarkdown(path) => self.start_maintenance(move |j| import_markdown_folder(&j, std::path::Path::new(&path), false).map(|r| format!("Imported {} entries; {} skipped", r.written, r.skipped))),
+                            Confirm::ImportDayOne(path) => self.start_maintenance(move |j| import_day_one(&j, std::path::Path::new(&path), false).map(|r| format!("Imported {} entries and {} media", r.written, r.media))),
+                            Confirm::MergeConflicts => self.start_maintenance(move |j| {
+                                let files = j.conflict_files(); let mut added = 0;
+                                for file in &files { added += merge_conflict(&j, file)?; }
+                                Ok(format!("Merged {} entries from {} conflict copies", added, files.len()))
+                            }),
+                            Confirm::FileTransfer => {
+                                let tags = self.split_tags.clone();
+                                self.start_maintenance(move |j| import_transfer(&j, &now_local(), &tags).map(|n| format!("Filed {} entries from transfer.md", n)));
+                            }
                             Confirm::Restore(name) => self.run_restore(&name),
                             Confirm::DeleteSelected => self.delete_selected(),
                             Confirm::DiscardDraft => {
@@ -1234,14 +1301,14 @@ impl App {
 
     // ----- settings -----
 
-    pub const SETTING_ROWS: usize = 14;
+    pub const SETTING_ROWS: usize = 24;
 
     /// Where each group of rows starts, with its heading.
-    pub const SETTING_GROUPS: [(usize, &'static str); 3] = [(0, "WRITING"), (6, "BACKUPS"), (9, "MAINTENANCE")];
+    pub const SETTING_GROUPS: [(usize, &'static str); 3] = [(0, "WRITING"), (6, "BACKUPS"), (11, "MAINTENANCE")];
 
     /// Rows that do something when pressed instead of stepping a value.
     pub fn setting_is_action(i: usize) -> bool {
-        i >= 6
+        i == 6 || i >= 9
     }
 
     /// The value shown for a row of the settings page.
@@ -1256,13 +1323,26 @@ impl App {
             4 => ("Mouse", onoff(self.mouse)),
             5 => ("Data Saver", onoff(self.settings.data_saver)),
             6 => ("Backup folder", self.settings.backup_dir.clone().unwrap_or_else(|| "not set".into())),
-            7 => ("Back up now", self.settings.last_backup.as_ref().map(|t| format!("last {}", &t[..t.len().min(16)])).unwrap_or_else(go)),
-            8 => ("Restore a backup", go()),
-            9 => ("Clean up", go()),
-            10 => ("Sort inbox", go()),
-            11 => ("File all drafts", go()),
-            12 => ("Clear orphan media", go()),
-            _ => ("Export all", go()),
+            7 => ("Automatic backups", match self.settings.interval().as_str() {
+                "daily" => "daily (24 hours)", "weekly" => "weekly (7 days)", "monthly" => "monthly (30 days)",
+                "change" => "on change (30s idle)", _ => "off",
+            }.into()),
+            8 => ("Keep backups", format!("{} copies", self.settings.keep())),
+            9 => ("Back up now", if self.backup_result.is_some() { "running…".into() } else { self.settings.last_backup.as_ref().map(|t| format!("last {}", &t[..t.len().min(16)])).unwrap_or_else(go) }),
+            10 => ("Restore a backup", go()),
+            11 => ("Clean up", go()),
+            12 => ("Sort inbox", go()),
+            13 => ("File all drafts", go()),
+            14 => ("Clear orphan media", go()),
+            15 => ("Export all", go()),
+            16 => ("Merge ex-split", go()),
+            17 => ("Compress media", if self.maintenance_running { "running…".into() } else { go() }),
+            18 => ("Review tags", go()),
+            19 => ("Rename tags", go()),
+            20 => ("Import markdown", go()),
+            21 => ("Import Day One", go()),
+            22 => ("File transfer.md", go()),
+            _ => ("Merge conflict copies", go()),
         }
     }
 
@@ -1299,15 +1379,26 @@ impl App {
                 let on = !self.settings.data_saver;
                 self.persist(|s| s.data_saver = on);
             }
+            7 => {
+                let intervals = quire_core::settings::INTERVALS;
+                let current = intervals.iter().position(|v| *v == self.settings.interval()).unwrap_or(0) as i64;
+                let value = intervals[(current + dir).rem_euclid(intervals.len() as i64) as usize].to_string();
+                self.persist(|s| s.backup_interval = Some(value.clone()));
+                self.backup_schedule.changed(Instant::now());
+            }
+            8 => {
+                let keep = (self.settings.keep() as i64 + dir).clamp(1, 50) as u32;
+                self.persist(|s| s.backup_keep = Some(keep));
+            }
             _ if dir < 0 => {}
             6 => {
                 let cur = self.settings.backup_dir.clone().unwrap_or_default();
                 self.modal = Some(Modal::Input { label: "Backup folder", value: cur, ask: Ask::BackupDir });
             }
-            7 => self.run_backup(),
-            8 => self.open_restore(),
-            9 => self.modal = Some(Modal::Confirm { text: "Standardise punctuation, reorder and dedupe every day file?".into(), action: Confirm::Cleanup }),
-            10 => match sort_inbox(&self.j) {
+            9 => self.run_backup(),
+            10 => self.open_restore(),
+            11 => self.modal = Some(Modal::Confirm { text: "Standardise punctuation, reorder and dedupe every day file?".into(), action: Confirm::Cleanup }),
+            12 => match sort_inbox(&self.j) {
                 Ok(true) => {
                     self.reload();
                     self.toast("Inbox sorted by time".into(), false);
@@ -1315,8 +1406,20 @@ impl App {
                 Ok(false) => self.toast("Inbox was already in order".into(), false),
                 Err(e) => self.toast(e, true),
             },
-            11 => self.modal = Some(Modal::Confirm { text: "File every draft to its day?".into(), action: Confirm::FileAll }),
-            12 => self.modal = Some(Modal::Confirm { text: "Delete media no entry links to?".into(), action: Confirm::ClearOrphans }),
+            13 => self.modal = Some(Modal::Confirm { text: "File every draft to its day?".into(), action: Confirm::FileAll }),
+            14 => self.modal = Some(Modal::Confirm { text: "Delete media no entry links to?".into(), action: Confirm::ClearOrphans }),
+            16 => self.modal = Some(Modal::Confirm { text: "Merge journals whose split tags are no longer configured?".into(), action: Confirm::MergeSplits }),
+            17 => self.modal = Some(Modal::Confirm { text: "Compress existing media and convert HEIC? Originals are replaced; back up first.".into(), action: Confirm::CompressMedia }),
+            18 => {
+                let groups = tag_review(&self.j);
+                if groups.is_empty() { self.toast("No similar tags found".into(), false); }
+                else { self.modal = Some(Modal::Tags(groups, 0)); }
+            }
+            19 => self.modal = Some(Modal::Input { label: "Rename (old -> new)", value: String::new(), ask: Ask::RenameTag }),
+            20 => self.modal = Some(Modal::Input { label: "Markdown folder", value: String::new(), ask: Ask::ImportMarkdown }),
+            21 => self.modal = Some(Modal::Input { label: "Day One JSON", value: String::new(), ask: Ask::ImportDayOne }),
+            22 => self.modal = Some(Modal::Confirm { text: "File transfer.md into dated entries?".into(), action: Confirm::FileTransfer }),
+            23 => self.modal = Some(Modal::Confirm { text: "Merge sync conflict copies, keeping both versions' entries?".into(), action: Confirm::MergeConflicts }),
             _ => {
                 let home = dirs::home_dir().unwrap_or_default();
                 let dest = home.join(format!("quire-export-{}.md", &now_local()[..10]));
@@ -1342,6 +1445,23 @@ impl App {
                     Err(e) => self.toast(e, true),
                 }
             }
+            Ask::RenameTag => {
+                let Some((from, to)) = v.split_once("->") else { return self.toast("Use old -> new (several old tags may be separated by spaces)".into(), true); };
+                let from: Vec<String> = from.split_whitespace().map(str::to_string).collect();
+                let to = to.trim().to_string();
+                if from.is_empty() || to.is_empty() { return self.toast("Enter both old and new tags".into(), true); }
+                self.modal = Some(Modal::Confirm { text: format!("Rename {} to {} in every entry?", from.join(", "), to), action: Confirm::MergeTags(from, to) });
+            }
+            Ask::ImportMarkdown | Ask::ImportDayOne => {
+                if v.is_empty() { return; }
+                let path = expand_home(v);
+                let report = if ask == Ask::ImportMarkdown { import_markdown_folder(&self.j, std::path::Path::new(&path), true) }
+                    else { import_day_one(&self.j, std::path::Path::new(&path), true) };
+                match report {
+                    Ok(report) => self.modal = Some(Modal::Confirm { text: format!("Import {} entries ({} already present)?", report.written, report.skipped), action: if ask == Ask::ImportMarkdown { Confirm::ImportMarkdown(path) } else { Confirm::ImportDayOne(path) } }),
+                    Err(error) => self.toast(error, true),
+                }
+            }
             Ask::ExportPath => {
                 if v.is_empty() {
                     return;
@@ -1365,19 +1485,78 @@ impl App {
     }
 
     fn run_backup(&mut self) {
+        if self.backup_result.is_some() { return self.toast("A backup is already running".into(), false); }
         let Some(dir) = self.backup_dir() else { return };
-        let _g = match BackupGuard::acquire() {
+        let guard = match BackupGuard::acquire() {
             Ok(g) => g,
-            Err(e) => return self.toast(e, true),
+            Err(e) => { self.backup_schedule.failed(Instant::now()); return self.toast(e, true); }
         };
         let keep = self.settings.keep();
-        match backup(&self.j, &dir).and_then(|made| prune_backups(&dir, keep).map(|_| made)) {
+        let journal = self.j.clone();
+        let (sender, receiver) = mpsc::channel();
+        self.backup_result = Some(receiver);
+        self.backup_schedule.started();
+        std::thread::spawn(move || {
+            let _guard = guard;
+            let result = backup(&journal, &dir).and_then(|made| prune_backups(&dir, keep).map(|_| made));
+            let _ = sender.send(result);
+        });
+    }
+
+    fn backup_finished(&mut self, result: Result<String, String>) {
+        match result {
             Ok(made) => {
                 let now = now_local();
                 self.persist(|s| s.last_backup = Some(now.clone()));
                 self.toast(format!("Backed up to {}", made), false);
             }
-            Err(e) => self.toast(e, true),
+            Err(error) => { self.backup_schedule.failed(Instant::now()); self.toast(error, true); }
+        }
+    }
+
+    fn poll_backup(&mut self) {
+        let result = self.backup_result.as_ref().map(|receiver| receiver.try_recv());
+        match result {
+            Some(Ok(result)) => { self.backup_result = None; self.backup_finished(result); }
+            Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                self.backup_result = None;
+                self.backup_finished(Err("The backup worker stopped unexpectedly".into()));
+            }
+            _ => {}
+        }
+    }
+
+    fn finish_backup(&mut self) {
+        if let Some(receiver) = self.backup_result.take() {
+            self.backup_finished(receiver.recv().unwrap_or_else(|_| Err("The backup worker stopped unexpectedly".into())));
+        }
+    }
+
+    fn start_maintenance(&mut self, job: impl FnOnce(Journal) -> Result<String, String> + Send + 'static) {
+        if self.maintenance_running || self.backup_result.is_some() { return self.toast("Wait for the current backup or maintenance to finish".into(), true); }
+        let guard = match BackupGuard::acquire() { Ok(guard) => guard, Err(error) => return self.toast(error, true) };
+        let journal = self.j.clone();
+        let (sender, receiver) = mpsc::channel();
+        self.maintenance_result = Some(receiver);
+        self.maintenance_running = true;
+        self.toast("Maintenance running — please leave Quire open".into(), false);
+        std::thread::spawn(move || { let _guard = guard; let _ = sender.send(job(journal)); });
+    }
+    fn maintenance_finished(&mut self, result: Result<String, String>) {
+        self.maintenance_running = false;
+        self.reload();
+        match result { Ok(message) => self.toast(message, false), Err(error) => self.toast(error, true) }
+    }
+    fn poll_maintenance(&mut self) {
+        match self.maintenance_result.as_ref().map(|receiver| receiver.try_recv()) {
+            Some(Ok(result)) => { self.maintenance_result = None; self.maintenance_finished(result); }
+            Some(Err(mpsc::TryRecvError::Disconnected)) => { self.maintenance_result = None; self.maintenance_finished(Err("Maintenance worker stopped unexpectedly".into())); }
+            _ => {}
+        }
+    }
+    fn finish_maintenance(&mut self) {
+        if let Some(receiver) = self.maintenance_result.take() {
+            self.maintenance_finished(receiver.recv().unwrap_or_else(|_| Err("Maintenance worker stopped unexpectedly".into())));
         }
     }
 
@@ -1437,7 +1616,7 @@ impl App {
 
     fn run_clear_orphans(&mut self) {
         match delete_orphans(&self.j) {
-            Ok(n) => self.toast(format!("Removed {} unlinked file(s)", n), false),
+            Ok(n) => { self.backup_schedule.changed(Instant::now()); self.toast(format!("Removed {} unlinked file(s)", n), false); }
             Err(e) => self.toast(e, true),
         }
     }
@@ -1471,6 +1650,7 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, m: MouseEvent) {
+        if self.maintenance_running { return; }
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.help {
@@ -1799,6 +1979,7 @@ pub fn run(mut app: App) -> std::io::Result<()> {
             }
             app.tick();
             if app.quit {
+                app.finish_maintenance();
                 if app.draft.is_some() {
                     if let Err(e) = app.save_draft() {
                         eprintln!("  {}", e);
@@ -1809,6 +1990,8 @@ pub fn run(mut app: App) -> std::io::Result<()> {
         }
         Ok(())
     })();
+    app.finish_maintenance();
+    app.finish_backup();
     let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
     result

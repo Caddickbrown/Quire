@@ -75,13 +75,25 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
         // Deliberately not applied to Return or "?", which have no competing
         // system behaviour and are better left to ordinary chain order.
         for command in arrows { command.wantsPriorityOverSystemBehavior = true }
-        return arrows + [
+        let displayKeys: [UIKeyCommand] = ExternalDisplayModel.shared.isConnected ? [
+            UIKeyCommand(title: "Larger display text", action: #selector(displayLarger), input: "=", modifierFlags: [.command, .alternate]),
+            UIKeyCommand(title: "Larger display text", action: #selector(displayLarger), input: "+", modifierFlags: [.command, .alternate]),
+            UIKeyCommand(title: "Smaller display text", action: #selector(displaySmaller), input: "-", modifierFlags: [.command, .alternate]),
+            UIKeyCommand(title: "Next display theme", action: #selector(displayTheme), input: "t", modifierFlags: [.command, .alternate]),
+            UIKeyCommand(title: "Pause / resume display", action: #selector(displayPause), input: "p", modifierFlags: [.command, .alternate]),
+            UIKeyCommand(title: "Toggle key hints", action: #selector(quireToggleHints), input: "h", modifierFlags: [.command, .alternate]),
+        ] : []
+        return arrows + displayKeys + [
             UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(quireOpenSelection)),
             UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(quireClearSelection)),
             UIKeyCommand(input: "?", modifierFlags: [], action: #selector(quireToggleHints)),
         ]
     }
 
+    @objc private func displayLarger() { ExternalDisplayModel.shared.adjustTextSize(1) }
+    @objc private func displaySmaller() { ExternalDisplayModel.shared.adjustTextSize(-1) }
+    @objc private func displayTheme() { ExternalDisplayModel.shared.cycleTheme() }
+    @objc private func displayPause() { ExternalDisplayModel.shared.togglePause() }
     @objc private func quireMoveUp()   { KeyCommandRouter.shared.moveUp() }
     @objc private func quireMoveDown() { KeyCommandRouter.shared.moveDown() }
     @objc private func quireOpenSelection()  { KeyCommandRouter.shared.open() }

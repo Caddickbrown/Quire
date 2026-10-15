@@ -19,6 +19,7 @@
 		C33255FA5CBE52908C555FA5 /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64DA39CFB5BC597A836E29E3 /* JournalStore.swift */; };
 		A1B080BDCF62550F9BD28602 /* CoreJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D621AD259615470A0332C22 /* CoreJournal.swift */; };
 		D6ADFB3B9BC158F2BFA265B5 /* AppleVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E04E597C279590983417F37 /* AppleVault.swift */; };
+		DF5A9F7DEC5D5323A432C357 /* ExternalTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D99C633A50657D08F33741E /* ExternalTheme.swift */; };
 		C0215CCB8FCE571198FB7DA3 /* QuireCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24347EB8D1EF54DBA0B13FCD /* QuireCore.swift */; };
 		7648246DC5BF5967923E8CA3 /* Templates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14AF8CCD2EB95A3EB7E99C40 /* Templates.swift */; };
 		FE46098381155B99B84670F7 /* Importers.swift in Sources */ = {isa = PBXBuildFile; fileRef = C64E8C9995395CF7A0352834 /* Importers.swift */; };
@@ -56,6 +57,7 @@
 		EA214089B9B75FC1A6BE83BD /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED47D33552DF5892B2E4D714 /* SettingsView.swift */; };
 		99482B7A97DD56FE9297F9F8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 94CAB23CC67A530BB80D9B9C /* Assets.xcassets */; };
 		8E024AFEF51D5D2E81FD76F3 /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = F3CE120A62095CDE90288AB5 /* fonts */; };
+		AFB87D64D6AC51959EACF6F6 /* themes.json in Resources */ = {isa = PBXBuildFile; fileRef = CA30FCCEB7E05E759B843C8C /* themes.json */; };
 		8EC192126CE855CFBB8718F2 /* QuireWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14326FEB75CD5E6F9DAC9DC4 /* QuireWidget.swift */; };
 		78B85277F566565C997241BD /* QuireWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A610BE49A435300A6DD3E64 /* QuireWidgetBundle.swift */; };
 		52D59FA5489C53189643989C /* QuireLockScreenWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 787687FF3A5158D9854060FB /* QuireLockScreenWidget.swift */; };
@@ -129,6 +131,7 @@
 		64DA39CFB5BC597A836E29E3 /* JournalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalStore.swift; sourceTree = "<group>"; };
 		2D621AD259615470A0332C22 /* CoreJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreJournal.swift; sourceTree = "<group>"; };
 		0E04E597C279590983417F37 /* AppleVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleVault.swift; sourceTree = "<group>"; };
+		1D99C633A50657D08F33741E /* ExternalTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalTheme.swift; sourceTree = "<group>"; };
 		24347EB8D1EF54DBA0B13FCD /* QuireCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Generated/QuireCore.swift; sourceTree = "<group>"; };
 		14AF8CCD2EB95A3EB7E99C40 /* Templates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Templates.swift; sourceTree = "<group>"; };
 		C64E8C9995395CF7A0352834 /* Importers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Importers.swift; sourceTree = "<group>"; };
@@ -166,6 +169,7 @@
 		ED47D33552DF5892B2E4D714 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		94CAB23CC67A530BB80D9B9C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F3CE120A62095CDE90288AB5 /* fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = fonts; sourceTree = "<group>"; };
+		CA30FCCEB7E05E759B843C8C /* themes.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = ../../themes.json; sourceTree = "<group>"; };
 		BB0D188A5FF459FCBDDC5770 /* iOS/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		578C318B43785325BE1B83DD /* macOS/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		1B963E24A0DB50B880153E30 /* Quire.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Quire.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -260,6 +264,7 @@
 				136E08B9542853D39F26A2E6 /* Views */,
 				94CAB23CC67A530BB80D9B9C /* Assets.xcassets */,
 				F3CE120A62095CDE90288AB5 /* fonts */,
+				CA30FCCEB7E05E759B843C8C /* themes.json */,
 				A8D2D8BF201754E9BB244DD3 /* iOS */,
 				3585E52EE5BE5A8C971B3C64 /* macOS */,
 			);
@@ -277,6 +282,7 @@
 				64DA39CFB5BC597A836E29E3 /* JournalStore.swift */,
 				2D621AD259615470A0332C22 /* CoreJournal.swift */,
 				0E04E597C279590983417F37 /* AppleVault.swift */,
+				1D99C633A50657D08F33741E /* ExternalTheme.swift */,
 				14AF8CCD2EB95A3EB7E99C40 /* Templates.swift */,
 				C64E8C9995395CF7A0352834 /* Importers.swift */,
 				7F904588828450EAB3C8BF43 /* Transcription.swift */,
@@ -497,6 +503,7 @@
 			files = (
 				99482B7A97DD56FE9297F9F8 /* Assets.xcassets in Resources */,
 				8E024AFEF51D5D2E81FD76F3 /* fonts in Resources */,
+				AFB87D64D6AC51959EACF6F6 /* themes.json in Resources */,
 				40FBCE3FF65154A6975F8FB8 /* CHANGELOG.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -528,6 +535,7 @@
 				C33255FA5CBE52908C555FA5 /* JournalStore.swift in Sources */,
 				A1B080BDCF62550F9BD28602 /* CoreJournal.swift in Sources */,
 				D6ADFB3B9BC158F2BFA265B5 /* AppleVault.swift in Sources */,
+				DF5A9F7DEC5D5323A432C357 /* ExternalTheme.swift in Sources */,
 				C0215CCB8FCE571198FB7DA3 /* QuireCore.swift in Sources */,
 				7648246DC5BF5967923E8CA3 /* Templates.swift in Sources */,
 				FE46098381155B99B84670F7 /* Importers.swift in Sources */,

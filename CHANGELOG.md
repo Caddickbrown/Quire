@@ -21,6 +21,10 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
+- **Backups**: configure automatic backups (off, daily, weekly, monthly or on change) and retention in Terminal Settings; monthly means 30 days in every shell. The terminal runs backups in the background and keeps 10 copies by default.
+- **Terminal**: Settings adds tag review/rename, media compression, ex-split merging, Markdown/Day One/transfer imports and conflict-copy merging through the shared Rust core. Show the version and build commit in Settings and `quire --version`.
+- **Linux**: Settings adds File All Drafts and Print / Export PDF for the filed journal.
+- **Apple**: Settings adds sorting, filing all drafts, transfer imports and conflict-copy merging through Rust. iOS external displays gain shared Quire themes, keyboard controls for size/theme/pause/hints, and an independent paused screen.
 - **Apple**: bring Nook's native iOS/macOS SwiftUI app, widget and share
   extension into `apple/` as Quire; journal parsing, search, editing, filing,
   migration and maintenance use the shared Rust core through UniFFI and a
@@ -120,6 +124,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   `README.md` describes the whole, `linux/README.md` the desktop app.
 
 ### Fixed
+- **Terminal**: align tags and word counts in Today, Inbox and Browse, including rows with different digit counts.
+- **Apple**: external monitors show a neutral screen while the journal is locked, including when an On this day preview is available.
 - **Editor**: continuing an ordered list at the largest supported number
   repeats the number instead of overflowing.
 - **Linux**: the running window shows Quire's icon again. Since the binary

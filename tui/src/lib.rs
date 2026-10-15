@@ -1,7 +1,10 @@
 //! Quire in the terminal. One binary, two names: installed as `quire` and as
 //! `jnl`, and every jnl subcommand keeps its spelling.
 
+pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), env!("QUIRE_GIT_SUFFIX"));
+
 pub mod app;
+mod backup;
 pub mod cli;
 pub mod editor;
 pub mod md;
@@ -63,6 +66,10 @@ pub fn resolve_folder(opts: &Opts, settings: &Settings) -> PathBuf {
 
 pub fn run(name: &str) {
     let opts = parse_opts(std::env::args().skip(1).collect());
+    if opts.args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("Quire {}", VERSION);
+        return;
+    }
     let settings = Settings::load();
     let folder = resolve_folder(&opts, &settings);
     if !folder.is_dir() {

@@ -50,7 +50,7 @@ const S = {
   calMonth: null, year: new Date().getFullYear(), promptReroll: 0,
   timer: { left: null, running: false, handle: null },
   assets: null, assetUrls: new Map(), tagReview: null, tagPicks: {}, backups: null, sizes: null, statsExtra: null, tplEdit: null,
-  narrow: false, showList: true, tagPick: null, lightbox: null, printDay: null, jnlDir: null, customChrome: false, chromeAvail: false,
+  narrow: false, showList: true, tagPick: null, lightbox: null, printDay: null, printAll: false, jnlDir: null, customChrome: false, chromeAvail: false,
   folderMissing: false, conflicts: [], stale: false, menuAsset: null,
   backupInterval: 'off', backupKeep: 10, lastBackup: null, backupRunning: false,
   dataSaver: false, dataSaved: 0, mediaTools: { ffmpeg: true, heif: true }, compress: null, compressReport: null,
@@ -427,6 +427,7 @@ function renderCalendar() {
 
 /* ---------- entry pane ---------- */
 function renderPane() {
+  if (S.printAll) return renderPrintJournal();
   if (S.view === 'journal' && S.jview === 'stream' && S.mode !== 'write') return renderStream();
   if (S.view === 'journal' && S.jview === 'media' && S.mode !== 'write') return renderMedia();
   if (S.mode === 'write' && S.draft) return renderWrite();
@@ -1221,6 +1222,11 @@ function openLightbox(rel, url, owner) {
   $('#ask-no').onclick = closePopover; askConfirm.cancel = closePopover;
 }
 
+function renderPrintJournal() {
+  const entries = [...filed()].sort((a, b) => a.ts.localeCompare(b.ts));
+  return `<section class="entry-pane"><div class="page"><article class="sheet print-sheet">${entries.map(e => `<section class="day-entry"><div class="day-meta">${esc(e.ts)}${e.starred ? ' ★' : ''}</div>${e.title ? `<h2>${esc(e.title)}</h2>` : ''}<div class="prose">${renderProse(e.body, e.file)}</div></section>`).join('')}</article></div></section>`;
+}
+
 /* ---------- a day on one page (jnl log) ---------- */
 function renderDayPage(date) {
   const es = sorted([...filed().filter(e => e.date === date), ...inbox().filter(e => e.date === date)]).sort((a, b) => a.ts.localeCompare(b.ts));
@@ -1540,6 +1546,8 @@ function renderSettings() {
       ${mediaSectionHtml()}
       <section id="s-maint"><h2>Maintenance</h2>
         <div class="srow"><div class="lbl"><span>Clean up</span><span class="note">Normalises … and straight quotes, reorders days by time, removes exact duplicates, and moves entries matching a split tag into their split journal. jnl’s <span class="mono">cleanup</span>, plus Nook’s dedupe.</span></div><button class="btn" data-action="cleanup">Clean up</button></div>
+        <div class="srow"><div class="lbl"><span>File all drafts</span><span class="note">Files drafts into their days or split journals</span></div><button class="btn" data-action="file-all">File all…</button></div>
+        <div class="srow"><div class="lbl"><span>Print / Export PDF</span><span class="note">Every filed entry; choose Save as PDF in the print dialog</span></div><button class="btn" data-action="print-journal">Print…</button></div>
         <div class="srow"><div class="lbl"><span>Sort inbox by date</span></div><button class="btn" data-action="sort-inbox">Sort</button></div>
         <div class="srow"><div class="lbl"><span>Merge ex-split journals into journal</span><span class="note">Split journals whose tag is no longer a split tag: their entries go back into the journal’s days, and emptied files are removed</span></div><button class="btn" data-action="merge-ex-split">Merge…</button></div>
         ${S.conflicts.length ? `<div class="srow"><div class="lbl"><span>Sync conflicts · ${S.conflicts.length}</span><span class="note">Copies a sync tool left beside a journal file. Merge adds the entries the main file is missing, sorts it, then deletes the copy.</span></div></div>
@@ -1588,8 +1596,8 @@ function backupListHtml() {
 function backupSectionHtml() {
   if (S.backups === null && S.backupDir) invoke('backups').then(b => { S.backups = b; const el = $('#backup-list'); if (el) el.innerHTML = backupListHtml(); }).catch(() => { S.backups = []; });
   const last = S.backupRunning ? 'Backing up…' : S.lastBackup ? `${fmtDate(S.lastBackup.slice(0, 10))} ${S.lastBackup.slice(11, 16)}` : 'Never';
-  const iv = [['off', 'Off'], ['daily', 'Daily'], ['weekly', 'Weekly'], ['change', 'On every change']];
-  const note = { off: 'Only when you press Back up now', daily: 'When Quire opens or comes back to the front, if a day has passed', weekly: 'When Quire opens or comes back to the front, if a week has passed', change: '30 seconds after your last change, at most once every five minutes' }[S.backupInterval] || '';
+  const iv = [['off', 'Off'], ['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['change', 'On every change']];
+  const note = { off: 'Only when you press Back up now', daily: 'When Quire opens or comes back to the front, if a day has passed', weekly: 'When Quire opens or comes back to the front, if a week has passed', monthly: 'When Quire opens or comes back to the front, if 30 days have passed', change: '30 seconds after your last change, at most once every five minutes' }[S.backupInterval] || '';
   return `<section id="s-backup"><h2>Backup</h2>
     <div class="srow"><div class="lbl"><span>Backup folder</span><span class="path">${esc(S.backupDir || 'Not set')}</span></div><button class="btn" data-action="pick-backup">Choose…</button>${S.backupDir ? `<button class="btn primary" data-action="backup-now" ${S.backupRunning ? 'disabled' : ''}>Back up now</button>` : ''}</div>
     <div class="srow"><div class="lbl"><span>Automatic</span><span class="note">${note}</span></div><div class="seg" role="group" aria-label="Automatic backup">${iv.map(([v, l]) => `<button data-action="backup-interval" data-v="${v}" aria-pressed="${S.backupInterval === v}">${l}</button>`).join('')}</div></div>
@@ -1740,6 +1748,15 @@ document.addEventListener('click', async ev => {
       case 'cancel-edit': await cancelEdit(); break;
       case 'save-edit': await saveEdit(); break;
       case 'file': await fileCurrent(); break;
+      case 'print-journal': {
+        if (!filed().length) { toast('No filed entries to print'); break; }
+        if (S.mode === 'write' && !(await leaveWrite())) break;
+        const previousView = S.view;
+        S.printAll = true; S.view = 'journal'; render();
+        try { await resolveVisibleMedia(); await new Promise(resolve => setTimeout(resolve, 150)); window.print(); }
+        finally { S.printAll = false; S.view = previousView; render(); }
+        break;
+      }
       case 'file-all': {
         const n = inbox().length;
         if (!(await askConfirm(`File all ${plural(n, 'draft')} to their days?`, 'File all'))) break;
@@ -1796,7 +1813,7 @@ document.addEventListener('click', async ev => {
       case 'unlock': await tryUnlock(); break;
       case 'pick-backup': { const p = await invoke('plugin:dialog|open', { options: { directory: true, multiple: false, title: 'Choose a backup folder' } }); if (p) { await invoke('set_backup_dir', { path: p }); S.backups = null; await load(); patchSection('s-backup'); } break; }
       case 'backup-now': { S.backupRunning = true; patchSection('s-backup'); try { const d = await invoke('backup_now'); toast('Backed up to ' + d.split('/').pop()); } finally { S.backups = null; await load().catch(() => {}); S.backupRunning = false; patchSection('s-backup'); } break; }
-      case 'backup-interval': { const v = el.dataset.v; await invoke('set_backup_prefs', { interval: v, keep: S.backupKeep }); S.backupInterval = v; patchSection('s-backup'); if (v === 'daily' || v === 'weekly') maybeBackup(); break; }
+      case 'backup-interval': { const v = el.dataset.v; await invoke('set_backup_prefs', { interval: v, keep: S.backupKeep }); S.backupInterval = v; patchSection('s-backup'); if (v === 'daily' || v === 'weekly' || v === 'monthly') maybeBackup(); break; }
       case 'backup-keep': { const keep = Math.max(1, Math.min(50, S.backupKeep + +el.dataset.d)); if (keep === S.backupKeep) break; await invoke('set_backup_prefs', { interval: S.backupInterval, keep }); S.backupKeep = keep; patchSection('s-backup'); $(`#s-backup [data-action="backup-keep"][data-d="${el.dataset.d}"]`)?.focus(); break; }
       case 'restore': { if (!(await askConfirm(`Restore “${esc(el.dataset.name)}” over the current folder? A full copy of the current folder is saved first.`, 'Restore'))) break; const safety = await invoke('restore_backup', { name: el.dataset.name }); S.assetUrls.clear(); S.backups = null; await load(); toast(`Restored. Your previous folder is saved as “${safety}”`); render(); break; }
       case 'cleanup': {

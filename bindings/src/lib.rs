@@ -152,6 +152,14 @@ enum Request {
         to: String,
     },
     Files,
+    Conflicts,
+    MergeConflict {
+        file: String,
+    },
+    FileTransfer {
+        ts: String,
+        tags: Vec<String>,
+    },
     Read {
         file: String,
     },
@@ -228,6 +236,7 @@ impl NativeJournal {
         // evicted iCloud folder for an empty one.
         match &request {
             Request::Load
+            | Request::Conflicts
             | Request::Migrate
             | Request::Files
             | Request::FileAll { .. }
@@ -305,6 +314,9 @@ impl NativeJournal {
             Request::Cleanup { tags } => json(core::cleanup(j, &tags)?),
             Request::Merge { tags } => json(core::merge_ex_split(j, &tags)?),
             Request::RenameTag { from, to } => json(core::rename_tags(j, &from, &to)?),
+            Request::Conflicts => json(j.conflict_files()),
+            Request::MergeConflict { file } => json(core::merge_conflict(j, &file)?),
+            Request::FileTransfer { ts, tags } => json(core::import_transfer(j, &ts, &tags)?),
             Request::Files => json(j.entry_files().into_iter().map(|f| f.0).collect::<Vec<_>>()),
             Request::Read { file } => json(j.try_read(&core::check_rel(&file)?)?),
             Request::Write { file, content } => {

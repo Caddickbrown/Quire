@@ -26,7 +26,7 @@ import UIKit
 
 /// How often Quire copies the journal folder to the backup location by itself.
 enum BackupInterval: String, CaseIterable, Identifiable {
-    case off, daily, weekly, onChange
+    case off, daily, weekly, monthly, onChange
     var id: String { rawValue }
 
     var label: String {
@@ -34,6 +34,7 @@ enum BackupInterval: String, CaseIterable, Identifiable {
         case .off:      return "Off"
         case .daily:    return "Daily"
         case .weekly:   return "Weekly"
+        case .monthly:  return "Monthly (30 days)"
         case .onChange: return "On every change"
         }
     }
@@ -44,6 +45,7 @@ enum BackupInterval: String, CaseIterable, Identifiable {
         switch self {
         case .daily:  return 24 * 60 * 60
         case .weekly: return 7 * 24 * 60 * 60
+        case .monthly: return 30 * 24 * 60 * 60
         default:      return nil
         }
     }
@@ -1666,6 +1668,24 @@ final class JournalStore: ObservableObject {
         let ok = coreMutation { try $0.delete(entry); return true } ?? false
         publishCoreChange()
         return ok
+    }
+
+    @discardableResult
+    func fileTransfer() -> Int {
+        let added: Int = coreMutation { try $0.call("file_transfer", ["ts": Self.nowTS(), "tags": splitTags]) } ?? 0
+        publishCoreChange()
+        return added
+    }
+    @discardableResult
+    func mergeConflictCopies() -> Int {
+        guard let core else { return 0 }
+        var added = 0
+        do {
+            let files: [String] = try core.call("conflicts")
+            for file in files { let count: Int = try core.call("merge_conflict", ["file": file]); added += count }
+        } catch { lastWriteError = journalErrorMessage(error) }
+        publishCoreChange()
+        return added
     }
 
     // MARK: Bulk filing (jnl transfer)

@@ -63,7 +63,7 @@ send("/"); send("garden"); check("search results", seen("result")); send(DOWN); 
 send(ESC, 0.6); send(ESC); send(ESC)   # leave the editor, clear the query, leave search
 check("back on today after search", seen("A PROMPT"))
 send("r"); check("random opens browse", seen("YEAR")); send(ESC)
-send(","); check("settings page", seen("Daily word goal") and seen("Back up now") and seen("Clean up")); send(ESC, 0.6)
+send(","); check("settings page", seen("Daily word goal") and seen("Automatic backups") and seen("Keep backups") and seen("Back up now") and seen("Clean up")); send(ESC, 0.6)
 send("?"); check("help overlay", seen("KEYS")); send("x")
 send("q", 0.8)
 status = None
