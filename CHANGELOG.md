@@ -58,6 +58,11 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Repository**: a Cargo workspace (`core`, `tui`, `linux/src-tauri`);
   `README.md` describes the whole, `linux/README.md` the desktop app.
 
+### Fixed
+- **Linux**: the welcome card says where drafts live now —
+  `inbox/YYYY/MM/DD.md`, one file a day — and that an `inbox.md` from jnl
+  or Nook is folded in, instead of pointing at `inbox.md`.
+
 ### Removed
 - **Linux**: the presentation window branch (a second desktop window
   mirroring the composer) is parked, not merged.

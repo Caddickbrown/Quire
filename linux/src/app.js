@@ -1990,7 +1990,7 @@ function showWelcome() {
   const layer = $('#popover');
   layer.innerHTML = `<div class="popover corner" role="dialog"><h3>Welcome to Quire</h3>
     <div class="note" style="font-size:14px;line-height:1.6;color:var(--ink)">
-      <p style="margin:0 0 10px">Your words live in a plain folder of markdown: <span class="mono">inbox.md</span> for drafts and <span class="mono">journal/YYYY/MM/DD.md</span> for filed days, the same files jnl reads. Nothing here is locked in.</p>
+      <p style="margin:0 0 10px">Your words live in a plain folder of markdown, one file a day: <span class="mono">inbox/YYYY/MM/DD.md</span> for drafts and <span class="mono">journal/YYYY/MM/DD.md</span> for filed days, in jnl's format. An <span class="mono">inbox.md</span> from jnl or Nook is folded in when Quire opens the folder. Nothing here is locked in.</p>
       <p style="margin:0">Write with <kbd>Ctrl</kbd>+<kbd>N</kbd>, file with <kbd>Ctrl</kbd>+<kbd>J</kbd>, and <kbd>Ctrl</kbd>+<kbd>,</kbd> opens Settings.</p></div>
     <div class="row2"><span></span><button class="btn primary" id="ask-yes">Begin</button></div></div>`;
   layer.classList.add('open');
