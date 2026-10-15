@@ -185,6 +185,8 @@ async function load(reselect) {
   S.assets = null;
   if (snap.migration) toast(`inbox.md folded into inbox/: ${plural(snap.migration.moved, 'draft')} moved${snap.migration.skipped ? `, ${snap.migration.skipped} already there` : ''}. The original is in ${snap.migration.backup}`);
   if (snap.migration_error) fail(snap.migration_error);
+  if (snap.split_migration) toast(`${plural(snap.split_migration.journals, 'split journal')} folded into split/: ${plural(snap.split_migration.moved, 'entry', 'entries')} moved${snap.split_migration.skipped ? `, ${snap.split_migration.skipped} already there` : ''}. The originals are in .quire/migration/`);
+  if (snap.split_migration_error) fail(snap.split_migration_error);
   applyUi();
 }
 const saveUi = () => invoke('save_ui', { ui: S.ui }).catch(fail);
@@ -1493,7 +1495,7 @@ function renderSettings() {
           <button class="btn" data-action="pick-folder">Choose…</button><button class="btn ghost" data-action="open-folder">Show</button>${S.isSample ? '' : '<button class="btn ghost" data-action="use-sample">Use sample</button>'}</div>
         ${S.jnlDir && S.jnlDir !== S.folder ? `<div class="srow"><div class="lbl"><span>jnl’s folder</span><span class="note">JNL_DIR is set to <span class="path">${esc(S.jnlDir)}</span>. Point Quire at a copy of it first; use it directly once you trust it.</span></div><button class="btn ghost" data-action="use-jnl-dir">Use it</button></div>` : ''}
         <div class="srow"><div class="lbl"><span>Or paste a path</span><span class="note">~ is expanded</span></div><input id="pathin" class="picker" style="width:280px;padding:0 10px" placeholder="/home/you/notes"><button class="btn" data-action="set-path">Use</button></div>
-        <div class="srow"><div class="lbl"><span>Split tags</span><span class="note">Filing a draft with one of these @tags writes it to <span class="mono">&lt;tag&gt;.md</span> instead of the day, as jnl’s JNL_SPLIT_TAGS does. ${splitNote}</span></div><input id="splitin" class="picker" style="width:220px;padding:0 10px" value="${esc(S.splitTags.join(' '))}" placeholder="work private"><button class="btn" data-action="set-split">Save</button></div>
+        <div class="srow"><div class="lbl"><span>Split tags</span><span class="note">Filing a draft with one of these @tags writes it to that split journal, <span class="mono">split/&lt;tag&gt;/YYYY/MM/DD.md</span>, instead of the journal, as jnl’s JNL_SPLIT_TAGS does (jnl writes one <span class="mono">&lt;tag&gt;.md</span>; Quire folds those in). ${splitNote}</span></div><input id="splitin" class="picker" style="width:220px;padding:0 10px" value="${esc(S.splitTags.join(' '))}" placeholder="work private"><button class="btn" data-action="set-split">Save</button></div>
       </section>
       <section id="s-templates"><h2>Templates</h2>
         <div class="note" style="margin-bottom:8px">Markdown files in <span class="mono">.quire/templates/</span>, inserted from the composer’s ⋯ menu. <span class="mono">{{date}}</span>, <span class="mono">{{time}}</span> and <span class="mono">{{weekday}}</span> fill in on insert.</div>
@@ -1537,9 +1539,9 @@ function renderSettings() {
       ${backupSectionHtml()}
       ${mediaSectionHtml()}
       <section id="s-maint"><h2>Maintenance</h2>
-        <div class="srow"><div class="lbl"><span>Clean up</span><span class="note">Normalises … and straight quotes, reorders days by time, removes exact duplicates, and moves entries matching a split tag into their file. jnl’s <span class="mono">cleanup</span>, plus Nook’s dedupe.</span></div><button class="btn" data-action="cleanup">Clean up</button></div>
+        <div class="srow"><div class="lbl"><span>Clean up</span><span class="note">Normalises … and straight quotes, reorders days by time, removes exact duplicates, and moves entries matching a split tag into their split journal. jnl’s <span class="mono">cleanup</span>, plus Nook’s dedupe.</span></div><button class="btn" data-action="cleanup">Clean up</button></div>
         <div class="srow"><div class="lbl"><span>Sort inbox by date</span></div><button class="btn" data-action="sort-inbox">Sort</button></div>
-        <div class="srow"><div class="lbl"><span>Merge ex-split journals into journal</span><span class="note">Root <span class="mono">&lt;name&gt;.md</span> journals that are no longer split tags: their entries go back into their days, and emptied files are removed</span></div><button class="btn" data-action="merge-ex-split">Merge…</button></div>
+        <div class="srow"><div class="lbl"><span>Merge ex-split journals into journal</span><span class="note">Split journals whose tag is no longer a split tag: their entries go back into the journal’s days, and emptied files are removed</span></div><button class="btn" data-action="merge-ex-split">Merge…</button></div>
         ${S.conflicts.length ? `<div class="srow"><div class="lbl"><span>Sync conflicts · ${S.conflicts.length}</span><span class="note">Copies a sync tool left beside a journal file. Merge adds the entries the main file is missing, sorts it, then deletes the copy.</span></div></div>
         <div class="conflicts">${S.conflicts.map(c => `<div class="srow"><div class="lbl"><span class="path">${esc(c)}</span></div><button class="btn" data-action="merge-conflict" data-rel="${esc(c)}">Merge</button></div>`).join('')}</div>` : ''}
         <div class="srow"><div class="lbl"><span>Clear orphan media</span><span class="note">Deletes files in assets/ that no entry links to</span></div><button class="btn" data-action="clear-orphans">Check…</button></div>
@@ -1572,7 +1574,7 @@ function renderSettings() {
         <span><kbd>Ctrl</kbd> <kbd>[</kbd></span><span>Back: like Esc while writing · otherwise back to the list</span>
       </div></section>
       <section id="s-about"><h2>About</h2>
-        <p style="font-size:14px;line-height:1.6;color:var(--muted);max-width:640px">Quire 0.7 reads and writes the jnl format: <span class="mono">journal/YYYY/MM/DD.md</span>, split journals and, for drafts, <span class="mono">inbox/YYYY/MM/DD.md</span> (an <span class="mono">inbox.md</span> left by jnl or Nook is folded in on open, the original kept under <span class="mono">.quire/migration/</span>), with atomic writes like jnl. Quire’s own extras live in <span class="mono">.quire/</span> (templates, saved searches) and <span class="mono">assets/</span> (media); jnl ignores both. Not here: voice recording and transcription, iCloud sync, widgets, the phone and desk mode. Themes beyond Nook’s and Quire’s own need Wander’s source.</p>
+        <p style="font-size:14px;line-height:1.6;color:var(--muted);max-width:640px">Quire 0.7 reads and writes the jnl format: <span class="mono">journal/YYYY/MM/DD.md</span>, split journals in <span class="mono">split/&lt;tag&gt;/YYYY/MM/DD.md</span> (a jnl <span class="mono">&lt;tag&gt;.md</span> is folded in on open) and, for drafts, <span class="mono">inbox/YYYY/MM/DD.md</span> (an <span class="mono">inbox.md</span> left by jnl or Nook is folded in on open, the original kept under <span class="mono">.quire/migration/</span>), with atomic writes like jnl. Quire’s own extras live in <span class="mono">.quire/</span> (templates, saved searches) and <span class="mono">assets/</span> (media); jnl ignores both. Not here: voice recording and transcription, iCloud sync, widgets, the phone and desk mode. Themes beyond Nook’s and Quire’s own need Wander’s source.</p>
         <p style="font-size:13px;color:var(--muted)"><button class="btn ghost" data-action="welcome">Show the welcome note again</button></p>
       </section>
     </main></div>`;
@@ -1798,7 +1800,7 @@ document.addEventListener('click', async ev => {
       case 'backup-keep': { const keep = Math.max(1, Math.min(50, S.backupKeep + +el.dataset.d)); if (keep === S.backupKeep) break; await invoke('set_backup_prefs', { interval: S.backupInterval, keep }); S.backupKeep = keep; patchSection('s-backup'); $(`#s-backup [data-action="backup-keep"][data-d="${el.dataset.d}"]`)?.focus(); break; }
       case 'restore': { if (!(await askConfirm(`Restore “${esc(el.dataset.name)}” over the current folder? A full copy of the current folder is saved first.`, 'Restore'))) break; const safety = await invoke('restore_backup', { name: el.dataset.name }); S.assetUrls.clear(); S.backups = null; await load(); toast(`Restored. Your previous folder is saved as “${safety}”`); render(); break; }
       case 'cleanup': {
-        if (!(await askConfirm('Clean up every day file? Punctuation is normalised, days re-sorted, duplicates removed, and split-tagged entries moved to their files.', 'Clean up'))) break;
+        if (!(await askConfirm('Clean up every day file? Punctuation is normalised, days re-sorted, duplicates removed, and split-tagged entries moved to their split journals.', 'Clean up'))) break;
         const r = await invoke('run_cleanup'); await load();
         toast(`Formatted ${r.formatted}, reordered ${r.reordered}, removed ${r.deduped} duplicate${r.deduped === 1 ? '' : 's'}, extracted ${r.extracted} to split journals${r.errors?.length ? ' · ' + r.errors.join('; ') : ''}`);
         render(); break;
@@ -1990,7 +1992,7 @@ function showWelcome() {
   const layer = $('#popover');
   layer.innerHTML = `<div class="popover corner" role="dialog"><h3>Welcome to Quire</h3>
     <div class="note" style="font-size:14px;line-height:1.6;color:var(--ink)">
-      <p style="margin:0 0 10px">Your words live in a plain folder of markdown: <span class="mono">inbox.md</span> for drafts and <span class="mono">journal/YYYY/MM/DD.md</span> for filed days, the same files jnl reads. Nothing here is locked in.</p>
+      <p style="margin:0 0 10px">Your words live in a plain folder of markdown, one file a day: <span class="mono">inbox/YYYY/MM/DD.md</span> for drafts and <span class="mono">journal/YYYY/MM/DD.md</span> for filed days, in jnl's format. An <span class="mono">inbox.md</span> from jnl or Nook is folded in when Quire opens the folder. Nothing here is locked in.</p>
       <p style="margin:0">Write with <kbd>Ctrl</kbd>+<kbd>N</kbd>, file with <kbd>Ctrl</kbd>+<kbd>J</kbd>, and <kbd>Ctrl</kbd>+<kbd>,</kbd> opens Settings.</p></div>
     <div class="row2"><span></span><button class="btn primary" id="ask-yes">Begin</button></div></div>`;
   layer.classList.add('open');

@@ -56,6 +56,13 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   pseudo-terminal and checks the files it writes.
 
 ### Changed
+- **Format**: split journals live in `split/<tag>/YYYY/MM/DD.md`, one file
+  per day, instead of one root `<tag>.md`. A `<tag>.md` written by jnl or
+  Nook is folded in on open (every entry read back first; the original kept
+  in `.quire/migration/`), and root `.md` files with no entries are no longer
+  mistaken for split journals. `journal/` is unchanged. jnl and Nook won't
+  see split entries in `split/` until taught to; `tools/migrate_journal.py`
+  does the move from outside the app.
 - **Format**: the sidecar is `.quire/` (templates, saved searches, Data Saver
   ledgers). `.nook/` is read while only it exists and renamed on the first
   write; ledgers are read from both. Nook stops seeing templates and saved
@@ -68,6 +75,11 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   no longer shares a name with the terminal's `quire`.
 - **Repository**: a Cargo workspace (`core`, `tui`, `linux/src-tauri`);
   `README.md` describes the whole, `linux/README.md` the desktop app.
+
+### Fixed
+- **Linux**: the welcome card says where drafts live now —
+  `inbox/YYYY/MM/DD.md`, one file a day — and that an `inbox.md` from jnl
+  or Nook is folded in, instead of pointing at `inbox.md`.
 
 ### Removed
 - **Linux**: the presentation window branch (a second desktop window

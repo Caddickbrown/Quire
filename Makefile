@@ -4,8 +4,14 @@
 test:
 	cargo test
 
+# The desktop app too when this machine can build it (libwebkit2gtk-4.1-dev).
 check:
 	cargo clippy -p quire-core -p quire-tui -- -D warnings
+	@if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then \
+		cargo clippy -p quire-desktop -- -D warnings; \
+	else \
+		echo "skipping quire-desktop: no webkit2gtk-4.1 (see linux/README.md)"; \
+	fi
 
 # Drive every screen of the terminal app in a pseudo-terminal, twice: a roomy
 # window in Cinema and a small one in Marathon. 20/20 each or it fails.

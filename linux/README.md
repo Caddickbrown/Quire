@@ -24,7 +24,7 @@ First launch opens a **sample journal** (copied to `~/.local/share/com.caddickbr
 <folder>/
   inbox/YYYY/MM/DD.md      drafts, one file per day (an inbox.md is folded in on open)
   journal/YYYY/MM/DD.md    filed days (jnl)
-  <tag>.md                 split journals (jnl's JNL_SPLIT_TAGS)
+  split/<tag>/YYYY/MM/DD.md split journals (jnl's JNL_SPLIT_TAGS; a <tag>.md is folded in on open)
   transfer.md              jnl's batch file; Quire files it from Today or Settings
   assets/YYYY/MM/…         photos, audio, video, files (Quire; jnl ignores)
   .quire/templates/*.md    templates (Quire; jnl ignores; .nook/ read until first write)

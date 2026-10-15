@@ -26,13 +26,13 @@ Quire/
 <folder>/
   inbox/YYYY/MM/DD.md      drafts, one file per day
   journal/YYYY/MM/DD.md    filed entries, one file per day
-  <tag>.md                 split journals (jnl's JNL_SPLIT_TAGS)
+  split/<tag>/YYYY/MM/DD.md split journals (jnl's JNL_SPLIT_TAGS), one file per day
   transfer.md              jnl's batch file; Quire files it from Today or Settings
   assets/YYYY/MM/…         photos, audio, video, files
   .quire/templates/*.md    templates
   .quire/searches.json     saved searches
   .quire/datasaver-*.json  Data Saver ledgers, one per device
-  .quire/migration/        the inbox.md Quire folded into inbox/, kept
+  .quire/migration/        the inbox.md and <tag>.md files Quire folded in, kept
 ```
 
 Each entry is a timestamp header and a body:
@@ -44,10 +44,12 @@ Body text here. @tags live inline. A trailing * on the title stars it.
 
 Writes are atomic (temp file and rename). A journal written by jnl or Nook
 opens as it is: an `inbox.md` is folded into `inbox/` on first open (every
-draft verified before the original is moved, never deleted), and `.nook/`
+draft verified before the original is moved, never deleted), a root
+`<tag>.md` split journal is folded into `split/<tag>/` the same way, and `.nook/`
 is read until the first write renames it `.quire/`. jnl and Nook will not
-see drafts in `inbox/` until taught to; `tools/migrate_journal.py` does the
-same move from outside the app, dry run by default.
+see drafts in `inbox/` or split entries in `split/` until taught to;
+`tools/migrate_journal.py` does the same moves from outside the app, dry run
+by default.
 
 ## Installing
 

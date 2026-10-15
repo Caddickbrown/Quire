@@ -562,15 +562,16 @@ pub struct MergeReport {
     pub errors: Vec<String>,
 }
 
-/// Fold root `<name>.md` journals that are no longer split tags back into
-/// their day files (no split routing), destination first. A file that empties
-/// is deleted unless it has a preamble, which is kept on its own.
+/// Fold split journals whose tag is no longer a split tag (`split/<tag>/`,
+/// or a legacy root `<tag>.md`) back into the journal's day files (no split
+/// routing), destination first. A file that empties is deleted unless it has
+/// a preamble, which is kept on its own.
 pub fn merge_ex_split(j: &Journal, split_tags: &[String]) -> Result<MergeReport, String> {
     let mut rep = MergeReport::default();
     let tags: HashSet<String> = split_tags.iter().map(|t| t.trim_start_matches('@').to_lowercase()).collect();
-    for name in j.split_files() {
-        let stem = name.trim_end_matches(".md").to_lowercase();
-        if tags.contains(&stem) {
+    let mut merged: HashSet<String> = HashSet::new();
+    for (name, tag) in j.split_files() {
+        if tags.contains(&tag.to_lowercase()) {
             continue;
         }
         let content = match j.try_read(&name) {
@@ -623,11 +624,12 @@ pub fn merge_ex_split(j: &Journal, split_tags: &[String]) -> Result<MergeReport,
         match res {
             Ok(()) => {
                 rep.entries += moved;
-                rep.journals += 1;
+                merged.insert(tag);
             }
             Err(e) => rep.errors.push(format!("{}: {}", name, e)),
         }
     }
+    rep.journals = merged.len();
     Ok(rep)
 }
 
@@ -1395,16 +1397,17 @@ pub fn stats_extra(j: &Journal) -> StatsExtra {
         }
     }
     let splits = j.split_files();
+    let split_tags: HashSet<&String> = splits.iter().map(|(_, t)| t).collect();
     StatsExtra {
         drafts,
         tags: tags.len(),
-        splits: splits.len(),
+        splits: split_tags.len(),
         avg_words_per_entry: (avg * 10.0).round() / 10.0,
         longest_day: longest,
         sizes_by_location: SizesByLocation {
             inbox: j.len(LEGACY_INBOX) + j.tree_bytes(INBOX_DIR),
             journal: j.tree_bytes(JOURNAL_DIR),
-            splits: splits.iter().map(|n| j.len(n)).sum(),
+            splits: splits.iter().map(|(rel, _)| j.len(rel)).sum(),
             media: j.tree_bytes("assets"),
         },
     }
@@ -1616,7 +1619,7 @@ mod tests {
         let d = tmp();
         w(d.path(), "transfer.md", "Keep me\n\n[2026-09-30 08:00:00] Standup @work\nnotes\n\n[2026-09-30 08:30:00]\n\n[2026-09-30 09:00:00] Home\n![](./assets/x.jpg)\n");
         assert_eq!(import_transfer(&jn(d.path()), "2026-09-30 10:00:00", &["work".into()]).unwrap(), 2);
-        assert!(d.path().join("work.md").exists());
+        assert!(d.path().join("split/work/2026/09/30.md").exists());
         let day = read(&d.path().join("journal/2026/09/30.md"));
         assert_eq!(parse_entries(&day).len(), 1);
         assert!(day.contains("![](assets/x.jpg)"));
@@ -1763,7 +1766,7 @@ mod tests {
         assert_eq!((r.formatted, r.reordered, r.deduped, r.extracted, r.errors.len()), (1, 3, 2, 1, 1), "{:?}", r);
         assert_eq!(read(&d.path().join("inbox/2026/10/01.md")), "[2026-10-01 08:00:00] d1\n\n[2026-10-01 09:00:00] d2\n");
         assert_eq!(read(&d.path().join("journal/2026/09/30.md")), "[2026-09-30 08:00:00] a\ny\n\n[2026-09-30 10:00:00] b\u{2026}\nx\n");
-        assert_eq!(read(&d.path().join("work.md")), "[2026-09-30 09:00:00] w @work\n![](assets/p.jpg)\n");
+        assert_eq!(read(&d.path().join("split/work/2026/09/30.md")), "[2026-09-30 09:00:00] w @work\n![](assets/p.jpg)\n");
         assert_eq!(read(&d.path().join("inbox.md")), "[2026-09-30 08:00:00] i1\n\n[2026-09-30 09:00:00] i2\n");
         let r2 = cleanup(&jn(d.path()), &["work".into()]).unwrap();
         assert_eq!((r2.formatted, r2.reordered, r2.deduped, r2.extracted), (0, 0, 0, 0));
@@ -1789,7 +1792,7 @@ mod tests {
             read(&d.path().join("journal/2026/09/30.md")),
             "[2026-09-30 09:00:00] early *\n![](assets/x.jpg)\n\n[2026-09-30 12:00:00] noon\n\n[2026-09-30 13:00:00] late\n"
         );
-        assert_eq!(read(&d.path().join("work.md")), "[2026-09-30 10:00:00] job @work\n");
+        assert_eq!(read(&d.path().join("split/work/2026/09/30.md")), "[2026-09-30 10:00:00] job @work\n");
     }
 
     #[test]
@@ -1810,6 +1813,14 @@ mod tests {
             "[2026-09-30 07:00:00] n1\n\n[2026-09-30 08:00:00] here\n\n[2026-09-30 09:00:00] o1\n![](../x.jpg) ![](assets/y.jpg)\n"
         );
         assert_eq!(read(&d.path().join("journal/2026/10/01.md")), "[2026-10-01 09:00:00] o2\n");
+        // A split/ journal whose tag was dropped: its day files fold back too.
+        w(d.path(), "split/gone/2026/10/02.md", "[2026-10-02 09:00:00] g1\n");
+        w(d.path(), "split/work/2026/10/02.md", "[2026-10-02 10:00:00] w2\n");
+        let r = merge_ex_split(&jn(d.path()), &["work".into()]).unwrap();
+        assert_eq!((r.entries, r.journals), (1, 1), "{:?}", r);
+        assert!(!d.path().join("split/gone/2026/10/02.md").exists());
+        assert!(d.path().join("split/work/2026/10/02.md").exists());
+        assert_eq!(read(&d.path().join("journal/2026/10/02.md")), "[2026-10-02 09:00:00] g1\n");
     }
 
     #[test]
