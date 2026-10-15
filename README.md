@@ -52,20 +52,43 @@ same move from outside the app, dry run by default.
 ## Installing
 
 ```sh
-./install.sh --dry-run     # see what it finds and what it would do
+./install.sh --dry-run     # see what it finds and every command it would run
 ./install.sh               # ask before each step
+./install.sh --both --yes  # terminal + desktop, every default
+./install.sh --uninstall   # remove Quire (journal and settings kept)
 ```
 
-Linux and macOS. It finds jnl (the Go CLI or the bash script), Nook and
-Wander — packages, AppImages, launcher entries, `.app` bundles — and the
-journal folders they point at; asks which folder Quire should open (the
-biggest by default); backs it up to `~/quire-preinstall-<stamp>.tar.gz`;
-builds and installs `quire` and `jnl` (and on Linux the desktop app);
-moves `inbox.md` drafts into `inbox/`; and only then offers to remove the
-old apps. Removed apps go to the Trash (or `~/.local/state/quire/`), never
-`rm`; journal folders and jnl's config are never touched. On the Mac it
-keeps Nook and Wander by default, since Quire has no Mac app yet. Without
-a checkout: `curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash`.
+Also `--tui` / `--gui` to skip the question, `--folder DIR`, `--bundle
+deb|rpm|appimage`, `--keep-old`, `--no-backup`, `--verbose`; `--help` for
+the rest. Every step is logged to `~/.local/state/quire/install-<stamp>.log`.
+
+Linux and macOS. It asks what to install: the **terminal app** (`quire`,
+and `jnl` with every jnl command as before), the **desktop app**, or
+**both**. (On the Mac the desktop app is the Tauri build, a preview until the
+Swift Mac app lands.) Then, all questions first:
+
+- **Finds** jnl (the Go CLI or the bash script), Nook and Wander — deb/rpm
+  packages, AppImages, launcher entries, `.app` bundles — and the journal
+  folders they point at, and asks which one Quire opens (the biggest by
+  default).
+- **Backs up** that journal to `~/quire-preinstall-<stamp>.tar.gz`.
+- **Installs what the build needs**: Rust (rustup), the Xcode command-line
+  tools, WebKitGTK and friends via apt / dnf / pacman / zypper, Tauri's CLI
+  (Node if you have it, else cargo), and optionally ffmpeg + HEIC tools.
+- **Builds and installs** Quire and checks it runs: the terminal app into
+  `~/.cargo/bin` (and onto your PATH if it isn't); the desktop app as a .deb,
+  .rpm, AppImage + launcher entry, or `Quire.app`.
+- **Sets it up**: the folder into Quire's settings; `inbox.md` drafts into
+  `inbox/`.
+- **Only then removes the old apps**, defaulting to yes for what your choice
+  replaces (jnl → terminal; Nook, Wander → desktop) and no for the rest, and
+  always no for Nook on the Mac (its widgets, share sheet and iCloud set-up
+  have no Quire equivalent yet). Removed apps go to the Trash (or
+  `~/.local/state/quire/`), never `rm`. Journal folders, jnl's config, and
+  any settings folder holding a journal are never touched.
+
+Without a checkout:
+`curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash`.
 
 ## The terminal
 
