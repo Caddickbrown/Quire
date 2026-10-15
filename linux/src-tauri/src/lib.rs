@@ -856,23 +856,22 @@ fn start_watcher(app: AppHandle, folder: PathBuf) -> Result<notify::RecommendedW
             Err(_) => false,
         }
     };
-    std::thread::spawn(move || loop {
-        let first = match rx.recv() {
-            Ok(ev) => ev,
-            Err(_) => break, // watcher dropped
-        };
-        let mut relevant = !is_own(&first);
-        // Coalesce bursts (a save is several events) into one notice, but
-        // never sit on a change for more than ~2s during a sustained storm.
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while let Ok(ev) = rx.recv_timeout(Duration::from_millis(400)) {
-            relevant |= !is_own(&ev);
-            if Instant::now() >= deadline {
-                break;
+    // Ends when the watcher is dropped: recv() then fails.
+    std::thread::spawn(move || {
+        while let Ok(first) = rx.recv() {
+            let mut relevant = !is_own(&first);
+            // Coalesce bursts (a save is several events) into one notice, but
+            // never sit on a change for more than ~2s during a sustained storm.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while let Ok(ev) = rx.recv_timeout(Duration::from_millis(400)) {
+                relevant |= !is_own(&ev);
+                if Instant::now() >= deadline {
+                    break;
+                }
             }
-        }
-        if relevant {
-            let _ = app.emit("journal-changed", ());
+            if relevant {
+                let _ = app.emit("journal-changed", ());
+            }
         }
     });
     Ok(watcher)

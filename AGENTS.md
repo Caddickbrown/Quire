@@ -130,7 +130,8 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   CSS is generated from the JSON.
 - **Format and layout are decided**: `inbox/YYYY/MM/DD.md`, `.quire/`. Don't
   add a third sidecar name or a second place for drafts.
-- `make test` (cargo test), `make check` (clippy, keep it clean), `make smoke`
+- `make test` (cargo test), `make check` (clippy, keep it clean; it covers
+  the desktop app too where WebKitGTK is installed), `make smoke`
   (the pty driver, must pass 20/20 at 100×30 and 80×24) before a push.
 - The one-line Tauri rule from before still holds: the Linux frontend has
   no build step; keep it that way.
