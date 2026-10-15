@@ -29,6 +29,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   moves `inbox.md` drafts into `inbox/`; then offers to remove the old apps
   (to the Trash, never deleted; journal folders are never touched).
   `--dry-run` shows every command first; `--uninstall` removes Quire.
+  With Quire already installed it offers to build nothing and only retire
+  the old apps (`--tidy`), counts what's installed when choosing removal
+  defaults, and says when old apps have already stopped seeing drafts.
 - **Core**: `quire-core`, one Rust crate every shell shares — the jnl format,
   the store, search, stats, media, maintenance — behind a `Vault` trait so
   the core never opens a file itself (the Apple shell will coordinate writes;

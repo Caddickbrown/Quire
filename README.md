@@ -58,7 +58,7 @@ same move from outside the app, dry run by default.
 ./install.sh --uninstall   # remove Quire (journal and settings kept)
 ```
 
-Also `--tui` / `--gui` to skip the question, `--folder DIR`, `--bundle
+Also `--tui` / `--gui` to skip the question (`--tidy` when Quire is already installed: build nothing, just retire the old apps), `--folder DIR`, `--bundle
 deb|rpm|appimage`, `--keep-old`, `--no-backup`, `--verbose`; `--help` for
 the rest. Every step is logged to `~/.local/state/quire/install-<stamp>.log`.
 

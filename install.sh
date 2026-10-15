@@ -35,7 +35,7 @@ YES=0
 MODE=install
 FOLDER_ARG=""
 SOURCE_ARG=""
-PICK=""            # tui | gui | both, from a flag; asked otherwise
+PICK=""            # tui | gui | both | none, from a flag; asked otherwise
 WANT_REMOVE=1
 NO_BACKUP=0
 VERBOSE=0
@@ -50,6 +50,7 @@ Journal folders are never deleted.
   --tui            the terminal app only (quire, and jnl)
   --gui            the desktop app only
   --both           both (the default when asked)
+  --tidy           nothing new: keep the Quire you have, retire the old apps
   --dry-run        show the plan and every command; change nothing
   -y, --yes        accept each default without asking
   --folder DIR     use DIR as the journal folder
@@ -71,6 +72,7 @@ while [ $# -gt 0 ]; do
     --tui|--no-desktop) PICK=tui ;;
     --gui) PICK=gui ;;
     --both) PICK=both ;;
+    --tidy) PICK=none ;;
     --dry-run) DRY=1 ;;
     -y|--yes) YES=1 ;;
     --folder) shift; FOLDER_ARG=${1:-} ;;
@@ -428,25 +430,46 @@ EOF
 
 # Quire's own pieces, for updating and for --uninstall: Q_KIND / Q_WHAT / Q_DESC.
 Q_KIND=(); Q_WHAT=(); Q_DESC=()
-add_q() { Q_KIND+=("$1"); Q_WHAT+=("$2"); Q_DESC+=("$3"); }
+add_q() {
+  local i=0
+  while [ $i -lt ${#Q_WHAT[@]} ]; do [ "${Q_WHAT[$i]}" = "$2" ] && return 0; i=$((i + 1)); done
+  Q_KIND+=("$1"); Q_WHAT+=("$2"); Q_DESC+=("$3")
+}
+
+# HAVE_TUI / HAVE_GUI: Quire is already here. QUIRE_CLI: a quire (or Quire's
+# jnl) to run `migrate` with, wherever it was put.
+HAVE_TUI=0; HAVE_GUI=0; QUIRE_CLI=""
 
 detect_quire() {
-  local f kind b
+  local f kind b p
   f=$(json_str "$QUIRE_SETTINGS" folder)
   case "$f" in */sample-journal|*/sample-journal/) f="" ;; esac
   [ -n "$f" ] && add_journal "$f" "Quire"
   if [ -x "$BIN/quire" ] || { [ -x "$BIN/jnl" ] && [ "$(classify_jnl "$BIN/jnl")" = quire ]; }; then
     add_q cargo quire-tui "the terminal app — $BIN/quire and $BIN/jnl"
+    HAVE_TUI=1
+    if [ -x "$BIN/quire" ]; then QUIRE_CLI="$BIN/quire"; else QUIRE_CLI="$BIN/jnl"; fi
   fi
+  # Quire's jnl copied somewhere else (a release binary on PATH, say).
+  while IFS= read -r p; do
+    [ -n "$p" ] && [ -f "$p" ] || continue
+    case "$p" in "$BIN"/*) continue ;; esac
+    [ "$(classify_jnl "$p")" = quire ] || continue
+    add_q file "$p" "Quire's jnl — $p"
+    HAVE_TUI=1
+    [ -z "$QUIRE_CLI" ] && QUIRE_CLI="$p"
+  done <<EOF
+$(type -ap jnl quire 2>/dev/null; for p in "$HOME/.local/bin/jnl" "$HOME/.local/bin/quire" "/usr/local/bin/jnl" "/usr/local/bin/quire"; do [ -e "$p" ] && echo "$p"; done)
+EOF
   if [ $OS = linux ]; then
     kind=$(pkg_installed quire /usr/bin/quire-desktop)
-    [ -n "$kind" ] && add_q "$kind" quire "the desktop app (package 'quire')"
-    [ -f "$APPIMAGE" ] && add_q file "$APPIMAGE" "the desktop app — $APPIMAGE"
+    [ -n "$kind" ] && { add_q "$kind" quire "the desktop app (package 'quire')"; HAVE_GUI=1; }
+    [ -f "$APPIMAGE" ] && { add_q file "$APPIMAGE" "the desktop app — $APPIMAGE"; HAVE_GUI=1; }
     [ -f "$APPS_DIR/quire.desktop" ] && add_q file "$APPS_DIR/quire.desktop" "its launcher entry"
     [ -f "$ICON_PATH" ] && add_q file "$ICON_PATH" "its icon"
   else
     while IFS= read -r b; do
-      [ -n "$b" ] && add_q file "$b" "the desktop app — $b"
+      [ -n "$b" ] && { add_q file "$b" "the desktop app — $b"; HAVE_GUI=1; }
     done <<EOF
 $(find_mac_apps com.caddickbrown.quire)
 EOF
@@ -593,7 +616,7 @@ install_main() {
     while [ $i -lt ${#ITEM_APP[@]} ]; do say "  • ${ITEM_DESC[$i]}"; i=$((i + 1)); done
   fi
   i=0
-  while [ $i -lt ${#Q_KIND[@]} ]; do say "  • Quire: ${Q_DESC[$i]} ${D}(will be updated)${R}"; i=$((i + 1)); done
+  while [ $i -lt ${#Q_KIND[@]} ]; do say "  • Quire: ${Q_DESC[$i]} ${D}(installed)${R}"; i=$((i + 1)); done
 
   say ""
   say "  Journal folders:"
@@ -617,19 +640,33 @@ install_main() {
   say "    1. Terminal app — quire, and jnl with every jnl command as before"
   say "    2. Desktop app  — Quire's window: write, review, browse, look back, media"
   say "    3. Both"
+  local choices="1, 2 or 3"
+  if [ $HAVE_TUI -eq 1 ] || [ $HAVE_GUI -eq 1 ]; then
+    say "    4. Nothing new — keep the Quire you have; just retire the old apps"
+    choices="1, 2, 3 or 4"
+  fi
   if [ -z "$PICK" ]; then
     while :; do
-      answer=$(ask_line "Which? (1, 2 or 3):" 3)
+      answer=$(ask_line "Which? ($choices):" 3)
       case "$answer" in
         1|t|tui|TUI) PICK=tui; break ;;
         2|g|gui|GUI) PICK=gui; break ;;
         3|b|both|Both) PICK=both; break ;;
+        4|n|none) [ "$choices" = "1, 2, 3 or 4" ] && { PICK=none; break; } ;;
       esac
     done
   fi
+  [ "$PICK" = none ] && [ $HAVE_TUI -eq 0 ] && [ $HAVE_GUI -eq 0 ] && die "--tidy needs Quire installed already; choose --tui, --gui or --both"
   WANT_TUI=0; WANT_GUI=0
   case "$PICK" in tui) WANT_TUI=1 ;; gui) WANT_GUI=1 ;; both) WANT_TUI=1; WANT_GUI=1 ;; esac
-  say "  → $( [ $WANT_TUI -eq 1 ] && echo 'terminal' )$( [ "$PICK" = both ] && echo ' + ' )$( [ $WANT_GUI -eq 1 ] && echo 'desktop' )"
+  if [ "$PICK" = none ]; then
+    say "  → nothing new: the installed Quire stays as it is"
+  else
+    say "  → $( [ $WANT_TUI -eq 1 ] && echo 'terminal' )$( [ "$PICK" = both ] && echo ' + ' )$( [ $WANT_GUI -eq 1 ] && echo 'desktop' )"
+  fi
+  # What will be here afterwards: what's installed, plus what's chosen.
+  R_TUI=$WANT_TUI; [ $HAVE_TUI -eq 1 ] && R_TUI=1
+  R_GUI=$WANT_GUI; [ $HAVE_GUI -eq 1 ] && R_GUI=1
   if [ $WANT_GUI -eq 1 ] && [ $OS = mac ]; then
     say "  ${D}On the Mac the desktop app is the Linux app's build (Tauri) — a preview until${R}"
     say "  ${D}the Swift Mac app lands. No widgets, share sheet or iCloud set-up of its own.${R}"
@@ -686,8 +723,24 @@ install_main() {
     ask "Back up $FOLDER first ($(human_size "$FOLDER")) to ~/quire-preinstall-$STAMP.tar.gz?" y && DO_BACKUP=1
   fi
 
+  # Quire has opened this folder before: its drafts already live in inbox/,
+  # so any old app still installed has stopped seeing them. Say so plainly.
+  local since="" olds
+  olds=$(old_app_names)
+  if [ -n "$olds" ] && { [ -d "$FOLDER/inbox" ] || [ -d "$FOLDER/.quire/migration" ]; }; then
+    since=$(ls "$FOLDER/.quire/migration" 2>/dev/null | sed -n 's/^inbox-\([0-9]\{4\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)-.*/\1-\2-\3/p' | sort | head -n 1)
+    say ""
+    warn "Quire already keeps this journal's drafts in inbox/${since:+ (since $since)}."
+    say "    $olds still read only inbox.md: they don't see your drafts, and what they"
+    say "    write there waits until Quire next opens the folder. Filed entries they still see."
+  fi
+
   DO_MIGRATE=0
-  if [ -f "$FOLDER/inbox.md" ]; then
+  if [ -f "$FOLDER/inbox.md" ] && { [ -d "$FOLDER/inbox" ] || [ -d "$FOLDER/.quire/migration" ]; }; then
+    say ""
+    say "  inbox.md has $(grep -c '^\[' "$FOLDER/inbox.md" 2>/dev/null || echo 0) draft(s) written since, by an app still using it."
+    ask "Move them into inbox/ now?" y && DO_MIGRATE=1
+  elif [ -f "$FOLDER/inbox.md" ]; then
     say ""
     say "  This journal keeps drafts in inbox.md. Quire keeps them in inbox/YYYY/MM/DD.md"
     say "  and moves them the first time it opens the folder (inbox.md is kept, renamed,"
@@ -698,8 +751,9 @@ install_main() {
   fi
 
   # The build's needs.
-  head1 "What the build needs"
   NEED_XCODE=0; NEED_RUST=0; DO_LIBS=0; TAURI_VIA=""; DO_MEDIA=0; DO_PATH=0
+  if [ $WANT_TUI -eq 1 ] || [ $WANT_GUI -eq 1 ]; then
+  head1 "What the build needs"
   if [ $OS = mac ] && ! xcode-select -p >/dev/null 2>&1; then NEED_XCODE=1; fi
   # shellcheck disable=SC1091
   [ -f "$CARGO_DIR/env" ] && . "$CARGO_DIR/env"
@@ -737,6 +791,7 @@ install_main() {
       *) ask "$BIN isn't on your PATH. Add it to your shell's start-up file?" y && DO_PATH=1 ;;
     esac
   fi
+  fi
 
   # Old apps: removal defaults follow what replaces them.
   head1 "Removing the old apps"
@@ -751,13 +806,13 @@ install_main() {
     while [ $i -lt ${#ITEM_APP[@]} ]; do
       def=n; why=""
       case "${ITEM_APP[$i]}" in
-        jnl) if [ $WANT_TUI -eq 1 ]; then def=y; why="Quire's jnl takes its place"
+        jnl) if [ $R_TUI -eq 1 ]; then def=y; why="Quire's jnl takes its place$([ $WANT_TUI -eq 0 ] && echo ' — already installed')"
              else why="without the terminal app you'd have no jnl command"; fi ;;
-        Wander) if [ $WANT_GUI -eq 1 ]; then def=y; why="the desktop app takes its place"
-                else why="no desktop app chosen"; fi ;;
+        Wander) if [ $R_GUI -eq 1 ]; then def=y; why="Quire's desktop app takes its place$([ $WANT_GUI -eq 0 ] && echo ' — already installed')"
+                else why="no Quire desktop app here or chosen"; fi ;;
         Nook) if [ $OS = mac ]; then why="Nook's widgets, share sheet and iCloud set-up have no Quire equivalent yet"
-              elif [ $WANT_GUI -eq 1 ]; then def=y; why="the desktop app takes its place"
-              else why="no desktop app chosen"; fi ;;
+              elif [ $R_GUI -eq 1 ]; then def=y; why="Quire's desktop app takes its place$([ $WANT_GUI -eq 0 ] && echo ' — already installed')"
+              else why="no Quire desktop app here or chosen"; fi ;;
       esac
       [ "${ITEM_SURE[$i]}" = n ] && { def=n; why="not recognised — check before removing"; }
       say "  ${D}${why}${R}"
@@ -787,6 +842,7 @@ install_main() {
   [ $DO_MEDIA -eq 1 ] && say "  • install ffmpeg and HEIC tools ($PM)"
   [ $WANT_TUI -eq 1 ] && say "  • build and install the terminal app → $BIN"
   [ $WANT_GUI -eq 1 ] && say "  • build and install the desktop app ($BUNDLE)"
+  [ "$PICK" = none ] && say "  • keep the installed Quire as it is"
   say "  • point Quire at $FOLDER"
   [ $DO_MIGRATE -eq 1 ] && say "  • move inbox.md's drafts into inbox/"
   [ $DO_PATH -eq 1 ] && say "  • add $BIN to your PATH"
@@ -814,6 +870,13 @@ install_main() {
   fi
 
   # ----- 4. prerequisites -----
+  if [ -n "$SUDO" ] && [ $DRY -eq 0 ] && needs_sudo; then
+    say "  Some steps need sudo:"
+    if [ -n "$TTY" ]; then sudo -v <"$TTY"; else sudo -n true; fi 2>/dev/null \
+      || die "sudo is needed for the package steps (or run as root)"
+  fi
+  find_source
+  if [ $WANT_TUI -eq 1 ] || [ $WANT_GUI -eq 1 ]; then
   head1 "Preparing"
   if [ $NEED_XCODE -eq 1 ]; then
     run xcode-select --install
@@ -832,11 +895,6 @@ install_main() {
     # rustup left PATH alone; do what it would have done.
     case ":$PATH:" in *":$BIN:"*) ;; *) DO_PATH=1 ;; esac
   fi
-  if [ -n "$SUDO" ] && [ $DRY -eq 0 ] && needs_sudo; then
-    say "  Some steps need sudo:"
-    if [ -n "$TTY" ]; then sudo -v <"$TTY"; else sudo -n true; fi 2>/dev/null \
-      || die "sudo is needed for the package steps (or run as root)"
-  fi
   if [ $DO_LIBS -eq 1 ]; then
     say "  Installing the build libraries (a minute or two)…"
     # shellcheck disable=SC2046 # the list is meant to split
@@ -853,9 +911,9 @@ install_main() {
     # shellcheck disable=SC2046
     pm_install $(media_tools) || warn "the media tools didn't install; Data Saver will say what's missing"
   fi
-  find_source
   fetch_source
   say "  Source: $SRC"
+  fi
 
   # ----- 5. build and install -----
   if [ $WANT_TUI -eq 1 ]; then
@@ -872,6 +930,7 @@ install_main() {
       rm -rf "$probe"
     fi
     say "  ✓ quire and jnl → $BIN"
+    QUIRE_CLI="$BIN/quire"
   fi
 
   GUI_DONE=0
@@ -906,13 +965,13 @@ install_main() {
     warn "\$JNL_DIR is $JNL_DIR and wins over Quire's setting. Point it at $FOLDER, or unset it."
   fi
   if [ $DO_MIGRATE -eq 1 ]; then
-    if [ $WANT_TUI -eq 1 ]; then
-      run "$BIN/quire" --folder "$FOLDER" migrate || die "moving the drafts failed — inbox.md is untouched; see $LOG"
-    elif have python3; then
+    if [ -n "$QUIRE_CLI" ]; then
+      run "$QUIRE_CLI" --folder "$FOLDER" migrate || die "moving the drafts failed — inbox.md is untouched; see $LOG"
+    elif have python3 && [ -f "$SRC/tools/migrate_journal.py" ]; then
       run python3 -I "$SRC/tools/migrate_journal.py" "$FOLDER" --apply --keep-nook \
         || die "moving the drafts failed — inbox.md is untouched; see $LOG"
     else
-      say "  The desktop app will move the drafts when it first opens the folder."
+      say "  The desktop app will move the drafts when it next opens the folder."
     fi
     [ $DRY -eq 0 ] && grep -i -E "moved|draft" "$LOG" | tail -n 1 | sed 's/^ */  /'
   fi
@@ -950,11 +1009,11 @@ install_main() {
       warn "'jnl' still runs $first, ahead of Quire's on your PATH."
     fi
   fi
-  if [ $WANT_TUI -eq 1 ]; then
+  if [ $WANT_TUI -eq 1 ] || [ $HAVE_TUI -eq 1 ]; then
     say "  quire            the Today screen; jnl works too, with the same commands"
     [ $DO_PATH -eq 1 ] && say "                   ${D}(open a new terminal first)${R}"
   fi
-  if [ $GUI_DONE -eq 1 ]; then
+  if [ $GUI_DONE -eq 1 ] || { [ $WANT_GUI -eq 0 ] && [ $HAVE_GUI -eq 1 ]; }; then
     if [ $OS = mac ]; then say "  Quire.app        in $MAC_APP_DIR"
     else say "  Quire            the desktop app, from your launcher"
     fi
@@ -981,6 +1040,17 @@ needs_sudo() {
     i=$((i + 1))
   done
   return 1
+}
+
+# The old apps still installed, by name: "Nook and Wander", "jnl, Nook and Wander".
+old_app_names() {
+  local i=0 names="" n
+  while [ $i -lt ${#ITEM_APP[@]} ]; do
+    n=${ITEM_APP[$i]}; [ "$n" = jnl ] && n="the old jnl"
+    case ",$names," in *",$n,"*) ;; *) names="${names:+$names,}$n" ;; esac
+    i=$((i + 1))
+  done
+  printf '%s' "$names" | sed 's/,\([^,]*\)$/ and \1/; s/,/, /g'
 }
 
 picked_app() {
