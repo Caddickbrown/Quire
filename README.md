@@ -26,13 +26,13 @@ Quire/
 <folder>/
   inbox/YYYY/MM/DD.md      drafts, one file per day
   journal/YYYY/MM/DD.md    filed entries, one file per day
-  <tag>.md                 split journals (jnl's JNL_SPLIT_TAGS)
+  split/<tag>/YYYY/MM/DD.md split journals (jnl's JNL_SPLIT_TAGS), one file per day
   transfer.md              jnl's batch file; Quire files it from Today or Settings
   assets/YYYY/MM/…         photos, audio, video, files
   .quire/templates/*.md    templates
   .quire/searches.json     saved searches
   .quire/datasaver-*.json  Data Saver ledgers, one per device
-  .quire/migration/        the inbox.md Quire folded into inbox/, kept
+  .quire/migration/        the inbox.md and <tag>.md files Quire folded in, kept
 ```
 
 Each entry is a timestamp header and a body:
@@ -44,10 +44,53 @@ Body text here. @tags live inline. A trailing * on the title stars it.
 
 Writes are atomic (temp file and rename). A journal written by jnl or Nook
 opens as it is: an `inbox.md` is folded into `inbox/` on first open (every
-draft verified before the original is moved, never deleted), and `.nook/`
+draft verified before the original is moved, never deleted), a root
+`<tag>.md` split journal is folded into `split/<tag>/` the same way, and `.nook/`
 is read until the first write renames it `.quire/`. jnl and Nook will not
-see drafts in `inbox/` until taught to; `tools/migrate_journal.py` does the
-same move from outside the app, dry run by default.
+see drafts in `inbox/` or split entries in `split/` until taught to;
+`tools/migrate_journal.py` does the same moves from outside the app, dry run
+by default.
+
+## Installing
+
+```sh
+./install.sh --dry-run     # see what it finds and every command it would run
+./install.sh               # ask before each step
+./install.sh --both --yes  # terminal + desktop, every default
+./install.sh --uninstall   # remove Quire (journal and settings kept)
+```
+
+Also `--tui` / `--gui` to skip the question (`--tidy` when Quire is already installed: build nothing, just retire the old apps), `--folder DIR`, `--bundle
+deb|rpm|appimage`, `--keep-old`, `--no-backup`, `--verbose`; `--help` for
+the rest. Every step is logged to `~/.local/state/quire/install-<stamp>.log`.
+
+Linux and macOS. It asks what to install: the **terminal app** (`quire`,
+and `jnl` with every jnl command as before), the **desktop app**, or
+**both**. (On the Mac the desktop app is the Tauri build, a preview until the
+Swift Mac app lands.) Then, all questions first:
+
+- **Finds** jnl (the Go CLI or the bash script), Nook and Wander — deb/rpm
+  packages, AppImages, launcher entries, `.app` bundles — and the journal
+  folders they point at, and asks which one Quire opens (the biggest by
+  default).
+- **Backs up** that journal to `~/quire-preinstall-<stamp>.tar.gz`.
+- **Installs what the build needs**: Rust (rustup), the Xcode command-line
+  tools, WebKitGTK and friends via apt / dnf / pacman / zypper, Tauri's CLI
+  (Node if you have it, else cargo), and optionally ffmpeg + HEIC tools.
+- **Builds and installs** Quire and checks it runs: the terminal app into
+  `~/.cargo/bin` (and onto your PATH if it isn't); the desktop app as a .deb,
+  .rpm, AppImage + launcher entry, or `Quire.app`.
+- **Sets it up**: the folder into Quire's settings; `inbox.md` drafts into
+  `inbox/`.
+- **Only then removes the old apps**, defaulting to yes for what your choice
+  replaces (jnl → terminal; Nook, Wander → desktop) and no for the rest, and
+  always no for Nook on the Mac (its widgets, share sheet and iCloud set-up
+  have no Quire equivalent yet). Removed apps go to the Trash (or
+  `~/.local/state/quire/`), never `rm`. Journal folders, jnl's config, and
+  any settings folder holding a journal are never touched.
+
+Without a checkout:
+`curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash`.
 
 ## The terminal
 

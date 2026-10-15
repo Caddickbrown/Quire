@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Move a jnl / Nook / Quire journal to Quire's new layout.
 
-Two changes, both reversible, both idempotent:
+Three changes, all reversible, all idempotent:
 
   1. inbox.md  ->  inbox/YYYY/MM/DD.md
      Every draft already carries a [YYYY-MM-DD HH:MM:SS] header, so the inbox
@@ -15,14 +15,22 @@ Two changes, both reversible, both idempotent:
      A rename when .quire/ does not exist; otherwise a file-by-file move that
      never overwrites, leaving anything that clashed in .nook/ and saying so.
 
+  3. <tag>.md  ->  split/<tag>/YYYY/MM/DD.md
+     Each root split journal jnl wrote (any root .md holding entries, except
+     the reserved inbox / transfer / export / readme / nook-export) splits
+     into day files the same way, ./assets/ links made base-relative. The
+     original is moved to .quire/migration/split-<tag>-<stamp>.md once every
+     entry has been read back. A root .md with no entries is left alone.
+
 Dependency-free, Python 3.8+. Dry run by default; --apply writes.
 
     python3 tools/migrate_journal.py ~/Notes            # show the plan
     python3 tools/migrate_journal.py ~/Notes --apply    # do it
-    python3 tools/migrate_journal.py ~/Notes --apply --keep-nook   # inbox only
+    python3 tools/migrate_journal.py ~/Notes --apply --keep-nook   # leave .nook/
+    python3 tools/migrate_journal.py ~/Notes --apply --keep-splits # leave <tag>.md
 
-Run it again later and it merges any inbox.md an older app has written since
-(entries already present in inbox/ are skipped by raw text).
+Run it again later and it merges any inbox.md or <tag>.md an older app has
+written since (entries already in place are skipped by raw text).
 """
 import argparse
 import os
@@ -257,9 +265,109 @@ def apply_sidecar(base, plan, log):
             log("    " + rel)
 
 
+# ---------- step 3: <tag>.md -> split/<tag>/ ----------
+
+RESERVED_STEMS = ("inbox", "transfer", "export", "readme", "nook-export")
+LINK_DOT_ASSETS_RE = re.compile(r"\]\(\s*(<?)\./assets/")
+
+
+def is_conflict_name(name):
+    l = name.lower()
+    return ".sync-conflict-" in l or "conflicted copy" in l
+
+
+def legacy_split_files(base):
+    out = []
+    for fn in sorted(os.listdir(base)):
+        if not fn.endswith(".md") or fn.startswith(".") or is_conflict_name(fn):
+            continue
+        if fn[:-3].lower() in RESERVED_STEMS or not os.path.isfile(os.path.join(base, fn)):
+            continue
+        out.append(fn)
+    return out
+
+
+def split_day_path(base, tag, date):
+    y, m, d = date.split("-")
+    return os.path.join(base, "split", tag, y, m, d + ".md")
+
+
+def all_split_entries(base, tag):
+    root = os.path.join(base, "split", tag)
+    out = []
+    if not os.path.isdir(root):
+        return out
+    for dirpath, _, files in os.walk(root):
+        for fn in sorted(files):
+            if re.fullmatch(r"\d{2}\.md", fn):
+                out.extend(parse_entries(read_text(os.path.join(dirpath, fn))))
+    return out
+
+
+def plan_splits(base):
+    """[(name, tag, plan, preamble, source_entries)] for each root split journal with entries."""
+    out = []
+    for name in legacy_split_files(base):
+        # Root-relative ./assets/ links become assets/, which work from any depth.
+        content = LINK_DOT_ASSETS_RE.sub(r"](\1assets/", read_text(os.path.join(base, name)))
+        entries = parse_entries(content)
+        if not entries:
+            continue
+        tag = name[:-3]
+        by_day = OrderedDict()
+        for e in entries:
+            by_day.setdefault(e.date, []).append(e)
+        plan = OrderedDict()
+        for date, new in by_day.items():
+            target = split_day_path(base, tag, date)
+            existing_pre, existing = "", []
+            if os.path.isfile(target):
+                existing_text = read_text(target)
+                existing = parse_entries(existing_text)
+                existing_pre = leading_preamble(existing_text)
+            seen = {e.raw.rstrip("\n") for e in existing}
+            added = [e for e in new if e.raw.rstrip("\n") not in seen]
+            plan[target] = (existing_pre, sorted_by_timestamp(existing + added), len(added), len(new) - len(added))
+        out.append((name, tag, plan, leading_preamble(content), entries))
+    return out
+
+
+def apply_split(base, name, tag, plan, preamble, source_entries, log):
+    for target, (pre, entries, _, _) in plan.items():
+        write_atomic(target, render_entries(pre, entries))
+    if preamble:
+        p = os.path.join(base, "split", tag, "preamble.md")
+        if os.path.exists(p):
+            existing = read_text(p)
+            if preamble.strip() not in existing:
+                write_atomic(p, existing.rstrip("\n") + "\n\n" + preamble + "\n")
+        else:
+            write_atomic(p, preamble + "\n")
+        log("  preamble of %s kept in split/%s/preamble.md" % (name, tag))
+    have = {}
+    for e in all_split_entries(base, tag):
+        k = e.raw.rstrip("\n")
+        have[k] = have.get(k, 0) + 1
+    missing = [e.raw.rstrip("\n") for e in source_entries if have.get(e.raw.rstrip("\n"), 0) < 1]
+    if missing:
+        log("  VERIFY FAILED: %d entries not found in split/%s/ — %s left in place" % (len(missing), tag, name))
+        return False
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup_dir = os.path.join(base, ".quire", "migration")
+    os.makedirs(backup_dir, exist_ok=True)
+    backup = os.path.join(backup_dir, "split-%s-%s.md" % (tag, stamp))
+    n = 1
+    while os.path.exists(backup):
+        n += 1
+        backup = os.path.join(backup_dir, "split-%s-%s-%d.md" % (tag, stamp, n))
+    os.replace(os.path.join(base, name), backup)
+    log("  %s moved to %s" % (name, os.path.relpath(backup, base)))
+    return True
+
+
 # ---------- main ----------
 
-def run(base, apply, keep_nook, log=print):
+def run(base, apply, keep_nook, log=print, keep_splits=False):
     base = os.path.abspath(base)
     if not os.path.isdir(base):
         log("not a folder: " + base)
@@ -299,6 +407,20 @@ def run(base, apply, keep_nook, log=print):
         if apply:
             ok = apply_inbox(base, plan, preamble, source, log) and ok
 
+    log("\n<tag>.md -> split/<tag>/YYYY/MM/DD.md")
+    if keep_splits:
+        log("  skipped (--keep-splits)")
+    else:
+        splits = plan_splits(base)
+        if not splits:
+            log("  no root split journals with entries. Nothing to do.")
+        for name, tag, splan, spre, ssource in splits:
+            new = sum(a for _, _, a, _ in splan.values())
+            dup = sum(d for _, _, _, d in splan.values())
+            log("  %s: %d entr%s across %d day(s); %d new, %d already in split/%s/" % (name, len(ssource), "y" if len(ssource) == 1 else "ies", len(splan), new, dup, tag))
+            if apply:
+                ok = apply_split(base, name, tag, splan, spre, ssource, log) and ok
+
     if not apply:
         log("\nNothing written. Re-run with --apply.")
     return 0 if ok else 1
@@ -309,8 +431,9 @@ def main(argv=None):
     ap.add_argument("folder", help="the journal folder (JNL_DIR)")
     ap.add_argument("--apply", action="store_true", help="write changes (default is a dry run)")
     ap.add_argument("--keep-nook", action="store_true", help="leave .nook/ alone")
+    ap.add_argument("--keep-splits", action="store_true", help="leave root <tag>.md split journals alone")
     a = ap.parse_args(argv)
-    return run(a.folder, a.apply, a.keep_nook)
+    return run(a.folder, a.apply, a.keep_nook, keep_splits=a.keep_splits)
 
 
 if __name__ == "__main__":

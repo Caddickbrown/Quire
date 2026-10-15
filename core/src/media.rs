@@ -713,7 +713,7 @@ fn walk_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// inbox.md, inbox/**/*.md, journal/**/*.md and other root *.md (minus export/transfer/readme).
+/// inbox.md, inbox/**/*.md, journal/**/*.md, split/**/*.md and other root *.md (minus export/transfer/readme).
 pub fn content_files(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Ok(rd) = fs::read_dir(root) {
@@ -729,6 +729,7 @@ pub fn content_files(root: &Path) -> Vec<PathBuf> {
     }
     out.extend(walk_files(&root.join("inbox")).into_iter().filter(|p| ext_of(p) == "md"));
     out.extend(walk_files(&root.join("journal")).into_iter().filter(|p| ext_of(p) == "md"));
+    out.extend(walk_files(&root.join("split")).into_iter().filter(|p| ext_of(p) == "md"));
     out.sort();
     out
 }

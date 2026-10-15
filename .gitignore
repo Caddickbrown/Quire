@@ -21,3 +21,7 @@ __pycache__/
 
 # Cargo workspace build output
 /target/
+
+# Stale build output from the pre-workspace layout (the app lives in
+# linux/src-tauri now). Leftovers only — safe to delete.
+/src-tauri/

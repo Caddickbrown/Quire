@@ -87,6 +87,13 @@ pub fn run(name: &str) {
             None
         }
     };
+    let split_migrated = match j.migrate_legacy_splits() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("  note: {}", e);
+            None
+        }
+    };
 
     let open = |screen: app::Screen, draft_title: Option<String>| {
         if !tty {
@@ -96,6 +103,8 @@ pub fn run(name: &str) {
         let mut a = app::App::new(j.clone(), settings.clone(), split_tags.clone(), &theme_id);
         if let Some(m) = &migrated {
             a.toast(format!("inbox.md folded into inbox/: {} moved, {} already there; original in {}", m.moved, m.skipped, m.backup), false);
+        } else if let Some(m) = &split_migrated {
+            a.toast(format!("{} split journal(s) folded into split/: {} moved, {} already there; originals in .quire/migration/", m.journals, m.moved, m.skipped), false);
         }
         if let Some(t) = draft_title {
             a.start_draft(&t, "");
@@ -174,10 +183,17 @@ pub fn run(name: &str) {
                 std::process::exit(1);
             }
         }
-        "migrate" => match migrated {
-            Some(m) => println!("  Moved {} draft(s) into inbox/ ({} already there). inbox.md kept as {}.", m.moved, m.skipped, m.backup),
-            None => println!("  Nothing to migrate: no inbox.md in {}.", folder.display()),
-        },
+        "migrate" => {
+            if let Some(m) = &migrated {
+                println!("  Moved {} draft(s) into inbox/ ({} already there). inbox.md kept as {}.", m.moved, m.skipped, m.backup);
+            }
+            if let Some(m) = &split_migrated {
+                println!("  Moved {} entr{} from {} split journal(s) into split/ ({} already there). Originals kept as {}.", m.moved, if m.moved == 1 { "y" } else { "ies" }, m.journals, m.skipped, m.backups.join(", "));
+            }
+            if migrated.is_none() && split_migrated.is_none() {
+                println!("  Nothing to migrate: no inbox.md or <tag>.md split journals in {}.", folder.display());
+            }
+        }
         "import" => {
             use std::io::Read;
             let mut text = String::new();

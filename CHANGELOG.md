@@ -21,6 +21,17 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
+- **Install**: `install.sh` for Linux and macOS asks for the terminal app,
+  the desktop app, or both; finds jnl, Nook and Wander and the journal
+  folders they use; backs the chosen journal up; installs what the build
+  needs (Rust, WebKitGTK via apt/dnf/pacman/zypper, Tauri's CLI, optionally
+  ffmpeg); builds, installs and checks Quire; points it at the journal and
+  moves `inbox.md` drafts into `inbox/`; then offers to remove the old apps
+  (to the Trash, never deleted; journal folders are never touched).
+  `--dry-run` shows every command first; `--uninstall` removes Quire.
+  With Quire already installed it offers to build nothing and only retire
+  the old apps (`--tidy`), counts what's installed when choosing removal
+  defaults, and says when old apps have already stopped seeing drafts.
 - **Terminal**: Today's On this day rows show an entry's first tag, as the inbox rows do.
 - **Terminal**: the timer pauses and resumes (`^o`), resets with `alt-o`, shows
   `paused` in the status line, rings the terminal bell when it ends (Settings ›
@@ -70,6 +81,13 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   `media::encode_clipboard_image`.
 
 ### Changed
+- **Format**: split journals live in `split/<tag>/YYYY/MM/DD.md`, one file
+  per day, instead of one root `<tag>.md`. A `<tag>.md` written by jnl or
+  Nook is folded in on open (every entry read back first; the original kept
+  in `.quire/migration/`), and root `.md` files with no entries are no longer
+  mistaken for split journals. `journal/` is unchanged. jnl and Nook won't
+  see split entries in `split/` until taught to; `tools/migrate_journal.py`
+  does the move from outside the app.
 - **Terminal**: Browse's year, month and day columns are wide enough for their
   longest label and biggest count (no more `Septemb…` or a cut-off year), and
   the entries beside them no longer highlight under the pointer.
@@ -105,6 +123,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   on the browser's white field; they now use the theme's ground, border and ink.
 - **Terminal**: the selected tag suggestion uses the theme's on-accent colour,
   so it is black on Marathon's green instead of white.
+- **Linux**: the welcome card says where drafts live now —
+  `inbox/YYYY/MM/DD.md`, one file a day — and that an `inbox.md` from jnl
+  or Nook is folded in, instead of pointing at `inbox.md`.
 
 ### Removed
 - **Linux**: the presentation window branch (a second desktop window
