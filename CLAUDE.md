@@ -51,6 +51,13 @@ does.
 ```
 Cargo.toml          workspace: core, tui, linux/src-tauri (default members: core, tui)
 themes.json         the looks — one source. core/src/themes.rs compiles it in.
+install.sh          Linux + macOS installer (bash 3.2). Asks TUI / GUI / both;
+                    detect jnl/Nook/Wander + their folders → ask everything →
+                    back up → install deps (rustup, WebKitGTK per package
+                    manager, Tauri CLI) → build + install + check → settings +
+                    migrate → only then remove old apps (to the Trash). Never
+                    deletes a journal; --dry-run prints every command;
+                    --uninstall removes Quire.
 core/               quire-core
   src/vault.rs      the Vault trait + FsVault. THE RULE: the core never opens a
                     file itself; every entry file and sidecar goes through the
