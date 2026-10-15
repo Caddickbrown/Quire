@@ -49,6 +49,24 @@ is read until the first write renames it `.quire/`. jnl and Nook will not
 see drafts in `inbox/` until taught to; `tools/migrate_journal.py` does the
 same move from outside the app, dry run by default.
 
+## Installing
+
+```sh
+./install.sh --dry-run     # see what it finds and what it would do
+./install.sh               # ask before each step
+```
+
+Linux and macOS. It finds jnl (the Go CLI or the bash script), Nook and
+Wander — packages, AppImages, launcher entries, `.app` bundles — and the
+journal folders they point at; asks which folder Quire should open (the
+biggest by default); backs it up to `~/quire-preinstall-<stamp>.tar.gz`;
+builds and installs `quire` and `jnl` (and on Linux the desktop app);
+moves `inbox.md` drafts into `inbox/`; and only then offers to remove the
+old apps. Removed apps go to the Trash (or `~/.local/state/quire/`), never
+`rm`; journal folders and jnl's config are never touched. On the Mac it
+keeps Nook and Wander by default, since Quire has no Mac app yet. Without
+a checkout: `curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash`.
+
 ## The terminal
 
 ```sh

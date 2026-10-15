@@ -1,4 +1,4 @@
-.PHONY: test check smoke tui install linux migrate fmt
+.PHONY: test check smoke tui install setup linux migrate fmt
 
 # The core and the terminal app (the default workspace members).
 test:
@@ -24,6 +24,10 @@ tui:
 # Installs both names into ~/.cargo/bin.
 install:
 	cargo install --path tui --force
+
+# The full installer: finds jnl / Nook / Wander, installs Quire, sets it up.
+setup:
+	./install.sh
 
 # Needs libwebkit2gtk-4.1-dev and the rest of linux/README.md's list.
 linux:
