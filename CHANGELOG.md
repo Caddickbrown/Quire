@@ -14,7 +14,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   are shared with jnl, Nook and hand-editing users.
 - On release: rename `[Unreleased]` to `## [x.y.z] — YYYY-MM-DD`, bump the
   workspace version in `Cargo.toml` and `linux/src-tauri/tauri.conf.json` +
-  `linux/package.json`, and open a fresh `[Unreleased]`.
+  `linux/package.json`, open a fresh `[Unreleased]`, then tag the release
+  commit `vx.y.z` and push the tag (see Releases in `CLAUDE.md`).
 
 ---
 

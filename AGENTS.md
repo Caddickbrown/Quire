@@ -160,10 +160,41 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   size, T theme, P pause, H hints. Locked/paused displays never render journal text.
 - **Android**: not in the repo yet; Wander's Compose shell over a SAF `Vault`.
 
+## Releases
+
+Quire ships tagged releases. A release lives on GitHub Releases at
+`Caddickbrown/Quire`: the tag, the CHANGELOG notes, and prebuilt files.
+**Linux first**; macOS and Apple builds come later.
+
+- **Version** is `MAJOR.MINOR.PATCH`, one number for the whole workspace:
+  `Cargo.toml` (`[workspace.package]`), `linux/src-tauri/tauri.conf.json` and
+  `linux/package.json` always match. A minor bump for a feature or format
+  change, a patch for fixes only.
+- **Cutting one**: on `main`, rename `## [Unreleased]` in `CHANGELOG.md` to
+  `## [x.y.z] — YYYY-MM-DD`, open a fresh `[Unreleased]`, bump the three
+  version fields, run `make test`, `make check` and `make smoke`, commit
+  "Release x.y.z", then tag `vx.y.z` on that commit and push the tag. Tags are
+  never moved or reused; a bad release is fixed by the next patch.
+- **Pipeline (planned, not built yet)**: pushing a `v*` tag runs a GitHub
+  Actions workflow that builds the Linux x86_64 and aarch64 terminal app
+  (`quire` + `jnl`, one tarball per target) and the desktop app (AppImage,
+  .deb, .rpm), and attaches them with SHA-256 checksums to the release.
+- **Updating (planned)**: `quire update` (also `jnl update`) asks the GitHub
+  API for the latest release, compares its tag with `CARGO_PKG_VERSION`,
+  downloads the tarball for its target, checks the checksum and replaces the
+  binaries. A source build (the version carries a commit suffix) re-runs
+  `install.sh` instead. The desktop app only *says* an update is out, except
+  as an AppImage, which can use Tauri's signed updater; deb/rpm installs
+  belong to the package manager. Update checks run when asked, never in the
+  background: a journal app doesn't phone home on its own.
+- `install.sh` keeps building from source until release tarballs exist, then
+  prefers them and falls back to a build.
+
 ## Conventions
 
 - **Update `CHANGELOG.md` in the same change that ships the work** — a bullet
-  under `## [Unreleased]`, nook's format (see the file's header).
+  under `## [Unreleased]`, nook's format (see the file's header). Releases are
+  cut from it as described under Releases.
 - **The core never touches `std::fs` for entry files or sidecars.** Go
   through the `Journal`/`Vault`. Media and backups are the exception and say
   so (`j.local()?`).
