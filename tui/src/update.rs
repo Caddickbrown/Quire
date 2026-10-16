@@ -209,10 +209,10 @@ fn update_terminal(agent: &ureq::Agent, rel: &Release, check_only: bool) -> Resu
     let current = env!("CARGO_PKG_VERSION");
     let version = rel.tag_name.trim_start_matches('v');
     if !is_newer(version, current) {
-        println!("  Quire {current} is up to date.");
+        println!("  Terminal app: Quire {current} is up to date.");
         return Ok(());
     }
-    println!("  Quire {version} is out (you have {current}).");
+    println!("  Terminal app: Quire {version} is out (you have {current}).");
     print!("{}", notes_preview(&rel.body));
     if check_only {
         println!("  Run `quire update` to install it.");
