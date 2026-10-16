@@ -404,6 +404,37 @@ pub fn is_day_file(rel: &str) -> bool {
     (rel.starts_with("inbox/") || rel.starts_with("journal/") || rel.starts_with("split/")) && rel != INBOX_PREAMBLE && !is_split_preamble(rel)
 }
 
+/// The date a day file is named for: `inbox/2026/10/14.md`,
+/// `journal/2026/10/14.md` and `split/<tag>/2026/10/14.md` → `2026-10-14`.
+/// None for anything else (`inbox.md`, a legacy `<tag>.md`, a conflict copy,
+/// a file whose name isn't a date).
+pub fn day_file_date(rel: &str) -> Option<String> {
+    if !is_day_file(rel) {
+        return None;
+    }
+    let parts: Vec<&str> = rel.split('/').collect();
+    let want = if parts[0] == SPLIT_DIR { 5 } else { 4 };
+    if parts.len() != want {
+        return None;
+    }
+    let (y, m, d) = (parts[want - 3], parts[want - 2], parts[want - 1].strip_suffix(".md")?);
+    let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
+    (digits(y, 4) && digits(m, 2) && digits(d, 2)).then(|| format!("{}-{}-{}", y, m, d))
+}
+
+/// The day file for `date` in the same tree as day file `rel` (inbox,
+/// journal, or the same split journal). None when `rel` isn't a day file.
+pub fn day_file_like(rel: &str, date: &str) -> Option<String> {
+    day_file_date(rel)?;
+    if rel.starts_with("inbox/") {
+        Some(inbox_rel(date))
+    } else if rel.starts_with("journal/") {
+        Some(journal_rel(date))
+    } else {
+        split_tag_of(rel).map(|tag| split_rel(&tag, date))
+    }
+}
+
 fn to_entry(r: &RawEntry, file: &str, index: usize, source: &str, split: Option<String>) -> Entry {
     let mut tags: Vec<String> = Vec::new();
     for m in TAG_RE.find_iter(&format!("{}\n{}", r.suffix, r.body)) {
@@ -1490,6 +1521,19 @@ mod tests {
     }
 
     // ----- the inbox folder -----
+
+    #[test]
+    fn day_file_dates() {
+        assert_eq!(day_file_date("inbox/2026/10/14.md").as_deref(), Some("2026-10-14"));
+        assert_eq!(day_file_date("journal/2026/10/14.md").as_deref(), Some("2026-10-14"));
+        assert_eq!(day_file_date("split/work/2026/10/14.md").as_deref(), Some("2026-10-14"));
+        for rel in ["inbox.md", "work.md", "inbox/preamble.md", "split/work/preamble.md", "journal/2026/10/14 (conflict).md", "journal/2026/10.md", "journal/x/2026/10/14.md"] {
+            assert_eq!(day_file_date(rel), None, "{}", rel);
+        }
+        assert_eq!(day_file_like("split/work/2026/10/20.md", "2026-10-14").as_deref(), Some("split/work/2026/10/14.md"));
+        assert_eq!(day_file_like("inbox/2026/10/20.md", "2026-10-14").as_deref(), Some("inbox/2026/10/14.md"));
+        assert_eq!(day_file_like("work.md", "2026-10-14"), None);
+    }
 
     #[test]
     fn drafts_live_in_day_files() {

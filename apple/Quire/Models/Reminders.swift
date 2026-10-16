@@ -148,6 +148,10 @@ enum ReminderScheduler {
     private static let planKey = "dailyReminderPlan"
 
     static func refresh(hasEntryToday: Bool, streak: Int) {
+        // The notification centre needs an app bundle: in a hostless XCTest
+        // bundle (or any non-app process) UNUserNotificationCenter.current()
+        // raises an uncaught exception.
+        guard Bundle.main.bundleURL.pathExtension == "app" else { return }
         let defaults = UserDefaults.standard
         let enabled = defaults.bool(forKey: enabledKey)
         let hour = defaults.object(forKey: hourKey) as? Int ?? defaultHour

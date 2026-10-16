@@ -14,13 +14,15 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   are shared with jnl, Nook and hand-editing users.
 - On release: rename `[Unreleased]` to `## [x.y.z] — YYYY-MM-DD`, bump the
   workspace version in `Cargo.toml` and `linux/src-tauri/tauri.conf.json` +
-  `linux/package.json`, and open a fresh `[Unreleased]`.
+  `linux/package.json`, open a fresh `[Unreleased]`, then tag the release
+  commit `vx.y.z` and push the tag (see Releases in `CLAUDE.md`).
 
 ---
 
 ## [Unreleased]
 
 ### Added
+- **Core**: Cleanup moves an entry stored in the wrong day file (say, the 14th's entries pasted into `inbox/…/20.md`) to the day file its header gives, in the same inbox, journal or split journal; one already there counts as a duplicate. Every shell's Cleanup reports how many moved.
 - **Backups**: configure automatic backups (off, daily, weekly, monthly or on change) and retention in Terminal Settings; monthly means 30 days in every shell. The terminal runs backups in the background and keeps 10 copies by default.
 - **Terminal**: Settings adds tag review/rename, media compression, ex-split merging, Markdown/Day One/transfer imports and conflict-copy merging through the shared Rust core. Show the version and build commit in Settings and `quire --version`.
 - **Linux**: Settings adds File All Drafts and Print / Export PDF for the filed journal.
@@ -124,6 +126,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   `README.md` describes the whole, `linux/README.md` the desktop app.
 
 ### Fixed
+- **Core**: ↩ in a list works on a line that still carries its `\r\n` or `\n` ending (the Apple editor passes one).
+- **Apple**: the vault refuses a new file under a symlinked folder that points outside the journal (Foundation left such paths unresolved), and reminders no longer crash a process that isn't an app (hostless tests).
+- **Apple**: the Xcode project no longer defines the `QuireCoreFFI` module twice (a project-wide header path duplicated the one the XCFramework provides), which broke every Apple build.
 - **Terminal**: align tags and word counts in Today, Inbox and Browse, including rows with different digit counts.
 - **Apple**: external monitors show a neutral screen while the journal is locked, including when an On this day preview is available.
 - **Editor**: continuing an ordered list at the largest supported number

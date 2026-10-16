@@ -196,7 +196,7 @@ pub fn random_text(j: &Journal) -> Option<Entry> {
 pub fn cleanup_text(j: &Journal, split_tags: &[String]) {
     match cleanup(j, split_tags) {
         Ok(r) => {
-            println!("  Cleanup: {} file(s) checked, {} formatted, {} reordered, {} duplicate(s) removed, {} extracted to split journals.", r.files, r.formatted, r.reordered, r.deduped, r.extracted);
+            println!("  Cleanup: {} file(s) checked, {} moved to their day, {} formatted, {} reordered, {} duplicate(s) removed, {} extracted to split journals.", r.files, r.moved, r.formatted, r.reordered, r.deduped, r.extracted);
             for e in r.errors {
                 println!("  ! {}", e);
             }
@@ -277,7 +277,7 @@ pub fn help(name: &str) {
   {n} tag <name>         all entries tagged @name
   {n} random             a random past entry
   {n} transfer           file everything in transfer.md (no review)
-  {n} cleanup            standardise punctuation, reorder, dedupe, extract split-tagged entries
+  {n} cleanup            move misdated entries to their day, standardise punctuation, reorder, dedupe, extract split-tagged entries
   {n} export [file]      combine all entries into one file (default: export.md)
   {n} open               open the journal folder in the file manager
   {n} config             edit ~/.config/jnl/config

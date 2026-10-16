@@ -784,7 +784,7 @@ struct SettingsView: View {
     private var cleanUpButton: some View {
         Button {
             let r = store.cleanup()
-            cleanupMessage = "Formatted \(r.formatted), reordered \(r.reordered), removed \(r.deduped) duplicate(s), extracted \(r.extracted) to split journals."
+            cleanupMessage = "Moved \(r.moved) to their day, formatted \(r.formatted), reordered \(r.reordered), removed \(r.deduped) duplicate(s), extracted \(r.extracted) to split journals."
             showingCleanup = true
         } label: {
             Label("Clean Up", systemImage: "wand.and.sparkles")

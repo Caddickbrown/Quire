@@ -1733,20 +1733,21 @@ final class JournalStore: ObservableObject {
 
     // MARK: Cleanup (jnl cmdCleanup)
 
-    struct CleanupResult { var formatted = 0; var reordered = 0; var deduped = 0; var extracted = 0 }
+    struct CleanupResult { var moved = 0; var formatted = 0; var reordered = 0; var deduped = 0; var extracted = 0 }
 
 
-    /// Standardise punctuation (… and straight quotes), retroactively route entries
+    /// Move entries stored under the wrong day to the day file their header gives,
+    /// standardise punctuation (… and straight quotes), retroactively route entries
     /// matching a configured split tag into their <tag>.md file, reorder each day
     /// by timestamp, and drop exact-duplicate entries. Returns what changed.
     @discardableResult
     func cleanup() -> CleanupResult {
-        struct Report: Decodable { let formatted: Int; let reordered: Int; let deduped: Int; let extracted: Int; let errors: [String] }
+        struct Report: Decodable { let moved: Int; let formatted: Int; let reordered: Int; let deduped: Int; let extracted: Int; let errors: [String] }
         let report: Report? = coreMutation { try $0.call("cleanup", ["tags": splitTags]) }
         publishCoreChange()
         guard let report else { return CleanupResult() }
         if !report.errors.isEmpty { lastWriteError = report.errors.joined(separator: "\n") }
-        return CleanupResult(formatted: report.formatted, reordered: report.reordered, deduped: report.deduped, extracted: report.extracted)
+        return CleanupResult(moved: report.moved, formatted: report.formatted, reordered: report.reordered, deduped: report.deduped, extracted: report.extracted)
     }
 
     struct MergeResult { var journals = 0; var entries = 0 }

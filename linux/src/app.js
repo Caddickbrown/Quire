@@ -1545,7 +1545,7 @@ function renderSettings() {
       ${backupSectionHtml()}
       ${mediaSectionHtml()}
       <section id="s-maint"><h2>Maintenance</h2>
-        <div class="srow"><div class="lbl"><span>Clean up</span><span class="note">Normalises … and straight quotes, reorders days by time, removes exact duplicates, and moves entries matching a split tag into their split journal. jnl’s <span class="mono">cleanup</span>, plus Nook’s dedupe.</span></div><button class="btn" data-action="cleanup">Clean up</button></div>
+        <div class="srow"><div class="lbl"><span>Clean up</span><span class="note">Moves entries filed under the wrong day to the day their header gives, normalises … and straight quotes, reorders days by time, removes exact duplicates, and moves entries matching a split tag into their split journal. jnl’s <span class="mono">cleanup</span>, plus Nook’s dedupe.</span></div><button class="btn" data-action="cleanup">Clean up</button></div>
         <div class="srow"><div class="lbl"><span>File all drafts</span><span class="note">Files drafts into their days or split journals</span></div><button class="btn" data-action="file-all">File all…</button></div>
         <div class="srow"><div class="lbl"><span>Print / Export PDF</span><span class="note">Every filed entry; choose Save as PDF in the print dialog</span></div><button class="btn" data-action="print-journal">Print…</button></div>
         <div class="srow"><div class="lbl"><span>Sort inbox by date</span></div><button class="btn" data-action="sort-inbox">Sort</button></div>
@@ -1819,7 +1819,7 @@ document.addEventListener('click', async ev => {
       case 'cleanup': {
         if (!(await askConfirm('Clean up every day file? Punctuation is normalised, days re-sorted, duplicates removed, and split-tagged entries moved to their split journals.', 'Clean up'))) break;
         const r = await invoke('run_cleanup'); await load();
-        toast(`Formatted ${r.formatted}, reordered ${r.reordered}, removed ${r.deduped} duplicate${r.deduped === 1 ? '' : 's'}, extracted ${r.extracted} to split journals${r.errors?.length ? ' · ' + r.errors.join('; ') : ''}`);
+        toast(`Moved ${r.moved} to their day, formatted ${r.formatted}, reordered ${r.reordered}, removed ${r.deduped} duplicate${r.deduped === 1 ? '' : 's'}, extracted ${r.extracted} to split journals${r.errors?.length ? ' · ' + r.errors.join('; ') : ''}`);
         render(); break;
       }
       case 'sort-inbox': { const changed = await invoke('sort_inbox_cmd'); await load(); toast(changed ? 'Inbox sorted' : 'The inbox was already in order'); render(); break; }
