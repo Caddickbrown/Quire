@@ -33,7 +33,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE1N0VDMjcxOTg0ODcxNUMKUldSY2NVaVljY0orcGFuRXQzZTNhUzduZnU2dXhjTkF0eWd0Z1ZTZGVCMXkxdklOSnREQlhWQzAK",
       "endpoints": [
         "https://github.com/Caddickbrown/Quire/releases/latest/download/latest.json"
       ]
