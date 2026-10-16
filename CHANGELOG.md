@@ -23,6 +23,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [0.8.1] — 2026-10-16
 
+### Fixed
+- **Terminal**: `quire update` follows GitHub's download redirect itself; letting the HTTP client follow it failed with "chunk expected crlf" behind an HTTPS proxy, so 0.8.0 may not be able to update itself there (download 0.8.1 by hand once if so).
+
 ### Changed
 - **Releases**: built with GitHub's Node 24 actions (the Node 20 ones are being retired), and the desktop app's build uses Node 24. Nothing in the apps changes; this release is the first chance for 0.8.0 to update itself.
 
