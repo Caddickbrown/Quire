@@ -82,12 +82,17 @@ Swift Mac app passes its Apple build checks; see `apple/README.md`.) Then, all q
   folders they point at, and asks which one Quire opens (the biggest by
   default).
 - **Backs up** that journal to `~/quire-preinstall-<stamp>.tar.gz`.
-- **Installs what the build needs**: Rust (rustup), the Xcode command-line
-  tools, WebKitGTK and friends via apt / dnf / pacman / zypper, Tauri's CLI
-  (Node if you have it, else cargo), and optionally ffmpeg + HEIC tools.
-- **Builds and installs** Quire and checks it runs: the terminal app into
-  `~/.cargo/bin` (and onto your PATH if it isn't); the desktop app as a .deb,
-  .rpm, AppImage + launcher entry, or `Quire.app`.
+- **Downloads the latest release** on Linux (x86_64, arm64), each file checked
+  against its published SHA-256, and checks it runs: the terminal app into
+  `~/.local/bin` (onto your PATH if it isn't; `quire update` keeps it
+  current), the desktop app as the AppImage + launcher entry, which updates
+  itself from Settings › About. An installed .deb/.rpm is offered the switch;
+  `fuse3` and optionally ffmpeg + HEIC tools are offered when missing.
+- **Or builds from source** with `--build` (and on macOS, or with `--source`
+  or `QUIRE_REF`): Rust (rustup), the Xcode command-line tools, WebKitGTK and
+  friends via apt / dnf / pacman / zypper, Tauri's CLI (Node if you have it,
+  else cargo); the terminal app into `~/.cargo/bin`, the desktop app as a
+  .deb, .rpm, AppImage or `Quire.app`.
 - **Sets it up**: the folder into Quire's settings; `inbox.md` drafts into
   `inbox/`.
 - **Only then removes the old apps**, defaulting to yes for what your choice
@@ -160,6 +165,6 @@ Open Terminal Settings with `,` to choose a backup folder, automatic interval
 between copies. The terminal must be running for its scheduler to run.
 
 `quire --version` prints the version and build commit; Settings shows it too.
-A local `./install.sh` builds the checked-out source: run `git pull` first to
-install newer commits. The downloaded installer fetches the remote source.
+`install.sh` installs the latest release; `./install.sh --build` builds the
+checked-out source instead (run `git pull` first for newer commits).
 See [maintenance coverage](docs/maintenance.md) for the available settings.
