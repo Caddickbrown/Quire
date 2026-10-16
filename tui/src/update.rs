@@ -55,6 +55,8 @@ fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .tls_config(TlsConfig::builder().root_certs(RootCerts::PlatformVerifier).build())
         .user_agent(concat!("quire/", env!("CARGO_PKG_VERSION")))
+        // download() follows redirects itself; see there.
+        .max_redirects(0)
         .build()
         .new_agent()
 }
@@ -72,9 +74,24 @@ fn latest(agent: &ureq::Agent) -> Result<Release, String> {
     res.body_mut().read_json().map_err(|e| format!("GitHub's reply didn't parse: {e}"))
 }
 
+/// GitHub serves a release file by redirecting to another host. Letting ureq
+/// follow that redirect failed reading the second response ("chunk expected
+/// crlf") behind an HTTPS proxy; reading the redirect's body and following
+/// it by hand works.
 fn download(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
-    let mut res = agent.get(url).call().map_err(|e| format!("Download failed: {e}"))?;
-    res.body_mut().with_config().limit(200 * 1024 * 1024).read_to_vec().map_err(|e| format!("Download failed: {e}"))
+    let fail = |e: ureq::Error| format!("Download failed: {e}");
+    let mut url = url.to_string();
+    for _ in 0..5 {
+        let mut res = agent.get(&url).call().map_err(fail)?;
+        if res.status().is_redirection() {
+            let next = res.headers().get("location").and_then(|v| v.to_str().ok()).map(str::to_string);
+            let _ = res.body_mut().read_to_vec();
+            url = next.ok_or("Download failed: a redirect with nowhere to go")?;
+            continue;
+        }
+        return res.body_mut().with_config().limit(200 * 1024 * 1024).read_to_vec().map_err(fail);
+    }
+    Err("Download failed: too many redirects".into())
 }
 
 /// The hex digest at the start of a `sha256sum` line.
