@@ -13,8 +13,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - Call out anything that changes the on-disk format explicitly — the files
   are shared with jnl, Nook and hand-editing users.
 - On release: rename `[Unreleased]` to `## [x.y.z] — YYYY-MM-DD`, bump the
-  workspace version in `Cargo.toml` and `linux/src-tauri/tauri.conf.json` +
-  `linux/package.json`, open a fresh `[Unreleased]`, then tag the release
+  workspace version in `Cargo.toml`, `linux/src-tauri/Cargo.toml`,
+  `linux/src-tauri/tauri.conf.json` and `linux/package.json`, open a fresh `[Unreleased]`, then tag the release
   commit `vx.y.z` and push the tag (see Releases in `CLAUDE.md`).
 
 ---
@@ -22,6 +22,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
+- **Releases**: pushing a `vX.Y.Z` tag builds and publishes Linux x86_64 and arm64 releases on GitHub: the terminal app as a tarball with a checksum, the desktop app as AppImage, .deb and .rpm.
+- **Terminal**: `quire update` (and `jnl update`) installs the latest release over the running one after checking its SHA-256; `--check` only reports. Source builds are pointed at `install.sh`.
+- **Linux**: Settings → About shows the version and how Quire was installed, checks for updates on request, and the AppImage installs a signed update and restarts.
 - **Core**: Cleanup moves an entry stored in the wrong day file (say, the 14th's entries pasted into `inbox/…/20.md`) to the day file its header gives, in the same inbox, journal or split journal; one already there counts as a duplicate. Every shell's Cleanup reports how many moved.
 - **Backups**: configure automatic backups (off, daily, weekly, monthly or on change) and retention in Terminal Settings; monthly means 30 days in every shell. The terminal runs backups in the background and keeps 10 copies by default.
 - **Terminal**: Settings adds tag review/rename, media compression, ex-split merging, Markdown/Day One/transfer imports and conflict-copy merging through the shared Rust core. Show the version and build commit in Settings and `quire --version`.

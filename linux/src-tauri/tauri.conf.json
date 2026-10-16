@@ -31,10 +31,19 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/Caddickbrown/Quire/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": [
       "deb",
+      "rpm",
       "appimage"
     ],
     "category": "Productivity",

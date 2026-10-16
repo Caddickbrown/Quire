@@ -854,6 +854,82 @@ fn set_system_titlebar(app: AppHandle, state: State<AppState>, on: bool) -> Resu
     Ok(custom)
 }
 
+// ----- updates -----
+
+const RELEASES_URL: &str = "https://github.com/Caddickbrown/Quire/releases";
+
+/// How this copy was installed, which decides what an update can do: an
+/// AppImage replaces itself; a .deb or .rpm belongs to the package manager;
+/// a source build is updated by re-running install.sh. CI release builds set
+/// QUIRE_RELEASE.
+fn install_kind() -> &'static str {
+    if std::env::var_os("APPIMAGE").is_some() {
+        "appimage"
+    } else if option_env!("QUIRE_RELEASE").is_some() {
+        "package"
+    } else {
+        "source"
+    }
+}
+
+/// The updater checks signatures against `plugins.updater.pubkey` in
+/// tauri.conf.json; without one there is nothing to check against.
+fn updater_ready(app: &AppHandle) -> bool {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|u| u.get("pubkey"))
+        .and_then(|k| k.as_str())
+        .is_some_and(|k| !k.trim().is_empty())
+}
+
+#[derive(Serialize)]
+struct AppInfo {
+    version: String,
+    kind: &'static str,
+    updates: bool,
+    releases: &'static str,
+}
+
+#[tauri::command]
+fn app_info(app: AppHandle) -> AppInfo {
+    AppInfo { version: app.package_info().version.to_string(), kind: install_kind(), updates: updater_ready(&app), releases: RELEASES_URL }
+}
+
+#[derive(Serialize)]
+struct UpdateCheck {
+    latest: Option<String>,
+    notes: Option<String>,
+    can_install: bool,
+}
+
+/// Asks the latest release's latest.json whether there is a newer version.
+/// Only ever runs when the person presses Check: Quire doesn't phone home.
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<UpdateCheck, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    if !updater_ready(&app) {
+        return Err(format!("This build has no update key, so it can't check. Releases are at {RELEASES_URL}"));
+    }
+    let update = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
+    let latest = update.as_ref().map(|u| u.version.clone());
+    Ok(UpdateCheck { can_install: latest.is_some() && install_kind() == "appimage", latest, notes: update.and_then(|u| u.body) })
+}
+
+/// Downloads the new AppImage, checks its signature, replaces this one and
+/// restarts. The front end saves any open draft first.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    if install_kind() != "appimage" {
+        return Err("Only the AppImage updates itself; a .deb or .rpm updates through your package manager.".into());
+    }
+    let update = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?.ok_or("Quire is already up to date")?;
+    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    app.restart()
+}
+
 pub fn run() {
     // The Wayland app id (and X11 WM_CLASS) come from the program name. The
     // binary is quire-desktop; naming the program after Quire.desktop lets
@@ -864,6 +940,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data = app.path().app_data_dir()?;
             let sample_dir = data.join("sample-journal");
@@ -953,7 +1030,10 @@ pub fn run() {
             pin_hash,
             rewatch,
             undecorated,
-            set_system_titlebar
+            set_system_titlebar,
+            app_info,
+            check_update,
+            install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running Quire");

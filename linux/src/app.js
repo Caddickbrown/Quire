@@ -168,6 +168,7 @@ function checkGoal() {
 /* ---------- data ---------- */
 async function load(reselect) {
   const snap = await invoke('load');
+  if (!S.appInfo) S.appInfo = await invoke('app_info').catch(() => null);
   Object.assign(S, {
     folder: snap.folder, isSample: snap.is_sample, splitTags: snap.split_tags || [], splitSource: snap.split_tags_source, backupDir: snap.backup_dir,
     templates: snap.templates || [], searches: snap.searches || [], hasTransfer: snap.has_transfer, entries: snap.entries || [], jnlDir: snap.jnl_dir || null,
@@ -1582,10 +1583,30 @@ function renderSettings() {
         <span><kbd>Ctrl</kbd> <kbd>[</kbd></span><span>Back: like Esc while writing · otherwise back to the list</span>
       </div></section>
       <section id="s-about"><h2>About</h2>
+        ${updateRowHtml()}
         <p style="font-size:14px;line-height:1.6;color:var(--muted);max-width:640px">Quire 0.7 reads and writes the jnl format: <span class="mono">journal/YYYY/MM/DD.md</span>, split journals in <span class="mono">split/&lt;tag&gt;/YYYY/MM/DD.md</span> (a jnl <span class="mono">&lt;tag&gt;.md</span> is folded in on open) and, for drafts, <span class="mono">inbox/YYYY/MM/DD.md</span> (an <span class="mono">inbox.md</span> left by jnl or Nook is folded in on open, the original kept under <span class="mono">.quire/migration/</span>), with atomic writes like jnl. Quire’s own extras live in <span class="mono">.quire/</span> (templates, saved searches) and <span class="mono">assets/</span> (media); jnl ignores both. Not here: voice recording and transcription, iCloud sync, widgets, the phone and desk mode. Themes beyond Nook’s and Quire’s own need Wander’s source.</p>
         <p style="font-size:13px;color:var(--muted)"><button class="btn ghost" data-action="welcome">Show the welcome note again</button></p>
       </section>
     </main></div>`;
+}
+const INSTALL_KIND = { appimage: 'AppImage', package: 'installed package', source: 'built from source' };
+function updateRowHtml() {
+  const a = S.appInfo, u = S.update || {};
+  if (!a) return '';
+  let note = `Quire ${esc(a.version)} · ${INSTALL_KIND[a.kind] || a.kind}. Checks only when you ask.`;
+  if (u.err) note = esc(u.err);
+  else if (u.latest === null) note = `Quire ${esc(a.version)} is the latest release.`;
+  else if (u.latest) {
+    const how = a.kind === 'appimage' ? 'Install replaces this AppImage and restarts Quire.'
+      : a.kind === 'package' ? 'Update with your package manager, or download it from the releases page.'
+      : 'Re-run install.sh to build it.';
+    note = `Quire ${esc(u.latest)} is out (you have ${esc(a.version)}). ${how}`;
+  }
+  const btn = u.busy ? `<button class="btn" disabled>${u.busy}</button>`
+    : u.latest && u.canInstall ? '<button class="btn primary" data-action="install-update">Install and restart</button>'
+    : u.latest ? `<button class="btn" data-action="open-releases">Releases…</button>`
+    : `<button class="btn" data-action="check-update" ${a.updates ? '' : 'disabled'}>Check for updates</button>`;
+  return `<div class="rows"><div class="srow"><div class="lbl"><span>Updates</span><span class="note">${note}</span></div>${btn}</div></div>`;
 }
 function backupListHtml() {
   if (!S.backupDir) return '';
@@ -1817,11 +1838,26 @@ document.addEventListener('click', async ev => {
       case 'backup-keep': { const keep = Math.max(1, Math.min(50, S.backupKeep + +el.dataset.d)); if (keep === S.backupKeep) break; await invoke('set_backup_prefs', { interval: S.backupInterval, keep }); S.backupKeep = keep; patchSection('s-backup'); $(`#s-backup [data-action="backup-keep"][data-d="${el.dataset.d}"]`)?.focus(); break; }
       case 'restore': { if (!(await askConfirm(`Restore “${esc(el.dataset.name)}” over the current folder? A full copy of the current folder is saved first.`, 'Restore'))) break; const safety = await invoke('restore_backup', { name: el.dataset.name }); S.assetUrls.clear(); S.backups = null; await load(); toast(`Restored. Your previous folder is saved as “${safety}”`); render(); break; }
       case 'cleanup': {
-        if (!(await askConfirm('Clean up every day file? Punctuation is normalised, days re-sorted, duplicates removed, and split-tagged entries moved to their split journals.', 'Clean up'))) break;
+        if (!(await askConfirm('Clean up every day file? Entries stored under the wrong day move to theirs, punctuation is normalised, days re-sorted, duplicates removed, and split-tagged entries moved to their split journals.', 'Clean up'))) break;
         const r = await invoke('run_cleanup'); await load();
         toast(`Moved ${r.moved} to their day, formatted ${r.formatted}, reordered ${r.reordered}, removed ${r.deduped} duplicate${r.deduped === 1 ? '' : 's'}, extracted ${r.extracted} to split journals${r.errors?.length ? ' · ' + r.errors.join('; ') : ''}`);
         render(); break;
       }
+      case 'check-update': {
+        S.update = { busy: 'Checking…' }; render();
+        try { const r = await invoke('check_update'); S.update = { latest: r.latest ?? null, notes: r.notes, canInstall: r.can_install }; }
+        catch (e) { S.update = { err: String(e?.message || e) }; }
+        render(); break;
+      }
+      case 'install-update': {
+        if (!(await askConfirm(`Install Quire ${esc(S.update.latest)} and restart?`, 'Install'))) break;
+        if (S.mode === 'write' && S.draft && !(await flushDraft(S.draft))) { toast('Couldn’t save the draft — not updating', 'error'); break; }
+        S.update = { ...S.update, busy: 'Installing…' }; render();
+        try { await invoke('install_update'); }
+        catch (e) { S.update = { err: String(e?.message || e) }; render(); }
+        break;
+      }
+      case 'open-releases': await invoke('plugin:opener|open_url', { url: S.appInfo.releases }); break;
       case 'sort-inbox': { const changed = await invoke('sort_inbox_cmd'); await load(); toast(changed ? 'Inbox sorted' : 'The inbox was already in order'); render(); break; }
       case 'merge-ex-split': {
         if (!(await askConfirm('Merge every root journal that isn’t a current split tag back into its days? Emptied files are removed.', 'Merge'))) break;

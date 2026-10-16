@@ -167,28 +167,46 @@ Quire ships tagged releases. A release lives on GitHub Releases at
 **Linux first**; macOS and Apple builds come later.
 
 - **Version** is `MAJOR.MINOR.PATCH`, one number for the whole workspace:
-  `Cargo.toml` (`[workspace.package]`), `linux/src-tauri/tauri.conf.json` and
-  `linux/package.json` always match. A minor bump for a feature or format
+  `Cargo.toml` (`[workspace.package]`), `linux/src-tauri/Cargo.toml`,
+  `linux/src-tauri/tauri.conf.json` and `linux/package.json` always match. A minor bump for a feature or format
   change, a patch for fixes only.
 - **Cutting one**: on `main`, rename `## [Unreleased]` in `CHANGELOG.md` to
-  `## [x.y.z] — YYYY-MM-DD`, open a fresh `[Unreleased]`, bump the three
+  `## [x.y.z] — YYYY-MM-DD`, open a fresh `[Unreleased]`, bump the four
   version fields, run `make test`, `make check` and `make smoke`, commit
   "Release x.y.z", then tag `vx.y.z` on that commit and push the tag. Tags are
   never moved or reused; a bad release is fixed by the next patch.
-- **Pipeline (planned, not built yet)**: pushing a `v*` tag runs a GitHub
-  Actions workflow that builds the Linux x86_64 and aarch64 terminal app
-  (`quire` + `jnl`, one tarball per target) and the desktop app (AppImage,
-  .deb, .rpm), and attaches them with SHA-256 checksums to the release.
-- **Updating (planned)**: `quire update` (also `jnl update`) asks the GitHub
-  API for the latest release, compares its tag with `CARGO_PKG_VERSION`,
-  downloads the tarball for its target, checks the checksum and replaces the
-  binaries. A source build (the version carries a commit suffix) re-runs
-  `install.sh` instead. The desktop app only *says* an update is out, except
-  as an AppImage, which can use Tauri's signed updater; deb/rpm installs
-  belong to the package manager. Update checks run when asked, never in the
-  background: a journal app doesn't phone home on its own.
-- `install.sh` keeps building from source until release tarballs exist, then
-  prefers them and falls back to a build.
+- **Pipeline** (`.github/workflows/release.yml`): pushing a `v*` tag checks
+  the tag against the four version fields and that CHANGELOG has the
+  section, then
+  builds on Ubuntu 22.04 x86_64 and arm64 and publishes the release with the
+  CHANGELOG section as notes:
+  `quire-<target>.tar.gz` (+ `.sha256`) holding `quire` and `jnl`, and the
+  desktop app as `Quire_<v>_<arch>.AppImage`, `.deb` and `.rpm` (+
+  `SHA256SUMS-desktop-<arch>`). Asset names for the terminal app carry no
+  version, so `releases/latest/download/quire-<target>.tar.gz` is stable.
+- **Terminal updates**: `quire update` (also `jnl update`; `--check` only
+  reports) reads the latest release from the GitHub API, compares its tag
+  with `CARGO_PKG_VERSION`, downloads the tarball for the target baked in as
+  `QUIRE_RELEASE_TARGET`, checks the SHA-256 and renames the new binaries over
+  the old ones (`tui/src/update.rs`). A build without `QUIRE_RELEASE_TARGET`
+  came from source and is told to re-run `install.sh`.
+- **Desktop updates**: Settings → About → Updates. The AppImage updates itself
+  through `tauri-plugin-updater` (signature-checked, then restart); a .deb or
+  .rpm (`QUIRE_RELEASE` set at build) only says a new version is out, as the
+  package manager owns it. The updater reads `latest.json` from the latest
+  release and checks it against `plugins.updater.pubkey` in tauri.conf.json;
+  with an empty pubkey the check is disabled. Signing needs the repo secrets
+  `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`); without them the release still
+  builds but has no `latest.json`. One-time setup: `cd linux && npx tauri
+  signer generate -w ~/.tauri/quire.key`; the public key goes in
+  `plugins.updater.pubkey` (committed), the private key and its password in
+  the two secrets. Lose the private key and existing AppImages can never
+  verify another update. The plugin is built without its `zip`
+  feature (Windows/macOS only; every zip 2.x/4.x is yanked).
+- **Never automatic**: both shells check only when asked. A journal app
+  doesn't phone home on its own.
+- `install.sh` still builds from source; using the release tarballs there
+  is the next step.
 
 ## Conventions
 

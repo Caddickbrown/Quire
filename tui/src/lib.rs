@@ -11,6 +11,7 @@ pub mod md;
 pub mod paste;
 pub mod theme;
 pub mod ui;
+pub mod update;
 
 use quire_core::*;
 use std::io::IsTerminal;
@@ -69,6 +70,10 @@ pub fn run(name: &str) {
     if opts.args.iter().any(|a| a == "--version" || a == "-V") {
         println!("Quire {}", VERSION);
         return;
+    }
+    // Before the folder: updating the program never touches a journal.
+    if opts.args.first().map(|s| s.as_str()) == Some("update") {
+        std::process::exit(update::run(&opts.args[1..]));
     }
     let settings = Settings::load();
     let folder = resolve_folder(&opts, &settings);
