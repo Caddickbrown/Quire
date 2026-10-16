@@ -282,6 +282,7 @@ pub fn help(name: &str) {
   {n} open               open the journal folder in the file manager
   {n} config             edit ~/.config/jnl/config
   {n} migrate            fold a legacy inbox.md into inbox/ and .nook/ into .quire/
+  {n} update [--check]   install the latest release (--check: only say if there is one)
 
   Options:  --folder PATH   --theme NAME   --help
 

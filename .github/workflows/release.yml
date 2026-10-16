@@ -1,0 +1,174 @@
+name: Release
+# Pushing a tag vX.Y.Z builds Linux x86_64 and aarch64 releases and publishes
+# them on GitHub Releases: the terminal app (quire + jnl, one tarball per
+# target, with a .sha256 beside it) and the desktop app (AppImage, .deb,
+# .rpm). With the TAURI_SIGNING_PRIVATE_KEY secret set, the AppImages are
+# signed and latest.json lets the AppImage update itself. See "Releases" in
+# CLAUDE.md for cutting one.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'An existing tag to rebuild, e.g. v0.7.1'
+        required: true
+permissions:
+  contents: read
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: The tag matches every version field
+        id: v
+        run: |
+          v=${TAG#v}
+          ws=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          tauri=$(jq -r .version linux/src-tauri/tauri.conf.json)
+          npm=$(jq -r .version linux/package.json)
+          desk=$(sed -n 's/^version = "\(.*\)"/\1/p' linux/src-tauri/Cargo.toml | head -1)
+          echo "tag $v · Cargo.toml $ws · tauri.conf.json $tauri · package.json $npm · quire-desktop $desk"
+          for x in "$ws" "$tauri" "$npm" "$desk"; do
+            [ "$x" = "$v" ] || { echo "::error::$TAG doesn't match every version field (see above)"; exit 1; }
+          done
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v v="${TAG#v}" '
+            /^## \[/ { if (on) exit; if (index($0, "## [" v "]") == 1) { on = 1; next } }
+            on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "::error::CHANGELOG.md has no '## [${TAG#v}]' section"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.md
+
+  terminal:
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build quire and jnl
+        env:
+          QUIRE_RELEASE_TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked -p quire-tui
+      - name: Package
+        run: |
+          name=quire-${{ matrix.target }}
+          mkdir "$name"
+          cp target/release/quire target/release/jnl README.md CHANGELOG.md "$name/"
+          "$name/quire" --version
+          tar czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terminal-${{ matrix.target }}
+          path: quire-${{ matrix.target }}.tar.gz*
+
+  desktop:
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-22.04 }
+          - { arch: aarch64, runner: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: System libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev build-essential file libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf pkg-config
+      - name: Build the AppImage, .deb and .rpm
+        working-directory: linux
+        env:
+          QUIRE_RELEASE: '1'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npm ci --no-fund --no-audit
+          extra=()
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            [ -n "$(jq -r '.plugins.updater.pubkey' src-tauri/tauri.conf.json)" ] \
+              || { echo "::error::the signing key is set but plugins.updater.pubkey in tauri.conf.json is empty"; exit 1; }
+            extra=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
+          else
+            echo "::warning::no TAURI_SIGNING_PRIVATE_KEY secret: the AppImage won't be able to update itself"
+          fi
+          npx tauri build --bundles appimage,deb,rpm "${extra[@]}"
+      - name: Collect
+        run: |
+          mkdir out
+          b=target/release/bundle
+          cp $b/appimage/*.AppImage $b/deb/*.deb $b/rpm/*.rpm out/
+          cp $b/appimage/*.AppImage.sig out/ 2>/dev/null || true
+          (cd out && sha256sum * > ../SHA256SUMS-desktop-${{ matrix.arch }} && mv ../SHA256SUMS-desktop-${{ matrix.arch }} .)
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.arch }}
+          path: out/*
+
+  publish:
+    needs: [verify, terminal, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: latest.json for the AppImage updater
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd dist
+          platforms='{}'
+          # Tauri names them Quire_<version>_amd64.AppImage / _aarch64.AppImage.
+          for pair in x86_64:amd64 aarch64:aarch64; do
+            arch=${pair%%:*}
+            img=$(ls ./*_"${pair#*:}".AppImage 2>/dev/null | head -1); img=${img#./}
+            [ -n "$img" ] && [ -f "$img.sig" ] || continue
+            platforms=$(jq --arg k "linux-$arch" --arg sig "$(cat "$img.sig")" \
+              --arg url "https://github.com/$REPO/releases/download/$TAG/$img" \
+              '. + {($k): {signature: $sig, url: $url}}' <<<"$platforms")
+          done
+          if [ "$platforms" != '{}' ]; then
+            jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --arg n "See https://github.com/$REPO/releases/tag/$TAG" --argjson p "$platforms" \
+              '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > latest.json
+            cat latest.json
+          fi
+          mv notes.md ../notes.md
+          ls -l
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          gh release create "$TAG" dist/* --repo "${{ github.repository }}" \
+            --title "Quire $VERSION" --notes-file notes.md --verify-tag
