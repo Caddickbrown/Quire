@@ -23,7 +23,7 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
       - name: The tag matches every version field
@@ -45,7 +45,7 @@ jobs:
             /^## \[/ { if (on) exit; if (index($0, "## [" v "]") == 1) { on = 1; next } }
             on' CHANGELOG.md > notes.md
           [ -s notes.md ] || { echo "::error::CHANGELOG.md has no '## [${TAG#v}]' section"; exit 1; }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: notes
           path: notes.md
@@ -59,7 +59,7 @@ jobs:
           - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm }
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
       - uses: dtolnay/rust-toolchain@stable
@@ -75,7 +75,7 @@ jobs:
           "$name/quire" --version
           tar czf "$name.tar.gz" "$name"
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: terminal-${{ matrix.target }}
           path: quire-${{ matrix.target }}.tar.gz*
@@ -89,13 +89,15 @@ jobs:
           - { arch: aarch64, runner: ubuntu-22.04-arm }
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
+          # No dependency cache in a job that holds the signing key.
+          package-manager-cache: false
       - name: System libraries
         run: |
           sudo apt-get update -qq
@@ -126,7 +128,7 @@ jobs:
           cp $b/appimage/*.AppImage.sig out/ 2>/dev/null || true
           (cd out && sha256sum * > ../SHA256SUMS-desktop-${{ matrix.arch }} && mv ../SHA256SUMS-desktop-${{ matrix.arch }} .)
           ls -l out
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.arch }}
           path: out/*
@@ -137,7 +139,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
