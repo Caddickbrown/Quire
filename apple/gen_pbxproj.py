@@ -657,8 +657,10 @@ def pbxproj():
         # it. The one Xcode's validator checks is this (default NO).
         a('\t\t\t\tASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;')
         a('\t\t\t\tCLANG_ENABLE_MODULES = YES;')
-        a('\t\t\t\tSWIFT_INCLUDE_PATHS = "$(inherited) $(SRCROOT)/Generated/Headers";')
-        a('\t\t\t\tHEADER_SEARCH_PATHS = "$(inherited) $(SRCROOT)/Generated/Headers";')
+        # No search path to Generated/Headers: the XCFramework carries the
+        # QuireCoreFFI headers and module map, and Xcode copies them into
+        # $(BUILT_PRODUCTS_DIR)/include for the targets that link it. A second
+        # path here defines the module twice ("redefinition of module").
         a('\t\t\t\tOTHER_LDFLAGS = "$(inherited) -lc++ -liconv -framework CoreFoundation -framework Security";')
         a('\t\t\t\tCLANG_ENABLE_OBJC_ARC = YES;')
         a('\t\t\t\tCLANG_ENABLE_OBJC_WEAK = YES;')
