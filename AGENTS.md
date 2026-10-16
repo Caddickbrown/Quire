@@ -173,8 +173,11 @@ Quire ships tagged releases. A release lives on GitHub Releases at
 - **Cutting one**: on `main`, rename `## [Unreleased]` in `CHANGELOG.md` to
   `## [x.y.z] — YYYY-MM-DD`, open a fresh `[Unreleased]`, bump the four
   version fields, run `make test`, `make check` and `make smoke`, commit
-  "Release x.y.z", then tag `vx.y.z` on that commit and push the tag. Tags are
-  never moved or reused; a bad release is fixed by the next patch.
+  "Release x.y.z", then tag `vx.y.z` on that commit and push the tag. Tag only
+  after the release commit is on `main`: a tag on an older commit fails the
+  version check and publishes nothing. Such a tag (no release made) may be
+  deleted and pushed again; a published tag is never moved or reused, and a
+  bad release is fixed by the next patch.
 - **Pipeline** (`.github/workflows/release.yml`): pushing a `v*` tag checks
   the tag against the four version fields and that CHANGELOG has the
   section, then
