@@ -622,7 +622,7 @@ async fn run_cleanup(app: AppHandle, state: State<'_, AppState>) -> Result<Clean
     let r = root(&state)?;
     let tags = split_tags_of(&state);
     let rep = blocking(move || cleanup(&r, &tags)).await?;
-    if rep.formatted + rep.reordered + rep.deduped + rep.extracted > 0 {
+    if rep.moved + rep.formatted + rep.reordered + rep.deduped + rep.extracted > 0 {
         wrote(&app);
     }
     Ok(rep)

@@ -1590,7 +1590,7 @@ impl App {
         match cleanup(&self.j, &self.split_tags) {
             Ok(r) => {
                 self.reload();
-                let msg = format!("Cleanup: {} formatted, {} reordered, {} duplicates removed, {} extracted", r.formatted, r.reordered, r.deduped, r.extracted);
+                let msg = format!("Cleanup: {} moved to their day, {} formatted, {} reordered, {} duplicates removed, {} extracted", r.moved, r.formatted, r.reordered, r.deduped, r.extracted);
                 match r.errors.first() {
                     Some(e) => self.toast(format!("{} — {}", msg, e), true),
                     None => self.toast(msg, false),

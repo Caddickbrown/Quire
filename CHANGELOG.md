@@ -21,6 +21,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
+- **Core**: Cleanup moves an entry stored in the wrong day file (say, the 14th's entries pasted into `inbox/…/20.md`) to the day file its header gives, in the same inbox, journal or split journal; one already there counts as a duplicate. Every shell's Cleanup reports how many moved.
 - **Backups**: configure automatic backups (off, daily, weekly, monthly or on change) and retention in Terminal Settings; monthly means 30 days in every shell. The terminal runs backups in the background and keeps 10 copies by default.
 - **Terminal**: Settings adds tag review/rename, media compression, ex-split merging, Markdown/Day One/transfer imports and conflict-copy merging through the shared Rust core. Show the version and build commit in Settings and `quire --version`.
 - **Linux**: Settings adds File All Drafts and Print / Export PDF for the filed journal.

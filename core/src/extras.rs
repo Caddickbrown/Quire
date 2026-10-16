@@ -367,6 +367,9 @@ pub struct CleanupReport {
     pub reordered: usize,
     pub deduped: usize,
     pub extracted: usize,
+    /// Entries moved to the day file their header dates them to (pasted
+    /// under the wrong day).
+    pub moved: usize,
     /// Files that couldn't be read or written; cleanup carries on past them.
     pub errors: Vec<String>,
     /// Back-compat aliases: files = day files scanned, formatting = formatted,
@@ -409,8 +412,68 @@ fn sort_dedupe(entries: Vec<RawEntry>) -> (Vec<RawEntry>, bool, usize) {
     (kept, reordered, removed)
 }
 
+/// Move every entry whose header date isn't its day file's date into the
+/// day file of that date in the same tree: the header is the date, the file
+/// name only stores it. Destination first, skipping an entry already there
+/// (counted as a duplicate), then removed from the source, so a failure
+/// leaves a duplicate, never a loss.
+fn rehome(j: &Journal, rep: &mut CleanupReport) {
+    for (rel, _, _) in j.entry_files() {
+        let Some(day) = day_file_date(&rel) else { continue };
+        let content = match j.try_read(&rel) {
+            Ok(s) => s,
+            Err(e) => {
+                // The passes below report unreadable inbox and journal files.
+                if rel.starts_with("split/") {
+                    rep.errors.push(e);
+                }
+                continue;
+            }
+        };
+        let mut groups: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+        for e in parse_entries(&content) {
+            if e.date == day {
+                continue;
+            }
+            if let Some(dest) = day_file_like(&rel, &e.date) {
+                let raw = e.raw.trim_end().to_string();
+                let moved = rebase_links(&raw, &rel, &dest);
+                groups.entry(dest).or_default().push((raw, moved));
+            }
+        }
+        let mut gone: HashMap<String, usize> = HashMap::new();
+        for (dest, items) in &groups {
+            let raws: Vec<String> = items.iter().map(|x| x.1.clone()).collect();
+            match j.insert_entries(dest, &raws, true) {
+                Ok(placed) => {
+                    for ((k, _), at) in items.iter().zip(placed) {
+                        *gone.entry(k.clone()).or_default() += 1;
+                        if at.is_some() {
+                            rep.moved += 1;
+                        } else {
+                            rep.deduped += 1;
+                        }
+                    }
+                }
+                Err(e) => rep.errors.push(format!("{} → {}: {}", rel, dest, e)),
+            }
+        }
+        if gone.is_empty() {
+            continue;
+        }
+        let res = j.try_read(&rel).and_then(|fresh| match remove_raws(&fresh, &mut gone) {
+            Some(text) => write_removed(j, &rel, &text),
+            None => Ok(()),
+        });
+        if let Err(e) = res {
+            rep.errors.push(format!("{}: {}", rel, e));
+        }
+    }
+}
+
 pub fn cleanup(j: &Journal, split_tags: &[String]) -> Result<CleanupReport, String> {
     let mut rep = CleanupReport::default();
+    rehome(j, &mut rep);
     for rel in j.walk_md(JOURNAL_DIR) {
         rep.files += 1;
         let orig = match j.try_read(&rel) {
@@ -1846,6 +1909,28 @@ mod tests {
         let r2 = cleanup(&jn(d.path()), &["work".into()]).unwrap();
         assert_eq!((r2.formatted, r2.reordered, r2.deduped, r2.extracted), (0, 0, 0, 0));
         assert!(sort_inbox(&jn(d.path())).unwrap() == false);
+    }
+
+    #[test]
+    fn cleanup_rehomes_misdated_entries() {
+        let d = tmp();
+        // The 14th's entries pasted into the 20th: one new, one already on the 14th.
+        w(d.path(), "inbox/2026/10/14.md", "[2026-10-14 09:00:00] kept\n");
+        w(d.path(), "inbox/2026/10/20.md", "[2026-10-20 08:00:00] today\n\n[2026-10-14 08:00:00] early\n\n[2026-10-14 09:00:00] kept\n");
+        w(d.path(), "journal/2026/10/20.md", "[2026-10-15 07:00:00] filed\n![](../../../assets/p.jpg)\n");
+        w(d.path(), "split/work/2026/10/20.md", "[2026-10-16 07:00:00] w @work\n");
+        w(d.path(), "inbox.md", "[2026-10-01 07:00:00] legacy\n");
+        let r = cleanup(&jn(d.path()), &["work".into()]).unwrap();
+        assert_eq!((r.moved, r.deduped, r.errors.len()), (3, 1, 0), "{:?}", r);
+        assert_eq!(read(&d.path().join("inbox/2026/10/14.md")), "[2026-10-14 08:00:00] early\n\n[2026-10-14 09:00:00] kept\n");
+        assert_eq!(read(&d.path().join("inbox/2026/10/20.md")), "[2026-10-20 08:00:00] today\n");
+        assert!(!d.path().join("journal/2026/10/20.md").exists());
+        assert_eq!(read(&d.path().join("journal/2026/10/15.md")), "[2026-10-15 07:00:00] filed\n![](assets/p.jpg)\n");
+        assert!(!d.path().join("split/work/2026/10/20.md").exists());
+        assert_eq!(read(&d.path().join("split/work/2026/10/16.md")), "[2026-10-16 07:00:00] w @work\n");
+        assert_eq!(read(&d.path().join("inbox.md")), "[2026-10-01 07:00:00] legacy\n");
+        let r2 = cleanup(&jn(d.path()), &["work".into()]).unwrap();
+        assert_eq!((r2.moved, r2.deduped), (0, 0));
     }
 
     #[test]
