@@ -1,4 +1,6 @@
 name: Release
+# Titled after the tag: by default a tag run takes its commit's message.
+run-name: Release ${{ inputs.tag || github.ref_name }}
 # Pushing a tag vX.Y.Z builds Linux x86_64 and aarch64 releases and publishes
 # them on GitHub Releases: the terminal app (quire + jnl, one tarball per
 # target, with a .sha256 beside it) and the desktop app (AppImage, .deb,
