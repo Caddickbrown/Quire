@@ -129,6 +129,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   `README.md` describes the whole, `linux/README.md` the desktop app.
 
 ### Fixed
+- **Apple**: the Xcode project no longer defines the `QuireCoreFFI` module twice (a project-wide header path duplicated the one the XCFramework provides), which broke every Apple build.
 - **Terminal**: align tags and word counts in Today, Inbox and Browse, including rows with different digit counts.
 - **Apple**: external monitors show a neutral screen while the journal is locked, including when an On this day preview is available.
 - **Editor**: continuing an ordered list at the largest supported number
