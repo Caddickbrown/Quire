@@ -126,6 +126,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   `README.md` describes the whole, `linux/README.md` the desktop app.
 
 ### Fixed
+- **Core**: ↩ in a list works on a line that still carries its `\r\n` or `\n` ending (the Apple editor passes one).
+- **Apple**: the vault refuses a new file under a symlinked folder that points outside the journal (Foundation left such paths unresolved), and reminders no longer crash a process that isn't an app (hostless tests).
 - **Apple**: the Xcode project no longer defines the `QuireCoreFFI` module twice (a project-wide header path duplicated the one the XCFramework provides), which broke every Apple build.
 - **Terminal**: align tags and word counts in Today, Inbox and Browse, including rows with different digit counts.
 - **Apple**: external monitors show a neutral screen while the journal is locked, including when an On this day preview is available.

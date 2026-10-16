@@ -20,6 +20,9 @@ static ORDERED: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\s*)(\d+)([.)] )(.*)$"
 static BULLET: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\s*)([-*+] )(.*)$").unwrap());
 
 pub fn list_continuation(line: &str) -> Option<ListStep> {
+    // A line may still carry its ending ("- milk\r\n"); `.` never matches
+    // `\n`, so drop it first. A lone trailing `\r` is whitespace to trim().
+    let line = line.strip_suffix('\n').unwrap_or(line);
     if let Some(m) = CHECK.captures(line) {
         return Some(if m[3].trim().is_empty() {
             ListStep::End(m[1].chars().count() + m[2].chars().count())
@@ -82,6 +85,16 @@ pub fn word_at(line: &str, col: usize) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_lines_with_their_endings() {
+        assert_eq!(list_continuation("- milk\r\n"), Some(ListStep::Continue("- ".into())));
+        assert_eq!(list_continuation("- milk\n"), Some(ListStep::Continue("- ".into())));
+        assert_eq!(list_continuation("- \r\n"), Some(ListStep::End(2)));
+        assert_eq!(list_continuation("- [ ] \r\n"), Some(ListStep::End(6)));
+        assert_eq!(list_continuation("2. x\r\n"), Some(ListStep::Continue("3. ".into())));
+        assert_eq!(list_continuation("prose\r\n"), None);
+    }
 
     #[test]
     fn lists() {

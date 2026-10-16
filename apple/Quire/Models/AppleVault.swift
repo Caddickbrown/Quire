@@ -13,9 +13,31 @@ final class AppleVault: NativeVault, @unchecked Sendable {
               !rel.split(separator: "/").contains("..") else { throw failure("Invalid journal path") }
         let url = rel.isEmpty ? base : base.appendingPathComponent(rel).standardizedFileURL
         let root = base.resolvingSymlinksInPath().path
-        let resolved = url.resolvingSymlinksInPath().path
+        let resolved = try resolvedPath(url)
         guard resolved == root || resolved.hasPrefix(root + "/") else { throw failure("Path leaves the journal folder") }
         return url
+    }
+
+    /// `url` with every symlink resolved, including in a path whose last parts
+    /// don't exist yet. Foundation leaves such a path unresolved, so a new file
+    /// under a symlinked folder ("escape/new.md", escape → outside) would pass
+    /// the check above. Resolves the deepest part that exists and re-appends
+    /// the rest; a dangling symlink is refused, since writing through it would
+    /// create its target wherever it points.
+    private func resolvedPath(_ url: URL) throws -> String {
+        var existing = url
+        var tail: [String] = []
+        while !fm.fileExists(atPath: existing.path) {
+            if (try? fm.destinationOfSymbolicLink(atPath: existing.path)) != nil {
+                throw failure("Path leaves the journal folder")
+            }
+            guard existing.pathComponents.count > 1 else { break }
+            tail.insert(existing.lastPathComponent, at: 0)
+            existing.deleteLastPathComponent()
+        }
+        var resolved = existing.resolvingSymlinksInPath()
+        for part in tail { resolved.appendPathComponent(part) }
+        return resolved.path
     }
     private func failure(_ message: String) -> BridgeError { .Failure(message: message) }
     private func coordinated<T>(_ url: URL, writing: Bool, options: NSFileCoordinator.WritingOptions = .forReplacing, _ body: (URL) throws -> T) throws -> T {
