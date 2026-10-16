@@ -195,7 +195,13 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   with `CARGO_PKG_VERSION`, downloads the tarball for the target baked in as
   `QUIRE_RELEASE_TARGET`, checks the SHA-256 and renames the new binaries over
   the old ones (`tui/src/update.rs`). A build without `QUIRE_RELEASE_TARGET`
-  came from source and is told to re-run `install.sh`.
+  came from source and is told to re-run `install.sh`. It updates the desktop
+  AppImage too (found from `quire.desktop`'s `Exec`, else
+  `~/Applications/Quire.AppImage`, or `$QUIRE_APPIMAGE`): replaced when its
+  SHA-256 isn't the one `SHA256SUMS-desktop-<arch>` lists; a .deb/.rpm gets
+  the package-manager command instead. `--terminal` / `--desktop` limit it.
+  Downloads follow GitHub's redirect by hand (ureq following it broke behind
+  a proxy).
 - **Desktop updates**: Settings → About → Updates. The AppImage updates itself
   through `tauri-plugin-updater` (signature-checked, then restart); a .deb or
   .rpm (`QUIRE_RELEASE` set at build) only says a new version is out, as the
