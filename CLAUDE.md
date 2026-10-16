@@ -54,11 +54,14 @@ Cargo.toml          workspace: core, tui, linux/src-tauri (default members: core
 themes.json         the looks — one source. core/src/themes.rs compiles it in.
 install.sh          Linux + macOS installer (bash 3.2). Asks TUI / GUI / both;
                     detect jnl/Nook/Wander + their folders → ask everything →
-                    back up → install deps (rustup, WebKitGTK per package
-                    manager, Tauri CLI) → build + install + check → settings +
-                    migrate → only then remove old apps (to the Trash). Never
-                    deletes a journal; --dry-run prints every command;
-                    --uninstall removes Quire.
+                    back up → on Linux x86_64/arm64 download the latest release
+                    (SHA-256 checked; desktop app as the self-updating AppImage,
+                    offering to switch an installed .deb/.rpm and to install
+                    fuse3) — or, with --build / --source / QUIRE_REF / macOS,
+                    install deps (rustup, WebKitGTK, Tauri CLI) and build →
+                    install + check → settings + migrate → only then remove old
+                    apps (to the Trash). Never deletes a journal; --dry-run
+                    prints every command; --uninstall removes Quire.
 core/               quire-core
   src/vault.rs      the Vault trait + FsVault. THE RULE: the core never opens a
                     file itself; every entry file and sidecar goes through the
@@ -208,8 +211,13 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   feature (Windows/macOS only; every zip 2.x/4.x is yanked).
 - **Never automatic**: both shells check only when asked. A journal app
   doesn't phone home on its own.
-- `install.sh` still builds from source; using the release tarballs there
-  is the next step.
+- **Installs**: `install.sh` downloads the latest release on Linux x86_64/arm64
+  (found from where `/releases/latest` redirects, no API token) and checks
+  each file against the release's SHA-256 files. The terminal app goes to
+  `~/.local/bin`, or replaces an existing `~/.cargo/bin/quire` so nothing
+  shadows it; the desktop app defaults to the AppImage. `--build` builds from
+  source as before; so does setting `QUIRE_REF`, `--source`, macOS, or a
+  release that can't be reached.
 
 ## Conventions
 

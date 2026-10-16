@@ -3,7 +3,10 @@
 #
 # Installs the terminal app (quire + jnl), the desktop app, or both; finds
 # jnl, Nook and Wander and the journal folders they use, offers to remove
-# them, and points Quire at your journal. It never deletes a journal folder:
+# them, and points Quire at your journal. On Linux (x86_64, arm64) it
+# downloads the latest release (checksummed) and installs the desktop app as
+# the AppImage, which updates itself; elsewhere, or with --build, it builds
+# from source. It never deletes a journal folder:
 # removed apps go to the Trash (macOS, or Linux with `gio`) or to a dated
 # folder under ~/.local/state/quire/, and every step is logged there.
 #
@@ -15,7 +18,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash
 #
 # The order is the safety: every question first, then back up the journal,
-# install what it needs, build and install Quire and check it runs, set it
+# install what it needs, download or build Quire and check it runs, set it
 # up — and only then remove the old apps. A failed build never leaves you
 # without a journal app.
 #
@@ -36,6 +39,7 @@ MODE=install
 FOLDER_ARG=""
 SOURCE_ARG=""
 PICK=""            # tui | gui | both | none, from a flag; asked otherwise
+BUILD=0            # 1: build from source even where a release download exists
 WANT_REMOVE=1
 NO_BACKUP=0
 VERBOSE=0
@@ -54,16 +58,20 @@ Journal folders are never deleted.
   --dry-run        show the plan and every command; change nothing
   -y, --yes        accept each default without asking
   --folder DIR     use DIR as the journal folder
+  --build          build from source instead of downloading the latest release
+                   (needs Rust; the desktop app needs WebKitGTK and Tauri)
   --source DIR     build from this Quire checkout instead of cloning
-  --bundle KIND    Linux desktop app as deb | rpm | appimage (default: what
-                   your package manager installs; AppImage otherwise)
+  --bundle KIND    Linux desktop app as deb | rpm | appimage (default: the
+                   AppImage, which updates itself; a build defaults to what
+                   your package manager installs)
   --keep-old       install alongside the old apps; remove nothing
   --no-backup      skip the journal backup
   --uninstall      remove Quire itself (journal and settings kept)
   -v, --verbose    show build and package-manager output (it is always logged)
   -h, --help       this text
 
-Environment: QUIRE_REPO, QUIRE_REF (default main) pick what gets cloned.
+Downloads come from the latest GitHub release of QUIRE_REPO. Builds clone
+QUIRE_REF (default main); setting QUIRE_REF builds from source.
 EOF
 }
 
@@ -76,6 +84,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     -y|--yes) YES=1 ;;
     --folder) shift; FOLDER_ARG=${1:-} ;;
+    --build) BUILD=1 ;;
     --source) shift; SOURCE_ARG=${1:-} ;;
     --bundle) shift; BUNDLE_ARG=${1:-} ;;
     --keep-old) WANT_REMOVE=0 ;;
@@ -546,6 +555,82 @@ case "$BUNDLE_ARG" in
   *) echo "--bundle takes deb, rpm or appimage" >&2; exit 2 ;;
 esac
 
+# ---------- the latest release ----------
+
+# owner/name of the GitHub repository releases come from.
+RELEASE_REPO=$(printf '%s' "$REPO_URL" | sed -n 's#^https://github\.com/\([^/]*/[^/]*\)$#\1#p' | sed 's/\.git$//')
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=x86_64; PKG_ARCH=amd64 ;;
+  aarch64|arm64) ARCH=aarch64; PKG_ARCH=arm64 ;;
+  *) ARCH=""; PKG_ARCH="" ;;
+esac
+REL_TAG=""; REL_VER=""
+
+# Sets REL_TAG/REL_VER from where /releases/latest redirects (no API, no token).
+latest_release() {
+  local url
+  url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$RELEASE_REPO/releases/latest" 2>/dev/null) || return 1
+  REL_TAG=${url##*/tag/}
+  case "$REL_TAG" in v[0-9]*) REL_VER=${REL_TAG#v} ;; *) return 1 ;; esac
+}
+
+# Download or build: download unless asked to build, or no release fits.
+choose_from() {
+  FROM=source
+  if [ $BUILD -eq 1 ]; then WHY_BUILD="--build"
+  elif [ -n "$SOURCE_ARG" ]; then WHY_BUILD="--source"
+  elif [ -n "${QUIRE_REF:-}" ]; then WHY_BUILD="QUIRE_REF=$QUIRE_REF"
+  elif [ $OS = mac ]; then WHY_BUILD="there are no macOS release builds yet"
+  elif [ -z "$ARCH" ]; then WHY_BUILD="there's no release build for $(uname -m)"
+  elif [ -z "$RELEASE_REPO" ]; then WHY_BUILD="QUIRE_REPO isn't a GitHub repository"
+  elif ! have curl; then WHY_BUILD="curl is needed to download"
+  elif ! latest_release; then WHY_BUILD="$RELEASE_REPO's releases couldn't be reached"
+  else FROM=release; WHY_BUILD=""
+  fi
+}
+
+rel_url() { printf 'https://github.com/%s/releases/download/%s/%s' "$RELEASE_REPO" "$REL_TAG" "$1"; }
+
+sha256_of() { if have sha256sum; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+
+# The AppImage's runtime carries its own libfuse; it needs a fusermount.
+fuse_ok() { have fusermount || have fusermount3; }
+fuse_pkg() { case "$PM" in apt-get|dnf|pacman|zypper) echo fuse3 ;; esac; }
+
+# The desktop app's release file for this machine and bundle.
+gui_asset() {
+  case "$BUNDLE" in
+    appimage) echo "Quire_${REL_VER}_$([ $ARCH = x86_64 ] && echo amd64 || echo aarch64).AppImage" ;;
+    deb) echo "Quire_${REL_VER}_${PKG_ARCH}.deb" ;;
+    rpm) echo "Quire-${REL_VER}-1.${ARCH}.rpm" ;;
+  esac
+}
+
+# Download $1 into $DL and check it against the SHA-256 in sums file $2
+# (a `sha256sum` listing, also downloaded). Dies on a mismatch.
+fetch_checked() {
+  local name=$1 sums=$2 want got
+  run curl -fsSL -o "$DL/$name" "$(rel_url "$name")" || die "couldn't download $name"
+  [ $DRY -eq 1 ] && return 0
+  [ -f "$DL/$sums" ] || { run curl -fsSL -o "$DL/$sums" "$(rel_url "$sums")" || die "couldn't download $sums"; }
+  want=$(awk -v n="$name" '{ f=$2; sub(/^\*/, "", f) } f==n || NR==1 && NF==1 { print $1; exit }' "$DL/$sums")
+  [ -n "$want" ] || want=$(awk 'NR==1 { print $1 }' "$DL/$sums")
+  got=$(sha256_of "$DL/$name")
+  [ "$got" = "$want" ] || die "$name doesn't match its published checksum — nothing was installed from it"
+  say "  ${D}✓ $name matches its SHA-256${R}"
+}
+
+# The terminal app from the release tarball, into $TUI_DIR. `quire update`
+# keeps it current from then on.
+install_tui_release() {
+  local tb="quire-$ARCH-unknown-linux-gnu.tar.gz"
+  fetch_checked "$tb" "$tb.sha256"
+  run tar -xzf "$DL/$tb" -C "$DL" || die "couldn't unpack $tb"
+  run mkdir -p "$TUI_DIR"
+  run install -m 755 "$DL/quire-$ARCH-unknown-linux-gnu/quire" "$DL/quire-$ARCH-unknown-linux-gnu/jnl" "$TUI_DIR/" \
+    || die "couldn't install into $TUI_DIR"
+}
+
 # ---------- the source ----------
 
 find_source() {
@@ -595,7 +680,8 @@ uninstall_main() {
   while [ $i -lt ${#Q_KIND[@]} ]; do
     if [ "${picks[$i]}" = y ]; then
       case "${Q_KIND[$i]}" in
-        cargo) if have cargo; then run cargo uninstall quire-tui; else move_aside "$BIN/quire"; move_aside "$BIN/jnl"; fi ;;
+        cargo) if have cargo && cargo install --list 2>/dev/null | grep -q '^quire-tui '; then run cargo uninstall quire-tui
+               else move_aside "$BIN/quire"; move_aside "$BIN/jnl"; fi ;;
         dpkg) sudo_run apt-get remove -y quire ;;
         rpm) if have dnf; then sudo_run dnf remove -y quire; else sudo_run rpm -e quire; fi ;;
         file) move_aside "${Q_WHAT[$i]}" ;;
@@ -776,10 +862,47 @@ install_main() {
   fi
   [ -n "$MIGRATE_WHAT" ] && ask "Move $MIGRATE_WHAT into day files now?" y && DO_MIGRATE=1
 
-  # The build's needs.
+  # Download or build, and what that needs.
   NEED_XCODE=0; NEED_RUST=0; DO_LIBS=0; TAURI_VIA=""; DO_MEDIA=0; DO_PATH=0
+  DO_FUSE=0; NO_FUSE=0; SWITCH_PKG=""; FROM=source; TUI_DIR=$BIN
   if [ $WANT_TUI -eq 1 ] || [ $WANT_GUI -eq 1 ]; then
+  choose_from
+  if [ $FROM = release ]; then
+  head1 "What it needs"
+  say "  Quire $REL_VER, the latest release, downloaded and checked against its SHA-256."
+  say "  ${D}(--build compiles it from source instead)${R}"
+  # An existing ~/.cargo/bin/quire would shadow a new one elsewhere on PATH.
+  [ -x "$BIN/quire" ] || TUI_DIR="$HOME/.local/bin"
+  if [ $WANT_GUI -eq 1 ]; then
+    if [ -z "$BUNDLE_ARG" ]; then
+      BUNDLE=appimage
+      SWITCH_PKG=$(pkg_installed quire /usr/bin/quire-desktop)
+      if [ -n "$SWITCH_PKG" ]; then
+        say "  The desktop app is installed as a .$( [ "$SWITCH_PKG" = dpkg ] && echo deb || echo rpm ) package, which can't update itself."
+        if ask "Switch it to the AppImage, which updates itself? (the package goes once the AppImage is in place)" y; then
+          :
+        else
+          [ "$SWITCH_PKG" = dpkg ] && BUNDLE=deb || BUNDLE=rpm
+          SWITCH_PKG=""
+        fi
+      fi
+    fi
+    if [ $BUNDLE = appimage ] && ! fuse_ok; then
+      if [ -n "$(fuse_pkg)" ] && ask "The AppImage mounts itself with FUSE, which isn't installed. Install $(fuse_pkg)$([ -n "$SUDO" ] && echo ' (needs sudo)')?" y; then
+        DO_FUSE=1
+      else
+        NO_FUSE=1
+        say "  ${D}Without FUSE the launcher unpacks the AppImage on each start (slower to open).${R}"
+      fi
+    fi
+    say "  The desktop app: $(gui_asset)"
+    if ! have ffmpeg && [ -n "$(media_tools)" ]; then
+      ask "Install ffmpeg and HEIC tools for Data Saver and iPhone photos ($(media_tools))?" y && DO_MEDIA=1
+    fi
+  fi
+  else
   head1 "What the build needs"
+  say "  Building from source: $WHY_BUILD."
   if [ $OS = mac ] && ! xcode-select -p >/dev/null 2>&1; then NEED_XCODE=1; fi
   # shellcheck disable=SC1091
   [ -f "$CARGO_DIR/env" ] && . "$CARGO_DIR/env"
@@ -811,10 +934,11 @@ install_main() {
       ask "Install ffmpeg and HEIC tools for Data Saver and iPhone photos ($(media_tools))?" y && DO_MEDIA=1
     fi
   fi
+  fi
   if [ $WANT_TUI -eq 1 ]; then
     case ":$PATH:" in
-      *":$BIN:"*) ;;
-      *) ask "$BIN isn't on your PATH. Add it to your shell's start-up file?" y && DO_PATH=1 ;;
+      *":$TUI_DIR:"*) ;;
+      *) ask "$TUI_DIR isn't on your PATH. Add it to your shell's start-up file?" y && DO_PATH=1 ;;
     esac
   fi
   fi
@@ -866,12 +990,15 @@ install_main() {
   [ $NEED_RUST -eq 1 ] && say "  • install Rust (rustup)"
   [ $DO_LIBS -eq 1 ] && say "  • install the desktop app's build libraries ($PM)"
   [ $DO_MEDIA -eq 1 ] && say "  • install ffmpeg and HEIC tools ($PM)"
-  [ $WANT_TUI -eq 1 ] && say "  • build and install the terminal app → $BIN"
-  [ $WANT_GUI -eq 1 ] && say "  • build and install the desktop app ($BUNDLE)"
+  [ $DO_FUSE -eq 1 ] && say "  • install $(fuse_pkg) for the AppImage ($PM)"
+  local how=build; [ $FROM = release ] && how="download ($REL_VER)"
+  [ $WANT_TUI -eq 1 ] && say "  • $how and install the terminal app → $TUI_DIR"
+  [ $WANT_GUI -eq 1 ] && say "  • $how and install the desktop app ($BUNDLE)"
+  [ -n "$SWITCH_PKG" ] && say "  • then remove the desktop app's old package"
   [ "$PICK" = none ] && say "  • keep the installed Quire as it is"
   say "  • point Quire at $FOLDER"
   [ $DO_MIGRATE -eq 1 ] && say "  • move $MIGRATE_WHAT into day files"
-  [ $DO_PATH -eq 1 ] && say "  • add $BIN to your PATH"
+  [ $DO_PATH -eq 1 ] && say "  • add $TUI_DIR to your PATH"
   i=0
   while [ $i -lt ${#ITEM_APP[@]} ]; do
     [ "${ITEM_PICK[$i]}" = y ] && say "  • remove ${ITEM_DESC[$i]}"
@@ -901,9 +1028,13 @@ install_main() {
     if [ -n "$TTY" ]; then sudo -v <"$TTY"; else sudo -n true; fi 2>/dev/null \
       || die "sudo is needed for the package steps (or run as root)"
   fi
-  find_source
+  [ $FROM = source ] && find_source
   if [ $WANT_TUI -eq 1 ] || [ $WANT_GUI -eq 1 ]; then
   head1 "Preparing"
+  if [ $DO_FUSE -eq 1 ]; then
+    say "  Installing $(fuse_pkg)…"
+    pm_install "$(fuse_pkg)" || { warn "installing $(fuse_pkg) failed; the launcher will unpack the AppImage instead"; NO_FUSE=1; }
+  fi
   if [ $NEED_XCODE -eq 1 ]; then
     run xcode-select --install
     die "finish installing the command-line tools, then run this again"
@@ -926,7 +1057,7 @@ install_main() {
     # shellcheck disable=SC2046 # the list is meant to split
     pm_install $(gui_libs) || warn "installing the build libraries failed"
   fi
-  if [ $WANT_GUI -eq 1 ] && [ $DRY -eq 0 ] && ! gui_libs_ok; then
+  if [ $FROM = source ] && [ $WANT_GUI -eq 1 ] && [ $DRY -eq 0 ] && ! gui_libs_ok; then
     warn "WebKitGTK still isn't there; skipping the desktop app. Prerequisites:"
     say "    https://v2.tauri.app/start/prerequisites/#linux"
     WANT_GUI=0
@@ -937,36 +1068,58 @@ install_main() {
     # shellcheck disable=SC2046
     pm_install $(media_tools) || warn "the media tools didn't install; Data Saver will say what's missing"
   fi
-  fetch_source
-  say "  Source: $SRC"
+  if [ $FROM = source ]; then
+    fetch_source
+    say "  Source: $SRC"
+  else
+    if [ $DRY -eq 1 ]; then DL="${TMPDIR:-/tmp}/quire-download"
+    else DL=$(mktemp -d 2>/dev/null || echo "$STATE_DIR/download-$STAMP"); mkdir -p "$DL"
+    fi
+  fi
   fi
 
-  # ----- 5. build and install -----
+  # ----- 5. download or build, and install -----
   if [ $WANT_TUI -eq 1 ]; then
     head1 "The terminal app"
-    say "  Building (a minute or two the first time)…"
-    run_loud cargo install --locked --force --path "$SRC/tui" || die "the terminal app didn't build — see $LOG"
+    if [ $FROM = release ]; then
+      say "  Downloading Quire $REL_VER…"
+      install_tui_release
+    else
+      say "  Building (a minute or two the first time)…"
+      run_loud cargo install --locked --force --path "$SRC/tui" || die "the terminal app didn't build — see $LOG"
+    fi
     if [ $DRY -eq 0 ]; then
-      [ -x "$BIN/quire" ] && [ -x "$BIN/jnl" ] || die "the build finished but $BIN/quire isn't there"
+      [ -x "$TUI_DIR/quire" ] && [ -x "$TUI_DIR/jnl" ] || die "the install finished but $TUI_DIR/quire isn't there"
       # In a scratch folder: every quire run folds an inbox.md, and that is
       # the user's call (asked above), not a side effect of checking the build.
       local probe
       probe=$(mktemp -d 2>/dev/null || echo "$STATE_DIR/probe-$STAMP")
-      "$BIN/quire" --folder "$probe" help >/dev/null 2>&1 </dev/null || die "$BIN/quire doesn't run"
+      "$TUI_DIR/quire" --folder "$probe" help >/dev/null 2>&1 </dev/null || die "$TUI_DIR/quire doesn't run"
       rm -rf "$probe"
     fi
-    say "  ✓ quire and jnl → $BIN"
-    QUIRE_CLI="$BIN/quire"
+    say "  ✓ quire and jnl → $TUI_DIR$([ $FROM = release ] && echo "  ${D}(\`quire update\` keeps them current)${R}")"
+    QUIRE_CLI="$TUI_DIR/quire"
   fi
 
   GUI_DONE=0
   if [ $WANT_GUI -eq 1 ]; then
     head1 "The desktop app"
-    say "  Building (several minutes the first time)…"
     local built=0
-    if [ "$TAURI_VIA" = npm ]; then
+    if [ $FROM = release ]; then
+      say "  Downloading $(gui_asset)…"
+      fetch_checked "$(gui_asset)" "SHA256SUMS-desktop-$ARCH"
+      GUI_FILE="$DL/$(gui_asset)"
+      if [ $BUNDLE = appimage ]; then
+        run curl -fsSL -o "$DL/quire.png" "https://raw.githubusercontent.com/$RELEASE_REPO/$REL_TAG/linux/src-tauri/icons/128x128.png" \
+          || warn "couldn't fetch the icon; the launcher entry will have none"
+        ICON_FILE="$DL/quire.png"
+      fi
+      built=1
+    elif [ "$TAURI_VIA" = npm ]; then
+      say "  Building (several minutes the first time)…"
       run_loud sh -c "cd \"$SRC/linux\" && npm install --no-fund --no-audit && npx tauri build --bundles $BUNDLE" && built=1
     else
+      say "  Building (several minutes the first time)…"
       if have cargo-tauri || [ $DRY -eq 1 ] || run_loud cargo install tauri-cli --version '^2' --locked; then
         run_loud sh -c "cd \"$SRC/linux\" && cargo tauri build --bundles $BUNDLE" && built=1
       fi
@@ -976,6 +1129,11 @@ install_main() {
       [ $WANT_TUI -eq 0 ] && die "nothing was installed; the old apps are still in place"
     elif install_gui; then
       GUI_DONE=1
+      # Only now the old package goes: a failed download left it in place.
+      case "$SWITCH_PKG" in
+        dpkg) sudo_run apt-get remove -y quire || warn "couldn't remove the old quire package — remove it with apt" ;;
+        rpm) if have dnf; then sudo_run dnf remove -y quire; else sudo_run rpm -e quire; fi || warn "couldn't remove the old quire package" ;;
+      esac
     elif [ $WANT_TUI -eq 0 ]; then
       die "the desktop app built but didn't install; the old apps are still in place"
     fi
@@ -1059,7 +1217,8 @@ install_main() {
 # Will any step need root? Package installs and removals.
 needs_sudo() {
   local i=0
-  [ $DO_LIBS -eq 1 ] || [ $DO_MEDIA -eq 1 ] && [ "$PM" != brew ] && return 0
+  [ $DO_LIBS -eq 1 ] || [ $DO_MEDIA -eq 1 ] || [ $DO_FUSE -eq 1 ] && [ "$PM" != brew ] && return 0
+  [ -n "$SWITCH_PKG" ] && return 0
   [ $WANT_GUI -eq 1 ] && { [ $BUNDLE = deb ] || [ $BUNDLE = rpm ]; } && return 0
   while [ $i -lt ${#ITEM_APP[@]} ]; do
     [ "${ITEM_PICK[$i]}" = y ] && [ "${ITEM_KIND[$i]}" != file ] && return 0
@@ -1099,31 +1258,35 @@ holds_journal() {
   return 1
 }
 
-# Install the bundle Tauri just built.
+# Install the bundle Tauri just built, or the one downloaded ($GUI_FILE).
 install_gui() {
-  local out="$SRC/target/release/bundle" f
+  local out="$SRC/target/release/bundle" f exec_line
   case "$BUNDLE" in
     deb)
-      f=$(ls -t "$out"/deb/*.deb 2>/dev/null | head -n 1)
+      f=${GUI_FILE:-$(ls -t "$out"/deb/*.deb 2>/dev/null | head -n 1)}
       [ $DRY -eq 1 ] && f=${f:-$out/deb/Quire_amd64.deb}
       [ -n "$f" ] || { warn "no .deb in $out/deb"; return 1; }
       sudo_run env DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall "$f" || { warn "installing $f failed"; return 1; }
       [ $DRY -eq 1 ] || have quire-desktop || { warn "the package installed but quire-desktop isn't on PATH"; return 1; }
       say "  ✓ Quire (.deb) — open it from your launcher" ;;
     rpm)
-      f=$(ls -t "$out"/rpm/*.rpm 2>/dev/null | head -n 1)
+      f=${GUI_FILE:-$(ls -t "$out"/rpm/*.rpm 2>/dev/null | head -n 1)}
       [ $DRY -eq 1 ] && f=${f:-$out/rpm/Quire.x86_64.rpm}
       [ -n "$f" ] || { warn "no .rpm in $out/rpm"; return 1; }
       if have dnf; then sudo_run dnf install -y "$f"; else sudo_run zypper --non-interactive install --allow-unsigned-rpm "$f"; fi \
         || { warn "installing $f failed"; return 1; }
       say "  ✓ Quire (.rpm) — open it from your launcher" ;;
     appimage)
-      f=$(ls -t "$out"/appimage/*.AppImage 2>/dev/null | head -n 1)
+      f=${GUI_FILE:-$(ls -t "$out"/appimage/*.AppImage 2>/dev/null | head -n 1)}
       [ $DRY -eq 1 ] && f=${f:-$out/appimage/Quire_amd64.AppImage}
       [ -n "$f" ] || { warn "no AppImage in $out/appimage"; return 1; }
       run mkdir -p "$HOME/Applications" "$APPS_DIR" "$(dirname "$ICON_PATH")"
       run install -m 755 "$f" "$APPIMAGE"
-      run install -m 644 "$SRC/linux/src-tauri/icons/128x128.png" "$ICON_PATH"
+      [ -f "${ICON_FILE:-$SRC/linux/src-tauri/icons/128x128.png}" ] || [ $DRY -eq 1 ] \
+        && run install -m 644 "${ICON_FILE:-$SRC/linux/src-tauri/icons/128x128.png}" "$ICON_PATH"
+      # Without FUSE the AppImage can still run by unpacking itself first.
+      exec_line=$APPIMAGE
+      [ "${NO_FUSE:-0}" = 1 ] && exec_line="env APPIMAGE_EXTRACT_AND_RUN=1 $APPIMAGE"
       say "  ${D}launcher entry → $APPS_DIR/quire.desktop${R}"
       if [ $DRY -eq 0 ]; then
         cat >"$APPS_DIR/quire.desktop" <<EOF
@@ -1131,14 +1294,14 @@ install_gui() {
 Type=Application
 Name=Quire
 Comment=Journalling over a plain folder of markdown
-Exec=$APPIMAGE
+Exec=$exec_line
 Icon=quire
 Categories=Office;
 Terminal=false
 EOF
         have update-desktop-database && update-desktop-database "$APPS_DIR" >/dev/null 2>&1
       fi
-      say "  ✓ Quire → $APPIMAGE, with a launcher entry" ;;
+      say "  ✓ Quire → $APPIMAGE, with a launcher entry  ${D}(Settings › About updates it)${R}" ;;
     app)
       f="$out/macos/Quire.app"
       [ $DRY -eq 1 ] || [ -d "$f" ] || { warn "no Quire.app in $out/macos"; return 1; }
@@ -1188,11 +1351,12 @@ add_to_path() {
     bash) if [ $OS = mac ]; then rc="$HOME/.bash_profile"; else rc="$HOME/.bashrc"; fi ;;
     *) rc="$HOME/.profile" ;;
   esac
-  if [ "$sh" = fish ]; then line="fish_add_path \"$BIN\""
-  else line="export PATH=\"$BIN:\$PATH\""
+  local dir=${TUI_DIR:-$BIN}
+  if [ "$sh" = fish ]; then line="fish_add_path \"$dir\""
+  else line="export PATH=\"$dir:\$PATH\""
   fi
-  if [ -f "$rc" ] && grep -q -F "$BIN" "$rc"; then
-    say "  ${D}$rc already adds $BIN${R}"
+  if [ -f "$rc" ] && grep -q -F "$dir" "$rc"; then
+    say "  ${D}$rc already adds $dir${R}"
     return 0
   fi
   say "  ${D}PATH → $rc${R}"
