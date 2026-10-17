@@ -21,8 +21,11 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-10-17
+
 ### Fixed
 - **Linux**: the launcher entry is `Quire.desktop`, matching the window's app id, so the dock and pinned icon show. The installer and first run replace an old `quire.desktop`, and `quire update` finds the AppImage from either name.
+- **Linux**: the window opens in your theme instead of flashing the light one first: the resolved theme is remembered and applied before the first paint, and the window itself starts dark.
 
 ## [0.9.0] — 2026-10-17
 

@@ -200,7 +200,9 @@ function applyUi() {
   const r = document.documentElement;
   let theme = S.ui.theme;
   if (S.ui.autoDark && window.matchMedia('(prefers-color-scheme: dark)').matches && !DARK_THEMES.includes(theme)) theme = DARK_PARTNER[theme] || 'cinema';
-  r.dataset.theme = theme; r.dataset.size = S.ui.size; r.dataset.font = S.ui.font; r.dataset.tags = S.ui.highlightTags ? 'on' : 'off';
+  r.dataset.theme = theme;
+  try { localStorage.setItem('quire.theme', theme); } catch (e) { /* the next start just won't know */ }
+  r.dataset.size = S.ui.size; r.dataset.font = S.ui.font; r.dataset.tags = S.ui.highlightTags ? 'on' : 'off';
   const acc = ACCENTS[S.ui.accent];
   if (acc) { r.style.setProperty('--accent', acc); r.style.setProperty('--accent-ink', acc); r.style.setProperty('--on-accent', '#FFFFFF'); r.style.setProperty('--accent-soft', acc + '26'); }
   else ['--accent', '--accent-ink', '--on-accent', '--accent-soft'].forEach(p => r.style.removeProperty(p));
