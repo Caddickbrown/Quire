@@ -87,7 +87,7 @@ import SwiftUI
     }
 
     private var appThemeID: String { defaults.string(forKey: QuireTheme.storageKey) ?? QuireTheme.auto }
-    private var monitorThemeID: String { defaults.string(forKey: ExternalTheme.key) ?? "almanac" }
+    private var monitorThemeID: String { defaults.string(forKey: ExternalTheme.key) ?? ExternalTheme.followPhone }
 
     /// What the app is showing right now, resolved: "auto" follows the phone.
     private var appIsDark: Bool {
@@ -103,13 +103,12 @@ import SwiftUI
         func next(_ id: String, in list: [String]) -> String {
             list[((list.firstIndex(of: id) ?? -1) + 1) % list.count]
         }
-        /// The theme the phone and the monitor both take, so they match.
+        /// The app's theme; the monitor follows it again.
         func setBoth(_ id: String) {
             defaults.set(id, forKey: QuireTheme.storageKey)
-            let concrete = id == QuireTheme.auto ? (ExternalDisplayModel.shared.colorScheme == .dark ? "cinema" : "almanac") : id
-            if ExternalTheme.all.contains(where: { $0.id == concrete }) { defaults.set(concrete, forKey: ExternalTheme.key) }
+            defaults.set(ExternalTheme.followPhone, forKey: ExternalTheme.key)
         }
-        let monitorIDs = ExternalTheme.all.map(\.id)
+        let monitorIDs = [ExternalTheme.followPhone] + ExternalTheme.all.map(\.id)
         let size = ExternalTextSize(rawValue: defaults.string(forKey: ExternalTextSize.key) ?? "") ?? .regular
         let sizes = ExternalTextSize.allCases
         let hints = flag(ShortcutHints.key, default: true)
@@ -132,7 +131,7 @@ import SwiftUI
             Item(id: "theme", title: "Theme", value: name(self.appThemeID)) {
                 setBoth(next(self.appThemeID, in: ids))
             },
-            Item(id: "monitor", title: "Monitor theme", value: ExternalTheme.selected(self.monitorThemeID)?.name ?? "—") {
+            Item(id: "monitor", title: "Monitor theme", value: self.monitorThemeID == ExternalTheme.followPhone ? "Same as phone" : (ExternalTheme.selected(self.monitorThemeID)?.name ?? "—")) {
                 guard !monitorIDs.isEmpty else { return }
                 self.defaults.set(next(self.monitorThemeID, in: monitorIDs), forKey: ExternalTheme.key)
             },
@@ -164,48 +163,39 @@ import SwiftUI
     }
 }
 
-/// The list as drawn on the monitor: ruled rows in the monitor's own theme.
+/// The list as drawn on the monitor: ruled rows in the theme's own type.
 struct ExternalSettingsView: View {
     let metrics: ExternalDisplayMetrics
 
     @ObservedObject private var model = ExternalSettingsModel.shared
     @EnvironmentObject private var store: JournalStore
-    @Environment(\.externalTheme) private var theme
-    @Environment(\.accent) private var accent
+    @Environment(\.quire) private var q
 
     var body: some View {
         let items = model.items()
-        let ink = theme?.text ?? .primary
-        let muted = theme?.secondary ?? .secondary
-        let rule = theme?.rule ?? Color.gray.opacity(0.3)
-        VStack(alignment: .leading, spacing: 0) {
-            Text("SETTINGS").font(.system(size: metrics.caption, weight: .semibold, design: .monospaced))
-                .tracking(metrics.caption * 0.2).foregroundStyle(accent)
-            Text("Settings").font(.system(size: metrics.title, weight: theme?.headingWeight ?? .medium, design: .serif))
-                .foregroundStyle(ink).padding(.top, metrics.gap * 0.3).padding(.bottom, metrics.gap * 0.6)
-            Rectangle().fill(accent).frame(height: max(1, theme?.rule_h ?? 1))
-            ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                let on = i == model.selected
-                VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: metrics.gap * 0.6) {
+            DeskHeader(kicker: "Quire", title: "Settings", metrics: metrics)
+            VStack(spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                    let on = i == model.selected
                     HStack(alignment: .firstTextBaseline, spacing: metrics.gap) {
-                        Text(on ? "›" : " ").foregroundStyle(accent)
-                            .font(.system(size: metrics.text, weight: .semibold))
-                        Text(item.title).foregroundStyle(on ? accent : ink)
-                            .font(.system(size: metrics.text, weight: on ? .semibold : .regular, design: .serif))
+                        Text(item.title).foregroundStyle(on ? q.accentColor : q.inkColor)
+                            .font(q.writing(metrics.text * 0.9, weight: on ? .medium : .regular))
                         Spacer(minLength: metrics.gap)
-                        Text(item.value).foregroundStyle(on ? ink : muted)
-                            .font(.system(size: metrics.text * 0.8, design: .monospaced))
-                            .lineLimit(1)
+                        Text(item.value).foregroundStyle(on ? q.inkColor : q.mutedColor)
+                            .font(q.mono(metrics.text * 0.65)).lineLimit(1)
                     }
-                    .padding(.vertical, metrics.gap * 0.42)
-                    Rectangle().fill(rule).frame(height: 1)
+                    .padding(.vertical, metrics.caption * 0.65).padding(.horizontal, metrics.caption * 0.6)
+                    .background(on ? q.accentSoftColor : Color.clear)
+                    .overlay(alignment: .leading) { if on { Rectangle().fill(q.accentColor).frame(width: max(3, metrics.caption * 0.2)) } }
+                    .overlay(alignment: .bottom) { Rectangle().fill(q.lineColor).frame(height: 1) }
                 }
             }
             Text(model.status.isEmpty ? " " : model.status)
-                .font(.system(size: metrics.caption)).foregroundStyle(muted)
-                .padding(.top, metrics.gap * 0.6)
+                .font(q.ui(metrics.caption)).foregroundStyle(q.mutedColor)
             Spacer(minLength: 0)
         }
+        .frame(maxWidth: metrics.text * 34, alignment: .leading)
         .padding(metrics.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }

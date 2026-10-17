@@ -173,8 +173,11 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   `QUIRE_START_TAB`, `QUIRE_THEME`, `QUIRE_OPEN=settings|search`,
   `QUIRE_SETTINGS_PAGE`. The iPhone design reads colours from `themes.json`; the
   Marathon themes are a look, not a palette (`QuireTheme.isMarathon`).
-  iOS external-display presentation follows the active entry/editor (the iPhone
-  composer and reader publish to it) or browse list. The iPhone lists select with
+  iOS external-display presentation is a desk mode (`Design/DeskViews.swift`, in Quire's
+  design, following the phone's theme) that follows the active entry/editor (the iPhone
+  composer and reader publish to it) or browse list; `,` opens `ExternalSettings.swift`
+  on the monitor. Keys come from `KeyCommandCatcher` at the app root (the app delegate is
+  not in the responder chain under SwiftUI). The iPhone lists select with
   `qKeyList` (Design/QuireKeys.swift) and the TUI's letters route through
   `KeyCommandRouter.key`, declared on the app delegate so typing is never touched;
   the composer's control chords (^J file, ^S, ^T, ^F, ^P, ^D) are declared only while

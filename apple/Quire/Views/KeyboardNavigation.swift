@@ -165,16 +165,63 @@ final class KeyCommandController: UIViewController {
         ]
         // Otherwise the enclosing scroll view scrolls instead of moving the row.
         for command in arrows { command.wantsPriorityOverSystemBehavior = true }
-        return arrows + [
+        // The terminal app's letters, and the composer's control chords while it is
+        // open. Declared here as well as on the app delegate: the delegate is not
+        // reliably in the responder chain under SwiftUI's lifecycle, this is.
+        let letters = ["n", "i", "j", "k", "l", "/", "r", "f", "e", "t", "d", "u", "p", ",", "*"]
+            .map { UIKeyCommand(input: $0, modifierFlags: [], action: #selector(letter(_:))) }
+        let chords: [UIKeyCommand] = KeyCommandRouter.shared.wantsChords
+            ? ["j", "s", "t", "f", "p", "d"].map {
+                let c = UIKeyCommand(input: $0, modifierFlags: .control, action: #selector(chord(_:)))
+                c.wantsPriorityOverSystemBehavior = true
+                return c
+            } : []
+        let display: [UIKeyCommand] = ExternalDisplayModel.shared.isConnected ? [
+            UIKeyCommand(input: "=", modifierFlags: [.command, .alternate], action: #selector(displayLarger)),
+            UIKeyCommand(input: "+", modifierFlags: [.command, .alternate], action: #selector(displayLarger)),
+            UIKeyCommand(input: "-", modifierFlags: [.command, .alternate], action: #selector(displaySmaller)),
+            UIKeyCommand(input: "t", modifierFlags: [.command, .alternate], action: #selector(displayTheme)),
+            UIKeyCommand(input: "p", modifierFlags: [.command, .alternate], action: #selector(displayPause)),
+            UIKeyCommand(input: "h", modifierFlags: [.command, .alternate], action: #selector(toggleHints)),
+        ] : []
+        return arrows + letters + chords + display + [
             UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(openSelection)),
             UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(clearSelection)),
             UIKeyCommand(input: "?", modifierFlags: [], action: #selector(toggleHints)),
         ]
     }
 
+    @objc private func letter(_ command: UIKeyCommand) {
+        if let input = command.input { KeyCommandRouter.shared.key(input) }
+    }
+    @objc private func chord(_ command: UIKeyCommand) {
+        if let input = command.input { KeyCommandRouter.shared.chord(input) }
+    }
+    @objc private func displayLarger() { ExternalDisplayModel.shared.adjustTextSize(1) }
+    @objc private func displaySmaller() { ExternalDisplayModel.shared.adjustTextSize(-1) }
+    @objc private func displayTheme() { ExternalDisplayModel.shared.cycleTheme() }
+    @objc private func displayPause() { ExternalDisplayModel.shared.togglePause() }
+
+    private var reclaim: Timer?
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         becomeFirstResponder()
+        // A push or a sheet taking down another catcher leaves the window with no
+        // first responder, and then no key reaches the app. Take it back, but only
+        // when nothing (a text field) holds it.
+        reclaim?.invalidate()
+        reclaim = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+            guard let self, let window = self.view.window, !self.isFirstResponder else { return }
+            // Anything that isn't taking typed text may give the keys up.
+            if !(window.firstResponder is UIKeyInput) { self.becomeFirstResponder() }
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        reclaim?.invalidate()
+        reclaim = nil
     }
 
     /// Reclaim the keys after a text field (search, an editor) hands them back.

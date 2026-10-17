@@ -57,6 +57,7 @@ struct PhoneRoot: View {
                              onRetime: { retiming = $0 })
             }
         }
+        .background(KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false))
         .qKeyBlocker(active: composing != nil || retiming != nil || showSearch || showSettings)
         .fullScreenCover(item: $composing) { target in
             ComposerScreen(target: target)

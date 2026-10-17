@@ -2,7 +2,9 @@ import SwiftUI
 
 /// External-display looks use the same source as Linux and the terminal.
 struct ExternalTheme: Decodable, Identifiable {
-    static let key = "externalDisplayTheme"
+    static let key = "deskMonitorTheme"
+    /// The monitor takes the phone's theme, unless it was given its own.
+    static let followPhone = "phone"
     let id: String
     let name: String
     let dark: Bool

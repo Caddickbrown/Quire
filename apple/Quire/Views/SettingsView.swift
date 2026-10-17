@@ -32,7 +32,7 @@ struct SettingsView: View {
     @AppStorage("highlightTags") private var highlightTags = true
     @AppStorage("firstWeekday") private var firstWeekday = 1
     @AppStorage("showWeekNumbers") private var showWeekNumbers = false
-    @AppStorage(ExternalTheme.key) private var externalThemeRaw = "almanac"
+    @AppStorage(ExternalTheme.key) private var externalThemeRaw = ExternalTheme.followPhone
     @AppStorage(ExternalDisplayModel.autoDimKey) private var dimWithExternalDisplay = false
     @AppStorage(ExternalDisplayModel.dimLevelKey) private var externalDisplayDimLevel = ExternalDisplayModel.dimFloor
     @AppStorage(ExternalTextSize.key) private var externalTextSizeRaw = ExternalTextSize.regular.rawValue
@@ -389,6 +389,7 @@ struct SettingsView: View {
             if shows(.display) {
             Section {
                 Picker("Theme", selection: $externalThemeRaw) {
+                    Text("Same as phone").tag(ExternalTheme.followPhone)
                     ForEach(ExternalTheme.all) { Text($0.name).tag($0.id) }
                 }
                 Toggle("Pause external display", isOn: Binding(get: { externalDisplay.isPaused }, set: { value in
