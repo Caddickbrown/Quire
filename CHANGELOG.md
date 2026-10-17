@@ -21,6 +21,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Fixed
+- **Linux**: the launcher entry is `Quire.desktop`, matching the window's app id, so the dock and pinned icon show. The installer and first run replace an old `quire.desktop`, and `quire update` finds the AppImage from either name.
+
 ## [0.9.0] — 2026-10-17
 
 ### Added

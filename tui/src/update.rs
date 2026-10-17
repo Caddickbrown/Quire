@@ -288,8 +288,10 @@ fn find_desktop() -> Desktop {
         return Desktop::AppImage(p);
     }
     let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".local/share")));
+    // `Quire.desktop` matches the Wayland app id; `quire.desktop` is what older installs wrote.
     if let Some(p) = data
-        .and_then(|d| std::fs::read_to_string(d.join("applications/quire.desktop")).ok())
+        .and_then(|d| ["Quire.desktop", "quire.desktop"].iter()
+            .find_map(|n| std::fs::read_to_string(d.join("applications").join(n)).ok()))
         .and_then(|e| appimage_in_entry(&e))
         .filter(|p| p.is_file())
     {

@@ -489,7 +489,8 @@ EOF
     kind=$(pkg_installed quire /usr/bin/quire-desktop)
     [ -n "$kind" ] && { add_q "$kind" quire "the desktop app (package 'quire')"; HAVE_GUI=1; }
     [ -f "$APPIMAGE" ] && { add_q file "$APPIMAGE" "the desktop app — $APPIMAGE"; HAVE_GUI=1; }
-    [ -f "$APPS_DIR/quire.desktop" ] && add_q file "$APPS_DIR/quire.desktop" "its launcher entry"
+    [ -f "$APPS_DIR/Quire.desktop" ] && add_q file "$APPS_DIR/Quire.desktop" "its launcher entry"
+    [ -f "$APPS_DIR/quire.desktop" ] && add_q file "$APPS_DIR/quire.desktop" "its launcher entry (old name)"
     [ -f "$ICON_PATH" ] && add_q file "$ICON_PATH" "its icon"
   else
     while IFS= read -r b; do
@@ -1287,9 +1288,10 @@ install_gui() {
       # Without FUSE the AppImage can still run by unpacking itself first.
       exec_line=$APPIMAGE
       [ "${NO_FUSE:-0}" = 1 ] && exec_line="env APPIMAGE_EXTRACT_AND_RUN=1 $APPIMAGE"
-      say "  ${D}launcher entry → $APPS_DIR/quire.desktop${R}"
+      say "  ${D}launcher entry → $APPS_DIR/Quire.desktop${R}"
       if [ $DRY -eq 0 ]; then
-        cat >"$APPS_DIR/quire.desktop" <<EOF
+        rm -f "$APPS_DIR/quire.desktop"   # the old name; it never matched the window's app id
+        cat >"$APPS_DIR/Quire.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Quire
