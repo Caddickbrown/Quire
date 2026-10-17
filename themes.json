@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Quire's looks, one source for every shell. Colours are the Linux app's style.css tokens; the terminal reads page/ink/muted/faint/line/card/accent. Add a theme here and it reaches the Linux app, the terminal and the Swift shell together.",
+  "note": "Quire's looks, one source for every shell. Colours are the Linux app's style.css tokens; the terminal reads page/ink/muted/faint/line/card/accent. Marathon's colours are the Linux CSS tokens; `signal`, `on_signal` and `flag` are optional extras (a fill colour, the text on it, a warning colour) that only that family uses. Add a theme here and it reaches the Linux app, the terminal and the Swift shell together.",
   "themes": [
     {
       "id": "almanac", "name": "Almanac", "dark": false, "writing_font": "Newsreader",
@@ -39,9 +39,10 @@
     },
     {
       "id": "marathon", "name": "Marathon", "dark": true, "writing_font": "DM Mono",
-      "page": "#141516", "ground": "#121314", "chrome": "#1B1C1E", "card": "#1B1C1E",
-      "ink": "#ECECEA", "muted": "#8D9096", "faint": "#6A6D72", "line": "#2C2E31", "line2": "#222326",
+      "page": "#0B0C0C", "ground": "#111313", "chrome": "#151818", "card": "#151818",
+      "ink": "#ECEFE9", "muted": "#8B918C", "faint": "#6F7570", "line": "#2A2E2E", "line2": "#1C1F1F",
       "accent": "#C8FF00", "accent_soft": "#2A3310", "accent_ink": "#DFFF66", "on_accent": "#0B0C0C",
+      "signal": "#C8FF00", "on_signal": "#0B0C0C", "flag": "#FF6A1F",
       "head_weight": 800, "rule_h": 6
     },
     {
@@ -49,6 +50,7 @@
       "page": "#E6E8E3", "ground": "#DDE0DA", "chrome": "#F4F5F1", "card": "#F4F5F1",
       "ink": "#0B0C0C", "muted": "#4F5551", "faint": "#6A706B", "line": "#B9BDB7", "line2": "#CDD1CA",
       "accent": "#3F5600", "accent_soft": "#D9F28A", "accent_ink": "#2F4000", "on_accent": "#F4F5F1",
+      "signal": "#C8FF00", "on_signal": "#0B0C0C", "flag": "#C24A0E",
       "head_weight": 800, "rule_h": 6
     }
   ]

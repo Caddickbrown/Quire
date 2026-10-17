@@ -22,10 +22,23 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
+- **Apple (iPhone):** with a monitor attached, `,` opens Settings on the monitor instead of a sheet on the phone: ↑↓ (or j/k) move, ↵ changes the row, `,` or Esc closes. Dark mode, theme, monitor theme, text size, key hints, dimming the phone, prompts and Back up now are all there. The monitor's hint bars list `,`.
+- **iPhone**: Quire's own design replaces the Nook look on iPhone: Today, a list-style Inbox, the Journal by month, a reader and composer set as a page, Look back, Search and Settings, in Newsreader and IBM Plex, ruled rather than boxed, in your theme. Times in lists are plain text; they only change inside an entry. Random entry on the Inbox and Journal; swipe from the edge to go back.
+- **iPhone**: the Marathon themes are a full look, not just colours: wide heavy Archivo capitals, DM Mono readouts, numbered-style ruled tabs with an inverted current page, a signal-colour brand block, chamfered new-entry slab, dot field and hazard stripe, and a words/streak/inbox readout on Today.
+- **iPhone**: Settings picks a theme from light and dark groups with swatches; the earlier settings (folder, backups, import and export, maintenance, reminders, privacy, media, split tags, external display, help) are pages in Quire's own style, and the Nook-only options that no longer apply are hidden.
+- **iPhone**: the external display mirrors the composer as you type and shows an entry while you read it.
+- **iPhone**: the terminal app's keys on a hardware keyboard, printed along the bottom of a connected monitor: ↑/↓ or `j`/`k` move through the Inbox, Journal and Search, Return opens, Esc lets go and then goes back to Today; in lists `f` files, `e` edits, `*` stars, `t` sets the date and time, `u` returns an entry to the inbox, `d` deletes; on Today `n` new, `i` inbox, `j` journal, `l` look back, `/` search, `r` random, `p` another prompt, `,` settings, Return writes from the prompt; while writing `^J` files the draft, `^S` saves, `^T` sets the date and time, `^F` focuses, `^P` inserts a prompt, `^D` discards, Esc is done. The first ↑/↓ from Today opens the Journal's top or bottom entry. The selection is mirrored to the monitor as a browse list with a preview. Letters never fire while you are typing.
+- **Apple**: a new app icon (the gathering mark) for iOS, light and dark, and macOS; `tools/make_apple_icon.swift` regenerates it.
 - **Terminal**: `quire update` updates the desktop app too: the AppImage is downloaded, checked against the release's SHA-256 and swapped in place (restart it if it's open); a .deb or .rpm gets the command for your package manager. `--terminal` or `--desktop` updates just one.
 
 ### Changed
+- **Apple**: opening a journal is much faster. On a journal of 5,100 entries in a file-provider folder the full index went from 55 s to about 1.2 s and the inbox from 5 s to 0.3 s: reads no longer go through file coordination (writes still do), the folder's real path and verified directories are worked out once, and the app stops loading the whole journal twice at launch.
+- **Core**: `themes.json` carries Marathon's real colours (they had drifted from the Linux CSS) and optional `signal`, `on_signal` and `flag` tokens for that family.
 - **Install**: on Linux (x86_64, arm64) `install.sh` downloads the latest release instead of compiling it, checking every file against its published SHA-256: no Rust, WebKitGTK or Tauri needed, and seconds instead of minutes. The desktop app installs as the AppImage, which updates itself; an installed .deb or .rpm is offered the switch (removed only once the AppImage is in place), and `fuse3` is offered when missing. The terminal app goes to `~/.local/bin`, or replaces a source-built `~/.cargo/bin/quire`; `quire update` keeps it current. `--build` compiles from source as before, as do `--source`, `QUIRE_REF` and macOS.
+
+### Fixed
+- **iPhone**: Today and Look back no longer re-read the whole journal each time they redraw; "on this day" is read from what is already loaded, so typing in the quick-capture line stays smooth.
+- **iPhone**: a large inbox no longer pushes the page sideways, and a single enormous paragraph can't break a list or the reader.
 
 ## [0.8.1] — 2026-10-16
 

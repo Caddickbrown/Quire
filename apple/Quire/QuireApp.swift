@@ -83,7 +83,20 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
             UIKeyCommand(title: "Pause / resume display", action: #selector(displayPause), input: "p", modifierFlags: [.command, .alternate]),
             UIKeyCommand(title: "Toggle key hints", action: #selector(quireToggleHints), input: "h", modifierFlags: [.command, .alternate]),
         ] : []
-        return arrows + displayKeys + [
+        // The terminal app's keys. The letters live here, at the end of the responder
+        // chain, so a text field that has focus takes them for itself and typing is
+        // never touched. `j`/`k` are move-down/up in a list and Journal on Today.
+        let letters = ["n", "i", "j", "k", "l", "/", "r", "f", "e", "t", "d", "u", "p", ",", "*"]
+            .map { UIKeyCommand(input: $0, modifierFlags: [], action: #selector(quireLetter(_:))) }
+        // Control chords while writing, declared only then, and ahead of the text
+        // system (which would otherwise read ^f, ^p, ^d, ^t as cursor edits).
+        let chords: [UIKeyCommand] = KeyCommandRouter.shared.wantsChords
+            ? ["j", "s", "t", "f", "p", "d"].map {
+                let c = UIKeyCommand(input: $0, modifierFlags: .control, action: #selector(quireChord(_:)))
+                c.wantsPriorityOverSystemBehavior = true
+                return c
+            } : []
+        return arrows + displayKeys + letters + chords + [
             UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(quireOpenSelection)),
             UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(quireClearSelection)),
             UIKeyCommand(input: "?", modifierFlags: [], action: #selector(quireToggleHints)),
@@ -94,6 +107,12 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
     @objc private func displaySmaller() { ExternalDisplayModel.shared.adjustTextSize(-1) }
     @objc private func displayTheme() { ExternalDisplayModel.shared.cycleTheme() }
     @objc private func displayPause() { ExternalDisplayModel.shared.togglePause() }
+    @objc private func quireLetter(_ command: UIKeyCommand) {
+        if let input = command.input { KeyCommandRouter.shared.key(input) }
+    }
+    @objc private func quireChord(_ command: UIKeyCommand) {
+        if let input = command.input { KeyCommandRouter.shared.chord(input) }
+    }
     @objc private func quireMoveUp()   { KeyCommandRouter.shared.moveUp() }
     @objc private func quireMoveDown() { KeyCommandRouter.shared.moveDown() }
     @objc private func quireOpenSelection()  { KeyCommandRouter.shared.open() }
@@ -133,6 +152,24 @@ extension Notification.Name {
 }
 #endif
 
+// MARK: - Root
+
+/// iPhone gets the Quire design; iPad and Mac keep the earlier shell until
+/// their own pass.
+struct AppRoot: View {
+    var body: some View {
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            QuireThemed { PhoneRoot() }
+        } else {
+            RootView()
+        }
+        #else
+        RootView()
+        #endif
+    }
+}
+
 // MARK: - App
 
 @main
@@ -158,7 +195,7 @@ struct QuireApp: App {
     var body: some Scene {
         let accent = AccentTheme.color(forRaw: accentRaw)
         return WindowGroup {
-            RootView()
+            AppRoot()
                 .environmentObject(store)
                 .environmentObject(nav)
                 .onChange(of: scenePhase) { _, phase in

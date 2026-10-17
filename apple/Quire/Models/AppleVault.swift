@@ -6,15 +6,42 @@ import Foundation
 final class AppleVault: NativeVault, @unchecked Sendable {
     let base: URL
     private let fm = FileManager.default
-    init(base: URL) { self.base = base.standardizedFileURL }
+    /// The folder's real path, with symlinks resolved — worked out once: every
+    /// call checks its path against it, and resolving it each time was a
+    /// noticeable share of the cost of reading a journal.
+    private let rootPath: String
+    /// Whether the folder is inside the app's own container (not iCloud), where
+    /// files are plain local files and nothing needs coordinating.
+    private let baseIsInAppContainer: Bool
+    init(base: URL) {
+        self.base = base.standardizedFileURL
+        let root = self.base.resolvingSymlinksInPath().path
+        rootPath = root
+        let home = URL(fileURLWithPath: NSHomeDirectory()).resolvingSymlinksInPath().path
+        baseIsInAppContainer = root.hasPrefix(home + "/") && !root.contains("/Mobile Documents/")
+    }
+
+    /// Directories already checked to be real (no symlink anywhere in their
+    /// path) and inside the journal folder, so a folder of hundreds of day
+    /// files is verified once and not once per file.
+    private let verifiedLock = NSLock()
+    private var verifiedDirectories = Set<String>()
 
     private func url(_ rel: String) throws -> URL {
         guard !rel.hasPrefix("/"), !rel.contains("\\"), !rel.contains("\0"),
               !rel.split(separator: "/").contains("..") else { throw failure("Invalid journal path") }
         let url = rel.isEmpty ? base : base.appendingPathComponent(rel).standardizedFileURL
-        let root = base.resolvingSymlinksInPath().path
+        let parent = url.deletingLastPathComponent()
+        verifiedLock.lock(); let known = verifiedDirectories.contains(parent.path); verifiedLock.unlock()
+        // The folder is known-good; only the item itself could still be a link.
+        if known, (try? fm.destinationOfSymbolicLink(atPath: url.path)) == nil { return url }
+        let root = rootPath
         let resolved = try resolvedPath(url)
         guard resolved == root || resolved.hasPrefix(root + "/") else { throw failure("Path leaves the journal folder") }
+        if let resolvedParent = try? resolvedPath(parent), resolvedParent == parent.path,
+           resolvedParent == root || resolvedParent.hasPrefix(root + "/") {
+            verifiedLock.lock(); verifiedDirectories.insert(parent.path); verifiedLock.unlock()
+        }
         return url
     }
 
@@ -57,24 +84,27 @@ final class AppleVault: NativeVault, @unchecked Sendable {
         guard let result else { throw failure("File coordination did not complete") }
         do { return try result.get() } catch { throw failure(error.localizedDescription) }
     }
+    /// Read the file. Coordinating a read, or asking iCloud about it first, costs
+    /// milliseconds a file (about 25 ms on a file-provider folder), which made a
+    /// journal of a few thousand entries take most of a minute to open. Nook
+    /// just read the file, and so does this: iCloud is only consulted when the
+    /// file turns out not to be there.
     func read(rel: String) throws -> Data? {
         let target = try url(rel)
-        if !fm.fileExists(atPath: target.path) && !fm.isUbiquitousItem(at: target) {
+        do { return try Data(contentsOf: target) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            // Missing: an evicted iCloud document must not be mistaken for a
+            // file that doesn't exist.
             let placeholder = target.deletingLastPathComponent().appendingPathComponent("." + target.lastPathComponent + ".icloud")
             if fm.fileExists(atPath: placeholder.path) {
                 try fm.startDownloadingUbiquitousItem(at: target)
                 throw failure("Journal files are downloading from iCloud. Try again shortly.")
             }
-            return nil
-        }
-        // An evicted iCloud document must not be mistaken for a missing file.
-        if fm.isUbiquitousItem(at: target) { try fm.startDownloadingUbiquitousItem(at: target) }
-        return try coordinated(target, writing: false) { target in
-            do { return try Data(contentsOf: target) }
-            catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-                if self.fm.isUbiquitousItem(at: target) { throw error }
-                return nil
+            if fm.isUbiquitousItem(at: target) {
+                try fm.startDownloadingUbiquitousItem(at: target)
+                return try coordinated(target, writing: false) { try Data(contentsOf: $0) }
             }
+            return nil
         }
     }
     func write(rel: String, bytes: Data) throws {
@@ -109,10 +139,14 @@ final class AppleVault: NativeVault, @unchecked Sendable {
         guard let result else { throw failure("Rename coordination did not complete") }
         do { try result.get() } catch { throw failure(error.localizedDescription) }
     }
+    /// Run a read without file coordination, reporting errors as the bridge's.
+    private func plain<T>(_ body: () throws -> T) throws -> T {
+        do { return try body() } catch let error as BridgeError { throw error } catch { throw failure(error.localizedDescription) }
+    }
     func list(rel: String) throws -> [VaultItem] {
         let target = try url(rel)
         guard fm.fileExists(atPath: target.path) else { return [] }
-        return try coordinated(target, writing: false) { target in
+        return try plain { 
             let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
             let items: [URL]
             do { items = try self.fm.contentsOfDirectory(at: target, includingPropertiesForKeys: Array(keys)) }

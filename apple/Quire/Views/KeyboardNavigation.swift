@@ -68,6 +68,13 @@ struct QuireKeyHandlers {
     var moveDown: () -> Void
     var open: () -> Void
     var clear: () -> Void
+    /// The TUI's single letters (`n`, `i`, `f`, `e`…): true if handled.
+    var key: (String) -> Bool = { _ in false }
+    /// Control chords while writing (`^j` file, `^s` save, `^t`, `^f`, `^p`, `^d`).
+    /// They are only declared to the system while a handler wants them, so the
+    /// text system's own Emacs-style bindings are untouched everywhere else.
+    var wantsChords = false
+    var chord: (String) -> Bool = { _ in false }
 }
 
 /// Routes the app-wide key commands to whichever list is on screen. A stack
@@ -102,6 +109,24 @@ struct QuireKeyHandlers {
     @discardableResult func open()      -> Bool { run { $0.open() } }
     @discardableResult func clear()     -> Bool { run { $0.clear() } }
 
+    /// What Esc does when nothing is selected: back to Today (set by the root).
+    var onBack: (() -> Void)?
+
+    /// Whether the visible page wants the control chords declared.
+    var wantsChords: Bool { stack.last?.handlers.wantsChords ?? false }
+
+    @discardableResult func chord(_ k: String) -> Bool {
+        guard let top, top.wantsChords else { return false }
+        return top.chord(k)
+    }
+
+    /// A letter: the visible list gets first refusal, then whatever is
+    /// registered beneath it (the app's own tab keys).
+    @discardableResult func key(_ k: String) -> Bool {
+        for entry in stack.reversed() where entry.handlers.key(k) { return true }
+        return false
+    }
+
     private func run(_ body: (QuireKeyHandlers) -> Void) -> Bool {
         guard let top else { return false }
         body(top)
@@ -125,7 +150,7 @@ struct QuireKeyHandlers {
 ///
 /// Tapping a text field makes *it* first responder, which is exactly what keeps
 /// typing intact: the arrows, Return and `?` go to the field and never reach us.
-private struct KeyCommandCatcher: UIViewControllerRepresentable {
+struct KeyCommandCatcher: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> KeyCommandController { KeyCommandController() }
     func updateUIViewController(_ controller: KeyCommandController, context: Context) {}
 }

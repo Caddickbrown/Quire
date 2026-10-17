@@ -178,6 +178,7 @@ struct ExternalRow: Equatable, Identifiable {
     }
 
     func displayDidDisconnect() {
+        ExternalSettingsModel.shared.close()
         isConnected = false
         content = .idle
         restoreBrightness()
@@ -356,6 +357,9 @@ struct ExternalDisplayRoot: View {
     @AppStorage("colorScheme") private var colorSchemeRaw = AppColorScheme.auto.rawValue
     @AppStorage("accentColor")  private var accentRaw     = AccentTheme.blue.rawValue
     @AppStorage(ExternalTextSize.key) private var textSizeRaw = ExternalTextSize.regular.rawValue
+    #if os(iOS)
+    @ObservedObject private var settings = ExternalSettingsModel.shared
+    #endif
 
     var body: some View {
         let palette = ExternalTheme.selected(externalThemeRaw)
@@ -382,7 +386,7 @@ struct ExternalDisplayRoot: View {
                     }.padding(metrics.padding)
                 } else if let store = model.store {
                     VStack(spacing: 0) {
-                        content(metrics: metrics)
+                        monitorBody(metrics: metrics)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                         ExternalHintBar(hints: hints, metrics: metrics)
                     }
@@ -402,6 +406,16 @@ struct ExternalDisplayRoot: View {
         // `preferredColorScheme` settles the window behind it.
         .environment(\.colorScheme, scheme)
         .preferredColorScheme(scheme)
+    }
+
+    /// The page, or the settings list while `,` has it open.
+    @ViewBuilder
+    private func monitorBody(metrics: ExternalDisplayMetrics) -> some View {
+        #if os(iOS)
+        if settings.isOpen { ExternalSettingsView(metrics: metrics) } else { content(metrics: metrics) }
+        #else
+        content(metrics: metrics)
+        #endif
     }
 
     @ViewBuilder
@@ -427,32 +441,42 @@ struct ExternalDisplayRoot: View {
     /// Which keys are live right now. Shown on the monitor because the device
     /// screen is dimmed — there is nowhere else to read them.
     private var hints: [ShortcutHint] {
+        #if os(iOS)
+        if settings.isOpen {
+            return [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Change"), .init(key: ",", label: "Close"), .init(key: "⎋", label: "Close")]
+        }
+        #endif
         let common: [ShortcutHint] = [.init(key: "⌥⌘±", label: "Size"), .init(key: "⌥⌘T", label: "Theme"), .init(key: "⌥⌘P", label: "Pause")]
+        // The same keys as the terminal app, by what the monitor is showing.
         switch model.content {
         case .idle:
             return [.init(key: "↑↓", label: "Browse"),
-                    .init(key: "⌘N", label: "New"),
+                    .init(key: "n",  label: "New"),
+                    .init(key: "/",  label: "Search"),
+                    .init(key: ",",  label: "Settings"),
                     .init(key: "?",  label: "Hints")] + common
-        case .browsing:
-            return [.init(key: "↑↓", label: "Move"),
-                    .init(key: "↩",  label: "Open"),
-                    .init(key: "⎋",  label: "Back"),
-                    .init(key: "⌘N", label: "New")] + common
+        case .browsing(let listTitle, _, _):
+            let base: [ShortcutHint] = [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Open"), .init(key: "⎋", label: "Back"), .init(key: ",", label: "Settings")]
+            switch listTitle {
+            case "Inbox":
+                return base + [.init(key: "f", label: "File"), .init(key: "e", label: "Edit"), .init(key: "*", label: "Star"),
+                               .init(key: "t", label: "Time"), .init(key: "d", label: "Delete")] + common
+            case "Journal":
+                return base + [.init(key: "e", label: "Edit"), .init(key: "u", label: "Inbox"), .init(key: "*", label: "Star"),
+                               .init(key: "d", label: "Delete")] + common
+            default:
+                return base + [.init(key: "n", label: "New")] + common
+            }
         case .composing:
-            // Only one of these: in the composer ⌘N and ⌘S both run newEntry()
-            // — save this draft to the inbox and start a blank one — so listing
-            // both implied a distinction that doesn't exist. No `?` here: with
-            // the editor focused that key types a question mark.
-            return [.init(key: "⌘S", label: "Save & New"),
-                    .init(key: "⌘B", label: "Bold"),
-                    .init(key: "⌘I", label: "Italic")] + common
+            // No `?` here: with the editor focused that key types a question mark.
+            return [.init(key: "^J", label: "File"), .init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"),
+                    .init(key: "^F", label: "Focus"), .init(key: "^D", label: "Discard"), .init(key: "⎋", label: "Done")] + common
         case .editing:
-            return [.init(key: "⌘B", label: "Bold"),
-                    .init(key: "⌘I", label: "Italic"),
-                    .init(key: "⎋",  label: "Back")] + common
+            return [.init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"), .init(key: "^F", label: "Focus"),
+                    .init(key: "⎋", label: "Back")] + common
         case .reading:
-            return [.init(key: "⎋",  label: "Back"),
-                    .init(key: "⌘N", label: "New")] + common
+            return [.init(key: "e", label: "Edit"), .init(key: "*", label: "Star"), .init(key: "t", label: "Time"),
+                    .init(key: "d", label: "Delete"), .init(key: "⎋", label: "Back"), .init(key: ",", label: "Settings")] + common
         }
     }
 }

@@ -1,7 +1,9 @@
 # Quire for iOS and macOS
 
-The native SwiftUI shell brought over from `../nook`, renamed to Quire, with
-journal storage replaced by Quire's Rust core. Minimum iOS 17 / macOS 14.
+The native SwiftUI shell, with journal storage in Quire's Rust core. The iPhone
+has Quire's own design (`Quire/Design/`, from the "Quire prototype" and "Quire
+without boxes" canvases); iPad and Mac still run the shell brought over from
+`../nook` until their own pass. Minimum iOS 17 / macOS 14.
 Use current Xcode with Swift 5.10 or newer (`nonisolated(unsafe)` is used by
 the inherited AVFoundation implementation).
 
@@ -67,11 +69,12 @@ rejected. The native shell uses `inbox/YYYY/MM/DD.md`,
 Rust bridge tests run on Linux, including callback storage, migration,
 stale-index relocation, stale-raw rejection, retiming, and unreadable data.
 The Swift sources, plist files and generated project can be checked here.
-This port has not yet been compiled with Apple SDKs or tested on a device;
-Xcode/Swift are absent on the development host. A green Apple workflow or a
-successful `make apple && make apple-test` is required before treating the
-native app as build-verified. iCloud, widgets, share capture, media capture
-and device signing also require a signed-device check.
+`make apple` and `make apple-test` pass (37 tests) and the iPhone app has been
+built signed and run on a device with a real journal. iCloud, widgets, share
+capture, media capture and the external display still need a signed-device
+check; the iPad and Mac shells have not had the design pass.
 
 The imported Swift sources retain Nook's MIT notice in `LICENSE.nook`; Lato's
-font license is included in `Quire/fonts/OFL.txt`.
+font license is included in `Quire/fonts/OFL.txt`. The iPhone design bundles
+Newsreader, IBM Plex, Archivo and DM Mono (all OFL; licences beside them).
+`tools/make_apple_icon.swift` regenerates the app icon.

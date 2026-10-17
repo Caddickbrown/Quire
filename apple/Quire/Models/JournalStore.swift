@@ -60,6 +60,9 @@ final class JournalStore: ObservableObject {
     /// Bumped on every reload so views can cheaply observe "data changed".
     @Published private(set) var revision = 0
     @Published private(set) var archiveDays: [ArchiveDay] = []
+    /// False until the first index of the journal has been published, so a
+    /// screen can say it is still reading rather than that nothing is there.
+    @Published private(set) var indexed = false
     /// The parsed corpus (dated journal files), newest day first — built
     /// off-main with the index. The one copy every list reads from.
     @Published private(set) var archiveEntries: [(date: String, entries: [Entry])] = []
@@ -600,6 +603,7 @@ final class JournalStore: ObservableObject {
     // MARK: Loading
 
     func reload() {
+        reloadStartedAt = Date()
         drainPendingShares()
         loadInbox()
         rebuildIndex()   // bumps `revision`
@@ -609,11 +613,16 @@ final class JournalStore: ObservableObject {
     /// What the journal looked like at the last reload — a stat-only walk
     /// (count + mtimes + sizes), no file reads.
     private var lastFingerprint = ""
+    private var reloadStartedAt = Date.distantPast
 
     /// Foreground/activation path: skip the full reload when nothing on disk
     /// changed. Every app-switch used to trigger a complete corpus re-read.
     func reloadIfChanged() {
         guard let base = baseURL else { return }
+        // The first index is still being built (it records the fingerprint when
+        // it lands), so there is nothing yet to compare against: a second full
+        // read here would double the time to open the journal.
+        if !indexed, Date().timeIntervalSince(reloadStartedAt) < 120 { return }
         let previous = lastFingerprint
         Task.detached(priority: .userInitiated) { [weak self] in
             let fp = Self.contentFingerprint(base: base)
@@ -733,6 +742,7 @@ final class JournalStore: ObservableObject {
                     .sorted { $0.count != $1.count ? $0.count > $1.count : $0.tag < $1.tag }
                 self.splitJournals = idx.splits
                 self.archiveEntries = idx.corpus
+                self.indexed = true
                 self.splitEntriesCache = idx.splitEntries
                 self.lastHeavyStats = heavy
                 // Announced here, at publication — every mutation funnels into

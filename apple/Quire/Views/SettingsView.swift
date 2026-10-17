@@ -9,9 +9,21 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// The pages the settings are split into on the phone; each shows only its own sections.
+enum SettingsGroup: String, CaseIterable, Identifiable {
+    case looks, reminders, privacy, display, journal, folder, media, maintenance, help
+    var id: String { rawValue }
+}
+
 struct SettingsView: View {
+    /// nil shows everything (the earlier single page); a group shows just its own sections.
+    var group: SettingsGroup? = nil
+    private func shows(_ g: SettingsGroup) -> Bool { group == nil || group == g }
+
     @EnvironmentObject private var store: JournalStore
     @ObservedObject private var externalDisplay = ExternalDisplayModel.shared
+    /// The strip of keys along the bottom of the monitor (also `?`).
+    @AppStorage(ShortcutHints.key) private var showMonitorHints = true
     @AppStorage("colorScheme") private var colorSchemeRaw: String = AppColorScheme.auto.rawValue
     @AppStorage("writingFont") private var writingFontRaw: String = WritingFont.lato.rawValue
     @AppStorage("dateStyle") private var dateStyleRaw: String = DateStyle.weekday.rawValue
@@ -221,8 +233,12 @@ struct SettingsView: View {
     @State private var showingRestore = false
 
     var body: some View {
-        Form {
-            Section("Appearance") {
+        QSettingsContainer {
+            if shows(.looks) {
+            Section {
+                // On the iPhone these belong to the earlier look (Nook's light/dark switch,
+                // Lato, eight accent colours, week options); Quire's themes replace them.
+                if group == nil {
                 Picker("Theme", selection: $colorSchemeRaw) {
                     ForEach(AppColorScheme.allCases) { scheme in
                         Text(scheme.displayName).tag(scheme.rawValue)
@@ -233,11 +249,13 @@ struct SettingsView: View {
                 Picker("Writing font", selection: $writingFontRaw) {
                     ForEach(WritingFont.allCases) { Text($0.displayName).tag($0.rawValue) }
                 }
+                }
                 Picker("Text size", selection: $fontSize) {
                     ForEach(Theme.fontSizes, id: \.self) { s in
                         Text("\(Int(s)) px").tag(Double(s))
                     }
                 }
+                if group == nil {
                 Picker("Date format", selection: $dateStyleRaw) {
                     ForEach(DateStyle.allCases) { Text($0.displayName).tag($0.rawValue) }
                 }
@@ -249,13 +267,23 @@ struct SettingsView: View {
                     Text("Saturday").tag(7)
                 }
                 Toggle("Show week numbers", isOn: $showWeekNumbers)
+                }
+            } header: {
+                QLabel("Appearance")
+            }
+            .qRowBackground()
             }
 
+            if shows(.looks) {
             Section {
+                if group == nil {
                 Toggle("Typewriter scrolling", isOn: $typewriterScroll)
                 Toggle("Focus current paragraph", isOn: $focusParagraph)
+                }
                 Toggle("Writing prompts", isOn: $promptsOn)
+                if group == nil {
                 Toggle("Transcribe voice memos automatically", isOn: $autoTranscribe)
+                }
                 // onChange sits on the controls, not the Section: a modified
                 // Section is no longer a Section to the enclosing Form.
                 Toggle("Daily word goal", isOn: $wordGoalEnabled)
@@ -265,11 +293,14 @@ struct SettingsView: View {
                         .onChange(of: wordGoal) { _, _ in store.reload() }
                 }
             } header: {
-                Text("Writing")
+                QLabel("Writing")
             } footer: {
                 Text("Typewriter scrolling keeps the line you're typing centred; focus dims everything but the current paragraph. Prompts show a question in the empty composer. The word goal counts everything dated today and shows a quiet ring by the timer.")
             }
+            .qRowBackground()
+            }
 
+            if shows(.reminders) {
             Section {
                 Toggle("Daily reminder", isOn: $reminderOn)
                     .onChange(of: reminderOn) { _, on in
@@ -322,11 +353,14 @@ struct SettingsView: View {
                     .onChange(of: weeklyHour) { _, _ in ResurfacingScheduler.settingsChanged(store: store) }
                 }
             } header: {
-                Text("Reminder")
+                QLabel("Reminder")
             } footer: {
                 Text("The daily reminder fires only on days you haven't written yet — an entry before the reminder time quietly cancels it — and takes a quick line right in the banner. The weekly note resurfaces one entry (starred first, then this day in past years); tapping it opens the entry.")
             }
+            .qRowBackground()
+            }
 
+            if shows(.privacy) {
             Section {
                 Toggle("Require Face ID / Touch ID", isOn: $appLockOn)
                     .onChange(of: appLockOn) { _, _ in AppLockManager.shared.preferenceChanged() }
@@ -344,12 +378,15 @@ struct SettingsView: View {
                         SpotlightIndexer.scheduleReindex(source: { store.spotlightSource() })
                     }
             } header: {
-                Text("Privacy")
+                QLabel("Privacy")
             } footer: {
                 Text("The lock covers the app only — your files stay plain markdown on disk and remain readable in \(fileBrowserName). Spotlight indexing (off by default) lets system search find entry titles and text; results open the entry in Quire.")
             }
+            .qRowBackground()
+            }
 
             #if os(iOS)
+            if shows(.display) {
             Section {
                 Picker("Theme", selection: $externalThemeRaw) {
                     ForEach(ExternalTheme.all) { Text($0.name).tag($0.id) }
@@ -362,6 +399,7 @@ struct SettingsView: View {
                 }
                 // onChange sits on the controls, not the Section: a modified
                 // Section is no longer a Section to the enclosing Form.
+                Toggle("Show key hints on the monitor", isOn: $showMonitorHints)
                 Toggle("Dim this screen", isOn: $dimWithExternalDisplay)
                     .onChange(of: dimWithExternalDisplay) { _, _ in
                         ExternalDisplayModel.shared.autoDimPreferenceChanged()
@@ -383,11 +421,14 @@ struct SettingsView: View {
                     }
                 }
             } header: {
-                Text("External display")
+                QLabel("External display")
             } footer: {
-                Text("Connected to a monitor, Quire shows your writing on it instead of mirroring. Themes come from Quire’s shared looks. ↑↓ browses, Return opens, Esc goes back; ⌘N writes. ⌥⌘± changes text size, ⌥⌘T changes theme, ⌥⌘P pauses, and ⌥⌘H toggles key hints. These controls leave the device’s appearance alone. Dimming this screen no longer affects what's up there, and turning it down saves power; it's restored when you unplug.")
+                Text("Connected to a monitor, Quire shows your writing on it instead of mirroring, and the keys are the terminal app's, printed along the bottom of the monitor. ↑↓ or j/k browse, Return opens, Esc goes back; n writes, / searches, i inbox, j journal, l look back, r a random entry. In a list: f files, e edits, * stars, t sets the date and time, d deletes. While writing: ^J files, ^S saves, ^T date and time, ^F focus, ^P a prompt, ^D discards, Esc is done. ⌥⌘± changes text size, ⌥⌘T the theme, ⌥⌘P pauses. These controls leave the device's appearance alone. Dimming this screen never affects what's up there, and turning it down saves power; it's restored when you unplug.")
+            }
+            .qRowBackground()
             }
 
+            if group == nil {
             Section {
                 Picker("Swipe left", selection: $swipeLeftRaw) {
                     ForEach(SwipeAction.allCases) { Text($0.label).tag($0.rawValue) }
@@ -396,18 +437,24 @@ struct SettingsView: View {
                     ForEach(SwipeAction.allCases) { Text($0.label).tag($0.rawValue) }
                 }
             } header: {
-                Text("Inbox swipe")
+                QLabel("Inbox swipe")
+            }
+            .qRowBackground()
             }
             #endif
 
+            if shows(.journal) {
             Section {
                 SplitTagsEditor(raw: $splitTagsRaw)
             } header: {
-                Text("Split tags")
+                QLabel("Split tags")
             } footer: {
                 Text("Entries containing these @tags file into <folder>/split/<tag>/YYYY/MM/DD.md instead of the date journal (jnl JNL_SPLIT_TAGS). Space or comma separated.")
             }
+            .qRowBackground()
+            }
 
+            if shows(.journal) {
             Section {
                 ForEach(templateNames, id: \.self) { name in
                     HStack {
@@ -438,11 +485,14 @@ struct SettingsView: View {
                     #endif
                 }
             } header: {
-                Text("Templates")
+                QLabel("Templates")
             } footer: {
                 Text("Plain markdown files in <folder>/.quire/templates/ — edit them here or in any editor; they sync with the journal. Insert one from the composer's ⋯ menu; {{date}}, {{time}} and {{weekday}} fill in on insert.")
             }
+            .qRowBackground()
+            }
 
+            if shows(.folder) {
             Section {
                 if let message = store.storageUnavailableMessage {
                     Label {
@@ -469,13 +519,16 @@ struct SettingsView: View {
                     #endif
                 }
             } header: {
-                Text("Journal folder")
+                QLabel("Journal folder")
             } footer: {
                 Text(store.unavailableFolder == nil
                      ? "Quire stores drafts in inbox/YYYY/MM/DD.md and filed entries in journal/YYYY/MM/DD.md. Older jnl drafts and split journals are migrated on open; their originals are kept in .quire/migration/."
                      : "Quire won't save anything while the folder is missing, so nothing ends up in a second journal. Plug the drive back in and locate the folder, or take the default back — your entries stay where they are either way.")
             }
+            .qRowBackground()
+            }
 
+            if shows(.folder) {
             Section {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Backup folder").foregroundStyle(.secondary)
@@ -512,11 +565,14 @@ struct SettingsView: View {
                     }
                 }
             } header: {
-                Text("Backup")
+                QLabel("Backup")
             } footer: {
                 Text("Copies everything (inbox, journal, split journals, and assets) into a timestamped folder in the backup location. Automatic backups run in the background and prune down to the number you keep; “On every change” waits for a pause in writing and won't run more than once every five minutes.")
             }
+            .qRowBackground()
+            }
 
+            if shows(.media) {
             Section {
                 Toggle("Data Saver", isOn: $dataSaver)
                 LabeledContent("Data saved",
@@ -525,11 +581,14 @@ struct SettingsView: View {
                     LabeledContent("Compressing", value: "\(p.done)/\(p.total)")
                 }
             } header: {
-                Text("Media")
+                QLabel("Media")
             } footer: {
                 Text("Compresses attached media to save space — photos (longest edge 2048 px), videos (720p H.264) and voice memos (low-bitrate AAC). The original format is kept so links stay valid; videos re-encode in the background after attaching. Existing media isn't touched until you run “Compress Existing Media” below. The tally is merged across your devices.")
             }
+            .qRowBackground()
+            }
 
+            if shows(.maintenance) {
             Section {
                 buttonRow {
                     cleanUpButton
@@ -548,12 +607,15 @@ struct SettingsView: View {
                     importFolderButton
                 }
             } header: {
-                Text("Maintenance")
+                QLabel("Maintenance")
             } footer: {
                 Text("Export combines all filed entries into one markdown file (Export PDF typesets them instead). Import brings a Day One JSON export or a folder of dated markdown/text files in as ordinary filed entries — photos and tags included; re-running an import never duplicates. Drafts still in the Inbox aren't included in exports until you file them.")
             }
+            .qRowBackground()
+            }
 
-            Section("Keyboard shortcuts") {
+            if shows(.help) {
+            Section {
                 ForEach(Self.shortcuts, id: \.action) { s in
                     HStack {
                         Text(s.action)
@@ -563,19 +625,27 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+            } header: {
+                QLabel("Keyboard shortcuts")
+            }
+            .qRowBackground()
             }
 
+            if shows(.help) {
             Section {
                 Button { showingChangelog = true } label: {
                     Label("What's New", systemImage: "sparkles")
                 }
             } header: {
-                Text("About")
+                QLabel("About")
             } footer: {
                 Text("Every release and what changed in it.")
             }
+            .qRowBackground()
+            }
 
-            Section("How to") {
+            if shows(.help) {
+            Section {
                 ForEach(Self.howTos, id: \.title) { item in
                     DisclosureGroup(isExpanded: Binding(
                         get: { expandedHowTos.contains(item.title) },
@@ -599,9 +669,14 @@ struct SettingsView: View {
                         #endif
                     }
                 }
+            } header: {
+                QLabel("How to")
+            }
+            .qRowBackground()
             }
         }
         .formStyle(.grouped)
+        .qFormSkin()
         .navigationTitle("Settings")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

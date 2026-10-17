@@ -212,4 +212,35 @@ final class JournalStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("no.md").path))
     }
 
+    /// Reads must be refused too, including when the folder holding the link has
+    /// already been checked and remembered as safe.
+    func testAppleVaultRefusesToReadThroughSymlinks() throws {
+        let (store, base) = makeStore()
+        _ = store
+        defer { try? FileManager.default.removeItem(at: base) }
+        let fm = FileManager.default
+        let outside = fm.temporaryDirectory.appendingPathComponent("quire-outside-\(UUID().uuidString)")
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: outside) }
+        try Data("secret".utf8).write(to: outside.appendingPathComponent("secret.md"))
+
+        // A symlinked folder.
+        try fm.createSymbolicLink(at: base.appendingPathComponent("escape"), withDestinationURL: outside)
+        let vault = AppleVault(base: base)
+        XCTAssertThrowsError(try vault.read(rel: "escape/secret.md"))
+        XCTAssertThrowsError(try vault.list(rel: "escape"))
+
+        // A symlinked file in a real folder that has already been read from.
+        let journal = base.appendingPathComponent("journal/2026/05", isDirectory: true)
+        try fm.createDirectory(at: journal, withIntermediateDirectories: true)
+        try Data("real".utf8).write(to: journal.appendingPathComponent("01.md"))
+        XCTAssertEqual(try vault.read(rel: "journal/2026/05/01.md"), Data("real".utf8))
+        try fm.createSymbolicLink(at: journal.appendingPathComponent("02.md"),
+                                  withDestinationURL: outside.appendingPathComponent("secret.md"))
+        XCTAssertThrowsError(try vault.read(rel: "journal/2026/05/02.md"))
+
+        // And a missing file is still just missing.
+        XCTAssertNil(try vault.read(rel: "journal/2026/05/03.md"))
+    }
+
 }

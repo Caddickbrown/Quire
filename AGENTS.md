@@ -11,8 +11,10 @@ is the consolidation of three earlier projects — **jnl** (a Go CLI, the
 format's reference), **Nook** (SwiftUI iOS/macOS, the fullest feature set)
 and **Wander** (the designed one) — into one repository with **one Rust
 core** and thin native shells. Today: the Linux Tauri app and the terminal
-app. The native Apple shell is now in `apple/`, brought over from Nook and wired
-to the Rust core; its first Apple SDK build is pending. Android from Wander's
+app. The native Apple shell is in `apple/`, brought over from Nook and wired
+to the Rust core. It builds with Xcode and runs on an iPhone: the iPhone has
+Quire's own design (`apple/Quire/Design/`); iPad and Mac still use the earlier
+shell until their own pass. Android from Wander's
 Kotlin is next. `docs/consolidation-plan.md` records every decision.
 
 ## Data model (jnl's, with drafts in day files)
@@ -107,8 +109,13 @@ bindings/           quire-bindings: UniFFI callback Vault + native journal API;
                     JSON transports existing core values, closed request enum;
                     `bindgen` feature builds the Swift generator, not on devices.
 apple/              Quire SwiftUI app + widget/share extensions from Nook
-  Quire/Models/     JournalStore façade, CoreJournal adapter, AppleVault with
-                    NSFileCoordinator; parser/search/list adapters call Rust.
+  Quire/Models/     JournalStore façade, CoreJournal adapter, AppleVault
+                    (plain reads, coordinated writes); parser/search/list
+                    adapters call Rust.
+  Quire/Design/     the iPhone design: QuireTheme (themes.json + type + the
+                    Marathon family), shared components, and the screens
+                    (Today, Inbox, Journal, Reader, Composer, Search, Look
+                    back, Settings pages). Fonts in Quire/fonts/.
   gen_pbxproj.py    deterministic app + extensions + hostless test project
   build-core.sh     generated Swift/C bindings + macOS/iOS/simulator XCFramework
   Tests/            parser/search checks and journal integration XCTest
@@ -117,6 +124,7 @@ tools/
   migrate_journal.py   inbox.md → inbox/, .nook/ → .quire/, from outside the app
   drive_tui.py         pseudo-terminal smoke test of every screen (make smoke)
   make_icon.swift      (Nook's) icon generator
+  make_apple_icon.swift  Quire's Apple app icon set (`swift tools/make_apple_icon.swift <AppIcon.appiconset>`)
 sample/             the sample journal (new layout)
 docs/consolidation-plan.md   the plan, decisions, and the TUI spec
 ```
@@ -151,14 +159,27 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   follow is on the canvas linked from the plan's section 8.
 - **Apple** (`apple/`): iOS 17 / macOS 14 SwiftUI. `JournalStore` remains the
   `@MainActor` façade; journal reads and writes call `quire-bindings` / UniFFI.
-  `AppleVault` coordinates storage and rejects paths outside the chosen folder.
+  `AppleVault` rejects paths outside the chosen folder (symlinks included) and
+  coordinates writes with `NSFileCoordinator`. Reads are plain: coordinating
+  each read cost ~25 ms a file on a file-provider folder and made a journal of a
+  few thousand entries take most of a minute to open; iCloud is only consulted
+  when a file turns out to be missing. Keep it that way.
   Each edit carries `(file, index, raw)` and adopts Rust's returned reference.
   Native media, backup, bookmarks, watchers, widgets, sharing and reminders
   remain Swift. `make apple` builds the Rust XCFramework and both unsigned apps;
   `make apple-test` runs hostless XCTest. Requires macOS, full Xcode and rustup.
-  The Apple workflow covers these commands; no Apple SDK build has run on this
-  Linux host. Generated bindings/frameworks are ignored, never hand-edited.
-  iOS external-display presentation follows the active entry/editor or browse list;
+  The Apple workflow covers these commands. Generated bindings/frameworks are
+  ignored, never hand-edited. Launch hints for screenshots (no effect when unset):
+  `QUIRE_START_TAB`, `QUIRE_THEME`, `QUIRE_OPEN=settings|search`,
+  `QUIRE_SETTINGS_PAGE`. The iPhone design reads colours from `themes.json`; the
+  Marathon themes are a look, not a palette (`QuireTheme.isMarathon`).
+  iOS external-display presentation follows the active entry/editor (the iPhone
+  composer and reader publish to it) or browse list. The iPhone lists select with
+  `qKeyList` (Design/QuireKeys.swift) and the TUI's letters route through
+  `KeyCommandRouter.key`, declared on the app delegate so typing is never touched;
+  the composer's control chords (^J file, ^S, ^T, ^F, ^P, ^D) are declared only while
+  it is open (`wantsChords`), at priority over the text system. The monitor's hint
+  bar (`ExternalDisplayView.hints`) must list exactly the keys that work;
   `ExternalTheme` loads the bundled root `themes.json`. Option-Command +/- changes
   size, T theme, P pause, H hints. Locked/paused displays never render journal text.
 - **Android**: not in the repo yet; Wander's Compose shell over a SAF `Vault`.

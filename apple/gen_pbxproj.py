@@ -66,6 +66,20 @@ swift_files = [
     ('YearReview',      'Models/YearReview.swift',      'Models'),
     ('SavedSearches',   'Models/SavedSearches.swift',   'Models'),
     ('TimerActivity',   'Models/TimerActivity.swift',   'Models'),
+    ('QuireTheme',     'Design/QuireTheme.swift',      'Design'),
+    ('QuireComponents','Design/QuireComponents.swift', 'Design'),
+    ('PhoneRoot',      'Design/PhoneRoot.swift',       'Design'),
+    ('TodayScreen',    'Design/TodayScreen.swift',     'Design'),
+    ('InboxScreen',    'Design/InboxScreen.swift',     'Design'),
+    ('JournalScreen',  'Design/JournalScreen.swift',   'Design'),
+    ('ReaderScreen',   'Design/ReaderScreen.swift',    'Design'),
+    ('ComposerScreen', 'Design/ComposerScreen.swift',  'Design'),
+    ('RetimeSheet',    'Design/RetimeSheet.swift',     'Design'),
+    ('LookBackScreen', 'Design/LookBackScreen.swift',  'Design'),
+    ('PhoneSettings',  'Design/PhoneSettings.swift',   'Design'),
+    ('SwipeBack',      'Design/SwipeBack.swift',       'Design'),
+    ('SearchScreen',   'Design/SearchScreen.swift',    'Design'),
+    ('QuireKeys',      'Design/QuireKeys.swift',       'Design'),
     ('RootView',        'Views/RootView.swift',         'Views'),
     ('WritingView',     'Views/WritingView.swift',      'Views'),
     ('WritingTextEditor','Views/WritingTextEditor.swift','Views'),
@@ -86,6 +100,7 @@ swift_files = [
     ('MediaPreview',    'Views/MediaPreview.swift',      'Views'),
     ('AssetsView',      'Views/AssetsView.swift',       'Views'),
     ('ExternalDisplay',  'Views/ExternalDisplayView.swift', 'Views'),
+    ('ExternalSettings', 'Views/ExternalSettings.swift', 'Views'),
     ('KeyboardNav',      'Views/KeyboardNavigation.swift',   'Views'),
     ('ChangelogView',   'Views/ChangelogView.swift',    'Views'),
     ('AudioRecorder',   'Views/AudioRecorder.swift',    'Views'),
@@ -134,7 +149,7 @@ test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListCon
 
 # Allocate ids
 IDs = {k: new_id(k) for k in [
-    'project', 'mainGroup', 'quireGroup', 'modelsGroup', 'viewsGroup',
+    'project', 'mainGroup', 'quireGroup', 'modelsGroup', 'viewsGroup', 'designGroup',
     'iosGroup', 'macosGroup', 'productsGroup', 'target',
     'debugConfig', 'releaseConfig', 'projDebugConfig', 'projReleaseConfig',
     'configList', 'targetConfigList', 'sourcesBuildPhase', 'resourcesBuildPhase',
@@ -357,6 +372,7 @@ def pbxproj():
         a(f'\t\t\t\t{IDs[n]} /* {next(base(p) for k,p,g in swift_files if k==n)} */,')
     a(f'\t\t\t\t{IDs["modelsGroup"]} /* Models */,')
     a(f'\t\t\t\t{IDs["viewsGroup"]} /* Views */,')
+    a(f'\t\t\t\t{IDs["designGroup"]} /* Design */,')
     for n, p, _ in resources:
         a(f'\t\t\t\t{IDs[n]} /* {base(p)} */,')
     a(f'\t\t\t\t{IDs["iosGroup"]} /* iOS */,')
@@ -368,7 +384,8 @@ def pbxproj():
 
     # subgroups Models / Views
     for grp, gid, folder in [('Models', IDs['modelsGroup'], 'Models'),
-                             ('Views', IDs['viewsGroup'], 'Views')]:
+                             ('Views', IDs['viewsGroup'], 'Views'),
+                             ('Design', IDs['designGroup'], 'Design')]:
         members = [n for n, p, g in swift_files if g == grp]
         a(f'\t\t{gid} /* {grp} */ = {{')
         a('\t\t\tisa = PBXGroup;')
