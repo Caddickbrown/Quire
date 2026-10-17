@@ -932,7 +932,7 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 
 /// An AppImage run on its own has no launcher entry, so the dock has no icon
 /// to show for its window. Write one (and the icon) the first time it runs,
-/// unless install.sh or a package already left one. `Quire.desktop` matches the
+/// unless a package already left one (install.sh writes the same `Quire.desktop`). `Quire.desktop` matches the
 /// app id set in `run`; StartupWMClass covers X11 and shells that ask for it.
 #[cfg(target_os = "linux")]
 fn ensure_launcher() {
@@ -940,7 +940,9 @@ fn ensure_launcher() {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
     let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share"));
     let apps = data.join("applications");
-    if apps.join("quire.desktop").exists() { return; }
+    // Older installs wrote `quire.desktop`, which the shell can't pair with the
+    // window (its app id is `Quire`) and which would show as a second entry.
+    let _ = fs::remove_file(apps.join("quire.desktop"));
     let icon = data.join("icons/hicolor/128x128/apps/quire.png");
     if !icon.exists() {
         let _ = fs::create_dir_all(icon.parent().unwrap());
@@ -950,6 +952,8 @@ fn ensure_launcher() {
     let exec = if appimage.contains(' ') { format!("\"{}\"", appimage) } else { appimage };
     let body = format!(
         "[Desktop Entry]\nType=Application\nName=Quire\nComment=Journalling over a plain folder of markdown\nExec={exec}\nIcon=quire\nCategories=Office;\nTerminal=false\nStartupWMClass=Quire\n");
+    // Keep an entry install.sh wrote with a wrapper (`env APPIMAGE_EXTRACT_AND_RUN=1 ...`) for no-FUSE systems.
+    if fs::read_to_string(&entry).map(|old| old.contains("Exec=env ") && old.contains(&exec)).unwrap_or(false) { return; }
     // Rewritten when the AppImage has moved, so the entry never points at a stale path.
     if fs::read_to_string(&entry).map(|old| old == body).unwrap_or(false) { return; }
     let _ = fs::create_dir_all(&apps);

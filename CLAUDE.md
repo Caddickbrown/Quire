@@ -220,7 +220,7 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   `QUIRE_RELEASE_TARGET`, checks the SHA-256 and renames the new binaries over
   the old ones (`tui/src/update.rs`). A build without `QUIRE_RELEASE_TARGET`
   came from source and is told to re-run `install.sh`. It updates the desktop
-  AppImage too (found from `quire.desktop`'s `Exec`, else
+  AppImage too (found from `Quire.desktop`'s `Exec` (or the old `quire.desktop`), else
   `~/Applications/Quire.AppImage`, or `$QUIRE_APPIMAGE`): replaced when its
   SHA-256 isn't the one `SHA256SUMS-desktop-<arch>` lists; a .deb/.rpm gets
   the package-manager command instead. `--terminal` / `--desktop` limit it.
