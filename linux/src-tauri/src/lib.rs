@@ -930,12 +930,41 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     app.restart()
 }
 
+/// An AppImage run on its own has no launcher entry, so the dock has no icon
+/// to show for its window. Write one (and the icon) the first time it runs,
+/// unless install.sh or a package already left one. `Quire.desktop` matches the
+/// app id set in `run`; StartupWMClass covers X11 and shells that ask for it.
+#[cfg(target_os = "linux")]
+fn ensure_launcher() {
+    let Ok(appimage) = std::env::var("APPIMAGE") else { return };
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
+    let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share"));
+    let apps = data.join("applications");
+    if apps.join("quire.desktop").exists() { return; }
+    let icon = data.join("icons/hicolor/128x128/apps/quire.png");
+    if !icon.exists() {
+        let _ = fs::create_dir_all(icon.parent().unwrap());
+        let _ = fs::write(&icon, include_bytes!("../icons/128x128.png"));
+    }
+    let entry = apps.join("Quire.desktop");
+    let exec = if appimage.contains(' ') { format!("\"{}\"", appimage) } else { appimage };
+    let body = format!(
+        "[Desktop Entry]\nType=Application\nName=Quire\nComment=Journalling over a plain folder of markdown\nExec={exec}\nIcon=quire\nCategories=Office;\nTerminal=false\nStartupWMClass=Quire\n");
+    // Rewritten when the AppImage has moved, so the entry never points at a stale path.
+    if fs::read_to_string(&entry).map(|old| old == body).unwrap_or(false) { return; }
+    let _ = fs::create_dir_all(&apps);
+    let _ = fs::write(&entry, body);
+}
+
 pub fn run() {
     // The Wayland app id (and X11 WM_CLASS) come from the program name. The
     // binary is quire-desktop; naming the program after Quire.desktop lets
     // the shell pair the window with its launcher, and so its icon.
     #[cfg(target_os = "linux")]
-    glib::set_prgname(Some("Quire"));
+    {
+        glib::set_prgname(Some("Quire"));
+        ensure_launcher();
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())

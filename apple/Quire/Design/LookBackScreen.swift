@@ -18,9 +18,19 @@ struct LookBackScreen: View {
     var search: () -> Void
     var settings: () -> Void
 
+    @State private var selected: Int?
+
+    /// The "on this day" entries, in the order they're drawn: what the keys walk.
+    private var pastRefs: [EntryRef] {
+        store.qOnThisDay().flatMap { day in
+            day.entries.prefix(2).map { EntryRef(entry: $0, source: .archive(date: day.date)) }
+        }
+    }
+
     var body: some View {
         let stats = store.stats()
-        ScrollView {
+        let refs = pastRefs
+        return ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 QMasthead(onSearch: search, onSettings: settings)
                 QTitle(kicker: "\(stats.days) days written", title: "Look back")
@@ -32,6 +42,8 @@ struct LookBackScreen: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 26).padding(.top, 14).padding(.bottom, 24)
         }
+        .qKeyList(entries: refs.map(\.entry), index: $selected, listTitle: "On this day", autoSelect: true,
+                  onOpen: { entry in if let r = refs.first(where: { $0.entry.id == entry.id }) { open(r) } })
     }
 
     private func figures(_ s: JournalStore.Stats) -> some View {
@@ -75,6 +87,7 @@ struct LookBackScreen: View {
                 ForEach(past, id: \.date) { day in
                     ForEach(day.entries.prefix(2)) { entry in
                         let ref = EntryRef(entry: entry, source: .archive(date: day.date))
+                        let on = ref.entry.id == selected.flatMap { pastRefs.indices.contains($0) ? pastRefs[$0].entry.id : nil }
                         Button { open(ref) } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(String(day.date.prefix(4))).font(q.mono(12)).foregroundStyle(q.accentColor)
@@ -87,6 +100,8 @@ struct LookBackScreen: View {
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 44)
+                            .padding(.leading, on ? 10 : 0)
+                            .overlay(alignment: .leading) { if on { Rectangle().fill(q.accentColor).frame(width: 3) } }
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)

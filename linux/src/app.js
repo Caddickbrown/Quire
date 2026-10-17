@@ -46,7 +46,7 @@ const S = {
   folder: '', isSample: false, splitTags: [], splitSource: 'none', backupDir: null, templates: [], searches: [], hasTransfer: false,
   entries: [], ui: { ...DEFAULT_UI },
   view: 'today', sel: null, mode: 'read', draft: null, focus: false, locked: false,
-  query: '', tag: null, day: null, showAllTags: false, journal: 'all', jview: 'list',
+  query: '', tag: null, day: null, showAllTags: false, journal: 'main', jview: 'list',
   calMonth: null, year: new Date().getFullYear(), promptReroll: 0,
   timer: { left: null, running: false, handle: null },
   assets: null, assetUrls: new Map(), tagReview: null, tagPicks: {}, backups: null, sizes: null, statsExtra: null, tplEdit: null,
@@ -372,9 +372,9 @@ function renderList() {
     const shown = S.showAllTags ? tagCounts : tagCounts.slice(0, 8);
     head = `<div class="list-tools">
         <select class="picker" data-input="journal" aria-label="Journal">
-          <option value="all" ${S.journal === 'all' ? 'selected' : ''}>All journals</option>
           <option value="main" ${S.journal === 'main' ? 'selected' : ''}>Main journal</option>
           ${splits.map(s => `<option value="${esc(s)}" ${S.journal === s ? 'selected' : ''}>@${esc(s)} (split)</option>`).join('')}
+          <option value="all" ${S.journal === 'all' ? 'selected' : ''}>All journals</option>
         </select>
         <div class="seg" role="group" aria-label="View">
           <button data-action="jview" data-v="list" aria-pressed="${S.jview === 'list'}">List</button>
@@ -669,7 +669,7 @@ function renderWrite() {
       <button class="btn ${d.starred ? 'star-on' : ''}" data-action="star" aria-label="Star">${icon.star(d.starred)}</button>
       ${moreBtn('write')}
       ${isDraft
-        ? `<button class="btn primary" data-action="file" ${empty ? 'disabled' : ''}>File to ${fmtDay(d.ts)} <span class="k">Ctrl+J</span></button>`
+        ? `<button class="btn" data-action="done" title="Stop editing (Esc)">Done <span class="k">Esc</span></button><button class="btn primary" data-action="file" ${empty ? 'disabled' : ''}>File to ${fmtDay(d.ts)} <span class="k">Ctrl+J</span></button>`
         : `<button class="btn" data-action="cancel-edit">Cancel <span class="k">Esc</span></button><button class="btn primary" data-action="save-edit">Save <span class="k">Ctrl+S</span></button>`}
     </div>
     <div id="guard">${guardHtml()}</div>
@@ -1246,7 +1246,7 @@ function renderDayPage(date) {
     </div>
     <div class="page"><article class="sheet print-sheet day-page">
       ${es.length ? es.map(e => `<section class="day-entry">
-        <div class="day-meta mono"><button class="daylink mono" data-action="open" data-file="${esc(e.file)}" data-index="${e.index}">${e.time}</button>${e.source === 'inbox' ? ' · draft' : ''}${e.starred ? ' · ★' : ''}</div>
+        <div class="day-meta mono"><button class="daylink mono" data-action="open" data-file="${esc(e.file)}" data-index="${e.index}">${e.time}</button>${e.source === 'inbox' ? ' · draft' : ''}${e.starred ? ' · ★' : ''} · <button class="daylink mono" data-action="edit-entry" data-file="${esc(e.file)}" data-index="${e.index}">Edit</button></div>
         ${e.title ? `<h2>${esc(e.title)}</h2>` : ''}
         <div class="prose" data-file="${esc(e.file)}" data-index="${e.index}">${renderProse(e.body, e.file)}</div></section>`).join('') : '<p class="empty-note">Nothing written this day.</p>'}
     </article></div>
@@ -1767,6 +1767,8 @@ document.addEventListener('click', async ev => {
       case 'open-folder': await invoke('plugin:opener|open_path', { path: S.folder }); break;
       case 'edit': if (S.sel) editEntry(S.sel); break;
       case 'cancel-edit': await cancelEdit(); break;
+      case 'done': await leaveWrite(); break;
+      case 'edit-entry': { const e = entryFrom(el); if (e) { S.sel = e; editEntry(e); } break; }
       case 'save-edit': await saveEdit(); break;
       case 'file': await fileCurrent(); break;
       case 'print-journal': {

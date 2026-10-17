@@ -100,7 +100,7 @@ struct JournalScreen: View {
         .onChange(of: selectedID) { _, id in
             if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
         }
-        .qKeyList(entries: flat, index: $selected, listTitle: "Journal",
+        .qKeyList(entries: flat, index: $selected, listTitle: "Journal", autoSelect: true,
                   onOpen: { open(EntryRef(entry: $0, source: .archive(date: $0.date))) },
                   letter: { entry, key in
                       let source = EntrySource.archive(date: entry.date)

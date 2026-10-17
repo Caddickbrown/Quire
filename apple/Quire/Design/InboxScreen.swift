@@ -93,7 +93,7 @@ struct InboxScreen: View {
         .onChange(of: selectedID) { _, id in
             if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
         }
-        .qKeyList(entries: flat, index: $selected, listTitle: "Inbox",
+        .qKeyList(entries: flat, index: $selected, listTitle: "Inbox", autoSelect: true,
                   onOpen: { open(EntryRef(entry: $0, source: .inbox)) },
                   letter: { entry, key in
                       switch key {

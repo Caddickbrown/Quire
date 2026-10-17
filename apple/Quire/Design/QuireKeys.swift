@@ -19,9 +19,10 @@ extension View {
     func qKeyList(entries: [Entry],
                   index: Binding<Int?>,
                   listTitle: String,
+                  autoSelect: Bool = false,
                   onOpen: @escaping (Entry) -> Void,
                   letter: @escaping (Entry, String) -> Bool = { _, _ in false }) -> some View {
-        modifier(QKeyList(entries: entries, index: index, listTitle: listTitle, onOpen: onOpen, letter: letter))
+        modifier(QKeyList(entries: entries, index: index, listTitle: listTitle, autoSelect: autoSelect, onOpen: onOpen, letter: letter))
     }
 
     /// While a sheet or full-screen page is up, keep every key away from the list
@@ -33,17 +34,20 @@ private struct QKeyList: ViewModifier {
     let entries: [Entry]
     @Binding var index: Int?
     let listTitle: String
+    let autoSelect: Bool
     let onOpen: (Entry) -> Void
     let letter: (Entry, String) -> Bool
 
     @State private var routerID = UUID()
+    @State private var didAutoSelect = false
 
     func body(content: Content) -> some View {
         content
             .background(KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false))
-            .onAppear { register(); publish() }
+            .onAppear { adopt(); register(); publish() }
             .onChange(of: index) { _, _ in register(); publish() }
             .onChange(of: entries.map(\.ts)) { _, _ in
+                adopt()
                 if let i = index, i >= entries.count { index = entries.isEmpty ? nil : entries.count - 1 }
                 register(); publish()
             }
@@ -53,12 +57,20 @@ private struct QKeyList: ViewModifier {
             }
     }
 
+    /// A list opens with its top row selected, so ↵ and the letters work at once.
+    private func adopt() {
+        if autoSelect, !didAutoSelect, index == nil, !entries.isEmpty { index = 0; didAutoSelect = true }
+    }
+
     private func register() {
+        // An empty list leaves the keys to the screen beneath (↓ from Look back
+        // still goes to the Journal).
+        guard !entries.isEmpty else { KeyCommandRouter.shared.unregister(routerID); return }
         KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
             moveUp: { move(-1) },
             moveDown: { move(1) },
             open: { if let e = selected { onOpen(e) } },
-            clear: { if index != nil { index = nil } else { KeyCommandRouter.shared.onBack?() } },
+            clear: { if index != nil, !autoSelect { index = nil } else { KeyCommandRouter.shared.onBack?() } },
             key: { k in
                 // The terminal's j/k: down and up, as the arrows.
                 if k == "j" { move(1); return true }

@@ -1298,6 +1298,7 @@ Exec=$exec_line
 Icon=quire
 Categories=Office;
 Terminal=false
+StartupWMClass=Quire
 EOF
         have update-desktop-database && update-desktop-database "$APPS_DIR" >/dev/null 2>&1
       fi

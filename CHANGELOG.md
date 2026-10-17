@@ -21,6 +21,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-10-17
+
 ### Added
 - **iPhone**: the external display is a desk mode in Quire's own design: it follows the phone's theme (or its own), in Newsreader and Plex with ruled pages. Today with the readouts and a prompt when idle, the list beside a preview of the selected entry while browsing, the page when reading or writing. It is driven from the keyboard alone: `n i j l / r` from Today, `,` for Settings on the monitor.
 - **Apple (iPhone):** with a monitor attached, `,` opens Settings on the monitor instead of a sheet on the phone: ↑↓ (or j/k) move, ↵ changes the row, `,` or Esc closes. Dark mode, theme, monitor theme, text size, key hints, dimming the phone, prompts and Back up now are all there. The monitor's hint bars list `,`.
@@ -38,6 +40,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Install**: on Linux (x86_64, arm64) `install.sh` downloads the latest release instead of compiling it, checking every file against its published SHA-256: no Rust, WebKitGTK or Tauri needed, and seconds instead of minutes. The desktop app installs as the AppImage, which updates itself; an installed .deb or .rpm is offered the switch (removed only once the AppImage is in place), and `fuse3` is offered when missing. The terminal app goes to `~/.local/bin`, or replaces a source-built `~/.cargo/bin/quire`; `quire update` keeps it current. `--build` compiles from source as before, as do `--source`, `QUIRE_REF` and macOS.
 
 ### Fixed
+- **Linux**: the AppImage has an icon in the dock: on first run it writes its own launcher entry and icon (when no `quire.desktop` exists), and the installer's entry sets `StartupWMClass`.
+- **Linux**: the Journal opens on the Main journal, with the split journals and All journals in the picker after it.
+- **Linux**: a draft in the composer has a visible Done button (Esc did this, but nothing said so), and each entry on the Journal's day page has an Edit link, so a filed entry can be edited without finding the time link first.
 - **iPhone**: the keyboard shortcuts now reach the app: the key catcher sits at the root of the app and takes the keys back after a push or a sheet, instead of relying on the app delegate (which isn't in the responder chain under SwiftUI). Esc, letters and the arrows work on Today and after opening an entry.
 - **iPhone**: Today and Look back no longer re-read the whole journal each time they redraw; "on this day" is read from what is already loaded, so typing in the quick-capture line stays smooth.
 - **iPhone**: a large inbox no longer pushes the page sideways, and a single enormous paragraph can't break a list or the reader.
