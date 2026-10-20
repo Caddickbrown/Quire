@@ -32,6 +32,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Media**: clearing orphan media from Settings or the library rechecks references and retains verified recovery copies under `.quire/media-cleanup/`.
 
 ### Fixed
+- **Linux**: long editor titles wrap and grow on screen while remaining a single line in the markdown file; italic markdown stays styled while the caret is inside it.
+- **Linux**: typing batches editor painting and avoids recounting the full journal on every keystroke; draft autosaves wait 1.2 seconds after typing stops, write off the UI thread and still flush when leaving or closing.
+- **Linux**: the Inbox has its own search, and the Journal opens directly on its first entry instead of unexpectedly showing a whole-day overview.
 - **Linux / Apple**: cleaned-up media links support angle brackets, spaces, percent escapes and optional titles; Apple library dates and entry navigation distinguish files with the same name in different folders.
 
 ## [0.9.1] — 2026-10-17

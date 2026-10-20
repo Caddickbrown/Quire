@@ -307,8 +307,9 @@ fn save_ui(state: State<AppState>, ui: Value) -> Result<(), String> {
 
 /// New draft → its day's file under inbox/, in time order.
 #[tauri::command]
-fn create_draft(app: AppHandle, state: State<AppState>, ts: String, title: String, starred: bool, body: String) -> Result<Written, String> {
-    let w = root(&state)?.new_draft(&ts, &title, starred, &body)?;
+async fn create_draft(app: AppHandle, state: State<'_, AppState>, ts: String, title: String, starred: bool, body: String) -> Result<Written, String> {
+    let j = root(&state)?;
+    let w = blocking(move || j.new_draft(&ts, &title, starred, &body)).await?;
     wrote(&app);
     Ok(w)
 }
@@ -318,9 +319,9 @@ fn create_draft(app: AppHandle, state: State<AppState>, ts: String, title: Strin
 /// split-journal entry stays in its file.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-fn update_entry(
+async fn update_entry(
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
     file: String,
     index: usize,
     expected_raw: String,
@@ -329,7 +330,8 @@ fn update_entry(
     starred: bool,
     body: String,
 ) -> Result<Written, String> {
-    let w = root(&state)?.update_entry(&file, index, &expected_raw, &ts, &title, starred, &body)?;
+    let j = root(&state)?;
+    let w = blocking(move || j.update_entry(&file, index, &expected_raw, &ts, &title, starred, &body)).await?;
     wrote(&app);
     Ok(w)
 }

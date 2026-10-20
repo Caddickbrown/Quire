@@ -936,3 +936,6 @@ button.card:disabled:hover .title { color: inherit; }
 
 .app.narrow .tabs { min-width: 0; overflow-x: auto; }
 .app.narrow .tab { flex-shrink: 0; }
+
+/* Titles wrap without scrolling sideways; Enter still moves to the body. */
+textarea.title-input { display: block; min-height: 1.15em; resize: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; box-sizing: border-box; }

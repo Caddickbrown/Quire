@@ -146,7 +146,11 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   `Journal` → one core call. `load()` folds a legacy `inbox.md` first and
   reports it in the snapshot (`migration`, `migration_error`). The front end
   keys everything off `entry.source` ("inbox" | "journal" | "split") and
-  `entry.file`, so day files under `inbox/` needed no view changes. Needs
+  `entry.file`, so day files under `inbox/` needed no view changes.
+  The composer title wraps visually but remains one header line on disk. Drafts
+  autosave after 1.2 seconds idle and flush on navigation/close; create/update
+  commands run on a blocking worker. Editor paints are batched per animation frame,
+  and Inbox search is independent of Journal search. Needs
   `libwebkit2gtk-4.1-dev` to build; `cargo build -p quire-desktop` builds it
   (the desktop binary is `quire-desktop`, so it never collides with the
   terminal's `quire` in the workspace target or on PATH).

@@ -47,7 +47,7 @@ const S = {
   folder: '', isSample: false, splitTags: [], splitSource: 'none', backupDir: null, templates: [], searches: [], hasTransfer: false,
   entries: [], ui: { ...DEFAULT_UI },
   view: 'today', sel: null, mode: 'read', draft: null, focus: false, locked: false,
-  query: '', tag: null, day: null, showAllTags: false, journal: 'main', jview: 'list',
+  query: '', inboxQuery: '', tag: null, day: null, showAllTags: false, journal: 'main', jview: 'list',
   calMonth: null, year: new Date().getFullYear(), promptReroll: 0,
   timer: { left: null, running: false, handle: null },
   assetFilter: 'all', assetQuery: '', assets: null, assetUrls: new Map(), tagReview: null, tagPicks: {}, backups: null, sizes: null, statsExtra: null, tplEdit: null,
@@ -254,6 +254,12 @@ function journalList() {
   if (q) { const pq = parseQuery(q); list = list.filter(e => matchesQuery(e, pq)); }
   return sorted(list);
 }
+function inboxList() {
+  const list = S.ui.sortNewest ? inbox() : inbox().reverse();
+  const q = S.inboxQuery.trim();
+  return q ? list.filter(e => matchesQuery(e, parseQuery(q))) : list;
+}
+
 function countTags(list) {
   const m = new Map();
   list.forEach(e => e.tags.forEach(t => m.set(t, (m.get(t) || 0) + 1)));
@@ -352,7 +358,9 @@ function groupByDay(list, opts) {
 }
 
 function searchBox(id, ph) {
-  return `<div class="search"><input id="${id}" data-input="${id === 'search' ? 'query' : 'gosearch'}" value="${id === 'search' ? esc(S.query) : ''}" placeholder="${esc(ph)}" autocomplete="off" spellcheck="false"></div>`;
+  const kind = id === 'search' ? 'query' : id === 'inbox-search' ? 'inbox-query' : 'gosearch';
+  const value = kind === 'query' ? S.query : kind === 'inbox-query' ? S.inboxQuery : '';
+  return `<div class="search"><input id="${id}" data-input="${kind}" value="${esc(value)}" placeholder="${esc(ph)}" autocomplete="off" spellcheck="false"></div>`;
 }
 
 function renderList() {
@@ -364,9 +372,9 @@ function renderList() {
     listHtml += `<div class="group-label"><span>Inbox · ${drafts.length} draft${drafts.length === 1 ? '' : 's'}</span></div><div class="rows">${drafts.map(e => rowHtml(e, { day: true, writing: true })).join('') || '<div class="empty-note">Inbox is empty.</div>'}</div>`;
     listHtml += `<div class="group-label"><span>Today · ${fmtDate(today())}</span></div><div class="rows">${todays.map(e => rowHtml(e, { excerpt: true })).join('') || '<div class="empty-note">Nothing filed today yet.</div>'}</div>`;
   } else if (S.view === 'inbox') {
-    const drafts = S.ui.sortNewest ? inbox() : inbox().reverse();
-    head = `<div class="list-tools"><span class="group-label" style="padding:0">Inbox · ${drafts.length}</span><span style="display:flex;gap:12px">${sortBtn()}${drafts.length && S.mode !== 'write' ? '<button class="btn ghost" data-action="file-all">File all</button>' : ''}</span></div>`;
-    listHtml = S.ui.grouped ? (groupByDay(drafts, { writing: true, excerpt: true }) || '<div class="empty-note">Inbox zero. Ctrl+N to start a draft.</div>') : `<div class="rows">${drafts.map(e => rowHtml(e, { day: true, writing: true, excerpt: true })).join('') || '<div class="empty-note">Inbox zero. Ctrl+N to start a draft.</div>'}</div>`;
+    const drafts = inboxList();
+    head = searchBox('inbox-search', 'Search drafts · words · tag: · before: · has:') + `<div class="list-tools"><span class="group-label" style="padding:0">Inbox · ${S.inboxQuery.trim() ? `${drafts.length} of ${inbox().length}` : drafts.length}</span><span style="display:flex;gap:12px">${sortBtn()}${drafts.length && !S.inboxQuery.trim() && S.mode !== 'write' ? '<button class="btn ghost" data-action="file-all">File all</button>' : ''}</span></div>`;
+    listHtml = S.ui.grouped ? (groupByDay(drafts, { writing: true, excerpt: true }) || `<div class="empty-note">${S.inboxQuery.trim() ? 'No drafts match this search.' : 'Inbox zero. Ctrl+N to start a draft.'}</div>`) : `<div class="rows">${drafts.map(e => rowHtml(e, { day: true, writing: true, excerpt: true })).join('') || `<div class="empty-note">${S.inboxQuery.trim() ? 'No drafts match this search.' : 'Inbox zero. Ctrl+N to start a draft.'}</div>`}</div>`;
   } else if (S.view === 'starred') {
     const list = sorted(S.entries.filter(e => e.starred));
     head = `<div class="list-tools"><span class="group-label" style="padding:0">Starred · ${list.length}</span><span style="display:flex;gap:12px">${sortBtn()}<button class="btn ghost" data-action="random">Random</button></span></div>`;
@@ -439,7 +447,7 @@ function renderPane() {
   if (S.mode === 'write' && S.draft) return renderWrite();
   if (S.sel) return renderRead(S.sel);
   if (S.printDay) return renderDayPage(S.printDay);
-  if (S.view === 'journal') { const d = S.day || journalList()[0]?.date; if (d) return renderDayPage(d); }
+  if (S.view === 'journal' && S.day) return renderDayPage(S.day);
   return renderHome();
 }
 
@@ -683,7 +691,7 @@ function renderWrite() {
     </div>
     <div id="guard">${guardHtml()}</div>
     <div class="page" id="page"><article class="sheet">
-      <input class="title-input" id="title" placeholder="Title (optional)" value="${esc(d.title)}" autocomplete="off" ${S.folderMissing ? 'readonly' : ''}>
+      <textarea class="title-input" id="title" rows="1" wrap="soft" aria-label="Entry title" placeholder="Title (optional)" ${S.folderMissing ? 'readonly' : ''}>${esc(d.title)}</textarea>
       <div class="rule"></div>
       <div class="editor" id="editor"><div class="backdrop" id="backdrop" aria-hidden="true"></div><textarea id="bodyta" spellcheck="true" aria-label="Entry text" ${S.folderMissing ? 'readonly' : ''}>${esc(d.body)}</textarea></div>
       ${S.ui.prompts && !d.body.trim() ? '<button class="prompt-again" data-action="prompt">↻ Another prompt</button>' : ''}
@@ -699,11 +707,22 @@ function renderWrite() {
   </section>`;
 }
 
+let dayWordCache = { entries: null, day: '', total: 0, entriesByID: new Map() };
 function todaysWords() {
-  let n = S.entries.filter(e => e.date === today() && !(S.draft?.ref && sameEntry(e, S.draft.ref))).reduce((a, e) => a + e.words, 0);
-  if (S.draft && S.draft.ts.slice(0, 10) === today()) n += words(S.draft.body);
+  const day = today();
+  if (dayWordCache.entries !== S.entries || dayWordCache.day !== day) {
+    const entries = S.entries.filter(e => e.date === day);
+    dayWordCache = { entries: S.entries, day, total: entries.reduce((n, e) => n + (e.words || 0), 0), entriesByID: new Map(entries.map(e => [`${e.file}:${e.index}`, e])) };
+  }
+  let n = dayWordCache.total;
+  if (S.draft) {
+    const ref = S.draft.ref;
+    if (ref) n -= dayWordCache.entriesByID.get(`${ref.file}:${ref.index}`)?.words || 0;
+    if (S.draft.ts.slice(0, 10) === day) n += words(S.draft.body);
+  }
   return n;
 }
+
 function goalHtml() {
   const n = todaysWords(), g = Math.max(1, S.ui.goal), pct = Math.min(1, n / g), c = 2 * Math.PI * 9;
   return `<span class="goal"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="var(--line)" stroke-width="3"/><circle cx="12" cy="12" r="9" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(c * pct).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 12 12)"/></svg><span><b>${n}</b> of ${g} today</span></span>`;
@@ -716,13 +735,58 @@ function timerHtml() {
   return `<button class="timer ${cls}" data-action="timer" id="timerbtn" title="Writing timer (click to start/pause, double-click to reset)">${icon.clock}<span class="mono">${label}</span></button>`;
 }
 
+let editorFrame = null;
+let composerResizeObserver = null;
+function resizeTitle() {
+  const title = $('#title');
+  if (!title) return;
+  title.style.height = 'auto';
+  title.style.height = `${title.scrollHeight}px`;
+}
+function queueEditorPaint() {
+  if (editorFrame !== null) return;
+  editorFrame = requestAnimationFrame(() => {
+    editorFrame = null;
+    if (S.mode !== 'write' || !S.draft) return;
+    paintBackdrop();
+    typewriter();
+    refreshChrome(false);
+    const ta = $('#bodyta'); if (ta) tagAutocomplete(ta);
+  });
+}
+/** Preserve the markdown markers while styling their text, including across the caret. */
+function editorMarkup(text) {
+  const code = [];
+  const out = esc(text)
+    .replace(/`([^`\n]+)`/g, (whole, inner) => { code.push(`<code>\`${inner}\`</code>`); return `\u0001${code.length - 1}\u0001`; })
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b>**$1**</b>')
+    .replace(/__([^_\n]+)__/g, '<i>__$1__</i>')
+    .replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?]|$)/g, '$1<i>_$2_</i>')
+    .replace(/(^|[\s(])\*([^*\s][^*\n]*?)\*(?=[\s).,!?]|$)/g, '$1<i>*$2*</i>')
+    .replace(/@[a-zA-Z][a-zA-Z0-9_-]*/g, '<span class="tag">$&</span>');
+  return out.replace(/\u0001(\d+)\u0001/g, (_, i) => code[+i]);
+}
+
+/** Place the caret after formatting, so it never interrupts markdown delimiters. */
+function markupWithCaret(text, offset) {
+  let pos = 0, placed = false;
+  const html = editorMarkup(text).replace(/<[^>]*>|&(?:#[0-9]+|#x[0-9a-f]+|[a-z]+);|[\s\S]/gi, token => {
+    if (token[0] === '<') return token;
+    const mark = !placed && pos === offset ? '<span id="caretmark"></span>' : '';
+    if (mark) placed = true;
+    pos++;
+    return mark + token;
+  });
+  return html + (placed ? '' : '<span id="caretmark"></span>');
+}
+
 function paintBackdrop() {
   const ta = $('#bodyta'), bd = $('#backdrop');
   if (!ta || !bd) return;
   const text = ta.value;
   const caret = ta.selectionStart ?? text.length;
   const dim = S.focus && S.ui.focusDims;
-  const live = s => esc(s).replace(/\*\*([^*\n]+)\*\*/g, '<b>**$1**</b>').replace(/__([^_\n]+)__/g, '<i>__$1__</i>').replace(/`([^`\n]+)`/g, '<code>`$1`</code>').replace(/@[a-zA-Z][a-zA-Z0-9_-]*/g, '<span class="tag">$&</span>');
+  const live = editorMarkup;
   if (!text) {
     const p = S.ui.prompts ? promptText() : 'Begin writing';
     bd.innerHTML = `<span id="caretmark"></span><span class="placeholder">${esc(p)}</span>`;
@@ -733,7 +797,7 @@ function paintBackdrop() {
       const start = pos, end = pos + part.length;
       const isSep = /^\n\s*\n$/.test(part);
       const here = caret >= start && caret <= end;
-      let inner = here ? live(text.slice(start, caret)) + '<span id="caretmark"></span>' + live(text.slice(caret, end)) : live(part);
+      const inner = here ? markupWithCaret(part, caret - start) : live(part);
       html += isSep ? inner : `<span class="para ${dim && !here ? 'dim' : ''}">${inner}</span>`;
       pos = end;
     }
@@ -812,6 +876,7 @@ function acceptTag(i) {
 
 let saveChain = Promise.resolve();
 let saveTimer = null;
+const AUTOSAVE_IDLE_MS = 1200;
 const isDraftRef = d => !!d && (!d.ref || d.ref.source === 'inbox');
 const isDirtyEdit = d => !!d?.ref && d.ref.source !== 'inbox' && makeRaw(d.ts, d.title, d.starred, d.body) !== d.ref.raw.trimEnd();
 /** Header-shaped lines in a draft's body: while there are any (and the user hasn't said "Keep as one"), nothing autosaves. */
@@ -826,13 +891,13 @@ function scheduleSave() {
   const d = S.draft;
   if (!isDraftRef(d) || guardCount(d) || S.folderMissing) return;
   saveTimer = setTimeout(() => {
-    saveChain = saveChain.then(saveDraftNow).then(checkGoal).catch(e => {
+    saveChain = saveChain.then(() => S.draft === d ? saveDraftNow() : undefined).then(checkGoal).catch(e => {
       // Drop the reference so the next save re-creates the draft instead of failing on a stale index/raw forever.
       // An unreachable folder changed nothing on disk, so the reference is still good there.
       if (S.draft === d && !/unavailable/i.test(String(e))) d.ref = null;
       fail(e);
     });
-  }, 700);
+  }, AUTOSAVE_IDLE_MS);
 }
 
 /** Drafts autosave to their day's file under inbox/. Filed entries save on Ctrl+S, or when you leave them. */
@@ -875,15 +940,15 @@ async function flushDraft(d) {
     return draftSaved(d);
   } catch (e) { console.error(e); return false; }
 }
-function refreshChrome() {
+function refreshChrome(updateTabs = true) {
   const wc = $('#wc'); if (wc && S.draft) wc.textContent = `${words(S.draft.body)} words`;
   const g = $('#goal'); if (g && S.ui.goalOn) g.innerHTML = goalHtml();
   const pill = $('.toolbar .pill');
-  if (pill && S.draft && isDraftRef(S.draft)) pill.textContent = guardCount(S.draft) ? 'Not saved' : S.draft.ref ? 'Draft · saved' : 'New draft';
+  if (pill && S.draft && isDraftRef(S.draft)) pill.textContent = guardCount(S.draft) ? 'Not saved' : draftSaved(S.draft) ? 'Draft · saved' : S.draft.ref ? 'Draft · unsaved' : 'New draft';
   const fileBtn = $('[data-action="file"]');
   if (fileBtn && S.draft) fileBtn.disabled = !S.draft.body.trim() && !S.draft.title.trim();
   const gb = $('#guard'); if (gb && S.draft) { const h = guardHtml(); if (gb.innerHTML !== h) gb.innerHTML = h; }
-  renderTabs();
+  if (updateTabs) renderTabs();
 }
 /** An empty new draft's time floats with the clock until you type or retime it. */
 function refreshDateButton() {
@@ -1684,14 +1749,18 @@ function afterRender() {
   // A re-render drops the tag picker element; drop its state too, or Enter would insert at stale offsets.
   S.tagPick = null; $('#tagpick')?.remove();
   const ta = $('#bodyta'), ti = $('#title');
+  composerResizeObserver?.disconnect();
+  composerResizeObserver = null;
+  if (editorFrame !== null) { cancelAnimationFrame(editorFrame); editorFrame = null; }
   if (ta && S.draft) {
+    resizeTitle();
     paintBackdrop();
     ta.addEventListener('input', () => {
       restampIfFloating(true);
-      S.draft.body = ta.value; paintBackdrop(); typewriter(); refreshChrome(); scheduleSave(); tagAutocomplete(ta);
+      S.draft.body = ta.value; scheduleSave(); queueEditorPaint();
       const again = $('[data-action="prompt"]'); if (again && ta.value.trim()) again.remove();
     });
-    ['keyup', 'click', 'select'].forEach(ev => ta.addEventListener(ev, () => { paintBackdrop(); typewriter(); }));
+    ['keyup', 'click', 'select'].forEach(ev => ta.addEventListener(ev, queueEditorPaint));
     ta.addEventListener('blur', () => { $('#tagpick')?.remove(); S.tagPick = null; });
     ta.addEventListener('keydown', ev => {
       if (ev.isComposing || ev.keyCode === 229) return; // an IME is composing: its keys aren't ours
@@ -1722,9 +1791,10 @@ function afterRender() {
         ta.dispatchEvent(new Event('input'));
       }
     });
-    ti.addEventListener('input', () => { restampIfFloating(true); S.draft.title = ti.value; refreshChrome(); scheduleSave(); });
+    ti.addEventListener('input', () => { restampIfFloating(true); ti.value = ti.value.replace(/[\r\n]/g, ' '); S.draft.title = ti.value; resizeTitle(); refreshChrome(false); scheduleSave(); });
     ti.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); ta.focus(); } });
-    new ResizeObserver(() => paintBackdrop()).observe($('#editor'));
+    composerResizeObserver = new ResizeObserver(() => { resizeTitle(); queueEditorPaint(); });
+    composerResizeObserver.observe($('#editor'));
   }
   if ($('#body [data-asset]')) resolveVisibleMedia().catch(() => {});
   const sel = $('.row.sel'); if (sel) sel.scrollIntoView({ block: 'nearest' });
@@ -1925,6 +1995,17 @@ document.addEventListener('input', ev => {
       const s = $('#search'); if (s && had) { s.focus(); s.setSelectionRange(pos, pos); }
     }, 150);
   }
+  if (k === 'media-query') { const start = ev.target.selectionStart; S.assetQuery = ev.target.value; render(); const input = $('[data-input=\"media-query\"]'); input?.focus(); input?.setSelectionRange(start, start); }
+  if (k === 'inbox-query') {
+    S.inboxQuery = ev.target.value;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      const input = $('#inbox-search'), focused = document.activeElement === input, pos = input?.selectionStart || 0;
+      if (S.mode !== 'write') S.sel = inboxList()[0] || null;
+      render();
+      const next = $('#inbox-search'); if (focused && next) { next.focus(); next.setSelectionRange(pos, pos); }
+    }, 150);
+  }
   if (k === 'gosearch') { S.view = 'journal'; S.jview = 'list'; S.query = ev.target.value; S.sel = null; render(); const s = $('#search'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
 });
 document.addEventListener('change', async ev => {
@@ -1932,7 +2013,6 @@ document.addEventListener('change', async ev => {
   if (k === 'journal') { S.journal = ev.target.value; S.sel = null; render(); }
   if (k === 'year') { S.year = +ev.target.value; render(); }
   if (k === 'reminderTime') { S.ui.reminderTime = ev.target.value; await saveUi(); scheduleReminder(); }
-  if (k === 'media-query') { const start = ev.target.selectionStart; S.assetQuery = ev.target.value; render(); const input = $('[data-input="media-query"]'); input?.focus(); input?.setSelectionRange(start, start); }
   if (k === 'asset-sort' || k === 'asset-group') { S.ui[k === 'asset-sort' ? 'assetSort' : 'assetGroup'] = ev.target.value; await saveUi(); render(); $(`[data-input="${k}"]`)?.focus(); }
   if (k === 'merge-on' || k === 'merge-to') {
     const grp = (S.tagReview || []).find(g => tagGroupId(g) === ev.target.dataset.id); if (!grp) return;
@@ -1963,7 +2043,8 @@ window.addEventListener('resize', () => { const n = window.innerWidth < 860; if 
 async function switchView(v) {
   if (S.mode === 'write' && !(await leaveWrite())) return;
   S.view = v; S.sel = null; S.focus = false; S.showList = true;
-  if (v === 'inbox') S.sel = inbox()[0] || null;
+  if (v === 'inbox') S.sel = inboxList()[0] || null;
+  if (v === 'journal' && S.jview === 'list' && !S.day) S.sel = journalList()[0] || null;
   render();
 }
 function randomEntry() { const f = filed(); if (!f.length) return; const e = f[Math.floor(Math.random() * f.length)]; S.view = 'journal'; S.jview = 'list'; S.tag = null; S.query = ''; S.day = null; S.sel = e; S.mode = 'read'; S.showList = false; render(); }
