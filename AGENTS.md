@@ -83,6 +83,13 @@ core/               quire-core
                     attach_bytes: Data Saver + ledger), importers (markdown folder, Day
                     One, transfer.md), tag review/rename, sizes, stats_extra,
                     split-tag + jnl-config resolution. Takes &Journal.
+  src/media_cleanup.rs  conservative asset organisation for terminal cleanup: strict
+                    inventory/read, verified copies, backed-up markdown, reference
+                    rewrites, then removal of old paths; recovery originals under
+                    .quire/media-cleanup/. Missing/ambiguous links are reported,
+                    unreferenced assets kept unless the terminal user confirms clearing them
+                    (default no; rechecked and archived into recovery first);
+                    existing YYYY/MM assets left in place.
   src/media.rs      Data Saver: image downsampling (image crate), video/audio
                     via the ffmpeg CLI, HEIC→JPEG, the per-device ledger (reads
                     both sidecars, writes .quire/). Path-based: local only.

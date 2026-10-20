@@ -23,3 +23,6 @@ pub use extras::*;
 pub use journal::*;
 pub use settings::Settings;
 pub use vault::{FsVault, Item, Vault};
+
+mod media_cleanup;
+pub use media_cleanup::{archive_orphan_media, cleanup_media, orphan_media, MediaCleanupReport};

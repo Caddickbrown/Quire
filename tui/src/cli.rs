@@ -4,6 +4,7 @@
 use quire_core::stats::{self, jnl_stats};
 use quire_core::*;
 use std::path::Path;
+use std::io::{self, IsTerminal, Write};
 
 pub fn inbox(j: &Journal) {
     let drafts: Vec<Entry> = j.load_all().into_iter().filter(|e| e.source == "inbox").collect();
@@ -200,13 +201,71 @@ pub fn cleanup_text(j: &Journal, split_tags: &[String]) {
             for e in r.errors {
                 println!("  ! {}", e);
             }
+            let media_ok = match cleanup_media(j) {
+                Ok(media) => {
+                    println!("  Media: {} checked, {} organised, {} markdown file(s) updated, {} unreferenced file(s) kept.", media.checked, media.organised, media.references_updated, media.unreferenced);
+                    if let Some(backup) = media.backup {
+                        println!("  Media cleanup originals: {backup}");
+                    }
+                    for issue in media.issues {
+                        println!("  ! {issue}");
+                    }
+                    true
+                }
+                Err(e) => {
+                    eprintln!("  Media cleanup stopped; original media retained or backed up: {e}");
+                    false
+                }
+            };
             let (removed, errors) = remove_ds_store(j);
             println!("  Removed {removed} .DS_Store file(s).");
             for e in errors {
                 println!("  ! {}", e);
             }
+            if media_ok {
+                prompt_orphan_media(j);
+            }
         }
         Err(e) => eprintln!("  error: {}", e),
+    }
+}
+
+fn prompt_orphan_media(j: &Journal) {
+    let orphans = match orphan_media(j) {
+        Ok(files) => files,
+        Err(e) => {
+            eprintln!("  Orphan check stopped; files kept: {e}");
+            return;
+        }
+    };
+    if orphans.is_empty() {
+        return;
+    }
+    println!(
+        "  {} orphan media file(s) found; kept unless you choose to clear them.",
+        orphans.len()
+    );
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return;
+    }
+    println!("  Recovery copies will be kept under .quire/media-cleanup/.");
+    print!("  Clear {} orphan media file(s)? [y/N] ", orphans.len());
+    if io::stdout().flush().is_err() {
+        return;
+    }
+    let mut answer = String::new();
+    if io::stdin().read_line(&mut answer).is_err() {
+        return;
+    }
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        println!("  Orphan media kept.");
+        return;
+    }
+    match archive_orphan_media(j, &orphans) {
+        Ok((n, backup)) => {
+            println!("  Cleared {n} orphan media file(s). Recovery copies: {backup}")
+        }
+        Err(e) => eprintln!("  Orphan cleanup stopped; originals retained or backed up: {e}"),
     }
 }
 
@@ -282,7 +341,7 @@ pub fn help(name: &str) {
   {n} tag <name>         all entries tagged @name
   {n} random             a random past entry
   {n} transfer           file everything in transfer.md (no review)
-  {n} cleanup            move misdated entries to their day, standardise punctuation, reorder, dedupe, extract split-tagged entries, remove .DS_Store files
+  {n} cleanup            move misdated entries to their day, standardise punctuation, reorder, dedupe, extract split-tagged entries, organise/check media, remove .DS_Store files
   {n} export [file]      combine all entries into one file (default: export.md)
   {n} open               open the journal folder in the file manager
   {n} config             edit ~/.config/jnl/config
