@@ -223,13 +223,14 @@ pub struct Asset {
 
 pub fn list_assets(j: &Journal) -> Result<Vec<Asset>, String> {
     let idx = link_index(j)?;
+    let orphans: HashSet<_> = crate::orphan_media(j)?.into_iter().collect();
     Ok(j.walk_files("assets")
         .into_iter()
         .filter(|rel| !rel.rsplit('/').next().unwrap_or(rel).starts_with('.'))
         .map(|rel| Asset {
             kind: media_kind(&rel),
             bytes: j.len(&rel),
-            referenced: idx.is_referenced(&rel),
+            referenced: !orphans.contains(&rel),
             owners: idx.refs.get(&rel).cloned().unwrap_or_default(),
             rel,
         })
@@ -332,16 +333,10 @@ pub fn attach_media(j: &Journal, src: &Path, ts: &str, saver: bool, device: &str
     Ok(attached(attach(j, src, ts, "")?, saver))
 }
 
+/// Clear unused media from assets/, retaining verified recovery copies.
 pub fn delete_orphans(j: &Journal) -> Result<usize, String> {
-    let mut n = 0;
-    // list_assets is Err if any file is unreadable: never delete on a partial view.
-    for a in list_assets(j)? {
-        if !a.referenced {
-            j.remove(&a.rel)?;
-            n += 1;
-        }
-    }
-    Ok(n)
+    let offered = crate::orphan_media(j)?;
+    crate::archive_orphan_media(j, &offered).map(|(count, _)| count)
 }
 
 /// Delete one file under assets/.
@@ -1806,6 +1801,9 @@ mod tests {
         let dd = list.iter().find(|a| a.rel.ends_with("d.jpg")).unwrap();
         assert_eq!(dd.owners, vec!["journal/2026/09/30.md"]);
         assert_eq!(delete_orphans(&jn(d.path())).unwrap(), 1);
+        let j = jn(d.path());
+        let recovered = j.walk_files(".quire/media-cleanup").into_iter().find(|p| p.ends_with("/assets/2026/09/g.jpg")).unwrap();
+        assert_eq!(j.vault().read(&recovered).unwrap().unwrap(), b"x");
         fs::write(d.path().join("other.md"), b"[2026-09-30 08:00:00] caf\xe9\n").unwrap();
         assert!(delete_orphans(&jn(d.path())).is_err());
         assert!(d.path().join("assets/2026/09/a.jpg").exists());

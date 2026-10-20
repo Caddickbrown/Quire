@@ -21,9 +21,18 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-20
+
 ### Added
+- **Linux / Apple**: a discoverable Media Library with filename search, media-type filters, sorting, date grouping, previews and links back to entries; Linux has its own tab, iPhone opens it from Journal or Settings, and Mac/iPad expose it in the sidebar.
 - **Terminal**: cleanup organises older assets into `assets/YYYY/MM/` using the earliest referencing entry, updates markdown links, reports missing media, asks before clearing orphan media (default: keep; recovery copies are retained) and keeps recovery copies under `.quire/media-cleanup/`.
 - **Terminal**: `quire cleanup` (also `jnl`) removes `.DS_Store` files throughout the journal folder, reporting the count and any failures.
+
+### Changed
+- **Media**: clearing orphan media from Settings or the library rechecks references and retains verified recovery copies under `.quire/media-cleanup/`.
+
+### Fixed
+- **Linux / Apple**: cleaned-up media links support angle brackets, spaces, percent escapes and optional titles; Apple library dates and entry navigation distinguish files with the same name in different folders.
 
 ## [0.9.1] — 2026-10-17
 

@@ -3,6 +3,9 @@ import os, pty, sys, time, select, fcntl, termios, struct, signal, re, datetime,
 binary, folder = sys.argv[1], sys.argv[2]
 cols, rows = int(sys.argv[3]), int(sys.argv[4])
 theme = sys.argv[5] if len(sys.argv) > 5 else "cinema"
+# Slow disks / simultaneous builds can delay redraws and saves. Keep the same
+# assertions, but allow release checks to give the app more processing time.
+wait_scale = max(1.0, float(os.environ.get("QUIRE_SMOKE_WAIT_SCALE", "1")))
 # A photo to drop on the composer, outside the journal; and a config dir of
 # our own, so the run never reads or writes the real settings.json.
 scratch = os.path.abspath(folder) + "-scratch"
@@ -17,7 +20,7 @@ if pid == 0:
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 out = bytearray()
 def pump(t=0.4):
-    end = time.time() + t
+    end = time.time() + t * wait_scale
     while time.time() < end:
         r, _, _ = select.select([fd], [], [], 0.05)
         if r:

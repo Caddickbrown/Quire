@@ -140,6 +140,11 @@ interactive terminal asks whether to clear orphan media: Enter keeps it; yes
 moves it out of `assets/` with verified recovery copies in the same recovery
 area. Piped or unattended runs always keep orphan media.
 
+The **Media Library** is a primary tab on Linux (`Ctrl+6`). On iPhone, open
+**Journal → Media Library** or the link in Settings; on Mac/iPad, use the sidebar.
+Search filenames, filter photos/video/audio (and files or orphans on Linux), sort
+or group by date, preview a file, and use its menu to go to the entry that uses it.
+
 ## Linux
 
 ```sh

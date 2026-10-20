@@ -40,6 +40,7 @@ const TABS = [
   { id: 'journal', label: 'Journal', key: '3' },
   { id: 'starred', label: 'Starred', key: '4' },
   { id: 'lookback', label: 'Look back', key: '5' },
+  { id: 'media', label: 'Media Library', key: '6' },
 ];
 
 const S = {
@@ -49,7 +50,7 @@ const S = {
   query: '', tag: null, day: null, showAllTags: false, journal: 'main', jview: 'list',
   calMonth: null, year: new Date().getFullYear(), promptReroll: 0,
   timer: { left: null, running: false, handle: null },
-  assets: null, assetUrls: new Map(), tagReview: null, tagPicks: {}, backups: null, sizes: null, statsExtra: null, tplEdit: null,
+  assetFilter: 'all', assetQuery: '', assets: null, assetUrls: new Map(), tagReview: null, tagPicks: {}, backups: null, sizes: null, statsExtra: null, tplEdit: null,
   narrow: false, showList: true, tagPick: null, lightbox: null, printDay: null, printAll: false, jnlDir: null, customChrome: false, chromeAvail: false,
   folderMissing: false, conflicts: [], stale: false, menuAsset: null,
   backupInterval: 'off', backupKeep: 10, lastBackup: null, backupRunning: false,
@@ -79,10 +80,10 @@ const HDR_LINE = /^\[[0-9]{4}[-–][0-9]{2}[-–][0-9]{2} [0-9]{2}:[0-9]{2}:[0-9
 const unguard = s => String(s || '').replace(/^\\(\[[0-9]{4}[-–][0-9]{2}[-–][0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\])/gm, '$1');
 const firstLine = s => { const l = unguard(s).split('\n').find(l => l.trim() && !/^[-*_\s]+$/.test(l)) || ''; return l.replace(/^#+\s*/, '').replace(/^\s*([-*+]\s+(\[[ xX]\]\s*)?|\d+[.)]\s+|>\s?)/, '').replace(/!\[[^\]]*\]\([^)]*\)/g, '[image]').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/(\*\*|__|`)/g, '').trim().slice(0, 90); };
 const dayFile = date => `journal/${date.slice(0, 4)}/${date.slice(5, 7)}/${date.slice(8, 10)}.md`;
-const mediaRe = /!?\[([^\]]*)\]\(([^)\s]+)\)/g;
+const mediaRe = /!?\[([^\]]*)\]\(\s*(?:<([^>\n]*)>|([^)\s]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
 const mediaKind = p => { const x = (p.split('.').pop() || '').toLowerCase(); return /^(jpe?g|png|gif|webp|heic|heif|bmp|svg|avif)$/.test(x) ? 'image' : /^(mp4|mov|m4v|webm|mkv)$/.test(x) ? 'video' : /^(m4a|mp3|wav|aac|ogg|opus|flac|caf)$/.test(x) ? 'audio' : 'file'; };
 /** Local links in an entry that resolve to a file under the journal root. */
-const mediaOf = e => [...(e.body || '').matchAll(mediaRe)].map(m => m[2]).filter(p => resolveRel(e.file, p));
+const mediaOf = e => [...(e.body || '').matchAll(mediaRe)].map(m => m[2] ?? m[3]).filter(p => resolveRel(e.file, p));
 
 /** A link `p` in entry file `file` → root-relative path, as the back end resolves it:
  *  `../` or `./` → from the file's folder; `assets/…` → from the journal root;
@@ -91,6 +92,7 @@ const mediaOf = e => [...(e.body || '').matchAll(mediaRe)].map(m => m[2]).filter
 function resolveRel(file, p) {
   p = String(p || '').trim();
   if (!p || /^[a-z][a-z0-9+.-]*:/i.test(p) || p.startsWith('#') || p.startsWith('/')) return null;
+  p = p.split(/[?#]/, 1)[0];
   try { p = decodeURIComponent(p); } catch { /* keep it as written */ }
   const parts = p.startsWith('assets/') ? [] : String(file || '').split('/').slice(0, -1);
   for (const seg of p.split('/')) {
@@ -298,10 +300,11 @@ function render() {
   const app = $('#app');
   app.classList.toggle('focus', S.focus);
   app.classList.toggle('narrow', S.narrow);
-  app.classList.toggle('show-list', S.narrow && (S.showList || (!S.sel && S.mode !== 'write')));
+  app.classList.toggle('show-list', S.narrow && S.view !== 'media' && (S.showList || (!S.sel && S.mode !== 'write')));
   app.classList.toggle('locked', S.locked);
   const body = $('#body');
   if (S.locked) body.innerHTML = renderLock();
+  else if (S.view === 'media') body.innerHTML = renderMedia();
   else if (S.view === 'lookback') body.innerHTML = renderLookBack();
   else if (S.view === 'settings') {
     // Keep the reader's place: actions in Settings re-render the whole page.
@@ -516,11 +519,11 @@ function renderProse(body, file) {
   };
   // Inline markup plus media embeds and local-file links; used by paragraphs and list items alike.
   const richText = text => {
-    const re = /!\[([^\]]*)\]\(([^)\s]+)\)/g;
+    const re = new RegExp(mediaRe.source, 'g');
     let last = 0, out = '', m;
-    while ((m = re.exec(text))) { out += inline(text.slice(last, m.index)).replace(/\n/g, '<br>'); out += media(m[1], m[2]); last = m.index + m[0].length; }
+    while ((m = re.exec(text))) { out += inline(text.slice(last, m.index)).replace(/\n/g, '<br>'); out += media(m[1], m[2] ?? m[3]); last = m.index + m[0].length; }
     out += inline(text.slice(last)).replace(/\n/g, '<br>');
-    return out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (x, a, p) => /^https?:/i.test(p) ? x : media(a, p));
+    return out;
   };
   return body.split(/\n\s*\n/).map(block => {
     const lines = block.split('\n');
@@ -592,8 +595,10 @@ function renderMedia() {
   // Dated by the earliest entry that links the file; unlinked files go last, by name.
   const dated = dir => (a, b) => { const x = first(a)?.ts, y = first(b)?.ts; return x && y ? dir * x.localeCompare(y) || byName(a, b) : x ? -1 : y ? 1 : byName(a, b); };
   const sorts = { newest: dated(-1), oldest: dated(1), largest: (a, b) => (b.bytes || 0) - (a.bytes || 0) || byName(a, b), kind: (a, b) => a.kind.localeCompare(b.kind) || dated(-1)(a, b), name: byName };
-  const list = [...S.assets].sort(sorts[S.ui.assetSort] || sorts.newest);
-  if (!list.length) return '<section class="stream"><div class="inner"><div class="empty-note">No media yet. Attach a photo from the composer’s ⋯ menu.</div></div></section>';
+  const all = [...S.assets];
+  const query = S.assetQuery.trim().toLocaleLowerCase();
+  const list = all.filter(a => (S.assetFilter === 'all' || (S.assetFilter === 'orphan' ? !a.referenced : a.kind === S.assetFilter)) && (!query || a.rel.toLocaleLowerCase().includes(query))).sort(sorts[S.ui.assetSort] || sorts.newest);
+
   const total = list.reduce((a, x) => a + (x.bytes || 0), 0);
   const tile = a => {
     const url = S.assetUrls.get(a.rel), o = first(a);
@@ -615,14 +620,16 @@ function renderMedia() {
       const label = !k ? 'Not linked to an entry' : g === 'day' ? fmtDate(k) : g === 'month' ? fmtMonth(+k.slice(0, 4), +k.slice(5, 7) - 1) : k;
       body += `<div class="group-label gallery-h"><span>${esc(label)}</span><span>${arr.length}</span></div><div class="gallery">${arr.map(tile).join('')}</div>`;
     }
-  } else body = `<div class="gallery">${list.map(tile).join('')}</div>`;
+  } else if (list.length) body = `<div class="gallery">${list.map(tile).join('')}</div>`;
   const opt = (k, v, l) => `<option value="${v}" ${S.ui[k] === v ? 'selected' : ''}>${l}</option>`;
-  return `<section class="stream" aria-label="Media"><div class="inner wide">
+  return `<section class="stream media-library" aria-label="Media Library"><div class="inner wide">
+    <header class="library-heading"><div><span class="group-label">Your journal</span><h1>Media Library</h1><p>Photos, video, audio and files from every journal and the inbox.</p></div><button class="btn ghost" data-action="refresh-media">Refresh</button></header>
+    <div class="library-filters"><div class="seg" role="group" aria-label="Media type">${[['all', 'All'], ['image', 'Photos'], ['video', 'Video'], ['audio', 'Audio'], ['file', 'Files'], ['orphan', 'Orphans']].map(([id, label]) => `<button data-action="media-filter" data-filter="${id}" aria-pressed="${S.assetFilter === id}">${label}</button>`).join('')}</div><div class="search"><input data-input="media-query" aria-label="Search media filenames" placeholder="Find a file…" value="${esc(S.assetQuery)}"></div></div>
     <div class="gallery-tools"><span class="group-label" style="padding:0">${plural(list.length, 'file')} · ${bytes(total)}</span><span class="spacer"></span>
       <label class="gl">Sort <select class="picker" data-input="asset-sort" aria-label="Sort media">${opt('assetSort', 'newest', 'Newest')}${opt('assetSort', 'oldest', 'Oldest')}${opt('assetSort', 'largest', 'Largest')}${opt('assetSort', 'kind', 'Kind')}${opt('assetSort', 'name', 'Name')}</select></label>
       <label class="gl">Group <select class="picker" data-input="asset-group" aria-label="Group media">${opt('assetGroup', 'none', 'None')}${opt('assetGroup', 'day', 'Day')}${opt('assetGroup', 'month', 'Month')}${opt('assetGroup', 'year', 'Year')}</select></label>
       ${list.some(a => !a.referenced) ? '<button class="btn ghost" data-action="clear-orphans">Clear orphans</button>' : ''}</div>
-    ${body}</div></section>`;
+    ${body || `<div class="empty-note">${all.length ? 'No media matches these filters.' : 'No media yet. Attach a photo, video, audio or file from the composer’s ⋯ menu.'}</div>`}</div></section>`;
 }
 /** rel → entries (oldest first) whose links resolve to it. */
 function assetOwners() {
@@ -639,7 +646,7 @@ async function loadAssets() {
   try {
     S.assets = await invoke('assets');
     await Promise.all(S.assets.filter(a => !S.assetUrls.get(a.rel)).map(async a => { try { S.assetUrls.set(a.rel, fileSrc(await invoke('asset_path', { rel: a.rel }))); } catch { S.assetUrls.set(a.rel, null); } }));
-    if (S.view === 'journal' && S.jview === 'media' && S.mode !== 'write') render();
+    if ((S.view === 'media' || (S.view === 'journal' && S.jview === 'media')) && S.mode !== 'write') render();
   } catch (e) { S.assets = []; fail(e); }
 }
 /** Swap every unresolved [data-asset] placeholder on screen (entry, day page, anywhere) for its media; URLs are cached. */
@@ -1555,7 +1562,7 @@ function renderSettings() {
         <div class="srow"><div class="lbl"><span>Merge ex-split journals into journal</span><span class="note">Split journals whose tag is no longer a split tag: their entries go back into the journal’s days, and emptied files are removed</span></div><button class="btn" data-action="merge-ex-split">Merge…</button></div>
         ${S.conflicts.length ? `<div class="srow"><div class="lbl"><span>Sync conflicts · ${S.conflicts.length}</span><span class="note">Copies a sync tool left beside a journal file. Merge adds the entries the main file is missing, sorts it, then deletes the copy.</span></div></div>
         <div class="conflicts">${S.conflicts.map(c => `<div class="srow"><div class="lbl"><span class="path">${esc(c)}</span></div><button class="btn" data-action="merge-conflict" data-rel="${esc(c)}">Merge</button></div>`).join('')}</div>` : ''}
-        <div class="srow"><div class="lbl"><span>Clear orphan media</span><span class="note">Deletes files in assets/ that no entry links to</span></div><button class="btn" data-action="clear-orphans">Check…</button></div>
+        <div class="srow"><div class="lbl"><span>Clear orphan media</span><span class="note">Clears unused files from assets/; keeps recovery copies</span></div><button class="btn" data-action="clear-orphans">Check…</button></div>
         <div class="srow"><div class="lbl"><span>Export</span><span class="note">Every filed entry, in order, as one markdown file</span></div><button class="btn" data-action="export">Export…</button></div>
         <div class="srow"><div class="lbl"><span>Import a markdown folder</span><span class="note">Dated .md/.txt files (Obsidian daily notes work); files already in jnl format keep their entries</span></div><button class="btn" data-action="import-md">Choose folder…</button></div>
         <div class="srow"><div class="lbl"><span>Import from Day One</span><span class="note">An unzipped JSON export; photos beside it come across into assets/</span></div><button class="btn" data-action="import-dayone">Choose…</button></div>
@@ -1809,6 +1816,8 @@ document.addEventListener('click', async ev => {
       case 'alltags': S.showAllTags = !S.showAllTags; render(); break;
       case 'clearfilter': S.tag = null; S.query = ''; S.day = null; render(); break;
       case 'sort': S.ui.sortNewest = !S.ui.sortNewest; await saveUi(); render(); break;
+      case 'refresh-media': S.assets = null; S.assetUrls.clear(); render(); break;
+      case 'media-filter': S.assetFilter = el.dataset.filter; render(); break;
       case 'jview': S.jview = el.dataset.v; S.sel = null; render(); break;
       case 'day': if (S.mode === 'write' && !(await leaveWrite())) break; S.view = 'journal'; S.jview = 'list'; S.day = S.day === el.dataset.day ? null : el.dataset.day; S.calMonth = [+el.dataset.day.slice(0, 4), +el.dataset.day.slice(5, 7) - 1]; S.sel = null; render(); break;
       case 'print-day-btn': { S.printDay = el.dataset.day; S.sel = null; render(); setTimeout(() => { window.print(); S.printDay = null; render(); }, 150); break; }
@@ -1817,7 +1826,7 @@ document.addEventListener('click', async ev => {
       case 'random': randomEntry(); break;
       case 'saved': { const s = S.searches[+el.dataset.i]; S.query = S.query.trim() === s.query ? '' : s.query; S.sel = null; render(); break; }
       case 'pin-search': { const name = await askText('Name this search', 'e.g. Starred this year', S.query.trim()); if (!name) break; S.searches.push({ name, query: S.query.trim() }); await invoke('save_searches_cmd', { list: S.searches }); render(); break; }
-      case 'clear-orphans': { const n = await invoke('orphan_count'); if (!n) { toast('No orphan media'); break; } if (!(await askConfirm(`Delete ${n} file${n === 1 ? '' : 's'} in assets/ that no entry links to?`, 'Delete'))) break; const d = await invoke('clear_orphans'); S.assets = null; toast(`Deleted ${d}`); render(); break; }
+      case 'clear-orphans': { const n = await invoke('orphan_count'); if (!n) { toast('No orphan media'); break; } if (!(await askConfirm(`Clear ${n} orphan media file${n === 1 ? '' : 's'}? Recovery copies will be kept under .quire/media-cleanup/.`, 'Clear'))) break; const d = await invoke('clear_orphans'); S.assets = null; toast(`Cleared ${d}; recovery copies kept in .quire/media-cleanup/`); render(); break; }
       case 'system-titlebar': { const m = $('.settings main'), top = m ? m.scrollTop : 0; const custom = await invoke('set_system_titlebar', { on: S.customChrome }); setChrome(custom); render(); const m2 = $('.settings main'); if (m2) m2.scrollTop = top; break; }
       case 'toggle-ui': S.ui[el.dataset.k] = !S.ui[el.dataset.k]; await saveUi(); render(); break;
       case 'lightbox': { ev.preventDefault(); const rel = el.dataset.rel; let url = S.assetUrls.get(rel); if (!url) { url = fileSrc(await invoke('asset_path', { rel })); S.assetUrls.set(rel, url); } const o = el.dataset.file ? entryFrom(el) || null : null; openLightbox(rel, url, o); break; }
@@ -1923,6 +1932,7 @@ document.addEventListener('change', async ev => {
   if (k === 'journal') { S.journal = ev.target.value; S.sel = null; render(); }
   if (k === 'year') { S.year = +ev.target.value; render(); }
   if (k === 'reminderTime') { S.ui.reminderTime = ev.target.value; await saveUi(); scheduleReminder(); }
+  if (k === 'media-query') { const start = ev.target.selectionStart; S.assetQuery = ev.target.value; render(); const input = $('[data-input="media-query"]'); input?.focus(); input?.setSelectionRange(start, start); }
   if (k === 'asset-sort' || k === 'asset-group') { S.ui[k === 'asset-sort' ? 'assetSort' : 'assetGroup'] = ev.target.value; await saveUi(); render(); $(`[data-input="${k}"]`)?.focus(); }
   if (k === 'merge-on' || k === 'merge-to') {
     const grp = (S.tagReview || []).find(g => tagGroupId(g) === ev.target.dataset.id); if (!grp) return;

@@ -26,6 +26,7 @@ struct PhoneRoot: View {
     @State private var path: [EntryRef] = []
     @State private var composing: ComposeTarget?
     @State private var retiming: EntryRef?
+    @State private var showMedia = false
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var rootKeyID = UUID()
@@ -58,7 +59,7 @@ struct PhoneRoot: View {
             }
         }
         .background(KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false))
-        .qKeyBlocker(active: composing != nil || retiming != nil || showSearch || showSettings)
+        .qKeyBlocker(active: composing != nil || retiming != nil || showSearch || showSettings || showMedia)
         .fullScreenCover(item: $composing) { target in
             ComposerScreen(target: target)
         }
@@ -74,8 +75,26 @@ struct PhoneRoot: View {
             .environmentObject(store).environmentObject(nav)
             .environment(\.quire, q)
         }
+        .sheet(isPresented: $showMedia) {
+            NavigationStack {
+                AssetsView(onOpenEntry: { entry, source in
+                    showMedia = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        open(EntryRef(entry: entry, source: source))
+                    }
+                }, onClose: { showMedia = false })
+                .toolbar(.hidden, for: .navigationBar)
+            }
+            .environmentObject(store).environmentObject(nav)
+            .environment(\.quire, q)
+            .tint(q.accentColor)
+            .preferredColorScheme(q.colorScheme)
+        }
         .sheet(isPresented: $showSettings) {
-            PhoneSettings()
+            PhoneSettings(openMedia: {
+                showSettings = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showMedia = true }
+            })
                 .environmentObject(store).environmentObject(nav)
                 .environment(\.quire, q)
         }
@@ -94,6 +113,7 @@ struct PhoneRoot: View {
             switch ProcessInfo.processInfo.environment["QUIRE_OPEN"] {
             case "settings": showSettings = true
             case "search": showSearch = true
+            case "media": showMedia = true
             default: break
             }
         }
@@ -109,7 +129,7 @@ struct PhoneRoot: View {
                         search: { showSearch = true }, settings: { showSettings = true })
         case .journal:
             JournalScreen(open: open, edit: { composing = ComposeTarget(ref: $0) }, retime: { retiming = $0 },
-                          search: { showSearch = true }, settings: { showSettings = true })
+                          search: { showSearch = true }, settings: { showSettings = true }, media: { showMedia = true })
         case .lookBack:
             LookBackScreen(open: open, search: { showSearch = true }, settings: { showSettings = true })
         }

@@ -87,7 +87,7 @@ core/               quire-core
                     inventory/read, verified copies, backed-up markdown, reference
                     rewrites, then removal of old paths; recovery originals under
                     .quire/media-cleanup/. Missing/ambiguous links are reported,
-                    unreferenced assets kept unless the terminal user confirms clearing them
+                    unreferenced assets kept unless the user confirms clearing them
                     (default no; rechecked and archived into recovery first);
                     existing YYYY/MM assets left in place.
   src/media.rs      Data Saver: image downsampling (image crate), video/audio
@@ -138,7 +138,9 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
 
 ## Shells
 
-- **Linux** (`linux/`): Tauri 2. `lib.rs` keeps settings (via
+- **Linux** (`linux/`): Tauri 2. Media Library is a primary tab (`Ctrl+6`)
+  with filters, filename search, sorting/grouping, previews and entry navigation;
+  the Journal media view remains. `lib.rs` keeps settings (via
   `quire_core::Settings`), the folder watcher, backup scheduling, the
   clipboard, and media glue; everything else is `root(&state)?` → a
   `Journal` → one core call. `load()` folds a legacy `inbox.md` first and
@@ -164,7 +166,12 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   The version/build commit is shown in Settings and `--version`.
   Non-tty invocations print (jnl parity). The design the screens
   follow is on the canvas linked from the plan's section 8.
-- **Apple** (`apple/`): iOS 17 / macOS 14 SwiftUI. `JournalStore` remains the
+- **Apple** (`apple/`): iOS 17 / macOS 14 SwiftUI. The Media Library reuses
+  `Views/AssetsView.swift`: Journal and Settings present a Quire-themed sheet on
+  iPhone; Mac/iPad use the sidebar. It filters/searches, sorts/groups, previews
+  and opens owning entries. Asset identity for dates/usages is the full relative
+  path. Media parsing accepts angle targets, URL escapes and optional titles.
+  `JournalStore` remains the
   `@MainActor` façade; journal reads and writes call `quire-bindings` / UniFFI.
   `AppleVault` rejects paths outside the chosen folder (symlinks included) and
   coordinates writes with `NSFileCoordinator`. Reads are plain: coordinating
@@ -177,7 +184,7 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   `make apple-test` runs hostless XCTest. Requires macOS, full Xcode and rustup.
   The Apple workflow covers these commands. Generated bindings/frameworks are
   ignored, never hand-edited. Launch hints for screenshots (no effect when unset):
-  `QUIRE_START_TAB`, `QUIRE_THEME`, `QUIRE_OPEN=settings|search`,
+  `QUIRE_START_TAB`, `QUIRE_THEME`, `QUIRE_OPEN=settings|search|media`,
   `QUIRE_SETTINGS_PAGE`. The iPhone design reads colours from `themes.json`; the
   Marathon themes are a look, not a palette (`QuireTheme.isMarathon`).
   iOS external-display presentation is a desk mode (`Design/DeskViews.swift`, in Quire's
@@ -277,5 +284,7 @@ Quire ships tagged releases. A release lives on GitHub Releases at
 - `make test` (core, TUI and bindings tests), `make check` (clippy, keep it clean; it covers
   the desktop app too where WebKitGTK is installed), `make smoke`
   (the pty driver, must pass 23/23 at 100×30 and 80×24) before a push.
+  Busy hosts can use `QUIRE_SMOKE_WAIT_SCALE=10 make smoke`; this extends
+  processing waits without changing any assertion.
 - The one-line Tauri rule from before still holds: the Linux frontend has
   no build step; keep it that way.

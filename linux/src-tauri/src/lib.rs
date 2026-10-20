@@ -602,7 +602,7 @@ fn attach_bytes(app: AppHandle, state: State<AppState>, name: String, bytes_b64:
 #[tauri::command]
 async fn orphan_count(state: State<'_, AppState>) -> Result<usize, String> {
     let r = root_r(&state)?;
-    blocking(move || Ok(list_assets(&r)?.into_iter().filter(|a| !a.referenced).count())).await
+    blocking(move || Ok(quire_core::orphan_media(&r)?.len())).await
 }
 
 #[tauri::command]

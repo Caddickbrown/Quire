@@ -29,6 +29,14 @@ final class JournalParserTests: XCTestCase {
         XCTAssertFalse(JournalParser.isHeaderLine("[2026-05-10] no time"))
     }
 
+    func testMediaTargetsAfterCleanup() {
+        let text = "![caption](<assets/2026/09/old photo.jpg> \"Title\") ![](assets/2026/09/a%23b.jpg)"
+        XCTAssertEqual(MediaLinks.paths(in: text), ["assets/2026/09/old photo.jpg", "assets/2026/09/a#b.jpg"])
+        XCTAssertEqual(MediaLinks.resolved("../../../assets/2026/09/photo.jpg", file: "journal/2026/09/30.md"), "assets/2026/09/photo.jpg")
+        XCTAssertNotEqual(MediaLinks.resolved("assets/2026/09/photo.jpg", file: "inbox.md"), MediaLinks.resolved("assets/2026/10/photo.jpg", file: "inbox.md"))
+        XCTAssertNil(MediaLinks.resolved("../../outside.jpg", file: "inbox.md"))
+    }
+
     func testStrippingLinksLeavesTheProse() {
         XCTAssertEqual(MediaLinks.strippingLinks("see ![cap](assets/a.png) here"), "see   here")
         XCTAssertEqual(MediaLinks.strippingLinks("plain"), "plain")

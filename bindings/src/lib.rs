@@ -355,13 +355,7 @@ impl NativeJournal {
                 core::save_searches(j, &searches)?;
                 json(true)
             }
-            Request::Orphans => json(
-                core::list_assets(j)?
-                    .into_iter()
-                    .filter(|a| !a.referenced)
-                    .map(|a| a.rel)
-                    .collect::<Vec<_>>(),
-            ),
+            Request::Orphans => json(core::orphan_media(j)?),
             Request::DeleteOrphans => json(core::delete_orphans(j)?),
             Request::MergeContent { file, content } => {
                 let file = core::check_entry_rel(&file)?;

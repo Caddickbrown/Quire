@@ -19,6 +19,7 @@ struct JournalScreen: View {
     var retime: (EntryRef) -> Void
     var search: () -> Void
     var settings: () -> Void
+    var media: () -> Void
 
     @State private var tag: String?
     @State private var starredOnly = false
@@ -70,6 +71,7 @@ struct JournalScreen: View {
             LazyVStack(alignment: .leading, spacing: 22, pinnedViews: []) {
                 QMasthead(onSearch: search, onSettings: settings)
                 QTitle(kicker: "\(store.archiveEntries.reduce(0) { $0 + $1.entries.count }) filed", title: "Journal")
+                QLink(title: "Media Library", action: media)
                 filters
                 if months.isEmpty {
                     Text(!store.indexed ? "Loading your journal…"

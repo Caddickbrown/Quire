@@ -53,7 +53,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case stream = "Stream"
     case splitJournals = "Split Journals"
     case tags = "Tags"
-    case assets = "Assets"
+    case assets = "Media Library"
     case search = "Search"
     case stats = "Stats"
     case settings = "Settings"

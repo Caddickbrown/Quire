@@ -12,6 +12,7 @@
 import SwiftUI
 
 struct PhoneSettings: View {
+    var openMedia: () -> Void = {}
     @EnvironmentObject private var store: JournalStore
     @Environment(\.quire) private var q
     @Environment(\.dismiss) private var dismiss
@@ -46,6 +47,11 @@ struct PhoneSettings: View {
                         QLink(title: "Done") { dismiss() }
                     }
                     QTitle(kicker: "Quire", title: "Settings", size: 40)
+                    section("Media Library") {
+                        QLink(title: "Browse photos, video and audio", action: openMedia)
+                        Text("All your attachments, with previews and links back to their entries.")
+                            .font(q.ui(13)).foregroundStyle(q.mutedColor)
+                    }
                     section("Folder") {
                         Text(store.storagePath).font(q.mono(14)).foregroundStyle(q.inkColor)
                             .fixedSize(horizontal: false, vertical: true)

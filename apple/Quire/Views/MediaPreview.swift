@@ -25,7 +25,7 @@ enum MDSegment {
 /// (`![caption](path)`) is carried through as the caption — the same convention
 /// Obsidian's "Image Captions" plugin uses, so it round-trips as plain markdown.
 func parseMediaSegments(_ s: String) -> [MDSegment] {
-    let regex = try! NSRegularExpression(pattern: #"!\[([^\]]*)\]\(([^)]+)\)"#)
+    let regex = try! NSRegularExpression(pattern: #"!\[([^\]]*)\]\(\s*(?:<([^>\n]*)>|([^\s)]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)"#)
     let ns = s as NSString
     var segments: [MDSegment] = []
     var cursor = 0
@@ -34,7 +34,8 @@ func parseMediaSegments(_ s: String) -> [MDSegment] {
             segments.append(.text(ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor))))
         }
         let caption = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
-        segments.append(.image(path: ns.substring(with: m.range(at: 2)), caption: caption))
+        let target = m.range(at: 2).location == NSNotFound ? m.range(at: 3) : m.range(at: 2)
+        segments.append(.image(path: MediaLinks.destination(ns.substring(with: target)), caption: caption))
         cursor = m.range.location + m.range.length
     }
     if cursor < ns.length {

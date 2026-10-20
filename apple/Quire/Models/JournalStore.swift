@@ -1256,13 +1256,13 @@ final class JournalStore: ObservableObject {
                 let values = try? url.resourceValues(forKeys: Set(keys))
                 return AssetItem(url: url,
                                  modified: values?.contentModificationDate ?? .distantPast,
-                                 entryDate: entryDates[url.lastPathComponent],
+                                 entryDate: entryDates["assets/" + String(url.path.dropFirst(dir.path.count + 1))],
                                  size: values?.fileSize ?? 0)
             }
             .sorted { $0.name < $1.name }
     }
 
-    /// asset file name → timestamp of the earliest entry that links it, built in
+    /// Root-relative asset path → timestamp of its earliest referencing entry, built in
     /// one pass over the inbox, the day files and the split journals. One scan
     /// for the whole gallery: `usages(ofAsset:)` per file would re-read the
     /// entire journal once per thumbnail.
@@ -1273,9 +1273,9 @@ final class JournalStore: ObservableObject {
         for value in (try? CoreJournal(base: base).load()) ?? [] {
             guard let date = stamps.date(from: value.ts) else { continue }
             for path in MediaLinks.paths(in: value.raw) {
-                let name = (path as NSString).lastPathComponent
-                if let current = map[name], current <= date { continue }
-                map[name] = date
+                guard let rel = MediaLinks.resolved(path, file: value.file) else { continue }
+                if let current = map[rel], current <= date { continue }
+                map[rel] = date
             }
         }
         return map
@@ -1287,7 +1287,7 @@ final class JournalStore: ObservableObject {
         "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tiff", "tif", "bmp",
     ]
 
-    /// Asset files that no entry references any more (safe to delete).
+    /// Conservatively checked unused assets; clearing retains recovery copies.
     func orphanAssets() -> [URL] {
         guard let baseURL, let core else { return [] }
         do { let files: [String] = try core.call("orphans"); return files.map { baseURL.appendingPathComponent($0) } }
@@ -1302,6 +1302,24 @@ final class JournalStore: ObservableObject {
     }
 
     /// Entries that reference an asset by file name (for "go to file").
+    func usages(ofAsset url: URL) -> [(entry: Entry, source: EntrySource)] {
+        let wanted = assetRelativePath(url)
+        func uses(_ entry: Entry) -> Bool {
+            MediaLinks.paths(in: entry.raw).contains {
+                MediaLinks.resolved($0, file: entry.file ?? "inbox.md") == wanted
+            }
+        }
+        var result: [(entry: Entry, source: EntrySource)] = []
+        for entry in inboxDrafts where uses(entry) { result.append((entry, .inbox)) }
+        for day in archiveEntries {
+            for entry in day.entries where uses(entry) { result.append((entry, .archive(date: day.date))) }
+        }
+        for (name, entries) in splitEntriesCache {
+            for entry in entries where uses(entry) { result.append((entry, .journal(name: name))) }
+        }
+        return result
+    }
+
     func usages(ofAsset fileName: String) -> [(entry: Entry, source: EntrySource)] {
         let needle = fileName
         var result: [(Entry, EntrySource)] = []

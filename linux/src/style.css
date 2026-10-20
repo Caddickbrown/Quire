@@ -922,3 +922,17 @@ button.card:disabled:hover .title { color: inherit; }
 [data-theme^="marathon"] .menu button:hover { background: var(--sel); color: var(--sel-ink); }
 [data-theme^="marathon"] .menu button.danger:hover { background: var(--danger); color: var(--on-danger); }
 [data-theme^="marathon"] .toast { background: var(--sel); color: var(--sel-ink); }
+
+/* The library is a destination as well as a Journal view. */
+.library-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+.library-heading h1 { margin: 4px 0 8px; font-family: var(--writing); font-size: 38px; font-weight: var(--head-weight); }
+.library-heading .group-label { padding: 0; }
+.library-heading p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.library-filters { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.library-filters .search { padding: 0; min-width: 180px; flex: 1; max-width: 300px; }
+.library-filters .seg { flex-wrap: wrap; }
+.media-library .mtile:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 600px) { .media-library { padding: 24px 18px; } .library-heading h1 { font-size: 30px; } }
+
+.app.narrow .tabs { min-width: 0; overflow-x: auto; }
+.app.narrow .tab { flex-shrink: 0; }

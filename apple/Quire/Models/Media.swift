@@ -12,12 +12,33 @@ import Foundation
 
 /// Relative asset paths referenced by markdown media links in some content.
 enum MediaLinks {
-    private static let regex = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\(([^)]+)\)"#)
+    private static let regex = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\(\s*(?:<([^>\n]*)>|([^\s)]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)"#)
 
     static func paths(in content: String) -> [String] {
         let ns = content as NSString
         return regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
-            .map { ns.substring(with: $0.range(at: 1)) }
+            .map { match in
+                let range = match.range(at: 1).location == NSNotFound ? match.range(at: 2) : match.range(at: 1)
+                return destination(ns.substring(with: range))
+            }
+    }
+
+    /// Local URL syntax is stripped before decoding so an escaped # stays a
+    /// filename character, rather than being mistaken for an anchor.
+    static func destination(_ target: String) -> String {
+        let path = target.split(whereSeparator: { $0 == "#" || $0 == "?" }).first.map(String.init) ?? target
+        return path.removingPercentEncoding ?? path
+    }
+
+    /// Root-relative asset identity, independent of duplicate basenames.
+    static func resolved(_ path: String, file: String) -> String? {
+        guard !path.hasPrefix("/"), !path.contains(":") else { return nil }
+        var parts = path.hasPrefix("assets/") ? [] : file.split(separator: "/").dropLast().map(String.init)
+        for part in path.split(separator: "/") {
+            if part == ".." { guard !parts.isEmpty else { return nil }; parts.removeLast() }
+            else if part != "." { parts.append(String(part)) }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "/")
     }
 
     /// `content` with every media link replaced by a space — what an entry

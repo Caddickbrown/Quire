@@ -183,8 +183,8 @@ struct SettingsView: View {
          Clean Up normalises punctuation (… and straight quotes), reorders entries by \
          time, removes exact duplicates, and retroactively moves any entry matching a \
          split tag into split/<tag>/YYYY/MM/DD.md — so adding a split tag later pulls matching \
-         history out too. Clear Orphan Media deletes asset files no entry references any \
-         more. Export combines all filed entries into one markdown file (drafts still in \
+         history out too. Clear Orphan Media moves unused files out of assets/ and keeps recovery copies \
+         under .quire/media-cleanup/. Export combines all filed entries into one markdown file (drafts still in \
          the Inbox aren't included until you file them).
          """),
         ("Storage, iCloud & jnl",
@@ -735,12 +735,12 @@ struct SettingsView: View {
             Text("No entries were found there. For Day One, pick the unzipped export folder or its Journal.json; for a folder import, files need a YYYY-MM-DD in their name or a creation date.")
         }
         .alert("Clear orphan media?", isPresented: $showingOrphanConfirm) {
-            Button("Delete \(orphanCount)", role: .destructive) {
+            Button("Clear \(orphanCount)", role: .destructive) {
                 orphanCleared = store.deleteOrphanAssets()
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("\(orphanCount) media file\(orphanCount == 1 ? "" : "s") in assets/ \(orphanCount == 1 ? "is" : "are") not referenced by any entry. Delete \(orphanCount == 1 ? "it" : "them")?")
+            Text("\(orphanCount) media file\(orphanCount == 1 ? "" : "s") in assets/ \(orphanCount == 1 ? "is" : "are") not referenced by any entry. Clear \(orphanCount == 1 ? "it" : "them")? Recovery copies will be kept under .quire/media-cleanup/.")
         }
         .alert("No orphan media", isPresented: $showingNoOrphans) {
             Button("OK") { }
@@ -753,7 +753,7 @@ struct SettingsView: View {
         )) {
             Button("OK") { }
         } message: {
-            Text("Deleted \(orphanCleared ?? 0) unused media file\((orphanCleared ?? 0) == 1 ? "" : "s").")
+            Text("Cleared \(orphanCleared ?? 0) unused media file\((orphanCleared ?? 0) == 1 ? "" : "s"). Recovery copies are kept under .quire/media-cleanup/.")
         }
         .alert("Cleanup complete", isPresented: $showingCleanup) {
             Button("OK") { }

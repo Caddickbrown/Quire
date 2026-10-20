@@ -57,6 +57,14 @@ do {
     check(MediaLinks.strippingLinks("plain") == "plain", "media: no links untouched")
 }
 
+// Cleanup targets and exact asset identity (also covered by QuireTests).
+do {
+    let text = "![caption](<assets/2026/09/old photo.jpg> \"Title\") ![](assets/2026/09/a%23b.jpg)"
+    check(MediaLinks.paths(in: text) == ["assets/2026/09/old photo.jpg", "assets/2026/09/a#b.jpg"], "media: angle targets, titles and URL escapes")
+    check(MediaLinks.resolved("../../../assets/2026/09/photo.jpg", file: "journal/2026/09/30.md") == "assets/2026/09/photo.jpg", "media: file-relative identity")
+    check(MediaLinks.resolved("../../outside.jpg", file: "inbox.md") == nil, "media: outside paths rejected")
+}
+
 // parseEntries basic fields
 do {
     let e = JournalParser.parseEntries("[2026-05-10 08:00:00] A title\nfirst line\nsecond line\n")

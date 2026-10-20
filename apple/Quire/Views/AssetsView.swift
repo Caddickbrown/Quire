@@ -49,6 +49,14 @@ enum AssetGrouping: String, CaseIterable, Identifiable {
 }
 
 struct AssetsView: View {
+    /// The phone presents the library as a Quire page; Mac/iPad use native navigation.
+    var onOpenEntry: ((Entry, EntrySource) -> Void)? = nil
+    var onClose: (() -> Void)? = nil
+    @Environment(\.quire) private var q
+    @State private var loading = true
+    @State private var query = ""
+    @State private var kindFilter = "all"
+
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
     @AppStorage("assetSort") private var sortRaw = AssetSort.newest.rawValue
@@ -91,13 +99,17 @@ struct AssetsView: View {
     /// Dates come from the entry that links each file (see `AssetItem.date`),
     /// falling back to the file's own date for media no entry references.
     private var sorted: [JournalStore.AssetItem] {
+        let items = assets.filter { item in
+            (query.isEmpty || item.name.localizedCaseInsensitiveContains(query))
+                && (kindFilter == "all" || String(describing: MediaKind(path: item.name)) == kindFilter)
+        }
         switch AssetSort(rawValue: sortRaw) ?? .newest {
-        case .newest:  return assets.sorted { $0.date > $1.date }
-        case .oldest:  return assets.sorted { $0.date < $1.date }
-        case .largest: return assets.sorted { $0.size > $1.size }
-        case .name:    return assets.sorted { $0.name < $1.name }
+        case .newest:  return items.sorted { $0.date > $1.date }
+        case .oldest:  return items.sorted { $0.date < $1.date }
+        case .largest: return items.sorted { $0.size > $1.size }
+        case .name:    return items.sorted { $0.name < $1.name }
         case .kind:
-            return assets.sorted {
+            return items.sorted {
                 let (a, b) = (Self.kindRank($0.name), Self.kindRank($1.name))
                 return a == b ? $0.date > $1.date : a < b
             }
@@ -182,7 +194,7 @@ struct AssetsView: View {
                     // Counted here rather than up front for the same reason as
                     // "Go to Entry": usages(ofAsset:) reads the whole journal.
                     pendingDelete = PendingDelete(item: item,
-                                                  uses: store.usages(ofAsset: item.name).count)
+                                                  uses: store.usages(ofAsset: item.url).count)
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
@@ -191,59 +203,91 @@ struct AssetsView: View {
     }
 
     var body: some View {
-        Group {
-            if assets.isEmpty {
-                ContentUnavailableView(
-                    "No media yet",
-                    systemImage: "photo.on.rectangle.angled",
-                    description: Text("Images, video, and audio you attach to entries live here.")
-                )
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: columns,
-                              spacing: 2,
-                              pinnedViews: grouping == .none ? [] : [.sectionHeaders]) {
-                        ForEach(sections) { section in
-                            Section {
-                                ForEach(section.items) { tile($0) }
-                            } header: {
-                                if grouping != .none { header(section.title) }
+        VStack(spacing: 0) {
+            #if os(iOS)
+            if onClose != nil { phoneHeader }
+            #endif
+            HStack {
+                TextField("Find a file…", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(onClose == nil ? .body : q.ui(14))
+                    .foregroundStyle(onClose == nil ? Color.primary : q.inkColor)
+                    .accessibilityLabel("Search media filenames")
+                Picker("Media type", selection: $kindFilter) {
+                    Text("All").tag("all")
+                    Text("Photos").tag("image")
+                    Text("Video").tag("video")
+                    Text("Audio").tag("audio")
+                }
+                .pickerStyle(.menu)
+            }
+            .padding(.horizontal).padding(.vertical, 10)
+            Group {
+                if loading {
+                    ProgressView("Loading media…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if assets.isEmpty {
+                    ContentUnavailableView(
+                        "No media yet",
+                        systemImage: "photo.on.rectangle.angled",
+                        description: Text("Images, video, and audio you attach to entries live here.")
+                    )
+                } else if sorted.isEmpty {
+                    ContentUnavailableView.search(text: query)
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: columns,
+                                  spacing: 2,
+                                  pinnedViews: grouping == .none ? [] : [.sectionHeaders]) {
+                            ForEach(sections) { section in
+                                Section {
+                                    ForEach(section.items) { tile($0) }
+                                } header: {
+                                    if grouping != .none { header(section.title) }
+                                }
                             }
                         }
+                        .padding(.horizontal, 2)
                     }
-                    .padding(.horizontal, 2)
                 }
             }
         }
-        .navigationTitle("Assets")
+        .background(onClose == nil ? Color.clear : q.pageColor)
+        .navigationTitle("Media Library")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
-            Menu {
-                Picker("Sort", selection: $sortRaw) {
-                    ForEach(AssetSort.allCases) { Text($0.label).tag($0.rawValue) }
+            if onClose == nil {
+                Menu {
+                    Picker("Sort", selection: $sortRaw) {
+                        ForEach(AssetSort.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.inline)
+                    Divider()
+                    Picker("Grouping", selection: $groupingRaw) {
+                        ForEach(AssetGrouping.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Label("Sort", systemImage: "arrow.up.arrow.down")
                 }
-                .pickerStyle(.inline)
-                Divider()
-                Picker("Grouping", selection: $groupingRaw) {
-                    ForEach(AssetGrouping.allCases) { Text($0.label).tag($0.rawValue) }
-                }
-                .pickerStyle(.inline)
-            } label: {
-                Label("Sort", systemImage: "arrow.up.arrow.down")
+                Button { reload() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
             }
-            Button { reload() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
         }
         .sheet(item: $viewing) { item in
-            AssetViewer(item: item)
+            AssetViewer(item: item, onOpenEntry: { entry, source in
+                viewing = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    openEntry(entry, source: source)
+                }
+            })
         }
         .confirmationDialog("Go to Entry",
                             isPresented: Binding(get: { usagePicker != nil },
                                                  set: { if !$0 { usagePicker = nil } }),
                             presenting: usagePicker) { picker in
             ForEach(Array(picker.uses.enumerated()), id: \.offset) { _, use in
-                Button(label(for: use)) { nav.open(use.entry, source: use.source) }
+                Button(label(for: use)) { openEntry(use.entry, source: use.source) }
             }
         } message: { picker in
             Text("Used by \(picker.uses.count) entries.")
@@ -263,11 +307,47 @@ struct AssetsView: View {
             Text(deleteMessage(for: pending))
         }
         .task { reload() }
+        .onChange(of: store.revision) { _, _ in reload() }
     }
 
     private func reload() {
-        Task { assets = await store.allAssetsAsync() }
+        Task {
+            assets = await store.allAssetsAsync()
+            loading = false
+        }
     }
+
+    private func openEntry(_ entry: Entry, source: EntrySource) {
+        if let onOpenEntry { onOpenEntry(entry, source) }
+        else { nav.open(entry, source: source) }
+    }
+
+    #if os(iOS)
+    private var phoneHeader: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                QLink(title: "Refresh") { reload() }
+                Spacer()
+                QLink(title: "Done") { onClose?() }
+            }
+            QTitle(kicker: "Your journal", title: "Media Library", size: 36)
+            HStack {
+                Text("\(assets.count) files").font(q.mono(12)).foregroundStyle(q.mutedColor)
+                Spacer()
+                Menu {
+                    Picker("Sort", selection: $sortRaw) {
+                        ForEach(AssetSort.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
+                    Picker("Group", selection: $groupingRaw) {
+                        ForEach(AssetGrouping.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
+                } label: { Text("Sort and group").font(q.ui(13)).foregroundStyle(q.accentColor) }
+            }
+            QRule()
+        }
+        .padding(.horizontal, 26).padding(.top, 18).padding(.bottom, 8)
+    }
+    #endif
 
     /// Spells out what deleting costs — the entries keep their `![](assets/…)`
     /// links, which is a broken image once the file is gone.
@@ -285,9 +365,9 @@ struct AssetsView: View {
     /// Assets crawl.
     private func goToMenu(_ item: JournalStore.AssetItem) -> some View {
         Button {
-            let uses = store.usages(ofAsset: item.name)
+            let uses = store.usages(ofAsset: item.url)
             if uses.count == 1 {
-                nav.open(uses[0].entry, source: uses[0].source)
+                openEntry(uses[0].entry, source: uses[0].source)
             } else if uses.count > 1 {
                 usagePicker = UsagePicker(uses: uses)
             }
@@ -367,6 +447,7 @@ struct AssetViewer: View {
     @EnvironmentObject private var nav: NavigationModel
     @Environment(\.dismiss) private var dismiss
     let item: JournalStore.AssetItem
+    var onOpenEntry: ((Entry, EntrySource) -> Void)? = nil
     /// Loaded once on appear — `usages(ofAsset:)` walks the whole journal, and
     /// calling it inside the toolbar menu re-ran that walk per body pass (the
     /// same trap the grid's context menu already dodges).
@@ -394,7 +475,8 @@ struct AssetViewer: View {
                             ForEach(Array(uses.enumerated()), id: \.offset) { _, use in
                                 Button(use.entry.preview.isEmpty ? use.entry.ts : use.entry.preview) {
                                     dismiss()
-                                    nav.open(use.entry, source: use.source)
+                                    if let onOpenEntry { onOpenEntry(use.entry, use.source) }
+                                    else { nav.open(use.entry, source: use.source) }
                                 }
                             }
                             #if os(macOS)
@@ -413,7 +495,7 @@ struct AssetViewer: View {
         #if os(macOS)
         .frame(minWidth: 560, minHeight: 420)
         #endif
-        .task { uses = store.usages(ofAsset: item.name) }
+        .task { uses = store.usages(ofAsset: item.url) }
     }
 
     @ViewBuilder
