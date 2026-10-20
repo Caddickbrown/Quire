@@ -21,6 +21,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+- **Terminal**: `quire cleanup` (also `jnl`) removes `.DS_Store` files throughout the journal folder, reporting the count and any failures.
+
 ## [0.9.1] — 2026-10-17
 
 ### Fixed

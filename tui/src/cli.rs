@@ -200,6 +200,11 @@ pub fn cleanup_text(j: &Journal, split_tags: &[String]) {
             for e in r.errors {
                 println!("  ! {}", e);
             }
+            let (removed, errors) = remove_ds_store(j);
+            println!("  Removed {removed} .DS_Store file(s).");
+            for e in errors {
+                println!("  ! {}", e);
+            }
         }
         Err(e) => eprintln!("  error: {}", e),
     }
@@ -277,7 +282,7 @@ pub fn help(name: &str) {
   {n} tag <name>         all entries tagged @name
   {n} random             a random past entry
   {n} transfer           file everything in transfer.md (no review)
-  {n} cleanup            move misdated entries to their day, standardise punctuation, reorder, dedupe, extract split-tagged entries
+  {n} cleanup            move misdated entries to their day, standardise punctuation, reorder, dedupe, extract split-tagged entries, remove .DS_Store files
   {n} export [file]      combine all entries into one file (default: export.md)
   {n} open               open the journal folder in the file manager
   {n} config             edit ~/.config/jnl/config

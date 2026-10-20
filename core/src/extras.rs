@@ -471,6 +471,41 @@ fn rehome(j: &Journal, rep: &mut CleanupReport) {
     }
 }
 
+/// Remove Finder's `.DS_Store` files throughout the journal, including assets
+/// and hidden folders. Vault listings exclude symlinks. Failures are reported
+/// individually so other folders can still be cleaned.
+pub fn remove_ds_store(j: &Journal) -> (usize, Vec<String>) {
+    let mut removed = 0;
+    let mut errors = Vec::new();
+    let mut folders = vec![String::new()];
+    while let Some(folder) = folders.pop() {
+        let items = match j.vault().list(&folder) {
+            Ok(items) => items,
+            Err(e) => {
+                errors.push(e);
+                continue;
+            }
+        };
+        for item in items {
+            let rel = if folder.is_empty() {
+                item.name.clone()
+            } else {
+                format!("{folder}/{}", item.name)
+            };
+            if item.is_dir {
+                folders.push(rel);
+            } else if item.is_file && item.name == ".DS_Store" {
+                match j.vault().remove(&rel) {
+                    Ok(true) => removed += 1,
+                    Ok(false) => {}
+                    Err(e) => errors.push(e),
+                }
+            }
+        }
+    }
+    (removed, errors)
+}
+
 pub fn cleanup(j: &Journal, split_tags: &[String]) -> Result<CleanupReport, String> {
     let mut rep = CleanupReport::default();
     rehome(j, &mut rep);
@@ -1886,6 +1921,34 @@ mod tests {
     #[test]
     fn punctuation_skips_links() {
         assert_eq!(fix_punctuation("Well... “hi” it’s ![a...b](x...y.jpg) [l’](a’b)"), "Well\u{2026} \"hi\" it's ![a...b](x...y.jpg) [l’](a’b)");
+    }
+
+    #[test]
+    fn remove_ds_store_only_exact_files_without_following_symlinks() {
+        let d = tmp();
+        for rel in [
+            ".DS_Store",
+            "assets/2026/10/.DS_Store",
+            ".quire/.DS_Store",
+            "journal/keep.md",
+            "assets/DS_Store",
+            "assets/._photo.jpg",
+        ] {
+            w(d.path(), rel, "keep");
+        }
+        let outside = tmp();
+        w(outside.path(), ".DS_Store", "outside");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), d.path().join("linked")).unwrap();
+        let j = jn(d.path());
+        let (removed, errors) = remove_ds_store(&j);
+        assert_eq!(removed, 3);
+        assert!(errors.is_empty(), "{errors:?}");
+        for rel in ["journal/keep.md", "assets/DS_Store", "assets/._photo.jpg"] {
+            assert_eq!(read(&d.path().join(rel)), "keep");
+        }
+        assert!(outside.path().join(".DS_Store").exists());
+        assert_eq!(remove_ds_store(&j), (0, vec![]));
     }
 
     #[test]
