@@ -147,6 +147,11 @@ or group by date, preview a file, and use its menu to go to the entry that uses 
 
 ## Linux
 
+The Inbox has its own search. In the editor, long titles wrap on screen while
+remaining a single header line in the file, and markdown italics display as you
+type. Drafts save after 1.2 seconds without typing and immediately when leaving
+or closing; filed entries save on Ctrl+S or when leaving the editor.
+
 ```sh
 cd linux && npm install && npx tauri build      # → linux/src-tauri/target/release/bundle/
 ```
