@@ -51,6 +51,9 @@ txt = open(p).read() if os.path.exists(p) else ""
 check("draft saved to inbox day file", "Smoke test" in txt and "- two @garden" in txt and "- one" in txt and "![](assets/" in txt)
 send(ESC, 0.6); check("back on today after esc", seen("day streak"))
 click(10, rows - 1); check("a click on the hint bar opens the inbox", seen("review"))
+# Select the new (newest) draft explicitly: the review selection can survive
+# a reload while the composer autosaves.
+send(UP * 16)
 send("t"); check("retime modal", seen("Date & time")); send(ESC)
 send("f", 1.0)
 jp = os.path.join(folder, "journal", today[:4], today[5:7], today[8:] + ".md")
@@ -65,10 +68,12 @@ send(LEFT); send(RIGHT); send(ESC)
 send("/"); send("garden"); check("search results", seen("result")); send(DOWN); send(ENTER); check("open from search", seen("editing") or seen("draft"))
 send(ESC, 0.6); send(ESC); send(ESC)   # leave the editor, clear the query, leave search
 check("back on today after search", seen("A PROMPT"))
+click(2, 0)  # Quire masthead: return Home, independently of the navigation stack.
 send("r"); check("random opens browse", seen("YEAR")); send(ESC)
+click(2, 0)
 send(","); check("settings page", seen("Daily word goal") and seen("Automatic backups") and seen("Keep backups") and seen("Back up now") and seen("Clean up")); send(ESC, 0.6)
 send("?"); check("help overlay", seen("KEYS")); send("x")
-send("q", 0.8)
+click(2, 0); send("q", 0.8)
 status = None
 for _ in range(50):
     try:
