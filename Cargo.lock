@@ -3778,7 +3778,7 @@ dependencies = [
 
 [[package]]
 name = "quire-bindings"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "quire-core",
  "serde",
@@ -3790,7 +3790,7 @@ dependencies = [
 
 [[package]]
 name = "quire-core"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -3805,7 +3805,7 @@ dependencies = [
 
 [[package]]
 name = "quire-desktop"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -3829,7 +3829,7 @@ dependencies = [
 
 [[package]]
 name = "quire-tui"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "arboard",
  "chrono",

@@ -21,6 +21,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-10-25
+
 ### Fixed
 - **Apple**: App Lock covers the iPhone app again: since the iPhone design (0.9.0) the Face ID veil was never shown there, so a locked app showed the open entry and its app-switcher snapshot. Keys do nothing while locked.
 - **Apple**: Spotlight results, notification taps and widget entry links open the entry on iPhone (they reached only the iPad/Mac shell).
