@@ -10,15 +10,10 @@ final class AppleVault: NativeVault, @unchecked Sendable {
     /// call checks its path against it, and resolving it each time was a
     /// noticeable share of the cost of reading a journal.
     private let rootPath: String
-    /// Whether the folder is inside the app's own container (not iCloud), where
-    /// files are plain local files and nothing needs coordinating.
-    private let baseIsInAppContainer: Bool
     init(base: URL) {
         self.base = base.standardizedFileURL
         let root = self.base.resolvingSymlinksInPath().path
         rootPath = root
-        let home = URL(fileURLWithPath: NSHomeDirectory()).resolvingSymlinksInPath().path
-        baseIsInAppContainer = root.hasPrefix(home + "/") && !root.contains("/Mobile Documents/")
     }
 
     /// Directories already checked to be real (no symlink anywhere in their
@@ -33,8 +28,10 @@ final class AppleVault: NativeVault, @unchecked Sendable {
         let url = rel.isEmpty ? base : base.appendingPathComponent(rel).standardizedFileURL
         let parent = url.deletingLastPathComponent()
         verifiedLock.lock(); let known = verifiedDirectories.contains(parent.path); verifiedLock.unlock()
-        // The folder is known-good; only the item itself could still be a link.
-        if known, (try? fm.destinationOfSymbolicLink(atPath: url.path)) == nil { return url }
+        // The folder was checked; the item, and the folder itself (a sync can
+        // replace a folder with a link after it was cached), could still be links.
+        if known, (try? fm.destinationOfSymbolicLink(atPath: url.path)) == nil,
+           (try? fm.destinationOfSymbolicLink(atPath: parent.path)) == nil { return url }
         let root = rootPath
         let resolved = try resolvedPath(url)
         guard resolved == root || resolved.hasPrefix(root + "/") else { throw failure("Path leaves the journal folder") }

@@ -119,9 +119,20 @@ enum WritingTimer {
     /// Pop one level (mouse Back button / ⌘[).
     func goBack() { if !path.isEmpty { path.removeLast() } }
 
+    /// An entry to open, for the iPhone shell (PhoneRoot), which keeps its own
+    /// navigation stack instead of `section`/`path`. Each request is new.
+    struct OpenRequest: Equatable {
+        let id = UUID()
+        let entry: Entry
+        let source: EntrySource
+        static func == (a: OpenRequest, b: OpenRequest) -> Bool { a.id == b.id }
+    }
+    @Published var openRequest: OpenRequest?
+
     /// Programmatically open an entry: switch section, then push it. Both
     /// steps are synchronous, so the entry is always what ends up on screen.
     func open(_ entry: Entry, source: EntrySource) {
+        openRequest = OpenRequest(entry: entry, source: source)
         switch source {
         case .inbox:   section = .inbox
         case .archive: section = .archive

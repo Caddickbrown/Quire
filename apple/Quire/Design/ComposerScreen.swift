@@ -30,6 +30,9 @@ struct ComposerScreen: View {
     @State private var startedAt: String?
     @State private var focusMode = false
     @State private var loaded = false
+    /// What an existing entry opened with: unchanged, it isn't written back, so
+    /// opening an entry never re-normalises it on disk.
+    @State private var opened: (title: String, text: String, starred: Bool)?
     @State private var pending: Task<Void, Never>?
     @FocusState private var bodyFocused: Bool
     @State private var routerID = UUID()
@@ -74,7 +77,7 @@ struct ComposerScreen: View {
         .onChange(of: title) { _, _ in scheduleSave(); mirror() }
         .onChange(of: text) { _, _ in scheduleSave(); mirror() }
         .onDisappear {
-            ExternalDisplayModel.shared.present(.idle)
+            ExternalDisplayModel.shared.clearEntry(writing: true)
             KeyCommandRouter.shared.unregister(routerID)
         }
         .sheet(isPresented: $showStamp) {
@@ -160,6 +163,7 @@ struct ComposerScreen: View {
             title = ref.entry.displayTitle
             text = ref.entry.body
             starred = ref.entry.isStarred
+            opened = (title, text, starred)
         }
         // The page opens ready to type into.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { if editing == nil { bodyFocused = true } }
@@ -195,20 +199,23 @@ struct ComposerScreen: View {
         let title = headerTitle
         let body = text.trimmingCharacters(in: .newlines)
         if let ref = editing, let cur = current {
+            if let o = opened, o.title == self.title, o.text == text, o.starred == starred { return }
             let newText = JournalStore.makeEntry(timestamp: cur.ts, title: title, body: body).raw
             guard newText != cur.raw else { return }
             let fallback = JournalStore.makeEntry(timestamp: cur.ts, title: title, body: body)
+            let written: Bool
             switch ref.source {
             case .inbox:
-                if store.updateDraft(cur, newText: newText) { current = store.writtenEntry(fallback: fallback) }
+                written = store.updateDraft(cur, newText: newText)
             case .archive(let d):
-                if store.updateFiledEntry(date: d, original: cur, newText: newText) != nil {
-                    current = store.writtenEntry(fallback: fallback)
-                }
+                written = store.updateFiledEntry(date: d, original: cur, newText: newText) != nil
             case .journal(let n):
-                if store.updateJournalEntry(name: n, original: cur, newText: newText) {
-                    current = store.writtenEntry(fallback: fallback)
-                }
+                written = store.updateJournalEntry(name: n, original: cur, newText: newText)
+            }
+            if written {
+                current = store.writtenEntry(fallback: fallback)
+                // What's on disk now is the baseline an unchanged page compares to.
+                opened = (self.title, text, starred)
             }
         } else {
             let stamp = startedAt ?? pendingTS ?? JournalStore.nowTS()

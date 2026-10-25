@@ -21,6 +21,7 @@ struct PhoneRoot: View {
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
     @Environment(\.quire) private var q
+    @ObservedObject private var appLock = AppLockManager.shared
 
     @State private var tab: PhoneTab = Self.startTab
     @State private var path: [EntryRef] = []
@@ -101,6 +102,14 @@ struct PhoneRoot: View {
         // The widget, the reminder and the home-screen action all ask for the
         // composer through the shared navigation model.
         .onChange(of: nav.newEntrySignal) { _, _ in composing = ComposeTarget(ref: nil) }
+        // Spotlight, notifications and the widget open entries through the shared
+        // model; this shell has its own stack, so it takes the request from there.
+        .onChange(of: nav.openRequest) { _, _ in takeOpenRequest() }
+        .onAppear(perform: takeOpenRequest)
+        // App Lock: the veil is a window of its own (AppLockVeilWindow), above any
+        // sheet or the composer, so nothing stays readable while locked.
+        .onAppear { AppLockVeilWindow.shared.setVisible(appLock.showsVeil) }
+        .onChange(of: appLock.showsVeil) { _, show in AppLockVeilWindow.shared.setVisible(show) }
         // `QUIRE_OPEN=settings|search` in the launch environment opens that first (screenshots).
         // The external display scene is built by UIKit and can't reach this environment.
         .onAppear {
@@ -151,6 +160,22 @@ struct PhoneRoot: View {
     }
 
     private func open(_ ref: EntryRef) { path.append(ref) }
+
+    /// Open what Spotlight, a notification or the widget asked for: close whatever
+    /// is presented, go to the entry's face, and push it.
+    private func takeOpenRequest() {
+        guard let request = nav.openRequest else { return }
+        nav.openRequest = nil
+        let presented = composing != nil || retiming != nil || showSearch || showSettings || showMedia
+        composing = nil; retiming = nil; showSearch = false; showSettings = false; showMedia = false
+        let ref = EntryRef(entry: request.entry, source: request.source)
+        let push = {
+            if case .inbox = request.source { tab = .inbox } else { tab = .journal }
+            path = [ref]
+        }
+        // Let a sheet or the composer finish leaving before the page is pushed.
+        if presented { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: push) } else { push() }
+    }
 
     /// The terminal app's keys on Today and Look back: n new, i inbox, j journal,
     /// l look back, / search, r a random entry, p another prompt, "," settings,

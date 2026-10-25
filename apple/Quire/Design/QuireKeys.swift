@@ -65,7 +65,9 @@ private struct QKeyList: ViewModifier {
     private func register() {
         // An empty list leaves the keys to the screen beneath (↓ from Look back
         // still goes to the Journal).
-        guard !entries.isEmpty else { KeyCommandRouter.shared.unregister(routerID); return }
+        // It keeps its place in the stack (see `deactivate`), so its first row
+        // doesn't lift it above the composer.
+        guard !entries.isEmpty else { KeyCommandRouter.shared.deactivate(routerID); return }
         KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
             moveUp: { move(-1) },
             moveDown: { move(1) },

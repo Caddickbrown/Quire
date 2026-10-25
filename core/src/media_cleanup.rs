@@ -4,6 +4,14 @@ use crate::journal::{link_targets, parse_entries, resolve_link_all, Journal, LIN
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Where recovery copies go, one folder per run named for its UTC time.
+const RECOVERY_DIR: &str = ".quire/media-cleanup";
+/// Recovery copies older than this are pruned the next time media cleanup or
+/// orphan clearing runs: long enough to notice a mistake (backups' monthly
+/// interval), short enough that the folder, which backups and sync carry too,
+/// can't grow without bound.
+pub const RECOVERY_DAYS: i64 = 30;
+
 #[derive(Default, Debug, Serialize)]
 pub struct MediaCleanupReport {
     pub checked: usize,
@@ -12,6 +20,50 @@ pub struct MediaCleanupReport {
     pub unreferenced: usize,
     pub issues: Vec<String>,
     pub backup: Option<String>,
+    /// Recovery folders older than RECOVERY_DAYS removed by this run.
+    pub pruned: usize,
+}
+
+/// Remove recovery folders older than `days`, judged by the UTC time in their
+/// name (`20261020T101500.123456789`, as this module writes them). A folder
+/// whose name isn't such a time is left alone. Files go through the vault one
+/// by one, then the emptied folders; links are never followed, and a folder a
+/// link keeps non-empty simply stays. Returns how many folders went.
+pub fn prune_media_recovery(j: &Journal, days: i64) -> Result<usize, String> {
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(days);
+    let mut pruned = 0;
+    for item in j.vault().list(RECOVERY_DIR)? {
+        if !item.is_dir {
+            continue;
+        }
+        let Some(when) = item
+            .name
+            .get(..15)
+            .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y%m%dT%H%M%S").ok())
+        else {
+            continue;
+        };
+        if when.and_utc() >= cutoff {
+            continue;
+        }
+        remove_tree(j, &format!("{RECOVERY_DIR}/{}", item.name))?;
+        pruned += 1;
+    }
+    Ok(pruned)
+}
+
+fn remove_tree(j: &Journal, dir: &str) -> Result<(), String> {
+    for item in j.vault().list(dir)? {
+        let rel = format!("{dir}/{}", item.name);
+        if item.is_dir {
+            remove_tree(j, &rel)?;
+        } else if item.is_file {
+            j.vault().remove(&rel)?;
+        }
+    }
+    // Best effort: a link left inside keeps the folder, which is harmless.
+    let _ = j.vault().remove(dir);
+    Ok(())
 }
 
 fn inventory(j: &Journal) -> Result<BTreeSet<String>, String> {
@@ -125,9 +177,10 @@ pub fn orphan_media(j: &Journal) -> Result<Vec<String>, String> {
 /// Clear only the files shown to the user, and only if still unreferenced.
 /// Recovery copies are verified before any original path is removed.
 pub fn archive_orphan_media(j: &Journal, offered: &[String]) -> Result<(usize, String), String> {
+    prune_media_recovery(j, RECOVERY_DAYS)?;
     let current: BTreeSet<_> = orphan_media(j)?.into_iter().collect();
     let backup = format!(
-        ".quire/media-cleanup/{}/orphans",
+        "{RECOVERY_DIR}/{}/orphans",
         chrono::Utc::now().format("%Y%m%dT%H%M%S%.9f")
     );
     let selected: Vec<_> = offered.iter().filter(|p| current.contains(*p)).collect();
@@ -163,8 +216,11 @@ pub fn archive_orphan_media(j: &Journal, offered: &[String]) -> Result<(usize, S
 /// reported, never guessed. Unreferenced files are never deleted. All changes
 /// use the Vault; originals and original markdown remain in the backup folder.
 pub fn cleanup_media(j: &Journal) -> Result<MediaCleanupReport, String> {
+    let mut report = MediaCleanupReport {
+        pruned: prune_media_recovery(j, RECOVERY_DAYS)?,
+        ..Default::default()
+    };
     let files = inventory(j)?;
-    let mut report = MediaCleanupReport::default();
     let mut texts = BTreeMap::new();
     let mut originals = BTreeMap::new();
     // Read everything before making any changes. Keep exact bytes for recovery.
@@ -260,7 +316,7 @@ pub fn cleanup_media(j: &Journal) -> Result<MediaCleanupReport, String> {
         return Ok(report);
     }
     let run = chrono::Utc::now().format("%Y%m%dT%H%M%S%.9f");
-    let backup = format!(".quire/media-cleanup/{run}");
+    let backup = format!("{RECOVERY_DIR}/{run}");
     report.backup = Some(backup.clone());
     for (source, dest) in &swaps {
         let bytes = j
@@ -568,6 +624,25 @@ mod tests {
             .walk_files(".quire/media-cleanup")
             .iter()
             .any(|f| f.ends_with("/assets/a.jpg")));
+    }
+
+    #[test]
+    fn recovery_copies_older_than_the_limit_are_pruned() {
+        let temp = tempfile::tempdir().unwrap();
+        let j = Journal::open(temp.path());
+        let old = (chrono::Utc::now() - chrono::Duration::days(RECOVERY_DAYS + 1)).format("%Y%m%dT%H%M%S%.9f");
+        let recent = (chrono::Utc::now() - chrono::Duration::days(RECOVERY_DAYS - 1)).format("%Y%m%dT%H%M%S%.9f");
+        put(&j, &format!(".quire/media-cleanup/{old}/assets/a.jpg"), b"a");
+        put(&j, &format!(".quire/media-cleanup/{old}/orphans/assets/2026/09/b.jpg"), b"b");
+        put(&j, &format!(".quire/media-cleanup/{recent}/assets/c.jpg"), b"c");
+        put(&j, ".quire/media-cleanup/kept-by-hand/d.jpg", b"d");
+        put(&j, "assets/2026/09/e.jpg", b"e");
+        assert_eq!(cleanup_media(&j).unwrap().pruned, 1);
+        assert!(!j.is_dir(&format!(".quire/media-cleanup/{old}")));
+        assert!(j.is_file(&format!(".quire/media-cleanup/{recent}/assets/c.jpg")));
+        assert!(j.is_file(".quire/media-cleanup/kept-by-hand/d.jpg"));
+        assert!(j.is_file("assets/2026/09/e.jpg"));
+        assert_eq!(prune_media_recovery(&j, RECOVERY_DAYS).unwrap(), 0);
     }
 
     #[test]

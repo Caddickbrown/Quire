@@ -134,7 +134,9 @@ jnl's config, else `~/notes`. The theme is Quire's setting or `--theme`
 `quire cleanup` formats, sorts and deduplicates entries, removes `.DS_Store`
 files, and checks media links. Older assets are organised into `assets/YYYY/MM/`
 using the earliest referencing entry; existing monthly assets stay put. Changed
-markdown and original media are preserved under `.quire/media-cleanup/`.
+markdown and original media are preserved under `.quire/media-cleanup/` for 30
+days; older recovery folders are removed the next time cleanup or orphan
+clearing runs.
 Missing or ambiguous links are reported rather than guessed. At the end, an
 interactive terminal asks whether to clear orphan media: Enter keeps it; yes
 moves it out of `assets/` with verified recovery copies in the same recovery

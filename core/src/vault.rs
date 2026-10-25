@@ -35,7 +35,7 @@ pub trait Vault: Send + Sync {
     fn read(&self, rel: &str) -> Result<Option<Vec<u8>>, String>;
     /// Replace the file atomically, creating parent folders.
     fn write(&self, rel: &str, bytes: &[u8]) -> Result<(), String>;
-    /// Delete a file. `Ok(false)` when it was not there.
+    /// Delete a file, or an empty folder. `Ok(false)` when it was not there.
     fn remove(&self, rel: &str) -> Result<bool, String>;
     /// Rename a file or folder.
     fn rename(&self, from: &str, to: &str) -> Result<(), String>;
@@ -89,7 +89,11 @@ impl Vault for FsVault {
 
     fn remove(&self, rel: &str) -> Result<bool, String> {
         let p = self.path(rel);
-        match fs::remove_file(&p) {
+        // A real folder (not a link to one) goes only when empty: remove_dir
+        // refuses anything else, so nothing is ever deleted recursively here.
+        let is_dir = fs::symlink_metadata(&p).map(|m| m.is_dir()).unwrap_or(false);
+        let removed = if is_dir { fs::remove_dir(&p) } else { fs::remove_file(&p) };
+        match removed {
             Ok(()) => Ok(true),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(format!("Can't delete {}: {}", p.display(), e)),

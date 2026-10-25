@@ -1018,7 +1018,7 @@ async function fileCurrent() {
   S.mode = 'read'; S.draft = null; S.focus = false;
   await load();
   S.sel = S.entries.find(e => e.file === dest && e.ts === target.ts) || null;
-  if (S.view === 'inbox') S.sel = inbox()[0] || S.sel;
+  if (S.view === 'inbox') S.sel = inboxList()[0] || S.sel;
   stamp('ENTRY_FILED', `Filed to ${dest}`);
   render();
 }
@@ -1138,7 +1138,11 @@ async function openInJournal(ref) {
   closePopover();
   if (S.mode === 'write' && !(await leaveWrite())) return;
   const e = reresolve(ref); if (!e) return;
-  S.view = 'journal'; S.jview = 'list'; S.sel = e; S.mode = 'read'; S.showList = false; render();
+  // A draft opens in the Inbox; a split entry under its own journal, so the
+  // selection is a row the list actually shows (and the arrows move from it).
+  if (e.source === 'inbox') { S.view = 'inbox'; S.inboxQuery = ''; }
+  else { S.view = 'journal'; S.jview = 'list'; S.journal = e.source === 'split' ? e.split : 'main'; S.query = ''; S.tag = null; S.day = null; }
+  S.sel = e; S.mode = 'read'; S.showList = false; render();
 }
 async function assetAction(a, rel) {
   const name = rel.split('/').pop();
@@ -1791,7 +1795,10 @@ function afterRender() {
         ta.dispatchEvent(new Event('input'));
       }
     });
-    ti.addEventListener('input', () => { restampIfFloating(true); ti.value = ti.value.replace(/[\r\n]/g, ' '); S.draft.title = ti.value; resizeTitle(); refreshChrome(false); scheduleSave(); });
+    ti.addEventListener('input', () => {
+      restampIfFloating(true);
+      // One header line on disk: a pasted newline becomes a space, caret kept.
+      if (/[\r\n]/.test(ti.value)) { const a = ti.selectionStart, b = ti.selectionEnd; ti.value = ti.value.replace(/[\r\n]/g, ' '); ti.setSelectionRange(a, b); } S.draft.title = ti.value; resizeTitle(); refreshChrome(false); scheduleSave(); });
     ti.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); ta.focus(); } });
     composerResizeObserver = new ResizeObserver(() => { resizeTitle(); queueEditorPaint(); });
     composerResizeObserver.observe($('#editor'));
@@ -1896,7 +1903,7 @@ document.addEventListener('click', async ev => {
       case 'random': randomEntry(); break;
       case 'saved': { const s = S.searches[+el.dataset.i]; S.query = S.query.trim() === s.query ? '' : s.query; S.sel = null; render(); break; }
       case 'pin-search': { const name = await askText('Name this search', 'e.g. Starred this year', S.query.trim()); if (!name) break; S.searches.push({ name, query: S.query.trim() }); await invoke('save_searches_cmd', { list: S.searches }); render(); break; }
-      case 'clear-orphans': { const n = await invoke('orphan_count'); if (!n) { toast('No orphan media'); break; } if (!(await askConfirm(`Clear ${n} orphan media file${n === 1 ? '' : 's'}? Recovery copies will be kept under .quire/media-cleanup/.`, 'Clear'))) break; const d = await invoke('clear_orphans'); S.assets = null; toast(`Cleared ${d}; recovery copies kept in .quire/media-cleanup/`); render(); break; }
+      case 'clear-orphans': { const offered = await invoke('orphan_files'), n = offered.length; if (!n) { toast('No orphan media'); break; } if (!(await askConfirm(`Clear ${n} orphan media file${n === 1 ? '' : 's'}? Recovery copies will be kept under .quire/media-cleanup/ for 30 days.`, 'Clear'))) break; const d = await invoke('clear_orphans', { offered }); S.assets = null; toast(`Cleared ${d}; recovery copies kept in .quire/media-cleanup/ for 30 days`); render(); break; }
       case 'system-titlebar': { const m = $('.settings main'), top = m ? m.scrollTop : 0; const custom = await invoke('set_system_titlebar', { on: S.customChrome }); setChrome(custom); render(); const m2 = $('.settings main'); if (m2) m2.scrollTop = top; break; }
       case 'toggle-ui': S.ui[el.dataset.k] = !S.ui[el.dataset.k]; await saveUi(); render(); break;
       case 'lightbox': { ev.preventDefault(); const rel = el.dataset.rel; let url = S.assetUrls.get(rel); if (!url) { url = fileSrc(await invoke('asset_path', { rel })); S.assetUrls.set(rel, url); } const o = el.dataset.file ? entryFrom(el) || null : null; openLightbox(rel, url, o); break; }
@@ -2006,7 +2013,8 @@ document.addEventListener('input', ev => {
       const next = $('#inbox-search'); if (focused && next) { next.focus(); next.setSelectionRange(pos, pos); }
     }, 150);
   }
-  if (k === 'gosearch') { S.view = 'journal'; S.jview = 'list'; S.query = ev.target.value; S.sel = null; render(); const s = $('#search'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+  // "Search everything": every journal, split journals and inbox drafts too.
+  if (k === 'gosearch') { S.view = 'journal'; S.jview = 'list'; S.journal = 'all'; S.query = ev.target.value; S.sel = null; render(); const s = $('#search'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
 });
 document.addEventListener('change', async ev => {
   const k = ev.target.dataset.input;
@@ -2162,7 +2170,7 @@ document.addEventListener('keydown', async ev => {
       return;
     }
     if (ctrl && ev.altKey && ev.key.toLowerCase() === 'f') { ev.preventDefault(); toggleFocus(); return; }
-    if (ctrl && ev.shiftKey && ev.key.toLowerCase() === 'f') { ev.preventDefault(); if (S.mode === 'write' && !(await leaveWrite())) return; S.view = 'journal'; S.jview = 'list'; S.showList = true; render(); $('#search')?.focus(); return; }
+    if (ctrl && ev.shiftKey && ev.key.toLowerCase() === 'f') { ev.preventDefault(); if (S.mode === 'write' && !(await leaveWrite())) return; S.view = 'journal'; S.jview = 'list'; S.journal = 'all'; S.showList = true; render(); $('#search')?.focus(); return; }
     if (ctrl && !ev.shiftKey && !ev.altKey) {
       const k = ev.key.toLowerCase();
       const ta = document.activeElement?.id === 'bodyta' ? document.activeElement : null;

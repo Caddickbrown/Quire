@@ -204,6 +204,9 @@ pub fn cleanup_text(j: &Journal, split_tags: &[String]) {
             let media_ok = match cleanup_media(j) {
                 Ok(media) => {
                     println!("  Media: {} checked, {} organised, {} markdown file(s) updated, {} unreferenced file(s) kept.", media.checked, media.organised, media.references_updated, media.unreferenced);
+                    if media.pruned > 0 {
+                        println!("  Pruned {} recovery folder(s) older than {RECOVERY_DAYS} days.", media.pruned);
+                    }
                     if let Some(backup) = media.backup {
                         println!("  Media cleanup originals: {backup}");
                     }
@@ -248,7 +251,7 @@ fn prompt_orphan_media(j: &Journal) {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return;
     }
-    println!("  Recovery copies will be kept under .quire/media-cleanup/.");
+    println!("  Recovery copies will be kept under .quire/media-cleanup/ for {RECOVERY_DAYS} days.");
     print!("  Clear {} orphan media file(s)? [y/N] ", orphans.len());
     if io::stdout().flush().is_err() {
         return;

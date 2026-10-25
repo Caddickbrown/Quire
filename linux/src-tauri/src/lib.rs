@@ -607,10 +607,23 @@ async fn orphan_count(state: State<'_, AppState>) -> Result<usize, String> {
     blocking(move || Ok(quire_core::orphan_media(&r)?.len())).await
 }
 
+/// The orphan files themselves, so the confirmation can name what it clears.
 #[tauri::command]
-async fn clear_orphans(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
+async fn orphan_files(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let r = root_r(&state)?;
+    blocking(move || quire_core::orphan_media(&r)).await
+}
+
+/// Clears `offered` (what the user was shown and confirmed) where each is still
+/// unreferenced; without it, every current orphan.
+#[tauri::command]
+async fn clear_orphans(app: AppHandle, state: State<'_, AppState>, offered: Option<Vec<String>>) -> Result<usize, String> {
     let r = root(&state)?;
-    let n = blocking(move || delete_orphans(&r)).await?;
+    let n = blocking(move || match offered {
+        Some(list) => quire_core::archive_orphan_media(&r, &list).map(|(n, _)| n),
+        None => delete_orphans(&r),
+    })
+    .await?;
     if n > 0 {
         wrote(&app);
     }
@@ -937,6 +950,27 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 /// unless a package already left one (install.sh writes the same `Quire.desktop`). `Quire.desktop` matches the
 /// app id set in `run`; StartupWMClass covers X11 and shells that ask for it.
 #[cfg(target_os = "linux")]
+/// One Exec argument as the desktop-entry spec wants it: `%` doubled (field
+/// codes); quoted when it holds a reserved character, with `"`, `` ` ``, `$` and
+/// `\` escaped inside the quotes; then the value's own string escaping, which
+/// doubles every backslash.
+fn desktop_exec_arg(arg: &str) -> String {
+    const RESERVED: &[char] = &[' ', '\t', '\n', '"', '\'', '\\', '>', '<', '~', '|', '&', ';', '$', '*', '?', '#', '(', ')', '`'];
+    let arg = arg.replace('%', "%%");
+    if !arg.contains(RESERVED) {
+        return arg;
+    }
+    let mut quoted = String::from("\"");
+    for c in arg.chars() {
+        if matches!(c, '"' | '`' | '$' | '\\') {
+            quoted.push('\\');
+        }
+        quoted.push(c);
+    }
+    quoted.push('"');
+    quoted.replace('\\', "\\\\")
+}
+
 fn ensure_launcher() {
     let Ok(appimage) = std::env::var("APPIMAGE") else { return };
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
@@ -951,13 +985,16 @@ fn ensure_launcher() {
         let _ = fs::write(&icon, include_bytes!("../icons/128x128.png"));
     }
     let entry = apps.join("Quire.desktop");
-    let exec = if appimage.contains(' ') { format!("\"{}\"", appimage) } else { appimage };
+    let old = fs::read_to_string(&entry).ok();
+    // install.sh wraps the AppImage in `env APPIMAGE_EXTRACT_AND_RUN=1` on a
+    // system without FUSE; that wrapper is kept, even when the path is redone.
+    let wrapped = old.as_deref().is_some_and(|o| o.contains("APPIMAGE_EXTRACT_AND_RUN=1"));
+    let exec = desktop_exec_arg(&appimage);
+    let exec = if wrapped { format!("env APPIMAGE_EXTRACT_AND_RUN=1 {exec}") } else { exec };
     let body = format!(
         "[Desktop Entry]\nType=Application\nName=Quire\nComment=Journalling over a plain folder of markdown\nExec={exec}\nIcon=quire\nCategories=Office;\nTerminal=false\nStartupWMClass=Quire\n");
-    // Keep an entry install.sh wrote with a wrapper (`env APPIMAGE_EXTRACT_AND_RUN=1 ...`) for no-FUSE systems.
-    if fs::read_to_string(&entry).map(|old| old.contains("Exec=env ") && old.contains(&exec)).unwrap_or(false) { return; }
     // Rewritten when the AppImage has moved, so the entry never points at a stale path.
-    if fs::read_to_string(&entry).map(|old| old == body).unwrap_or(false) { return; }
+    if old.as_deref() == Some(body.as_str()) { return; }
     let _ = fs::create_dir_all(&apps);
     let _ = fs::write(&entry, body);
 }
@@ -1046,6 +1083,7 @@ pub fn run() {
             attach_bytes,
             orphan_count,
             clear_orphans,
+            orphan_files,
             run_cleanup,
             sort_inbox_cmd,
             export_cmd,
@@ -1072,4 +1110,20 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Quire");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::desktop_exec_arg;
+
+    #[test]
+    fn exec_args_follow_the_desktop_entry_spec() {
+        assert_eq!(desktop_exec_arg("/home/a/Applications/Quire.AppImage"), "/home/a/Applications/Quire.AppImage");
+        assert_eq!(desktop_exec_arg("/home/a/My Apps/Quire.AppImage"), "\"/home/a/My Apps/Quire.AppImage\"");
+        // `"` and `$` escaped inside the quotes, then the backslash doubled.
+        assert_eq!(desktop_exec_arg("/x/a\"b$c"), "\"/x/a\\\\\"b\\\\$c\"");
+        // A literal backslash: \\ in the quotes, \\\\ in the file.
+        assert_eq!(desktop_exec_arg("/x/a\\b"), "\"/x/a\\\\\\\\b\"");
+        assert_eq!(desktop_exec_arg("/x/100%/Q"), "/x/100%%/Q");
+    }
 }
