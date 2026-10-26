@@ -83,7 +83,10 @@ struct QuireKeyHandlers {
 @MainActor final class KeyCommandRouter {
     static let shared = KeyCommandRouter()
 
-    private var stack: [(id: UUID, handlers: QuireKeyHandlers)] = []
+    /// `active` false: a list with no rows. It keeps its place in the stack, so
+    /// when its first row arrives it doesn't float above whatever was pushed
+    /// over it since (the composer), but it handles nothing meanwhile.
+    private var stack: [(id: UUID, handlers: QuireKeyHandlers, active: Bool)] = []
 
     /// Push a list's handlers, or refresh an already-registered list's in place.
     /// In place matters: a list re-registers whenever its rows change, which a
@@ -93,8 +96,18 @@ struct QuireKeyHandlers {
     func register(_ id: UUID, _ handlers: QuireKeyHandlers) {
         if let i = stack.firstIndex(where: { $0.id == id }) {
             stack[i].handlers = handlers
+            stack[i].active = true
         } else {
-            stack.append((id, handlers))
+            stack.append((id, handlers, true))
+        }
+    }
+
+    /// Keep `id`'s place but pass every key to what's beneath it.
+    func deactivate(_ id: UUID) {
+        if let i = stack.firstIndex(where: { $0.id == id }) {
+            stack[i].active = false
+        } else {
+            stack.append((id, QuireKeyHandlers(moveUp: {}, moveDown: {}, open: {}, clear: {}), false))
         }
     }
 
@@ -102,7 +115,11 @@ struct QuireKeyHandlers {
         stack.removeAll { $0.id == id }
     }
 
-    private var top: QuireKeyHandlers? { stack.last?.handlers }
+    /// Nothing acts while App Lock is up: the journal is hidden, so are its keys.
+    private var top: QuireKeyHandlers? {
+        guard !AppLockManager.shared.showsVeil else { return nil }
+        return stack.last(where: { $0.active })?.handlers
+    }
 
     @discardableResult func moveUp()   -> Bool { run { $0.moveUp() } }
     @discardableResult func moveDown() -> Bool { run { $0.moveDown() } }
@@ -113,7 +130,7 @@ struct QuireKeyHandlers {
     var onBack: (() -> Void)?
 
     /// Whether the visible page wants the control chords declared.
-    var wantsChords: Bool { stack.last?.handlers.wantsChords ?? false }
+    var wantsChords: Bool { top?.wantsChords ?? false }
 
     @discardableResult func chord(_ k: String) -> Bool {
         guard let top, top.wantsChords else { return false }
@@ -123,7 +140,8 @@ struct QuireKeyHandlers {
     /// A letter: the visible list gets first refusal, then whatever is
     /// registered beneath it (the app's own tab keys).
     @discardableResult func key(_ k: String) -> Bool {
-        for entry in stack.reversed() where entry.handlers.key(k) { return true }
+        guard !AppLockManager.shared.showsVeil else { return false }
+        for entry in stack.reversed() where entry.active && entry.handlers.key(k) { return true }
         return false
     }
 
@@ -213,8 +231,10 @@ final class KeyCommandController: UIViewController {
         reclaim?.invalidate()
         reclaim = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             guard let self, let window = self.view.window, !self.isFirstResponder else { return }
-            // Anything that isn't taking typed text may give the keys up.
-            if !(window.firstResponder is UIKeyInput) { self.becomeFirstResponder() }
+            // Anything that isn't taking typed text may give the keys up, but not
+            // another catcher: two visible ones would trade it back and forth.
+            let holder = window.firstResponder
+            if !(holder is UIKeyInput), !(holder is KeyCommandController) { self.becomeFirstResponder() }
         }
     }
 

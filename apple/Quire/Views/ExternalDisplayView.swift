@@ -138,6 +138,17 @@ struct ExternalRow: Equatable, Identifiable {
         present(.idle)
     }
 
+    /// An entry page leaving: back to idle only if the monitor still shows that
+    /// kind of page (being read, or being written when `writing`). A list that
+    /// has already come back underneath and published itself stays up.
+    func clearEntry(writing: Bool) {
+        switch latest {
+        case .reading: if !writing { present(.idle) }
+        case .composing, .editing: if writing { present(.idle) }
+        default: break
+        }
+    }
+
     func togglePause() {
         guard isConnected else { return }
         isPaused.toggle()

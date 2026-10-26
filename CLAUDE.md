@@ -86,7 +86,9 @@ core/               quire-core
   src/media_cleanup.rs  conservative asset organisation for terminal cleanup: strict
                     inventory/read, verified copies, backed-up markdown, reference
                     rewrites, then removal of old paths; recovery originals under
-                    .quire/media-cleanup/. Missing/ambiguous links are reported,
+                    .quire/media-cleanup/<UTC run time>/, pruned after RECOVERY_DAYS
+                    (30) when cleanup or orphan clearing next runs (never in the
+                    background). Missing/ambiguous links are reported,
                     unreferenced assets kept unless the user confirms clearing them
                     (default no; rechecked and archived into recovery first);
                     existing YYYY/MM assets left in place.

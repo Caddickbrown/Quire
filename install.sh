@@ -1259,6 +1259,21 @@ holds_journal() {
   return 1
 }
 
+# One Exec argument as the desktop-entry spec wants it (as the app's own
+# ensure_launcher writes it): % doubled; quoted when it holds a reserved
+# character, with " ` $ and \ escaped inside the quotes; then every backslash
+# doubled by the value's own string escaping.
+desktop_exec_arg() {
+  local a
+  a=$(printf '%s' "$1" | sed 's/%/%%/g')
+  case "$a" in
+    *[[:space:]\"\'\\\<\>~\|\&\;\$\*\?\#\(\)\`]*)
+      a=$(printf '%s' "$a" | sed 's/[\\"`$]/\\&/g; s/\\/\\\\/g')
+      printf '"%s"' "$a" ;;
+    *) printf '%s' "$a" ;;
+  esac
+}
+
 # Install the bundle Tauri just built, or the one downloaded ($GUI_FILE).
 install_gui() {
   local out="$SRC/target/release/bundle" f exec_line
@@ -1286,8 +1301,8 @@ install_gui() {
       [ -f "${ICON_FILE:-$SRC/linux/src-tauri/icons/128x128.png}" ] || [ $DRY -eq 1 ] \
         && run install -m 644 "${ICON_FILE:-$SRC/linux/src-tauri/icons/128x128.png}" "$ICON_PATH"
       # Without FUSE the AppImage can still run by unpacking itself first.
-      exec_line=$APPIMAGE
-      [ "${NO_FUSE:-0}" = 1 ] && exec_line="env APPIMAGE_EXTRACT_AND_RUN=1 $APPIMAGE"
+      exec_line=$(desktop_exec_arg "$APPIMAGE")
+      [ "${NO_FUSE:-0}" = 1 ] && exec_line="env APPIMAGE_EXTRACT_AND_RUN=1 $exec_line"
       say "  ${D}launcher entry → $APPS_DIR/Quire.desktop${R}"
       if [ $DRY -eq 0 ]; then
         rm -f "$APPS_DIR/quire.desktop"   # the old name; it never matched the window's app id

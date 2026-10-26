@@ -184,7 +184,7 @@ struct SettingsView: View {
          time, removes exact duplicates, and retroactively moves any entry matching a \
          split tag into split/<tag>/YYYY/MM/DD.md — so adding a split tag later pulls matching \
          history out too. Clear Orphan Media moves unused files out of assets/ and keeps recovery copies \
-         under .quire/media-cleanup/. Export combines all filed entries into one markdown file (drafts still in \
+         under .quire/media-cleanup/ for 30 days. Export combines all filed entries into one markdown file (drafts still in \
          the Inbox aren't included until you file them).
          """),
         ("Storage, iCloud & jnl",
@@ -740,7 +740,7 @@ struct SettingsView: View {
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("\(orphanCount) media file\(orphanCount == 1 ? "" : "s") in assets/ \(orphanCount == 1 ? "is" : "are") not referenced by any entry. Clear \(orphanCount == 1 ? "it" : "them")? Recovery copies will be kept under .quire/media-cleanup/.")
+            Text("\(orphanCount) media file\(orphanCount == 1 ? "" : "s") in assets/ \(orphanCount == 1 ? "is" : "are") not referenced by any entry. Clear \(orphanCount == 1 ? "it" : "them")? Recovery copies will be kept under .quire/media-cleanup/ for 30 days.")
         }
         .alert("No orphan media", isPresented: $showingNoOrphans) {
             Button("OK") { }
@@ -753,7 +753,7 @@ struct SettingsView: View {
         )) {
             Button("OK") { }
         } message: {
-            Text("Cleared \(orphanCleared ?? 0) unused media file\((orphanCleared ?? 0) == 1 ? "" : "s"). Recovery copies are kept under .quire/media-cleanup/.")
+            Text("Cleared \(orphanCleared ?? 0) unused media file\((orphanCleared ?? 0) == 1 ? "" : "s"). Recovery copies are kept under .quire/media-cleanup/ for 30 days.")
         }
         .alert("Cleanup complete", isPresented: $showingCleanup) {
             Button("OK") { }

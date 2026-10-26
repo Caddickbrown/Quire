@@ -58,7 +58,7 @@ struct ReaderScreen: View {
         .onChange(of: store.revision) { _, _ in refresh(); mirror() }
         .onAppear { mirror(); registerKeys() }
         .onDisappear {
-            ExternalDisplayModel.shared.present(.idle)
+            ExternalDisplayModel.shared.clearEntry(writing: false)
             KeyCommandRouter.shared.unregister(routerID)
         }
         .confirmationDialog("Delete this entry?", isPresented: $confirmDelete, titleVisibility: .visible) {

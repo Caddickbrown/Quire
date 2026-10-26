@@ -1201,7 +1201,19 @@ final class JournalStore: ObservableObject {
     }
     private func assetRelativePath(_ url: URL) -> String {
         guard let baseURL else { return "" }
-        return String(url.path.dropFirst(baseURL.path.count + 1))
+        return Self.relativePath(of: url, under: baseURL)
+    }
+
+    /// `url`'s path below `base`, by path components after resolving symlinks.
+    /// Trimming by character count went wrong when one side came back as
+    /// `/private/var/…` and the other as `/var/…` (iOS does both).
+    nonisolated static func relativePath(of url: URL, under base: URL) -> String {
+        let b = base.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let u = url.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        guard u.count > b.count, Array(u.prefix(b.count)) == b else {
+            return String(url.path.dropFirst(base.path.count + 1))
+        }
+        return u.dropFirst(b.count).joined(separator: "/")
     }
 
 
@@ -1256,7 +1268,7 @@ final class JournalStore: ObservableObject {
                 let values = try? url.resourceValues(forKeys: Set(keys))
                 return AssetItem(url: url,
                                  modified: values?.contentModificationDate ?? .distantPast,
-                                 entryDate: entryDates["assets/" + String(url.path.dropFirst(dir.path.count + 1))],
+                                 entryDate: entryDates["assets/" + relativePath(of: url, under: dir)],
                                  size: values?.fileSize ?? 0)
             }
             .sorted { $0.name < $1.name }

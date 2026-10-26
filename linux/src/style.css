@@ -370,10 +370,14 @@ button.card:hover .title { color: var(--accent); }
 .popover kbd { font-family: "Plex Mono", monospace; font-size: 12px; padding: 1px 6px; border-radius: 5px; background: var(--chrome); border: 1px solid var(--line); }
 
 /* editor extras */
-.editor .backdrop b, .editor .backdrop i, .editor .backdrop code { font-weight: inherit; font-style: inherit; }
-.editor .backdrop b { font-weight: 600; }
-.editor .backdrop i { font-style: italic; }
-.editor .backdrop code { font-family: "Plex Mono", monospace; font-size: .92em; }
+/* The backdrop must keep every glyph exactly as wide as the transparent textarea
+   above it, or the caret drifts on the line: no weight, italic, font or size
+   changes. Bold is a faux-bold shadow, italic a colour, code a tint; the
+   markdown markers themselves stay visible. */
+.editor .backdrop b, .editor .backdrop i, .editor .backdrop code { font: inherit; letter-spacing: inherit; }
+.editor .backdrop b { text-shadow: .45px 0 0 currentColor; }
+.editor .backdrop i { color: var(--accent-ink); }
+.editor .backdrop code { background: var(--chrome); border-radius: 3px; }
 .editor .backdrop .tag { color: var(--accent); }
 .tagpick { position: absolute; z-index: 5; min-width: 160px; padding: 4px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.16); display: flex; flex-direction: column; font-family: "Plex Sans", sans-serif; font-size: 13px; }
 .tagpick button { text-align: left; min-height: 30px; padding: 0 10px; border: none; border-radius: 7px; background: none; color: var(--accent); }
@@ -747,8 +751,7 @@ button.card:disabled:hover .title { color: inherit; }
 .counters, .mstrip { display: none; }
 
 [data-theme="marathon"] {
-  --page: #141516; --ground: #121314; --chrome: #1B1C1E; --card: #1B1C1E;
-  --ink: #ECECEA; --muted: #8D9096; --faint: #6A6D72; --line: #2C2E31; --line2: #222326;
+  /* Page, ink and line colours come from the block above, which mirrors themes.json. */
   --chip: #2A2B2E; --chip-ink: #C9CACD; --sel: #ECECEA; --sel-ink: #111213;
   --strip: #232427; --badge: #2E7BFF; --badge-ink: #FFFFFF;
   --hatch: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='44' height='44'%3E%3Cpath d='M0 22H44M22 0V44' stroke='%232E7BFF' stroke-opacity='.10'/%3E%3Cpath d='M6 6l6 6M12 6l-6 6M30 28l6 6M36 28l-6 6' stroke='%232E7BFF' stroke-opacity='.45' stroke-width='1.2'/%3E%3C/svg%3E");
