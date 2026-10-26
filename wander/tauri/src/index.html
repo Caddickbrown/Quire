@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wander</title>
+<link rel="stylesheet" href="./fonts/fonts.css">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-row" data-tauri-drag-region>
+    <span class="wordmark">wander</span>
+    <nav class="pages" id="pages"></nav>
+    <span class="spacer"></span>
+    <span class="smallcaps" id="running-head"></span>
+    <span class="toggles">
+      <span class="pipe">│</span>
+      <button class="quiet" data-column="index">Index</button>
+      <button class="quiet" data-column="stats">Stats</button>
+      <button class="quiet" data-column="options">Options</button>
+    </span>
+    <span class="window-controls" id="window-controls">
+      <button title="Minimise" data-window="minimise">&#8211;</button>
+      <button title="Maximise" data-window="maximise">&#9723;</button>
+      <button title="Close" data-window="close">&#10005;</button>
+    </span>
+  </div>
+  <div class="rule-heavy"></div>
+</header>
+
+<main class="columns">
+
+  <section class="panel index" id="col-index">
+    <div class="ornament" id="rail-ornament" aria-hidden="true">
+      <i class="orn-a"></i><i class="orn-b"></i><i class="orn-c"></i>
+    </div>
+    <div class="find">
+      <span class="smallcaps">Find</span>
+      <input id="query" type="text" placeholder="title, text or @tag" spellcheck="false">
+      <button class="quiet" id="clear-query" hidden>Clear</button>
+    </div>
+    <div class="rule"></div>
+    <div class="list" id="list"></div>
+    <div class="rule"></div>
+    <div class="index-actions">
+      <button class="block" id="new-entry">New</button>
+    </div>
+  </section>
+
+  <section class="editor" id="col-editor">
+    <div class="ornament" id="page-ornament" aria-hidden="true">
+      <i class="orn-a"></i><i class="orn-b"></i><i class="orn-c"></i><i class="orn-d"></i>
+    </div>
+    <div class="page">
+      <div class="kicker smallcaps" id="kicker" hidden></div>
+      <input id="title" class="title" placeholder="Untitled" spellcheck="false">
+      <div class="dateline">
+        <button class="smallcaps linkish" id="dateline"></button>
+        <span class="spacer"></span>
+        <span class="smallcaps" id="record-time"></span>
+        <button class="icon" id="record" title="Record a voice note (⌘⇧R)" aria-label="Record">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+        </button>
+        <button class="icon" id="file-toggle" title="File into the journal (⌘J)" aria-label="File" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v10M8 9.5l4 4 4-4M4 13.5V19a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5.5"/></svg>
+        </button>
+        <button class="icon star" id="star-toggle" title="Star (⌘D)" aria-label="Star">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg>
+        </button>
+      </div>
+      <div class="rule-ink"></div>
+      <div id="prose" class="prose" contenteditable="plaintext-only" spellcheck="true"></div>
+      <div class="rule"></div>
+      <div class="status">
+        <span class="smallcaps" id="counts"></span>
+        <span class="spacer"></span>
+        <span class="smallcaps" id="save-state"></span>
+      </div>
+    </div>
+    <div class="blank" id="blank" hidden>
+      <h1>Nothing open</h1>
+      <p class="marginalia">Press ⌘N to start an entry. Wander writes plain markdown into
+        journal/YYYY/MM/DD.md — the same files the Mac app and jnl read.</p>
+      <button class="block" id="blank-new">New</button>
+    </div>
+  </section>
+
+  <section class="panel stats" id="col-stats">
+    <div class="scroll">
+      <div class="group" id="group-entry"></div>
+      <div class="group">
+        <div class="smallcaps section">Filed</div>
+        <div class="field"><span>Number</span><b id="s-number">—</b></div>
+        <div class="field"><span>Written</span><b><button class="value" id="s-written">—</button></b></div>
+        <div class="field"><span>Tags</span><b id="s-tags" class="accent">—</b></div>
+        <div class="field"><span>Status</span><b><button class="value" id="s-status">—</button></b></div>
+        <div class="field"><span>File</span><b id="s-file">—</b></div>
+      </div>
+      <div class="group" id="group-journal"></div>
+      <div class="group actions">
+        <button class="block" id="a-file" hidden>File</button>
+        <button class="block" id="a-copy">Copy markdown</button>
+      </div>
+      <div class="group">
+        <div class="rule"></div>
+        <p class="marginalia" id="prompt"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel options" id="col-options">
+    <div class="scroll">
+      <div class="group">
+        <div class="smallcaps section">Setting</div>
+        <div class="field"><span>Theme</span><b><button class="value" id="o-theme">Almanac</button></b></div>
+        <div class="field"><span>Type</span>
+          <b class="stepper"><button data-step="type-">−</button><i id="o-type">17.5</i><button data-step="type+">+</button></b>
+        </div>
+        <div class="field"><span>Leading</span>
+          <b class="stepper"><button data-step="lead-">−</button><i id="o-lead">1.42</i><button data-step="lead+">+</button></b>
+        </div>
+        <div class="field"><span>Focus</span><b><button class="value" data-toggle="focus" id="o-focus">Off</button></b></div>
+        <div class="field"><span>Measure</span>
+          <b class="stepper"><button data-step="measure-">−</button><i id="o-measure">760</i><button data-step="measure+">+</button></b>
+        </div>
+        <div class="field"><span>Paper</span><b><button class="value" id="o-paper">Auto</button></b></div>
+      </div>
+      <div class="group">
+        <div class="smallcaps section">Columns</div>
+        <div class="field"><span>Index</span><b><button class="value" data-column="index" id="o-index">Open</button></b></div>
+        <div class="field"><span>Stats</span><b><button class="value" data-column="stats" id="o-stats">Open</button></b></div>
+        <div class="field"><span>Options</span><b><button class="value" data-column="options" id="o-options">Open</button></b></div>
+      </div>
+      <div class="group">
+        <div class="smallcaps section">Journal</div>
+        <div class="field"><span>Folder</span><b><button class="value" id="o-folder">Change</button></b></div>
+        <p class="path" id="o-path"></p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div class="scrim" id="scrim" hidden>
+  <div class="sheet" id="sheet">
+    <div class="sheet-head">
+      <h2>Date &amp; time</h2>
+      <span class="smallcaps" id="sheet-title"></span>
+    </div>
+    <div class="rule-ink"></div>
+    <div class="calendar">
+      <div class="cal-head">
+        <span class="cal-month" id="cal-month"></span>
+        <span class="spacer"></span>
+        <button class="quiet" id="cal-today">Today</button>
+        <button class="quiet" id="cal-prev">‹</button>
+        <button class="quiet" id="cal-next">›</button>
+      </div>
+      <div class="cal-weekdays" id="cal-weekdays"></div>
+      <div class="rule-ink"></div>
+      <div class="cal-grid" id="cal-grid"></div>
+    </div>
+    <div class="field"><span>Time</span>
+      <b class="stepper"><button id="time-down">−</button><input id="time" value="09:00"><button id="time-up">+</button></b>
+    </div>
+    <div class="field"><span id="dest-label">Moves to</span><b id="dest">—</b></div>
+    <p class="marginalia" id="sheet-note"></p>
+    <div class="sheet-actions">
+      <button class="block outline" id="sheet-cancel">Keep</button>
+      <button class="block" id="sheet-move">Move entry</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="themes" hidden>
+  <div class="sheet themes">
+    <div class="sheet-head">
+      <h2>Themes</h2>
+      <span class="smallcaps" id="themes-count"></span>
+      <span class="spacer"></span>
+      <span class="paper-picker" id="paper-picker">
+        <button data-paper="auto">Auto</button><button data-paper="light">Light</button><button data-paper="dark">Dark</button>
+      </span>
+      <button class="block outline narrow" id="themes-done">Done</button>
+    </div>
+    <div class="rule-ink"></div>
+    <div class="theme-grid" id="theme-grid"></div>
+  </div>
+</div>
+
+<div class="scrim" id="confirm" hidden>
+  <div class="sheet narrow">
+    <h2>Delete this entry?</h2>
+    <p class="marginalia" id="confirm-note"></p>
+    <div class="sheet-actions">
+      <button class="block outline" id="confirm-cancel">Keep</button>
+      <button class="block danger" id="confirm-delete">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,156 @@
+{
+  "artboards": [
+    {
+      "file": "Quiet.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1240,
+      "h": 800,
+      "title": "Quiet"
+    },
+    {
+      "file": "Main.dc.html",
+      "x": 1340,
+      "y": 0,
+      "w": 1240,
+      "h": 800,
+      "title": "Almanac \u2014 ships today"
+    },
+    {
+      "file": "Botanic.dc.html",
+      "x": 2680,
+      "y": 0,
+      "w": 1240,
+      "h": 800,
+      "title": "Botanic"
+    },
+    {
+      "file": "Manuscript.dc.html",
+      "x": 4020,
+      "y": 0,
+      "w": 1240,
+      "h": 800,
+      "title": "Manuscript"
+    },
+    {
+      "file": "Sumi.dc.html",
+      "x": 5360,
+      "y": 0,
+      "w": 1240,
+      "h": 800,
+      "title": "Sumi \u00b7 Hanko"
+    },
+    {
+      "file": "Editorial.dc.html",
+      "x": 0,
+      "y": 1080,
+      "w": 1240,
+      "h": 800,
+      "title": "Editorial"
+    },
+    {
+      "file": "Broadsheet.dc.html",
+      "x": 1340,
+      "y": 1080,
+      "w": 1240,
+      "h": 800,
+      "title": "Broadsheet"
+    },
+    {
+      "file": "Cinema.dc.html",
+      "x": 2680,
+      "y": 1080,
+      "w": 1240,
+      "h": 800,
+      "title": "Cinema"
+    },
+    {
+      "file": "Seismograph.dc.html",
+      "x": 4020,
+      "y": 1080,
+      "w": 1240,
+      "h": 800,
+      "title": "Seismograph"
+    },
+    {
+      "file": "Constructivist.dc.html",
+      "x": 5360,
+      "y": 1080,
+      "w": 1240,
+      "h": 800,
+      "title": "Constructivist"
+    },
+    {
+      "file": "Bauhaus.dc.html",
+      "x": 0,
+      "y": 2160,
+      "w": 1240,
+      "h": 800,
+      "title": "Bauhaus"
+    },
+    {
+      "file": "Brutalist.dc.html",
+      "x": 1340,
+      "y": 2160,
+      "w": 1240,
+      "h": 800,
+      "title": "Brutalist"
+    },
+    {
+      "file": "Carson.dc.html",
+      "x": 2680,
+      "y": 2160,
+      "w": 1240,
+      "h": 800,
+      "title": "Broken grid"
+    },
+    {
+      "file": "Memphis.dc.html",
+      "x": 4020,
+      "y": 2160,
+      "w": 1240,
+      "h": 800,
+      "title": "Memphis"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "shortlist",
+      "x": 0,
+      "y": -320,
+      "w": 900,
+      "text": "THE SHORTLIST \u2014 fourteen, on one board.\nRow 1: the calm four you kept, plus Sumi.  Rows 2 and 3: the bold ones.\nSame screen, same entry, in every one."
+    },
+    {
+      "id": "editorial",
+      "x": 0,
+      "y": 910,
+      "w": 440,
+      "text": "EDITORIAL \u2014 the GQ/Esquire register: Bodoni Moda at 56px with an italic drop line, a standfirst, wide-tracked kickers, and magenta used exactly four times.\nWhy: the only one here that treats an entry as a commissioned piece \u2014 kicker, headline, standfirst, drop cap.\nCost: the standfirst is writing you didn't ask for; without one the layout has a hole."
+    },
+    {
+      "id": "sumi",
+      "x": 5360,
+      "y": -170,
+      "w": 420,
+      "text": "SUMI \u00b7 HANKO \u2014 merged, as you asked. Hanko's vertical wordmark, red seal and 2.0 line-height, on Sumi's ink-wash ground."
+    },
+    {
+      "id": "seis",
+      "x": 4020,
+      "y": 910,
+      "w": 420,
+      "text": "SEISMOGRAPH \u2014 reworked: the trace moved out of the banner and down the stats column, today at the top."
+    },
+    {
+      "id": "constr",
+      "x": 5360,
+      "y": 910,
+      "w": 420,
+      "text": "CONSTRUCTIVIST \u2014 reworked: one angle instead of three, the wedge anchored as ground, the title set flush."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

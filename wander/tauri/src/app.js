@@ -1,0 +1,1844 @@
+/*
+  wander — the front end.
+
+  The same journal the macOS app opens: entries are plain markdown in the jnl
+  layout, and the Rust side (src-tauri/src/journal.rs) does every read and write.
+  This file is the interface — the index, the page, the two panels — and the
+  live markdown styling in the editor.
+*/
+
+const invoke = window.__TAURI__.core.invoke;
+const convertFileSrc = window.__TAURI__.core.convertFileSrc;
+const webview = window.__TAURI__.webview.getCurrentWebview();
+const dialog = window.__TAURI__.dialog;
+const appWindow = window.__TAURI__.window.getCurrentWindow();
+
+const $ = (id) => document.getElementById(id);
+const PAGES = ['journal', 'inbox', 'starred'];
+
+const state = {
+  base: '',
+  entries: [],
+  page: 'journal',
+  query: '',
+  selection: null,
+  title: '',
+  body: '',
+  saveState: '',
+  sheetDate: null,
+  calendarMonth: null,
+  pendingDelete: null,
+  // Bumped whenever the entry list changes. Anything derived from every entry
+  // — the visible set, the streak — is cached against it, because with a big
+  // journal those walks are done several times per render.
+  revision: 0,
+};
+
+const touch = () => { state.revision += 1; };
+
+let THEMES = [];
+let theme = null;
+
+const settings = Object.assign({
+  theme: 'almanac',
+  type: 17.5,
+  lead: 0.3,
+  measure: 760,
+  focus: false,
+  paper: 'auto',
+  columns: { index: true, stats: true, options: false },
+}, JSON.parse(localStorage.getItem('wander.settings') || '{}'));
+
+function persistSettings() {
+  localStorage.setItem('wander.settings', JSON.stringify(settings));
+}
+
+// ---------------------------------------------------------------- utilities
+
+const idOf = (entry) => `${entry.source}#${entry.ts}`;
+
+/// The entry as it sits in the file. The Rust side no longer sends this — it is
+/// the header line plus the body a second time, and it doubled the JSON the
+/// front end had to parse — so it is rebuilt here, where it is actually wanted.
+function rawOf(entry) {
+  let raw = `[${entry.ts}]`;
+  if (entry.suffix) raw += ` ${entry.suffix}`;
+  if (entry.body) raw += `\n${entry.body}`;
+  return raw;
+}
+
+/// Folded to lower case once and kept on the entry: search used to fold the
+/// whole journal on every keystroke in the find box.
+function haystack(entry) {
+  if (entry.folded === undefined) entry.folded = rawOf(entry).toLowerCase();
+  return entry.folded;
+}
+
+/// The file's own name. `source` is an absolute path from the Rust side, so on
+/// Windows its separator is a backslash — split on either, not just '/'.
+const basename = (path) => path.split(/[\\/]/).pop();
+
+const current = () => state.entries.find((e) => idOf(e) === state.selection) || null;
+
+const words = (text) => (text.trim() ? text.trim().split(/\s+/).length : 0);
+const paragraphs = (text) => text.split(/\n\s*\n/).filter((p) => p.trim()).length;
+const readingMinutes = (text) => (words(text) ? Math.max(1, Math.round(words(text) / 220)) : 0);
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'];
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const pad = (n) => String(n).padStart(2, '0');
+
+function parseStamp(ts) {
+  // "YYYY-MM-DD HH:MM:SS" as local time, without Date's string-parsing quirks.
+  const [date, time] = ts.split(' ');
+  const [y, m, d] = date.split('-').map(Number);
+  const [hh, mm, ss] = (time || '00:00:00').split(':').map(Number);
+  return new Date(y, m - 1, d, hh, mm, ss);
+}
+
+const stampOf = (date) =>
+  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+  `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+
+const dayOf = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+const longDay = (date) => `${DAYS[date.getDay()]}, ${date.getDate()} ${MONTHS[date.getMonth()]} ${date.getFullYear()}`;
+const shortDay = (date) => `${date.getDate()} ${SHORT_MONTHS[date.getMonth()]}`;
+const clock = (date) => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+
+const PROMPTS = [
+  'Write the sentence you would rather not. It is usually the one carrying the entry.',
+  'Detail before conclusion: what was on the table, what the light was doing, who spoke first.',
+  'A journal is not a defence. Nobody is going to cross-examine the draft.',
+  'If the day resists summary, put down three things in the order they happened and stop.',
+  'The dull entries are the ones worth having in five years. Keep them.',
+  'Name the thing you are avoiding, then leave it. Naming is enough for today.',
+  'Write it as you would tell it to one person, and not as you would post it.',
+  'What changed today that you would not have predicted on Monday?',
+  'End mid-thought if you must. Tomorrow’s entry can pick up the sentence.',
+  'Tag it @later and let the future reader do the sorting.',
+  'One page is a good day’s work. Half a page still counts.',
+  'Describe the room. The feeling tends to follow the furniture.',
+];
+
+// ------------------------------------------------------------------- filing
+
+let visibleCache = { key: null, list: [] };
+
+function visibleEntries() {
+  const query = state.query.trim().toLowerCase();
+  const key = `${state.revision}\u0000${state.page}\u0000${query}`;
+  if (visibleCache.key === key) return visibleCache.list;
+
+  const found = query
+    ? state.entries.filter((e) => haystack(e).includes(query))
+    : state.entries;
+  const list = found.filter(onPage);
+  visibleCache = { key, list };
+  return list;
+}
+
+/// Whether an entry belongs on the page being shown. Filing carries an entry
+/// from the inbox to the journal, so this is also the test for whether it has
+/// just left the page you are standing on — starred, which cuts across both,
+/// keeps it.
+function onPage(entry) {
+  if (state.page === 'inbox') return entry.unfiled;
+  if (state.page === 'starred') return entry.starred;
+  return !entry.unfiled;
+}
+
+/// Where the index should land when the open entry leaves the page: the row
+/// below it, which slides up into its place, or the row above when it was the
+/// last one. Null when it was the only one — an emptied inbox is worth seeing.
+function successorId(entry) {
+  const list = visibleEntries();
+  const index = list.findIndex((e) => idOf(e) === idOf(entry));
+  if (index < 0) return null;
+  const next = list[index + 1] || list[index - 1];
+  return next ? idOf(next) : null;
+}
+
+/// Sections for the index: the inbox is one undated run, because inbox.md is;
+/// the other pages are set by month.
+function sections() {
+  const list = visibleEntries();
+  if (state.page === 'inbox') {
+    return list.length ? [{ title: 'Inbox', entries: list, inbox: true }] : [];
+  }
+  const order = [];
+  const buckets = new Map();
+  for (const entry of list) {
+    const key = entry.date.slice(0, 7);
+    if (!buckets.has(key)) { order.push(key); buckets.set(key, []); }
+    buckets.get(key).push(entry);
+  }
+  return order.map((key) => {
+    const [y, m] = key.split('-').map(Number);
+    return { title: `${MONTHS[m - 1]} ${y}`, entries: buckets.get(key), inbox: false };
+  });
+}
+
+let streakCache = { revision: -1, value: 0 };
+
+function streak() {
+  if (streakCache.revision === state.revision) return streakCache.value;
+  streakCache = { revision: state.revision, value: countStreak() };
+  return streakCache.value;
+}
+
+function countStreak() {
+  const days = new Set(state.entries.map((e) => e.date));
+  if (!days.size) return 0;
+  let cursor = new Date();
+  if (!days.has(dayOf(cursor))) {
+    cursor.setDate(cursor.getDate() - 1);
+    if (!days.has(dayOf(cursor))) return 0;
+  }
+  let count = 0;
+  while (days.has(dayOf(cursor))) {
+    count += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return count;
+}
+
+// -------------------------------------------------------------------- media
+
+/// Photos, video and sound are Nook's: a file in <base>/assets/ named by an
+/// uppercase UUID, and an image link to it from the entry, relative to the
+/// journal folder. The Rust side (media.rs) copies files in; this side shows
+/// them. The kinds match Nook's by extension, so a link reads as the same kind
+/// of thing in either app.
+const MEDIA_KINDS = {
+  image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'bmp', 'tif', 'tiff'],
+  video: ['mov', 'mp4', 'm4v', 'webm'],
+  audio: ['m4a', 'mp3', 'wav', 'aac', 'aiff', 'caf', 'ogg', 'opus', 'flac'],
+};
+const MEDIA_NAMES = { image: 'Photo', video: 'Video', audio: 'Recording' };
+const MEDIA_LINE = /^\s*!\[[^\]\n]*\]\(([^)\s]+)\)\s*$/;
+
+const extOf = (path) => (path.match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase() || '';
+const isMedia = (path) => Object.values(MEDIA_KINDS).some((list) => list.includes(extOf(path)));
+
+function mediaKind(path) {
+  const ext = extOf(path);
+  if (MEDIA_KINDS.video.includes(ext)) return 'video';
+  if (MEDIA_KINDS.audio.includes(ext)) return 'audio';
+  return 'image';
+}
+
+/// A URL the page may load for a link, or null for one it won't: a web
+/// address, an absolute path, or anything that climbs out with '..'. Only the
+/// folder's assets/ is in the asset protocol's scope anyway (lib.rs).
+function mediaUrl(src) {
+  if (!state.base || /^[a-z][a-z0-9+.-]*:/i.test(src) || /^[\\/]/.test(src)) return null;
+  if (src.split(/[\\/]/).includes('..')) return null;
+  let path = src;
+  try { path = decodeURI(src); } catch (error) { /* a stray % is part of the name */ }
+  return convertFileSrc(`${state.base}/${path}`);
+}
+
+/// The picture, player or recording under a link. It holds no text — an
+/// <img>, <video> or <audio> has no text nodes — so the caret arithmetic
+/// that counts characters line by line never sees it. A file that won't load
+/// is marked broken and says so through CSS, for the same reason.
+function mediaNode(src) {
+  const url = mediaUrl(src);
+  if (!url) return '';
+  const kind = mediaKind(src);
+  const name = escapeHtml(src.split(/[\\/]/).pop());
+  const inner = kind === 'image'
+    ? `<img src="${escapeHtml(url)}" alt="" loading="lazy" draggable="false">`
+    : kind === 'video'
+      ? `<video src="${escapeHtml(url)}" controls preload="metadata"></video>`
+      : `<audio src="${escapeHtml(url)}" controls preload="metadata"></audio>`;
+  return `<span class="media ${kind}" contenteditable="false" data-src="${escapeHtml(src)}" ` +
+         `data-name="${name}">${inner}</span>`;
+}
+
+/// WebKitGTK plays video and sound over http and blob: but not from the asset
+/// protocol, where an <img> loads fine and a <video> fails as unsupported. So a
+/// player that fails is given its file again as a blob, read through fetch,
+/// which the asset protocol does serve. Only once: a second failure is the file.
+async function retryAsBlob(player, holder) {
+  if (player.dataset.retried) {
+    holder.classList.add('broken');
+    return;
+  }
+  player.dataset.retried = 'true';
+  try {
+    const response = await fetch(player.src);
+    if (!response.ok) throw new Error(response.status);
+    player.src = URL.createObjectURL(await response.blob());
+  } catch (error) {
+    holder.classList.add('broken');
+  }
+}
+
+// A media element's error doesn't bubble, so it is caught on the way down.
+document.addEventListener('error', (event) => {
+  const holder = event.target.closest && event.target.closest('.media');
+  if (!holder) return;
+  if (event.target.matches('video, audio')) retryAsBlob(event.target, holder);
+  else holder.classList.add('broken');
+}, true);
+
+/// Re-styling a line rebuilds it, and a rebuilt <img> or <video> reloads —
+/// on every keystroke, a flicker, and a video that stops. So the old elements
+/// are carried over into the new line wherever it points at the same file.
+function adoptMedia(from, into) {
+  const old = new Map();
+  for (const node of from.querySelectorAll('.media')) {
+    const list = old.get(node.dataset.src) || [];
+    list.push(node);
+    old.set(node.dataset.src, list);
+  }
+  if (!old.size) return;
+  for (const node of into.querySelectorAll('.media')) {
+    const kept = (old.get(node.dataset.src) || []).shift();
+    if (kept) node.replaceWith(kept);
+  }
+}
+
+// -------------------------------------------------------- markdown styling
+
+/// Quotes too, though nothing here builds an attribute from escaped text:
+/// the next template that does should not need to remember.
+const escapeHtml = (s) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+const mark = (s) => `<span class="mark">${s}</span>`;
+
+/// Inline markdown, in one left-to-right pass over the source text. Each rule
+/// used to run over the previous rule's output — HTML, not markdown — so the
+/// emphasis rule matched the asterisks of a strong span's markers, a tag rule
+/// found the @ in a URL, and a link inside backticks came out live. Now each
+/// run is claimed once, in order of precedence (code, strong, emphasis, link,
+/// tag), and whatever falls between is escaped as plain text. Every character
+/// of the source comes out as exactly one character of text, which the caret
+/// arithmetic in readProse and placeCaret depends on.
+const INLINE = new RegExp([
+  '`(?<code>[^`\\n]+)`',
+  '(?<both>\\*\\*\\*|___)(?=\\S)(?<bothBody>.+?)(?<=\\S)\\k<both>',
+  '(?<strong>\\*\\*|__)(?=\\S)(?<strongBody>.+?)(?<=\\S)\\k<strong>',
+  '(?<em>[*_])(?=[^\\s*_])(?<emBody>(?:(?!\\k<em>).)+?)(?<=[^\\s*_])\\k<em>(?![*_])',
+  '!\\[(?<alt>[^\\]\\n]*)\\]\\((?<src>[^)\\s]+)\\)',
+  '\\[(?<label>[^\\]\\n]*)\\]\\((?<url>[^)\\s]+)\\)',
+  '(?<tag>@[a-zA-Z][a-zA-Z0-9_-]*)',
+].join('|'), 'g');
+
+function inlineStyle(text) {
+  let out = '';
+  let last = 0;
+  let from = 0;
+  for (;;) {
+    INLINE.lastIndex = from;
+    const match = INLINE.exec(text);
+    if (!match) break;
+    const at = match.index;
+    const g = match.groups;
+    const opener = g.both || g.strong || g.em;
+    // An @ inside a word is an address, not a tag; underscores inside a word
+    // are an identifier, not emphasis. Both are left as text.
+    if ((g.tag && at > 0 && /[\w.]/.test(text[at - 1])) ||
+        (opener && opener[0] === '_' && at > 0 && /\w/.test(text[at - 1]))) {
+      from = at + 1;
+      continue;
+    }
+    out += escapeHtml(text.slice(last, at));
+    if (g.code !== undefined) {
+      out += `<span class="code">${mark('`')}${escapeHtml(g.code)}${mark('`')}</span>`;
+    } else if (g.both) {
+      out += `${mark(g.both)}<span class="strong"><span class="em">${inlineStyle(g.bothBody)}` +
+             `</span></span>${mark(g.both)}`;
+    } else if (g.strong) {
+      out += `${mark(g.strong)}<span class="strong">${inlineStyle(g.strongBody)}</span>${mark(g.strong)}`;
+    } else if (g.em) {
+      out += `${mark(g.em)}<span class="em">${inlineStyle(g.emBody)}</span>${mark(g.em)}`;
+    } else if (g.src !== undefined) {
+      // The link stays on the page, faded, with the thing itself under it:
+      // what is on disk is still the markdown that was typed.
+      out += `${mark('![')}<span class="caption">${escapeHtml(g.alt)}</span>${mark('](')}` +
+             `<span class="url">${escapeHtml(g.src)}</span>${mark(')')}${mediaNode(g.src)}`;
+    } else if (g.url !== undefined) {
+      out += `${mark('[')}<span class="link">${escapeHtml(g.label)}</span>${mark(']')}` +
+             `${mark('(')}<span class="url">${escapeHtml(g.url)}</span>${mark(')')}`;
+    } else {
+      out += `<span class="tag">${escapeHtml(g.tag)}</span>`;
+    }
+    last = at + match[0].length;
+    from = last;
+  }
+  return out + escapeHtml(text.slice(last));
+}
+
+/// One source line as one styled block. Structure shows; the markers recede.
+function renderLine(line) {
+  if (!line) return '<span class="ln"><br></span>';
+
+  let match = line.match(/^(#{1,6})\s+(.*)$/);
+  if (match) {
+    const level = Math.min(match[1].length, 3);
+    return `<span class="ln h${level}">${mark(match[1])} ${inlineStyle(match[2])}</span>`;
+  }
+  match = line.match(/^(\s*>\s?)(.*)$/);
+  if (match) {
+    return `<span class="ln quote">${mark(match[1])}${inlineStyle(match[2])}</span>`;
+  }
+  match = line.match(/^(\s*(?:[-*+]|\d{1,3}\.)\s)(.*)$/);
+  if (match) {
+    return `<span class="ln bullet">${mark(match[1])}${inlineStyle(match[2])}</span>`;
+  }
+  if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+    return `<span class="ln hr">${escapeHtml(line)}</span>`;
+  }
+  return `<span class="ln">${inlineStyle(line)}</span>`;
+}
+
+// -------------------------------------------------- the contenteditable page
+
+const prose = $('prose');
+
+/// The text as the DOM currently holds it, plus where the caret sits in it.
+function readProse() {
+  const selection = window.getSelection();
+  let text = '';
+  let caret = null;
+  const lines = Array.from(prose.children);
+
+  lines.forEach((line, index) => {
+    if (index) text += '\n';
+    if (selection && selection.anchorNode === prose && selection.anchorOffset === index) {
+      caret = text.length;
+    }
+    const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+    let node;
+    let sawText = false;
+    while ((node = walker.nextNode())) {
+      sawText = true;
+      if (selection && selection.anchorNode === node) {
+        caret = text.length + selection.anchorOffset;
+      }
+      text += node.nodeValue;
+    }
+    if (!sawText && selection && line.contains(selection.anchorNode)) caret = text.length;
+  });
+
+  // Typing into an empty editor can leave a bare text node behind.
+  if (!lines.length) {
+    text = prose.textContent;
+    caret = selection && selection.anchorNode ? selection.anchorOffset : text.length;
+  }
+  return { text, caret };
+}
+
+/// The lines as the DOM currently has them, so a keystroke can be matched
+/// against them and only its own line rebuilt.
+let renderedLines = [];
+
+function renderProse(text, caret) {
+  const lines = text.split('\n');
+
+  // Typing touches one line, and the styling here is line by line, so replacing
+  // that one block beats re-parsing the whole entry's HTML on every keystroke.
+  // Anything wider — a paste, a return, a delete across a newline — falls
+  // through to the full rebuild below.
+  if (lines.length === renderedLines.length && prose.children.length === lines.length) {
+    let changed = -1;
+    let count = 0;
+    for (let index = 0; index < lines.length && count < 2; index += 1) {
+      if (lines[index] !== renderedLines[index]) { changed = index; count += 1; }
+    }
+    if (count < 2) {
+      if (count === 1) {
+        const holder = document.createElement('div');
+        holder.innerHTML = renderLine(lines[changed]);
+        adoptMedia(prose.children[changed], holder.firstChild);
+        prose.replaceChild(holder.firstChild, prose.children[changed]);
+      }
+      renderedLines = lines;
+      if (caret !== null && caret !== undefined) placeCaret(caret);
+      markLiveLine();
+      return;
+    }
+  }
+
+  const holder = document.createElement('div');
+  holder.innerHTML = lines.map(renderLine).join('');
+  adoptMedia(prose, holder);
+  prose.replaceChildren(...holder.childNodes);
+  renderedLines = lines;
+  if (caret !== null && caret !== undefined) placeCaret(caret);
+  markLiveLine();
+}
+
+function placeCaret(offset) {
+  let remaining = offset;
+  const lines = Array.from(prose.children);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const length = line.textContent.length;
+    if (remaining <= length) {
+      const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+      let node;
+      let seen = 0;
+      while ((node = walker.nextNode())) {
+        if (seen + node.nodeValue.length >= remaining) {
+          const range = document.createRange();
+          range.setStart(node, remaining - seen);
+          range.collapse(true);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          return;
+        }
+        seen += node.nodeValue.length;
+      }
+      // Empty line: put the caret in the block itself.
+      const range = document.createRange();
+      range.setStart(line, 0);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return;
+    }
+    remaining -= length + 1;   // the newline between blocks
+  }
+}
+
+/// Focus mode lights only the line the caret is on. Finding it by walking up
+/// from the caret touches two nodes; asking every line whether it contains the
+/// caret touched all of them, on every keystroke.
+let liveLine = null;
+
+function markLiveLine() {
+  if (!settings.focus) {
+    if (liveLine) { liveLine.classList.remove('live'); liveLine = null; }
+    return;
+  }
+  const anchor = window.getSelection() ? window.getSelection().anchorNode : null;
+  let line = anchor && (anchor.nodeType === 1 ? anchor : anchor.parentElement);
+  while (line && line !== prose && line.parentElement !== prose) line = line.parentElement;
+  if (line === prose) line = null;
+
+  if (line === liveLine) return;
+  if (liveLine) liveLine.classList.remove('live');
+  liveLine = line;
+  if (liveLine) liveLine.classList.add('live');
+}
+
+/// The page is rebuilt as it is styled, which takes the browser's own undo
+/// with it, so undo is kept here. The top of the stack is always the text as
+/// it now stands (seeded with the entry as loaded), so ⌘Z steps back to the
+/// one before it, and all the way back reaches the entry as it was opened.
+/// Pauses of 400ms mark the steps. Cleared when another entry is opened.
+const undoStack = [];
+const redoStack = [];
+let undoTimer = null;
+
+function recordNow(text, caret) {
+  clearTimeout(undoTimer);
+  undoTimer = null;
+  const last = undoStack[undoStack.length - 1];
+  if (last && last.text === text) return;
+  undoStack.push({ text, caret });
+  if (undoStack.length > 200) undoStack.shift();
+  redoStack.length = 0;
+}
+
+function snapshot(text, caret) {
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => recordNow(text, caret), 400);
+}
+
+function seedUndo(text) {
+  clearTimeout(undoTimer);
+  undoTimer = null;
+  undoStack.length = 0;
+  redoStack.length = 0;
+  undoStack.push({ text, caret: text.length });
+}
+
+function restore(step) {
+  state.body = step.text;
+  renderProse(step.text, step.caret);
+  edited();
+  renderCounts();
+}
+
+function undo() {
+  // A pause still pending is a step that has not been recorded yet: record it,
+  // so the undo lands on the one before rather than being eaten by it later.
+  if (undoTimer) recordNow(state.body, readProse().caret);
+  if (undoStack.length < 2) return;
+  redoStack.push(undoStack.pop());
+  restore(undoStack[undoStack.length - 1]);
+}
+
+function redo() {
+  clearTimeout(undoTimer);
+  undoTimer = null;
+  const next = redoStack.pop();
+  if (!next) return;
+  undoStack.push(next);
+  restore(next);
+}
+
+prose.addEventListener('input', () => {
+  const { text, caret } = readProse();
+  state.body = text;
+  snapshot(text, caret);
+  renderProse(text, caret);
+  edited();
+  renderCounts();
+});
+
+prose.addEventListener('keydown', (event) => {
+  const meta = event.metaKey || event.ctrlKey;
+  if (meta && event.key.toLowerCase() === 'z') {
+    event.preventDefault();
+    if (event.shiftKey) redo(); else undo();
+    return;
+  }
+  if (meta && !event.shiftKey && (event.key === 'b' || event.key === 'i')) {
+    event.preventDefault();
+    // Underscores for italic, as the Mac app and the README have it.
+    wrapSelection(event.key === 'b' ? '**' : '_');
+  }
+  // Left to the browser, Enter is its native paragraph-insertion command —
+  // which line-splitting a <span class="ln"> per source line was never
+  // designed to survive, and which WebKitGTK's contenteditable in particular
+  // mangles into duplicated blocks and a caret that lands nowhere near the
+  // keystroke. Handled here instead: a plain text splice, exactly like
+  // wrapSelection, so Enter behaves the same on every platform.
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    const { text, caret } = readProse();
+    const selection = window.getSelection();
+    const chosen = selection && !selection.isCollapsed ? selection.toString() : '';
+    let start = caret;
+    let end = caret;
+    if (chosen) {
+      start = text.indexOf(chosen);
+      if (start < 0) start = caret;
+      end = start + chosen.length;
+    }
+    const next = text.slice(0, start) + '\n' + text.slice(end);
+    state.body = next;
+    snapshot(next, start + 1);
+    renderProse(next, start + 1);
+    edited();
+    renderCounts();
+  }
+});
+
+document.addEventListener('selectionchange', () => {
+  if (document.activeElement === prose) markLiveLine();
+});
+
+function wrapSelection(marker) {
+  const { text, caret } = readProse();
+  const selection = window.getSelection();
+  const chosen = selection && !selection.isCollapsed ? selection.toString() : '';
+  recordNow(text, caret);
+  if (!chosen) {
+    const next = text.slice(0, caret) + marker + marker + text.slice(caret);
+    state.body = next;
+    renderProse(next, caret + marker.length);
+    recordNow(next, caret + marker.length);
+  } else {
+    const start = text.indexOf(chosen);
+    if (start < 0) return;
+    const wrapped = chosen.startsWith(marker) && chosen.endsWith(marker);
+    const replacement = wrapped
+      ? chosen.slice(marker.length, -marker.length)
+      : marker + chosen + marker;
+    const next = text.slice(0, start) + replacement + text.slice(start + chosen.length);
+    state.body = next;
+    renderProse(next, start + replacement.length);
+    recordNow(next, start + replacement.length);
+  }
+  edited();
+  renderCounts();
+}
+
+// ------------------------------------------------------------------- saving
+
+let saveTimer = null;
+
+/// Clean when the buffer matches what is on disk, or what was last written
+/// from it — the Rust side trims what it stores, so comparing only against the
+/// stored entry would leave a buffer with a trailing newline dirty for ever,
+/// saving on a loop.
+function dirty(entry) {
+  if (state.title === entry.title && state.body === entry.body) return false;
+  const written = entry.written;
+  return !written || state.title !== written.title || state.body !== written.body;
+}
+
+function edited() {
+  const entry = current();
+  if (!entry) return;
+  if (!dirty(entry)) {
+    clearTimeout(saveTimer);
+    if (state.saveState === 'Writing…') setSaveState('');
+    return;
+  }
+  setSaveState('Writing…');
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 700);
+}
+
+function setSaveState(text) {
+  state.saveState = text;
+  $('save-state').textContent = text;
+}
+
+/// Saves run one at a time. A write slower than the 700ms debounce would
+/// otherwise let the next one start from the same entry while the first was
+/// still in flight, and the two could land in either order.
+let saving = Promise.resolve();
+
+function save() {
+  clearTimeout(saveTimer);
+  saving = saving.then(saveNow, saveNow);
+  return saving;
+}
+
+async function saveNow() {
+  const entry = current();
+  if (!entry || !dirty(entry)) return;
+  const written = { title: state.title, body: state.body };
+  try {
+    const saved = await invoke('save', {
+      ts: entry.ts,
+      source: entry.source,
+      title: written.title,
+      body: written.body,
+      starred: entry.starred,
+    });
+    absorb(entry, saved, written);
+    setSaveState(saved ? `Saved ${clock(new Date())}` : '');
+  } catch (error) {
+    setSaveState(`Not saved — ${error}`);
+  }
+}
+
+/// Fold what the disk now holds back into the list, without rereading the
+/// folder. Saving used to call `refresh`, which parsed every file in the
+/// journal and rebuilt the index from it — once every 700ms while you typed,
+/// and it took the caret and the undo stack with it each time.
+function absorb(entry, saved, written) {
+  // By id, not by identity: a reload may have swapped the objects out while
+  // the write was in flight.
+  const id = idOf(entry);
+  const index = state.entries.findIndex((e) => idOf(e) === id);
+
+  // Emptied: the Rust side has taken it off disk, so it leaves the list too.
+  if (!saved) {
+    if (index >= 0) state.entries.splice(index, 1);
+    touch();
+    // Only move on if the entry that went was the one still open — a save that
+    // lands after you have clicked elsewhere must not drag you back.
+    if (!current()) ensureSelection();
+    render();
+    return;
+  }
+
+  // Saving never moves an entry, so its id — and its place in the list — hold.
+  if (written) saved.written = written;
+  if (index >= 0) state.entries[index] = saved;
+  else state.entries.unshift(saved);
+  touch();
+  render();
+}
+
+async function refreshNow(selectId) {
+  const journal = await invoke('load');
+  state.base = journal.base;
+  state.entries = journal.entries;
+  touch();
+  if (selectId !== undefined && selectId !== null) state.selection = selectId;
+  if (!current()) {
+    const first = visibleEntries()[0];
+    state.selection = first ? idOf(first) : null;
+  }
+  loadDraft();
+  render();
+}
+
+function loadDraft() {
+  const entry = current();
+  state.title = entry ? entry.title : '';
+  state.body = entry ? entry.body : '';
+  $('title').value = state.title;
+  renderProse(state.body, null);
+  seedUndo(state.body);
+}
+
+function selectEntry(id) {
+  if (state.selection === id) return;
+  save();
+  state.selection = id;
+  loadDraft();
+  setSaveState('');
+  render();
+}
+
+// ------------------------------------------------------------------ actions
+
+// Every entry starts undated: new writing rarely belongs to a day on the spot,
+// so it waits in the inbox until it is filed.
+async function newEntryNow() {
+  await save();
+  const entry = await invoke('create');
+  state.page = 'inbox';
+  // A blank entry isn't on disk until it has text; hold it in the list.
+  state.entries.unshift(entry);
+  touch();
+  state.selection = idOf(entry);
+  loadDraft();
+  render();
+  prose.focus();
+}
+
+async function toggleStarNow() {
+  await save();
+  // `save` may have replaced the entry object, so ask for it again.
+  const entry = current();
+  if (!entry) return;
+  const saved = await invoke('save', {
+    ts: entry.ts, source: entry.source,
+    title: entry.title, body: entry.body, starred: !entry.starred,
+  });
+  absorb(entry, saved, null);
+}
+
+/// File a draft, or send a filed entry back to the inbox. The entry travels;
+/// you don't. The page stays as it was and the selection steps to whatever
+/// takes the entry's place, so an inbox can be cleared one entry at a time
+/// rather than throwing the index over to the journal and back on every file.
+async function toggleFilingNow() {
+  const open = current();
+  if (!open) return;
+  await save();
+  // By id, and from the list: `save` may have replaced the entry object, or
+  // emptied it off disk and moved the selection on — neither of which should
+  // end with some other entry being filed.
+  const entry = state.entries.find((e) => idOf(e) === idOf(open));
+  if (!entry) return;
+  // Read after the save, which may have rewritten the list under us.
+  const next = successorId(entry);
+  const moved = await invoke('relocate', {
+    ts: entry.ts, source: entry.source, newTs: null, toInbox: !entry.unfiled,
+  });
+  // On a page the entry still belongs to nothing has moved, so stay with it.
+  await refreshNow(onPage(moved) ? idOf(moved) : next);
+}
+
+async function removeEntryNow(entry) {
+  await invoke('remove', { ts: entry.ts, source: entry.source });
+  state.selection = null;
+  await refreshNow(null);
+}
+
+async function moveEntryNow(date) {
+  const entry = current();
+  if (!entry) return;
+  const moved = await invoke('relocate', {
+    ts: entry.ts, source: entry.source, newTs: stampOf(date), toInbox: null,
+  });
+  await refreshNow(idOf(moved));
+}
+
+/// Put links to files already in assets/ into the open entry, each on a line
+/// of its own, after the line holding `at` (a character offset in the body) —
+/// or at the end when there is no caret to go by. After the line rather than
+/// at the caret, so a photo never lands in the middle of a sentence.
+function insertMedia(links, at) {
+  const text = state.body;
+  let pos = at === null || at === undefined ? text.length : at;
+  const eol = text.indexOf('\n', pos);
+  pos = eol < 0 ? text.length : eol;
+  const before = text.slice(0, pos);
+  const block = links.map((link) => `![](${link})`).join('\n');
+  const lead = before.trim() ? '\n' : '';
+  const head = before.trimEnd() + lead + block;
+  const next = head + (text.slice(pos) || '\n');
+  recordNow(text, pos);
+  state.body = next;
+  renderProse(next, head.length);
+  recordNow(next, head.length);
+  edited();
+  renderCounts();
+}
+
+/// The body offset under a point on screen, or null if the point isn't over
+/// the text — the drop lands where the pointer is, like dropping into any
+/// other editor.
+function offsetAt(x, y) {
+  const range = document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;
+  if (!range || !prose.contains(range.startContainer)) return null;
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return readProse().caret;
+}
+
+/// Files dropped anywhere on the window. Tauri takes the drop before the page
+/// sees it, and hands over paths rather than File objects — which is what the
+/// Rust side wants anyway: it copies from the path, and nothing crosses the
+/// bridge but a name.
+async function dropFilesNow(paths, position) {
+  const media = paths.filter(isMedia);
+  if (!media.length) {
+    setSaveState('Only photos, video and sound can be dropped in');
+    return;
+  }
+  if (!current()) await newEntryNow();
+  // Tauri reports the drop in physical pixels; the page works in CSS pixels.
+  const scale = window.devicePixelRatio || 1;
+  const at = position ? offsetAt(position.x / scale, position.y / scale) : null;
+  const attached = await invoke('attach', { paths: media });
+  if (attached.links.length) insertMedia(attached.links, at);
+  const skipped = paths.length - media.length + attached.refused.length;
+  if (attached.refused.length) setSaveState(`Not attached — ${attached.refused[0]}`);
+  else if (skipped) setSaveState(`${skipped} ${skipped === 1 ? 'file wasn’t' : 'files weren’t'} a photo, video or sound`);
+}
+
+// ---------------------------------------------------------------- recording
+
+/// Press to record, press again to stop: the note goes into assets/ as an
+/// .m4a and its link into the entry. Nothing more — no trimming, no waveform.
+/// On Linux ffmpeg records it (media.rs), since WebKitGTK's recorder needs
+/// plugins most desktops lack; elsewhere the webview records and ffmpeg, if
+/// installed, converts.
+let recorder = null;
+
+function renderRecord() {
+  const button = $('record');
+  const elapsed = $('record-time');
+  button.classList.toggle('on', !!recorder);
+  button.title = recorder ? 'Stop recording (⌘⇧R)' : 'Record a voice note (⌘⇧R)';
+  if (!recorder) {
+    elapsed.textContent = '';
+    return;
+  }
+  const seconds = Math.floor((Date.now() - recorder.started) / 1000);
+  elapsed.textContent = `${Math.floor(seconds / 60)}:${pad(seconds % 60)}`;
+}
+
+async function toggleRecordingNow() {
+  if (recorder) {
+    await recorder.stop();
+    return;
+  }
+  if (!current()) await newEntryNow();
+  const openId = state.selection;
+  const at = document.activeElement === prose ? readProse().caret : null;
+  const done = (link) => placeRecording(link, openId, at);
+
+  try {
+    await invoke('start_recording');
+    begin(async () => done(await invoke('stop_recording')));
+  } catch (error) {
+    if (String(error) !== 'unsupported') throw error;
+    await recordInWebview(done);
+  }
+}
+
+function begin(stop) {
+  recorder = {
+    started: Date.now(),
+    tick: setInterval(renderRecord, 500),
+    stop: async () => {
+      const running = recorder;
+      recorder = null;
+      clearInterval(running.tick);
+      renderRecord();
+      setSaveState('Saving the recording…');
+      await stop();
+    },
+  };
+  renderRecord();
+}
+
+async function recordInWebview(done) {
+  if (!window.MediaRecorder || !navigator.mediaDevices) {
+    throw new Error('this build of the webview can’t record');
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const type = ['audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']
+    .find((t) => MediaRecorder.isTypeSupported(t));
+  const media = new MediaRecorder(stream, type ? { mimeType: type } : {});
+  const chunks = [];
+  media.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+  const stopped = new Promise((resolve) => { media.onstop = resolve; });
+  media.start(1000);
+  begin(async () => {
+    media.stop();
+    await stopped;
+    stream.getTracks().forEach((track) => track.stop());
+    const mime = media.mimeType || '';
+    const ext = mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'm4a' : 'webm';
+    const bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    if (!bytes.length) throw new Error('nothing was recorded');
+    await done(await invoke('save_recording', bytes, { headers: { 'x-ext': ext } }));
+  });
+}
+
+/// Into the entry it was recorded for, even if another has been opened since.
+async function placeRecording(link, openId, at) {
+  if (state.selection === openId) {
+    insertMedia([link], at);
+    return;
+  }
+  await save();
+  const entry = state.entries.find((e) => idOf(e) === openId);
+  if (!entry) {
+    setSaveState(`Recording kept as ${link}, but its entry has moved — add the link by hand`);
+    return;
+  }
+  const body = `${entry.body.trimEnd()}${entry.body.trim() ? '\n' : ''}![](${link})`;
+  const saved = await invoke('save', {
+    ts: entry.ts, source: entry.source, title: entry.title, body, starred: entry.starred,
+  });
+  absorb(entry, saved, null);
+  setSaveState('Recording added to the entry it was made in');
+}
+
+/// Every action that goes to disk says so on the status line when it fails,
+/// where a failed save already does. Left alone, a rejected invoke is an
+/// unhandled rejection: nothing on screen, and a button that seems broken.
+function reported(failure, action) {
+  return async (...args) => {
+    try {
+      return await action(...args);
+    } catch (error) {
+      setSaveState(`${failure} — ${error}`);
+      return undefined;
+    }
+  };
+}
+
+const newEntry = reported('No new entry', newEntryNow);
+const toggleStar = reported('Not starred', toggleStarNow);
+const toggleFiling = reported('Not filed', toggleFilingNow);
+const removeEntry = reported('Not removed', removeEntryNow);
+const moveEntry = reported('Not moved', moveEntryNow);
+const refresh = reported('Couldn’t read the journal', refreshNow);
+const dropFiles = reported('Not attached', dropFilesNow);
+const toggleRecording = reported('Not recorded', toggleRecordingNow);
+
+// ---------------------------------------------------------------- rendering
+
+function render() {
+  renderMasthead();
+  renderList();
+  renderEditor();
+  renderPanels();
+  applySettings();
+}
+
+function renderMasthead() {
+  const nav = $('pages');
+  const ordered = [state.page, ...PAGES.filter((p) => p !== state.page)];
+  nav.innerHTML = '';
+  // Only the inbox carries a count: it is a queue, and the number is the thing
+  // waiting to be dealt with. Counted once, not once per button.
+  const count = state.entries.reduce((n, e) => n + (e.unfiled ? 1 : 0), 0);
+  for (const page of ordered) {
+    const button = document.createElement('button');
+    button.className = `quiet${page === state.page ? ' on' : ''}`;
+    button.textContent = page === 'inbox' && count
+      ? `Inbox ${count}`
+      : page.charAt(0).toUpperCase() + page.slice(1);
+    button.onclick = () => { state.page = page; ensureSelection(); render(); };
+    nav.appendChild(button);
+  }
+
+  const entry = current();
+  const number = entry
+    ? state.entries.length - state.entries.findIndex((e) => idOf(e) === state.selection)
+    : null;
+  const parts = [];
+  if (number) parts.push(`No. ${String(number).padStart(3, '0')}`);
+  parts.push(longDay(new Date()));
+  const run = streak();
+  if (run > 1) parts.push(`${run}-day streak`);
+  $('running-head').textContent = parts.join(' · ');
+
+  document.querySelectorAll('[data-column]').forEach((button) => {
+    const open = settings.columns[button.dataset.column];
+    if (button.classList.contains('quiet')) button.classList.toggle('on', open);
+    else button.textContent = open ? 'Open' : 'Closed';
+  });
+}
+
+/// The index is windowed. A journal of any age is thousands of rows, and
+/// building every one of them — which is what this did — cost a third of a
+/// second of frozen interface every time anything at all changed. Rows are
+/// built a screenful at a time and appended as the list is scrolled.
+const LIST_BATCH = 60;
+const LIST_LOOKAHEAD = 400;
+let listItems = [];
+let listShown = 0;
+let listKey = null;
+let rowHeight = 56;
+
+/// Stands in for the rows not built yet, so the scrollbar still measures the
+/// whole journal rather than the handful of rows currently in the document.
+const spacer = document.createElement('div');
+spacer.className = 'list-rest';
+
+function renderList() {
+  const list = $('list');
+  // Most re-renders are a word count or a title changing, not the list itself.
+  // Only a different page or a different search starts again from the top.
+  const key = `${state.page}\u0000${state.query}`;
+  const keep = key === listKey;
+  listKey = key;
+  const wasScrolled = keep ? list.scrollTop : 0;
+
+  list.innerHTML = '';
+  listItems = [];
+  listShown = 0;
+  const grouped = sections();
+
+  if (!grouped.length) {
+    const note = document.createElement('p');
+    note.className = 'marginalia';
+    note.style.padding = '22px 14px';
+    note.textContent = state.query
+      ? 'No entry matches that.'
+      : state.page === 'inbox'
+        ? 'The inbox is empty — start a draft when something isn’t ready to be dated.'
+        : state.page === 'starred'
+          ? 'Nothing starred. Star an entry to keep it where you can find it again.'
+          : 'Nothing filed yet. The first entry is the hardest to place; it needn’t be good.';
+    list.appendChild(note);
+    return;
+  }
+
+  for (const section of grouped) {
+    listItems.push({ section });
+    // Position within the section, not the whole list — row colours cycle
+    // fresh under each month heading, the way the Mac app cycles them.
+    section.entries.forEach((entry, position) => listItems.push({ entry, position }));
+  }
+  spacer.style.height = '0px';
+  list.appendChild(spacer);
+  // Back to where the list was, which means building the rows up to there.
+  growTo(Math.max(wasScrolled + list.clientHeight, LIST_LOOKAHEAD));
+  list.scrollTop = wasScrolled;
+  growList();
+}
+
+/// Rows enough to cover what is on screen, and a little beyond it.
+function growList() {
+  const list = $('list');
+  growTo(list.scrollTop + list.clientHeight + LIST_LOOKAHEAD);
+}
+
+function growTo(bottom) {
+  const list = $('list');
+  // How far the rows built so far reach. Taken from the list's own scroll
+  // height rather than the spacer's offsetTop, which is measured against
+  // whichever ancestor happens to be positioned.
+  const built = () => list.scrollHeight - spacer.offsetHeight;
+  while (listShown < listItems.length && built() < bottom) {
+    const end = Math.min(listItems.length, listShown + LIST_BATCH);
+    const batch = document.createDocumentFragment();
+    for (let index = listShown; index < end; index += 1) {
+      const item = listItems[index];
+      batch.appendChild(item.section ? sectionNode(item.section) : rowNode(item.entry, item.position));
+    }
+    list.insertBefore(batch, spacer);
+    listShown = end;
+    // Measured rather than guessed, so the scrollbar is about the right size.
+    const first = list.querySelector('.row');
+    if (first && first.offsetHeight) rowHeight = first.offsetHeight;
+    spacer.style.height = `${(listItems.length - listShown) * rowHeight}px`;
+  }
+}
+
+$('list').addEventListener('scroll', () => {
+  if (listShown < listItems.length) growList();
+});
+
+function sectionNode(section) {
+  const head = document.createElement('div');
+  head.className = `month${section.inbox ? ' inbox' : ''}`;
+  head.innerHTML = `<span class="smallcaps">${section.title}</span>` +
+                   `<span class="smallcaps">${section.entries.length}</span>`;
+  return head;
+}
+
+function rowNode(entry, position) {
+  const row = document.createElement('button');
+  const selected = idOf(entry) === state.selection;
+  row.className = `row${selected ? ' on' : ''}`;
+  // Pink, teal, plain, in rotation — the selected row takes the accent via
+  // CSS instead, so this only touches the ones that aren't.
+  if (!selected && theme && theme.chrome.rowColours && theme.chrome.rowStyle === 'card') {
+    const fills = ['var(--surface)', 'var(--tint)', 'var(--surface)'];
+    row.style.background = fills[position % fills.length];
+  }
+  const title = entry.title || firstLine(entry.body);
+  const date = parseStamp(entry.ts);
+  const meta = `${entry.unfiled ? 'Draft · ' : ''}${shortDay(date)} · ${entry.words} ` +
+               `${entry.words === 1 ? 'word' : 'words'}`;
+  row.innerHTML =
+    `<div class="row-title${title ? '' : ' untitled'}">${escapeHtml(title || 'Untitled')}` +
+    `${entry.starred ? '<span class="star"> ✱</span>' : ''}</div>` +
+    `<div class="row-meta"><span class="smallcaps">${escapeHtml(meta)}</span>` +
+    `<span class="spacer"></span>` +
+    `${entry.unfiled ? '<span class="smallcaps file">File</span>' : ''}</div>`;
+  row.onclick = (event) => {
+    if (event.target.classList.contains('file')) {
+      selectEntry(idOf(entry));
+      toggleFiling();
+      return;
+    }
+    selectEntry(idOf(entry));
+  };
+  row.oncontextmenu = (event) => {
+    event.preventDefault();
+    selectEntry(idOf(entry));
+    state.pendingDelete = entry;
+    $('confirm-note').textContent =
+      `“${entry.title || firstLine(entry.body) || 'Untitled'}” will be removed from ` +
+      `${basename(entry.source)} on disk.`;
+    $('confirm').hidden = false;
+  };
+  return row;
+}
+
+/// The line a row is named by. A line that is only a photo or a recording
+/// names it by what it is, rather than by a UUID.
+function firstLine(body) {
+  const lines = body.split('\n').filter((line) => line.trim());
+  const text = lines.find((line) => !MEDIA_LINE.test(line));
+  if (text) return text.replace(/^[#>\-*_`\s]+/, '');
+  const media = lines.length ? lines[0].match(MEDIA_LINE) : null;
+  return media ? MEDIA_NAMES[mediaKind(media[1])] : '';
+}
+
+function renderEditor() {
+  const entry = current();
+  $('blank').hidden = !!entry;
+  document.querySelector('.page').hidden = !entry;
+  if (!entry) return;
+
+  const date = parseStamp(entry.ts);
+  const parts = [longDay(date), clock(date)];
+  if (entry.tags.length) parts.push(entry.tags.slice(0, 4).join(' '));
+  $('dateline').textContent = parts.join(' · ').toUpperCase();
+
+  // The magazine kicker: the day, and the first tag if the entry carries one.
+  const kicker = $('kicker');
+  if (theme && theme.chrome.kicker) {
+    const day = longDay(date).split(',')[0];
+    kicker.textContent = entry.tags.length ? `${day} · ${entry.tags[0]}` : day;
+    kicker.hidden = false;
+  } else {
+    kicker.hidden = true;
+  }
+
+  $('star-toggle').classList.toggle('on', entry.starred);
+  $('star-toggle').title = entry.starred ? 'Unstar (⌘D)' : 'Star (⌘D)';
+  $('file-toggle').hidden = !entry.unfiled;
+  renderCounts();
+}
+
+function renderCounts() {
+  const count = words(state.body);
+  const parts = [`${count} ${count === 1 ? 'word' : 'words'}`, `${state.body.length} characters`];
+  const minutes = readingMinutes(state.body);
+  if (minutes) parts.push(`${minutes} min read`);
+  $('counts').textContent = parts.join(' · ').toUpperCase();
+}
+
+/// A ruled row, the vocabulary the panels use everywhere except the themes
+/// whose stats read as figures instead.
+const fieldRow = (label, value, tone) =>
+  `<div class="field"><span>${label}</span><b${tone ? ` class="${tone}"` : ''}>${value}</b></div>`;
+
+/// A label over a display numeral — the treatment nearly every figures theme
+/// uses for its counts. `figureBlocks` themes give each one a fill of its
+/// own, cycling the theme's distinct colours; the rest just tint the value.
+function figureTile(index, label, value, tone) {
+  if (theme && theme.chrome.figureBlocks) {
+    return `<div class="figure block" style="background:var(--fill-${index});color:var(--fill-${index}-on)">` +
+      `<span class="smallcaps">${label}</span><span class="value">${value}</span></div>`;
+  }
+  return `<div class="figure"><span class="smallcaps">${label}</span>` +
+    `<span class="value" style="color:var(${tone || '--ink'})">${value}</span></div>`;
+}
+
+function renderPanels() {
+  const entry = current();
+  const figures = theme && theme.chrome.statsStyle === 'figures';
+  const run = streak();
+  const prefix = dayOf(new Date()).slice(0, 7);
+  const monthCount = state.entries.filter((e) => e.date.startsWith(prefix)).length;
+
+  $('group-entry').innerHTML = figures
+    ? `<div class="figures">` +
+      figureTile(0, 'Words', words(state.body)) +
+      figureTile(1, 'Days running', run, '--accent') +
+      figureTile(2, 'This month', monthCount) +
+      figureTile(0, 'Reading', `${readingMinutes(state.body)} min`) +
+      `</div>`
+    : `<div class="smallcaps section">This entry</div>` +
+      fieldRow('Words', words(state.body)) +
+      fieldRow('Characters', state.body.length) +
+      fieldRow('Paragraphs', paragraphs(state.body)) +
+      fieldRow('Reading', `${readingMinutes(state.body)} min`);
+
+  const number = entry
+    ? state.entries.length - state.entries.findIndex((e) => idOf(e) === state.selection)
+    : null;
+  $('s-number').textContent = number ? `No. ${String(number).padStart(3, '0')}` : '—';
+  $('s-written').textContent = entry
+    ? `${shortDay(parseStamp(entry.ts))} · ${clock(parseStamp(entry.ts))}` : '—';
+  $('s-tags').textContent = entry && entry.tags.length ? entry.tags.slice(0, 3).join(' ') : '—';
+  $('s-status').textContent = entry ? (entry.unfiled ? 'In the inbox' : 'Filed') : '—';
+  $('s-file').textContent = entry ? basename(entry.source) : '—';
+  $('a-file').hidden = !entry || !entry.unfiled;
+
+  const totalWords = state.entries.reduce((sum, e) => sum + e.words, 0).toLocaleString();
+  $('group-journal').innerHTML = `<div class="smallcaps section">Journal</div>` +
+    fieldRow('Entries', state.entries.length) +
+    fieldRow('Words', totalWords) +
+    (figures ? '' :
+      fieldRow('This month', monthCount) +
+      fieldRow('Streak', `${run} ${run === 1 ? 'day' : 'days'}`, run > 0 ? 'green' : ''));
+
+  $('o-type').textContent = settings.type.toFixed(1);
+  $('o-lead').textContent = (1 + settings.lead).toFixed(2);
+  $('o-measure').textContent = settings.measure;
+  $('o-focus').textContent = settings.focus ? 'On' : 'Off';
+  $('o-paper').textContent = settings.paper.charAt(0).toUpperCase() + settings.paper.slice(1);
+  $('o-path').textContent = state.base;
+
+  const day = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+  $('prompt').textContent = PROMPTS[day % PROMPTS.length];
+}
+
+// --------------------------------------------------------------- palette math
+
+const hexLuminance = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+
+/// Whichever of two colours actually contrasts with a fill — the same measure
+/// as the Mac app's Tone.readable, so a near-white "ink" in a dark theme
+/// doesn't get chosen as the dark one and sit white on white.
+function readableOn(fill, first, second) {
+  const base = hexLuminance(fill);
+  return Math.abs(hexLuminance(first) - base) >= Math.abs(hexLuminance(second) - base) ? first : second;
+}
+
+/// Contrast on the usual 1–21 scale, from the same luminance as above.
+const contrast = (a, b) => {
+  const [x, y] = [hexLuminance(a) + 0.05, hexLuminance(b) + 0.05];
+  return Math.max(x, y) / Math.min(x, y);
+};
+
+/// The first candidate that reads on a fill, else the best of them — the Mac
+/// app's Tone.legible. The band masthead needs it: Brutalist's accent is its
+/// ink, so an active page drawn in the accent vanishes into the band.
+function legibleOn(fill, candidates, minimum = 3.2) {
+  const found = candidates.find((c) => contrast(fill, c) >= minimum);
+  if (found) return found;
+  return candidates.reduce((best, c) => (contrast(fill, c) > contrast(fill, best) ? c : best));
+}
+
+/// Distinct fills for the stats blocks: accent, tint, green, ink, deduplicated
+/// and padded with surface — several themes point two or three of those at
+/// the same colour, so this is what keeps a block from repeating.
+function figureFills(palette) {
+  const chosen = [];
+  for (const key of ['accent', 'tint', 'green', 'ink']) {
+    if (!chosen.includes(palette[key])) chosen.push(palette[key]);
+  }
+  while (chosen.length < 3) chosen.push(palette.surface);
+  return chosen;
+}
+
+/// The theme table is the same file the Mac and iOS apps read.
+async function loadThemes() {
+  try {
+    const response = await fetch('./themes.json');
+    THEMES = (await response.json()).themes;
+  } catch (error) {
+    THEMES = [];
+  }
+  theme = THEMES.find((t) => t.id === settings.theme) || THEMES[0] || null;
+}
+
+const isDark = () => {
+  if (settings.paper === 'dark') return true;
+  if (settings.paper === 'light') return false;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+};
+
+/// Paint the theme: its palette as custom properties, its faces, and the
+/// structural switches as data attributes the stylesheet keys off.
+function applyTheme() {
+  if (!theme) return;
+  const root = document.documentElement;
+  const palette = isDark() ? theme.dark : theme.light;
+  for (const [key, value] of Object.entries(palette)) {
+    root.style.setProperty(`--${key.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())}`, value);
+  }
+  const stack = (face, fallback) => `'${face.families.join("', '")}', ${fallback}`;
+  // --prose is the palette's prose colour, set above; the face has its own name.
+  root.style.setProperty('--prose-face', stack(theme.type.prose, 'Georgia, serif'));
+  root.style.setProperty('--display', stack(theme.type.display, 'Georgia, serif'));
+  root.style.setProperty('--label', stack(theme.type.label, 'system-ui, sans-serif'));
+  root.style.setProperty('--label-size', `${theme.type.label.size || 10.5}px`);
+  root.style.setProperty('--label-tracking', `${(theme.type.label.tracking || 1.15) / 10}em`);
+  root.style.setProperty('--display-scale', theme.type.display.scale || 1);
+  root.style.setProperty('--corner', `${theme.chrome.corner || 0}px`);
+  root.style.setProperty('--border', `${theme.chrome.border || 1}px`);
+  root.style.setProperty('--masthead-rule', `${theme.chrome.mastheadRule || 0}px`);
+  root.dataset.masthead = theme.chrome.mastheadStyle || 'rule';
+  root.dataset.rows = theme.chrome.rowStyle || 'rule';
+  root.dataset.stats = theme.chrome.statsStyle || 'rows';
+  root.dataset.pageCard = String(!!theme.chrome.pageCard);
+  root.dataset.ornament = theme.chrome.ornament || 'none';
+  root.dataset.kicker = String(!!theme.chrome.kicker);
+  root.dataset.centred = String(!!theme.chrome.centred);
+
+  const fills = figureFills(palette);
+  fills.forEach((fill, index) => {
+    root.style.setProperty(`--fill-${index}`, fill);
+    root.style.setProperty(`--fill-${index}-on`, readableOn(fill, palette.paper, palette.ink));
+  });
+
+  root.style.setProperty('--accent-on-band',
+    legibleOn(palette.ink, [palette.accent, palette.tint, palette.green, palette.paper]));
+
+  $('o-theme').textContent = theme.name;
+  updateOrnament();
+}
+
+/// The ornament is drawn in pure CSS, keyed off the class set here — except
+/// the ghost numeral, which is the open entry's day and has to come from the
+/// state this function already has to hand. Rail is index furniture, not
+/// something drawn on the page, so it gets its own element instead.
+function updateOrnament() {
+  const kind = theme ? (theme.chrome.ornament || 'none') : 'none';
+  const page = $('page-ornament');
+  const rail = $('rail-ornament');
+  if (page) {
+    page.className = `ornament ornament-${kind === 'rail' ? 'none' : kind}`;
+    const entry = current();
+    page.dataset.day = entry ? entry.date.slice(-2) : '';
+  }
+  if (rail) rail.className = `ornament ornament-${kind === 'rail' ? 'rail' : 'none'}`;
+}
+
+function applySettings() {
+  const root = document.documentElement;
+  root.style.setProperty('--type', `${settings.type}px`);
+  root.style.setProperty('--lead', (1 + settings.lead).toFixed(2));
+  root.style.setProperty('--measure', `${settings.measure}px`);
+  root.dataset.theme = settings.paper;
+  root.dataset.system = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  applyTheme();
+  prose.classList.toggle('focus', settings.focus);
+
+  for (const [name, open] of Object.entries(settings.columns)) {
+    $(`col-${name}`).classList.toggle('closed', !open);
+  }
+  persistSettings();
+}
+
+function ensureSelection() {
+  if (current() && visibleEntries().some((e) => idOf(e) === state.selection)) return;
+  const first = visibleEntries()[0];
+  state.selection = first ? idOf(first) : null;
+  loadDraft();
+}
+
+// ------------------------------------------------------------- the calendar
+
+/// The month the calendar shows, always held on its 1st: stepping a Date's
+/// month from the 31st overflows, so Jan 31 plus one month is 3 March, and the
+/// sheet would skip February.
+const monthOf = (date) => new Date(date.getFullYear(), date.getMonth(), 1);
+
+function openSheet() {
+  const entry = current();
+  if (!entry) return;
+  state.sheetDate = parseStamp(entry.ts);
+  state.calendarMonth = monthOf(state.sheetDate);
+  $('sheet-title').textContent = entry.title || firstLine(entry.body) || 'Untitled';
+  $('dest-label').textContent = entry.unfiled ? 'Stays in' : 'Moves to';
+  $('sheet-note').textContent = entry.unfiled
+    ? 'This one is still in the inbox, which isn’t dated — retiming it rewrites it in place '
+      + 'rather than filing it under a day.'
+    : 'The date is the filename. Changing it rewrites both day files, so jnl and the Mac app '
+      + 'see the entry under its new date.';
+  renderCalendar();
+  $('scrim').hidden = false;
+}
+
+function renderCalendar() {
+  const month = state.calendarMonth;
+  $('cal-month').textContent = `${MONTHS[month.getMonth()]} ${month.getFullYear()}`;
+  $('time').value = clock(state.sheetDate);
+
+  const weekdays = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+  $('cal-weekdays').innerHTML = weekdays
+    .map((day) => `<span class="smallcaps">${day}</span>`).join('');
+
+  const first = new Date(month.getFullYear(), month.getMonth(), 1);
+  const lead = (first.getDay() + 6) % 7;             // weeks start on Monday
+  const start = new Date(first);
+  start.setDate(start.getDate() - lead);
+  const marked = new Set(state.entries.map((e) => e.date));
+
+  const grid = $('cal-grid');
+  grid.innerHTML = '';
+  for (let index = 0; index < 42; index += 1) {
+    const day = new Date(start);
+    day.setDate(day.getDate() + index);
+    const cell = document.createElement('button');
+    const classes = ['day'];
+    if (day.getMonth() !== month.getMonth()) classes.push('out');
+    if (dayOf(day) === dayOf(new Date())) classes.push('today');
+    if (dayOf(day) === dayOf(state.sheetDate)) classes.push('on');
+    if (marked.has(dayOf(day))) classes.push('marked');
+    cell.className = classes.join(' ');
+    cell.innerHTML = `<span>${day.getDate()}</span><span class="dot"></span>`;
+    cell.onclick = () => {
+      const chosen = new Date(day);
+      chosen.setHours(state.sheetDate.getHours(), state.sheetDate.getMinutes(), 0, 0);
+      state.sheetDate = chosen;
+      state.calendarMonth = monthOf(chosen);
+      renderCalendar();
+    };
+    grid.appendChild(cell);
+  }
+
+  const entry = current();
+  const date = dayOf(state.sheetDate).split('-');
+  $('dest').textContent = entry && entry.unfiled
+    ? 'inbox.md'
+    : `journal/${date[0]}/${date[1]}/${date[2]}.md`;
+}
+
+function nudgeTime(minutes) {
+  const next = new Date(state.sheetDate);
+  next.setMinutes(next.getMinutes() + minutes);
+  state.sheetDate = next;
+  renderCalendar();
+}
+
+/// Accepts "9", "930", "9:30", "09:30"; anything else snaps back.
+function commitTime() {
+  const digits = $('time').value.replace(/\D/g, '');
+  let hour = null;
+  let minute = 0;
+  if (digits.length <= 2) hour = Number(digits);
+  else if (digits.length === 3) { hour = Number(digits[0]); minute = Number(digits.slice(1)); }
+  else if (digits.length === 4) { hour = Number(digits.slice(0, 2)); minute = Number(digits.slice(2)); }
+  if (hour !== null && hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+    const next = new Date(state.sheetDate);
+    next.setHours(hour, minute, 0, 0);
+    state.sheetDate = next;
+  }
+  renderCalendar();
+}
+
+// -------------------------------------------------------------------- wiring
+
+$('title').addEventListener('input', (event) => {
+  state.title = event.target.value;
+  edited();
+});
+$('query').addEventListener('input', (event) => {
+  state.query = event.target.value;
+  $('clear-query').hidden = !state.query;
+  ensureSelection();
+  render();
+});
+$('clear-query').onclick = () => {
+  state.query = '';
+  $('query').value = '';
+  $('clear-query').hidden = true;
+  ensureSelection();
+  render();
+};
+
+$('new-entry').onclick = newEntry;
+$('blank-new').onclick = newEntry;
+$('star-toggle').onclick = toggleStar;
+$('record').onclick = toggleRecording;
+$('file-toggle').onclick = toggleFiling;
+$('a-file').onclick = toggleFiling;
+$('s-status').onclick = toggleFiling;
+$('dateline').onclick = openSheet;
+$('s-written').onclick = openSheet;
+$('a-copy').onclick = reported('Not copied', async () => {
+  const entry = current();
+  if (!entry) return;
+  await navigator.clipboard.writeText(rawOf(entry));
+  setSaveState('Copied');
+});
+
+document.querySelectorAll('[data-column]').forEach((button) => {
+  button.onclick = () => {
+    const name = button.dataset.column;
+    settings.columns[name] = !settings.columns[name];
+    applySettings();
+    renderMasthead();
+  };
+});
+
+document.querySelectorAll('[data-step]').forEach((button) => {
+  button.onclick = () => {
+    const step = button.dataset.step;
+    if (step === 'type-') settings.type = Math.max(13, settings.type - 0.5);
+    if (step === 'type+') settings.type = Math.min(28, settings.type + 0.5);
+    if (step === 'lead-') settings.lead = Math.max(0.10, settings.lead - 0.06);
+    if (step === 'lead+') settings.lead = Math.min(1.20, settings.lead + 0.06);
+    if (step === 'measure-') settings.measure = Math.max(520, settings.measure - 40);
+    if (step === 'measure+') settings.measure = Math.min(1100, settings.measure + 40);
+    applySettings();
+    renderPanels();
+  };
+});
+
+$('o-focus').onclick = () => { settings.focus = !settings.focus; applySettings(); renderPanels(); };
+$('o-paper').onclick = () => {
+  const order = ['auto', 'light', 'dark'];
+  settings.paper = order[(order.indexOf(settings.paper) + 1) % order.length];
+  applySettings();
+  renderPanels();
+};
+$('o-folder').onclick = reported('Couldn’t open that folder', async () => {
+  const chosen = await dialog.open({ directory: true, title: 'Choose a journal folder' });
+  if (!chosen) return;
+  const journal = await invoke('set_folder', { path: chosen });
+  state.base = journal.base;
+  state.entries = journal.entries;
+  touch();
+  state.selection = null;
+  ensureSelection();
+  render();
+});
+
+function renderThemes() {
+  const grid = $('theme-grid');
+  grid.innerHTML = '';
+  document.querySelectorAll('[data-paper]').forEach((button) => {
+    button.classList.toggle('on', button.dataset.paper === settings.paper);
+  });
+  $('themes-count').textContent = `${THEMES.length} looks · one journal`;
+
+  for (const entry of THEMES) {
+    const palette = isDark() ? entry.dark : entry.light;
+    const card = document.createElement('button');
+    card.className = `theme-card${entry.id === settings.theme ? ' on' : ''}`;
+    const display = `'${entry.type.display.families.join("', '")}', Georgia, serif`;
+    const label = `'${entry.type.label.families.join("', '")}', system-ui, sans-serif`;
+    const prose = `'${entry.type.prose.families.join("', '")}', Georgia, serif`;
+    const upper = entry.type.display.uppercase ? 'uppercase' : 'none';
+    const filled = entry.chrome.filledButtons;
+
+    // The ornament reads --ink/--panel/--accent/--tint/--green off its own
+    // element rather than the page's current theme, since a dozen of these
+    // sit on screen at once, each showing a different theme's palette.
+    const ornamentVars = `--ink:${palette.ink};--panel:${palette.panel};--accent:${palette.accent};` +
+      `--tint:${palette.tint};--green:${palette.green};--paper:${palette.paper}`;
+    card.innerHTML =
+      `<div class="theme-preview" style="background:${palette.paper}">
+         <div class="ornament ornament-${entry.chrome.ornament || 'none'}" data-day="08" style="${ornamentVars}">
+           <i class="orn-a"></i><i class="orn-b"></i><i class="orn-c"></i><i class="orn-d"></i>
+         </div>
+         <div class="pv-mast">
+           <span style="font-family:${display};font-size:13px;color:${palette.ink};text-transform:${upper}">wander</span>
+           <span class="pv-meta" style="font-family:${label};color:${palette.accent}">journal</span>
+         </div>
+         ${entry.chrome.mastheadRule ? `<div class="pv-rule" style="background:${palette.ink};height:${Math.min(entry.chrome.mastheadRule, 3)}px"></div>` : '<div style="height:4px"></div>'}
+         <div class="pv-title" style="font-family:${display};font-size:${Math.min(21, 15 * (entry.type.display.scale || 1))}px;color:${palette.ink};text-transform:${upper}">The long way round</div>
+         <div class="pv-meta" style="font-family:${label};color:${palette.muted}">8 sep · 122 words</div>
+         <div class="pv-body" style="font-family:${prose};color:${palette.prose};line-height:${1 + settings.lead}">Left before seven and took the long way round the reservoir, which adds twenty minutes.</div>
+         <div class="pv-dots" style="margin-top:auto">
+           <span class="pv-chip" style="font-family:${label};border-radius:${entry.chrome.corner}px;${filled ? `background:${palette.accent};color:${palette.paper}` : `color:${palette.accent};box-shadow:inset 0 0 0 1px ${palette.rule}`}">new entry</span>
+           <i style="background:${palette.tint}"></i><i style="background:${palette.green}"></i>
+         </div>
+       </div>
+       <div class="theme-caption">
+         <div class="row"><span class="scheme-dot ${entry.scheme || 'both'}" title="Best in ${entry.scheme || 'either'}"></span>
+           ${entry.name}${entry.id === settings.theme ? ' <span class="smallcaps" style="color:var(--accent)">In use</span>' : ''}</div>
+         <p>${entry.note}</p>
+       </div>`;
+
+    card.onclick = () => {
+      // Type size and leading are the reader's settings: a theme change leaves
+      // them where they were.
+      settings.theme = entry.id;
+      theme = entry;
+      applySettings();
+      renderPanels();
+      $('themes').hidden = true;
+    };
+    grid.appendChild(card);
+  }
+}
+
+document.querySelectorAll('[data-paper]').forEach((button) => {
+  button.onclick = () => {
+    settings.paper = button.dataset.paper;
+    applySettings();
+    renderPanels();
+    renderThemes();
+  };
+});
+
+$('o-theme').onclick = () => { renderThemes(); $('themes').hidden = false; };
+$('themes-done').onclick = () => { $('themes').hidden = true; };
+
+$('cal-prev').onclick = () => {
+  state.calendarMonth.setMonth(state.calendarMonth.getMonth() - 1);
+  renderCalendar();
+};
+$('cal-next').onclick = () => {
+  state.calendarMonth.setMonth(state.calendarMonth.getMonth() + 1);
+  renderCalendar();
+};
+$('cal-today').onclick = () => {
+  const now = new Date();
+  now.setHours(state.sheetDate.getHours(), state.sheetDate.getMinutes(), 0, 0);
+  state.sheetDate = now;
+  state.calendarMonth = monthOf(now);
+  renderCalendar();
+};
+$('time-down').onclick = () => nudgeTime(-5);
+$('time-up').onclick = () => nudgeTime(5);
+$('time').addEventListener('change', commitTime);
+$('time').addEventListener('blur', commitTime);
+
+$('sheet-cancel').onclick = () => { $('scrim').hidden = true; };
+$('sheet-move').onclick = async () => {
+  $('scrim').hidden = true;
+  await moveEntry(state.sheetDate);
+};
+$('confirm-cancel').onclick = () => { $('confirm').hidden = true; state.pendingDelete = null; };
+$('confirm-delete').onclick = async () => {
+  $('confirm').hidden = true;
+  if (state.pendingDelete) await removeEntry(state.pendingDelete);
+  state.pendingDelete = null;
+};
+
+document.addEventListener('keydown', (event) => {
+  const meta = event.metaKey || event.ctrlKey;
+  if (!meta) {
+    if (event.key === 'Escape') {
+      for (const id of ['scrim', 'themes', 'confirm']) $(id).hidden = true;
+    }
+    return;
+  }
+  // Shift changes event.key (⌘⇧\ arrives as '|'), so the backslash is read
+  // from the physical key instead.
+  const key = event.code === 'Backslash' ? '\\' : event.key.toLowerCase();
+  // ⌘⇧F is focus mode on the Mac, and ⌘⇧T typewriter scrolling, which this
+  // build doesn't have: neither may fall through to ⌘F or ⌘T.
+  if (event.shiftKey && key === 't') return;
+  const shortcuts = {
+    n: newEntry,
+    s: () => save(),
+    f: () => {
+      if (event.shiftKey) {
+        settings.focus = !settings.focus;
+        applySettings();
+        renderPanels();
+        return;
+      }
+      $('query').focus();
+      $('query').select();
+    },
+    d: () => (event.shiftKey ? openSheet() : toggleStar()),
+    // ⌘⇧R only: plain ⌘R is left alone.
+    r: event.shiftKey ? toggleRecording : undefined,
+    j: () => toggleFiling(),
+    1: () => { state.page = 'journal'; ensureSelection(); render(); },
+    2: () => { state.page = 'inbox'; ensureSelection(); render(); },
+    3: () => { state.page = 'starred'; ensureSelection(); render(); },
+    t: () => { renderThemes(); $('themes').hidden = false; },
+    '\\': () => {
+      const name = event.shiftKey ? 'stats' : event.altKey ? 'options' : 'index';
+      settings.columns[name] = !settings.columns[name];
+      applySettings();
+      renderMasthead();
+    },
+  };
+  if (shortcuts[key]) {
+    event.preventDefault();
+    shortcuts[key]();
+  }
+});
+
+// On Linux and Windows the window has no bar of its own: the masthead is the
+// drag region (see data-tauri-drag-region in index.html) and carries the
+// controls. macOS keeps its title bar, and hides them.
+document.querySelectorAll('[data-window]').forEach((button) => {
+  button.onclick = () => {
+    const action = button.dataset.window;
+    if (action === 'minimise') appWindow.minimize();
+    if (action === 'maximise') appWindow.toggleMaximize();
+    if (action === 'close') appWindow.close();   // through onCloseRequested below
+  };
+});
+
+webview.onDragDropEvent((event) => {
+  const page = document.querySelector('.page');
+  const { type } = event.payload;
+  page.classList.toggle('dropping', type === 'enter' || type === 'over');
+  if (type === 'drop') dropFiles(event.payload.paths || [], event.payload.position);
+});
+
+invoke('undecorated').then((custom) => {
+  if (custom) document.documentElement.dataset.chrome = 'custom';
+}).catch(() => {});
+
+window.matchMedia('(prefers-color-scheme: dark)')
+  .addEventListener('change', () => applySettings());
+
+// Closing waits for the last edit to reach the disk. The window is held open
+// while a save is pending or in flight, then destroyed once it has landed —
+// or failed, since a window that won't close over a full disk is worse; the
+// failure is on the status line either way.
+appWindow.onCloseRequested(async (event) => {
+  event.preventDefault();
+  try {
+    if (recorder) await recorder.stop().catch(() => {});
+    await save();
+  } finally {
+    await appWindow.destroy();
+  }
+});
+
+// Best effort only: an async write can't be awaited from beforeunload, and the
+// page may be gone before the IPC call lands. The close handler above is what
+// actually flushes; this covers a reload.
+window.addEventListener('beforeunload', () => { save(); });
+
+loadThemes().then(() => {
+  applySettings();
+  refresh();
+});

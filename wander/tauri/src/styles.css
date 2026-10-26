@@ -1,0 +1,767 @@
+/*
+  wander — the look.
+
+  A straight translation of the macOS app: warm paper, near-black ink, hairline
+  rules, small-caps labels and one terracotta accent. Newsreader sets anything
+  that reads as writing; IBM Plex Sans sets anything that reads as apparatus.
+*/
+
+:root {
+  --paper: #f6f2ea;
+  --panel: #f1ece1;
+  --surface: #fbf8f2;
+  --ink: #171310;
+  --prose: #453d33;
+  --muted: #8a7f6d;
+  --rule: #ddd5c7;
+  --rule-faint: #e6ded0;
+  --accent: #9c3220;
+  --accent-deep: #7a2416;
+  --green: #2f5d4a;
+
+  /* The face is --prose-face; --prose is the colour, and one name can't be both. */
+  --prose-face: 'Newsreader', Georgia, serif;
+  --display: 'Newsreader', Georgia, serif;
+  --label: 'IBM Plex Sans', system-ui, sans-serif;
+  --label-size: 10.5px;
+  --label-tracking: .115em;
+  --display-scale: 1;
+  --corner: 0px;
+  --border: 1px;
+  --masthead-rule: 2px;
+
+  --measure: 760px;
+  --type: 17.5px;
+  --lead: 1.42;
+
+  --index-width: 250px;
+  --panel-width: 252px;
+  --column-motion: 220ms cubic-bezier(.4, 0, .2, 1);
+
+  color-scheme: light;
+}
+
+:root[data-theme='dark'],
+:root[data-theme='auto'] {
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme='auto'] { color-scheme: dark; }
+}
+
+:root[data-theme='dark'],
+:root[data-theme='auto'][data-system='dark'] {
+  --paper: #16130f;
+  --panel: #1b1713;
+  --surface: #221d18;
+  --ink: #f2ece0;
+  --prose: #d2c8b7;
+  --muted: #93876f;
+  --rule: #342d24;
+  --rule-faint: #27211a;
+  --accent: #cc6a4c;
+  --accent-deep: #e08b6e;
+  --green: #82a26b;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+/* A class that sets `display` outranks the UA's rule for [hidden], so anything
+   hidden by attribute has to say so louder than the layout rules below. */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--label);
+  -webkit-font-smoothing: antialiased;
+}
+
+body { display: flex; flex-direction: column; }
+
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+input { font: inherit; color: inherit; background: none; border: 0; outline: none; }
+
+/* The outlines taken off above come back for the keyboard, and only for it. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input:focus-visible { outline-offset: 0; }
+.prose:focus-visible { outline: none; }
+.spacer { flex: 1; }
+
+/* Labels, rules, the shared vocabulary ---------------------------------- */
+
+.smallcaps {
+  font-family: var(--label);
+  font-size: var(--label-size);
+  font-weight: 600;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.rule { height: 1px; background: var(--rule); flex: none; }
+.rule-faint { height: 1px; background: var(--rule-faint); flex: none; }
+.rule-ink { height: 1px; background: var(--ink); flex: none; }
+.rule-heavy { height: var(--masthead-rule); background: var(--ink); margin: 0 34px; flex: none; }
+
+.marginalia {
+  font-family: var(--prose-face);
+  font-size: 12.5px;
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 0;
+}
+
+button.quiet {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0;
+}
+button.quiet:hover { color: var(--accent); }
+button.quiet.on { color: var(--accent); }
+
+button.block {
+  width: 100%;
+  padding: 9px 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  color: var(--paper);
+  background: var(--accent);
+}
+button.block:hover { background: var(--accent-deep); }
+button.block.outline {
+  color: var(--accent);
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+button.block.outline:hover { background: color-mix(in srgb, var(--rule) 50%, transparent); }
+button.block.narrow { width: 82px; flex: none; }
+button.block.danger { background: var(--accent); }
+
+button.value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  padding: 0;
+  font-variant-numeric: tabular-nums;
+}
+button.value:hover { color: var(--accent); text-decoration: underline; }
+
+/* Masthead --------------------------------------------------------------- */
+
+.masthead { flex: none; }
+
+.masthead-row {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 22px 34px 8px;
+}
+
+.wordmark {
+  font-family: var(--display);
+  font-size: calc(26px * var(--display-scale));
+  font-weight: 600;
+  letter-spacing: -.015em;
+  color: var(--ink);
+}
+
+.pages { display: flex; align-items: baseline; gap: 13px; }
+.pages button.on { color: var(--accent); }
+.pages button:hover { color: var(--ink); }
+.pages button.on:hover { color: var(--accent); }
+
+.toggles { display: flex; align-items: baseline; gap: 12px; }
+.pipe { font-size: 10px; color: var(--rule); }
+
+/* Window controls, on the platforms where the window has no bar of its own.
+   Drawn as quietly as everything else: glyphs in the label grey, the accent
+   only on the one that closes. */
+
+/* Out of the masthead's flow and into the window's corner, where a title bar
+   would have put them — the running head keeps the baseline to itself. */
+.window-controls { display: none; }
+:root[data-chrome='custom'] .window-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: fixed;
+  top: 6px;
+  right: 8px;
+  z-index: 20;
+}
+.window-controls button {
+  font-size: 11px;
+  line-height: 1;
+  color: color-mix(in srgb, var(--muted) 75%, transparent);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.window-controls button:hover { color: var(--ink); background: color-mix(in srgb, var(--rule) 55%, transparent); }
+.window-controls button:hover { color: var(--ink); }
+.window-controls button[data-window='close']:hover {
+  color: var(--paper);
+  background: var(--accent);
+}
+
+/* Columns ---------------------------------------------------------------- */
+
+.columns { flex: 1; display: flex; min-height: 0; }
+
+.panel {
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  transition: width var(--column-motion), opacity var(--column-motion);
+}
+
+.panel.index { width: var(--index-width); position: relative; border-right: 1px solid var(--rule); }
+:root[data-ornament='rail'] .panel.index { padding-left: 74px; }
+.panel.stats, .panel.options { width: var(--panel-width); border-left: 1px solid var(--rule); }
+.panel.closed { width: 0; opacity: 0; border-width: 0; }
+
+.find { display: flex; align-items: baseline; gap: 9px; padding: 16px 14px 11px; }
+.find input { flex: 1; font-size: 13px; min-width: 0; }
+.find input::placeholder {
+  font-family: 'Newsreader', Georgia, serif;
+  font-style: italic;
+  color: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.list { flex: 1; overflow-y: auto; }
+
+.month {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 16px 14px 6px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--ink);
+  position: sticky;
+  top: 0;
+}
+.month.inbox .smallcaps { color: var(--accent); }
+
+.row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px 9px 10px;
+  border-bottom: 1px solid var(--rule-faint);
+  border-left: 2px solid transparent;
+}
+.row:hover { background: color-mix(in srgb, var(--rule) 35%, transparent); }
+.row.on { background: var(--surface); border-left-color: var(--accent); }
+
+.row .row-title {
+  font-family: var(--display);
+  font-size: 14.5px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row .row-title.untitled { font-style: italic; color: var(--muted); }
+.row .row-meta { display: flex; align-items: baseline; gap: 8px; margin-top: 3px; }
+.row .star { color: var(--accent); font-size: 9px; }
+.row .file { visibility: hidden; }
+.row:hover .file, .row.on .file { visibility: visible; }
+
+.index-actions { display: flex; gap: 8px; padding: 14px; }
+
+/* The page --------------------------------------------------------------- */
+
+.editor {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  /* A stacking context of its own, so the ornament's z-index: -1 lands above
+     this background rather than behind it. */
+  isolation: isolate;
+  display: flex;
+  justify-content: center;
+  background: var(--paper);
+}
+
+.page {
+  width: 100%;
+  max-width: var(--measure);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 24px 40px 18px;
+}
+
+.kicker { color: var(--accent); margin-bottom: 4px; }
+
+:root[data-centred='true'] .title,
+:root[data-centred='true'] .kicker { text-align: center; }
+
+.title {
+  font-family: var(--display);
+  font-size: calc(30px * var(--display-scale));
+  color: var(--ink);
+  width: 100%;
+  padding: 0;
+}
+.title::placeholder { font-style: italic; color: color-mix(in srgb, var(--muted) 55%, transparent); }
+
+.dateline { display: flex; align-items: center; gap: 10px; padding: 9px 0 11px; }
+.linkish:hover { color: var(--accent); }
+
+.prose {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 0 0;
+  outline: none;
+  font-family: var(--prose-face);
+  font-size: var(--type);
+  line-height: var(--lead);
+  color: var(--prose);
+  caret-color: var(--accent);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.prose:empty::before {
+  content: 'Begin writing…';
+  font-style: italic;
+  color: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+.prose ::selection { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+/* Markdown, styled in place: structure shows, markers recede. */
+.prose .ln { display: block; min-height: 1em; }
+.prose .mark { color: color-mix(in srgb, var(--muted) 45%, transparent); }
+.prose .h1, .prose .h2, .prose .h3 { color: var(--ink); font-weight: 600; }
+.prose .h1 { font-size: 1.55em; }
+.prose .h2 { font-size: 1.3em; }
+.prose .h3 { font-size: 1.14em; }
+.prose .h1 .mark, .prose .h2 .mark, .prose .h3 .mark { font-size: .62em; font-weight: 400; }
+.prose .quote { font-style: italic; color: var(--muted); padding-left: 1.1em; }
+.prose .bullet .mark { color: var(--accent); }
+.prose .hr { color: color-mix(in srgb, var(--muted) 45%, transparent); letter-spacing: .18em; }
+.prose .strong { font-weight: 700; color: var(--ink); }
+.prose .em { font-style: italic; }
+.prose .code {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: .88em;
+  background: color-mix(in srgb, var(--rule) 50%, transparent);
+}
+.prose .tag { color: var(--accent); }
+.prose .link { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+/* Media: the link stays, faded; the photo, player or recording sits under it.
+   The holder is contenteditable=false and holds no text, so the caret steps
+   over it. A file that won't load says so from CSS — text in the DOM would
+   throw the caret arithmetic off by its length. */
+.prose .caption { font-style: italic; color: var(--muted); }
+.prose .media { display: block; margin: .45em 0 .8em; user-select: none; line-height: 0; }
+.prose .media img,
+.prose .media video { display: block; max-width: 100%; max-height: 70vh; border-radius: var(--corner); }
+.prose .media img { box-shadow: 0 0 0 1px var(--rule); }
+.prose .media audio { width: 100%; max-width: 460px; height: 36px; }
+.prose .media.broken > * { display: none; }
+.prose .media.broken::after {
+  content: attr(data-name) " can’t be shown here";
+  display: block; padding: 14px 16px; line-height: 1.4;
+  font-family: var(--label); font-size: var(--label-size); letter-spacing: var(--label-tracking);
+  text-transform: uppercase; color: var(--muted);
+  border: var(--border) dashed var(--rule); border-radius: var(--corner);
+}
+.prose.focus .ln:not(.live) .media { opacity: .35; }
+.page.dropping { outline: var(--border) dashed var(--accent); outline-offset: 10px; }
+
+/* The page's own actions — record, file, star — as icons drawn in the ink
+   of the chrome around them: muted at rest, the accent when on. */
+button.icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; color: var(--muted);
+}
+button.icon svg {
+  width: 17px; height: 17px; fill: none; stroke: currentColor;
+  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+}
+button.icon:hover, button.icon.on { color: var(--accent); }
+button.icon.star.on svg { fill: currentColor; }
+#record.on svg rect { fill: currentColor; animation: recording 1.6s ease-in-out infinite; }
+#record-time { color: var(--accent); font-variant-numeric: tabular-nums; }
+@keyframes recording { 50% { opacity: .35; } }
+
+.prose .url { font-family: ui-monospace, monospace; font-size: .8em; color: color-mix(in srgb, var(--muted) 45%, transparent); }
+
+/* Focus mode: everything but the paragraph under the caret recedes. */
+.prose.focus .ln { color: color-mix(in srgb, var(--muted) 38%, transparent); }
+.prose.focus .ln.live { color: var(--prose); }
+.prose.focus .ln.live .strong,
+.prose.focus .ln.live .h1, .prose.focus .ln.live .h2, .prose.focus .ln.live .h3 { color: var(--ink); }
+
+.status { display: flex; align-items: baseline; padding-top: 9px; }
+
+.blank { margin: auto 0; padding: 40px; max-width: 420px; }
+.blank h1 { font-family: 'Newsreader', Georgia, serif; font-size: 34px; font-weight: 400; margin: 0 0 16px; }
+.blank .marginalia { margin-bottom: 20px; }
+.blank .block { width: 160px; }
+
+/* Panels ----------------------------------------------------------------- */
+
+.scroll { overflow-y: auto; padding: 20px 18px 24px; display: flex; flex-direction: column; gap: 22px; }
+.group { display: flex; flex-direction: column; }
+.group.actions { gap: 10px; }
+.section { padding-bottom: 7px; }
+
+.field {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--rule);
+  font-size: 13px;
+}
+.field > span { color: var(--muted); }
+.field > b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.field .accent { color: var(--accent); }
+.field .green { color: var(--green); }
+
+.stepper { display: flex; align-items: baseline; gap: 10px; }
+.stepper button { font-size: 10.5px; font-weight: 600; color: var(--muted); }
+.stepper button:hover { color: var(--accent); }
+.stepper i { font-style: normal; font-size: 13px; }
+.stepper input { width: 44px; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
+
+.path { font-size: 10.5px; color: color-mix(in srgb, var(--muted) 85%, transparent); margin: 8px 0 0; word-break: break-all; }
+
+/* Sheets ----------------------------------------------------------------- */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, #0f0c08 45%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.sheet {
+  width: 380px;
+  background: var(--paper);
+  padding: 24px;
+  box-shadow: 0 24px 48px rgba(15, 12, 8, .28);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sheet.narrow { width: 320px; }
+.sheet h2 { font-family: 'Newsreader', Georgia, serif; font-size: 22px; font-weight: 400; margin: 0; }
+.sheet-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.sheet-head .smallcaps { overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+.sheet-actions { display: flex; gap: 10px; padding-top: 6px; }
+
+.cal-head { display: flex; align-items: baseline; gap: 12px; padding-bottom: 10px; }
+.cal-month { font-family: 'Newsreader', Georgia, serif; font-size: 17px; }
+.cal-weekdays, .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); }
+.cal-weekdays { padding-bottom: 6px; }
+.cal-weekdays span { text-align: center; }
+.cal-grid { padding-top: 4px; }
+
+.day {
+  height: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.day:hover { background: color-mix(in srgb, var(--rule) 50%, transparent); }
+.day.out { color: color-mix(in srgb, var(--muted) 45%, transparent); }
+.day.today { color: var(--accent); font-weight: 600; }
+.day.on { background: var(--accent); color: var(--paper); font-weight: 600; }
+.day .dot { width: 3px; height: 3px; border-radius: 50%; background: transparent; }
+.day.marked .dot { background: color-mix(in srgb, var(--accent) 65%, transparent); }
+.day.on .dot { background: color-mix(in srgb, var(--paper) 70%, transparent); }
+.day.out.marked .dot { background: color-mix(in srgb, var(--muted) 40%, transparent); }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 35%, transparent); border-radius: 3px; }
+
+
+/* Themes ----------------------------------------------------------------- */
+
+.sheet.themes { width: min(1040px, 92vw); max-height: 86vh; }
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 14px;
+  overflow-y: auto;
+  padding-top: 4px;
+  /* In a flex column a scrolling grid needs this, or the rows are squeezed and
+     every card loses its caption. */
+  min-height: 0;
+  align-content: start;
+}
+
+.theme-card {
+  /* A fixed card height: the grid was compressing rows and clipping the
+     caption off the bottom of every card but the last row's. */
+  align-self: start;
+  height: 250px;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  border: 1px solid var(--rule);
+  overflow: hidden;
+  background: var(--surface);
+}
+.theme-card.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.theme-card:hover { box-shadow: 0 6px 18px rgba(0, 0, 0, .10); }
+
+.theme-preview {
+  /* Fixed, so the caption below it is never squeezed out of the card. */
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  isolation: isolate;      /* see .editor: keeps the ornament above the paper */
+  padding: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow: hidden;
+}
+.theme-preview .pv-mast { display: flex; align-items: baseline; gap: 6px; }
+.theme-preview .pv-rule { height: 2px; }
+.theme-preview .pv-title { line-height: 1.1; }
+.theme-preview .pv-meta { font-size: 7px; letter-spacing: .12em; text-transform: uppercase; }
+.theme-preview .pv-body { font-size: 9.5px; }
+.theme-preview .pv-chip { font-size: 7px; letter-spacing: .12em; text-transform: uppercase; padding: 4px 8px; }
+.theme-preview .pv-dots { display: flex; gap: 4px; align-items: center; }
+.theme-preview .pv-dots i { width: 7px; height: 7px; border-radius: 50%; display: block; }
+
+.theme-caption { flex: 0 0 78px; padding: 10px 13px; border-top: 1px solid var(--rule); display: flex; flex-direction: column; gap: 3px; }
+.theme-caption .row { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 500; }
+.theme-caption p { margin: 0; font-size: 10.5px; color: var(--muted); line-height: 1.4; }
+
+/* Which appearance a theme was drawn for: light, dark, or half of each. */
+.scheme-dot {
+  width: 11px; height: 11px; border-radius: 50%; flex: none;
+  border: 1px solid color-mix(in srgb, var(--muted) 60%, transparent);
+}
+.scheme-dot.light { background: #fafaf9; }
+.scheme-dot.dark { background: #171717; }
+.scheme-dot.both { background: linear-gradient(90deg, #fafaf9 0 50%, #171717 50% 100%); }
+
+/* Per-theme structure ---------------------------------------------------- */
+
+:root[data-masthead='band'] .masthead-row { background: var(--ink); padding-bottom: 14px; }
+:root[data-masthead='band'] .wordmark,
+:root[data-masthead='band'] .masthead-row .smallcaps { color: var(--paper); }
+/* On the band the ink is the ground, so muted and ink are both the wrong
+   colour for a switch: the resting ones are paper, dimmed; hover is paper. */
+:root[data-masthead='band'] .pages button,
+:root[data-masthead='band'] .toggles button { color: color-mix(in srgb, var(--paper) 72%, transparent); }
+:root[data-masthead='band'] .pages button:hover,
+:root[data-masthead='band'] .toggles button:hover { color: var(--paper); }
+/* Some themes' accent is their ink, which on the band is no colour at all. */
+:root[data-masthead='band'] .pages button.on,
+:root[data-masthead='band'] .pages button.on:hover,
+:root[data-masthead='band'] .toggles button.on { color: var(--accent-on-band, var(--paper)); }
+:root[data-masthead='band'] .rule-heavy { display: none; }
+
+:root[data-masthead='none'] .rule-heavy { display: none; }
+
+:root[data-masthead='centred'] .masthead-row { flex-direction: column; align-items: center; gap: 6px; }
+:root[data-masthead='centred'] .spacer { display: none; }
+
+:root[data-masthead='double'] .rule-heavy { position: relative; margin-bottom: 4px; }
+/* The hairline 3px under the heavy rule. A shadow can't draw it: spread of
+   -3px on a 3px rule leaves nothing to show. */
+:root[data-masthead='double'] .rule-heavy::after {
+  content: ''; position: absolute; left: 0; right: 0; top: calc(100% + 3px);
+  height: 1px; background: var(--ink);
+}
+
+:root[data-rows='plain'] .row,
+:root[data-rows='indent'] .row { border-bottom: 0; }
+:root[data-rows='card'] .row {
+  border: 1px solid var(--rule);
+  border-radius: var(--corner);
+  margin: 4px 10px;
+  background: var(--surface);
+}
+:root[data-rows='card'] .row.on { background: var(--accent); border-color: var(--accent); }
+:root[data-rows='card'] .row.on .row-title, :root[data-rows='card'] .row.on .smallcaps { color: var(--paper); }
+:root[data-rows='block'] .row { border-bottom-width: 2px; border-bottom-color: var(--ink); }
+:root[data-rows='block'] .row.on { background: var(--ink); }
+:root[data-rows='block'] .row.on .row-title { color: var(--paper); }
+
+:root[data-page-card='true'] .page {
+  border: 3px solid var(--ink);
+  border-radius: var(--corner);
+  background: var(--surface);
+  box-shadow: 9px 9px 0 var(--green);
+  margin: 18px;
+}
+
+/* Stats as figures rather than ruled rows. */
+.figures { display: flex; flex-direction: column; gap: 14px; }
+.figure { display: flex; flex-direction: column; gap: 2px; }
+.figure .value { font-family: var(--display); font-size: 34px; line-height: 1; font-variant-numeric: tabular-nums; }
+.figure.block { padding: 12px 14px; border-radius: var(--corner); }
+.figure.block .smallcaps { color: inherit; opacity: .75; }
+
+/* Ornaments — the part of a theme that isn't type or colour: the ink wash
+   behind Sumi, Cinema's letterbox bars, Constructivist's wedge, Broken grid's
+   ghost numeral, Memphis's confetti. Drawn behind the page, never over it,
+   and never in the way of a click. `.ornament` sits absolutely within its
+   positioned parent and paints just above that parent's own background
+   (z-index: -1 keeps it under every in-flow child without needing to touch
+   the stacking of the content itself). */
+.ornament { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.ornament i { display: none; position: absolute; }
+
+.ornament-wash .orn-a, .ornament-wash .orn-b, .ornament-wash .orn-c { display: block; border-radius: 999px; }
+.ornament-wash .orn-a {
+  width: 46%; height: 46%; right: -6%; top: 4%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--ink) 13%, transparent) 0%, transparent 70%);
+}
+.ornament-wash .orn-b {
+  width: 30%; height: 30%; right: 2%; bottom: -4%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--ink) 9%, transparent) 0%, transparent 70%);
+}
+.ornament-wash .orn-c {
+  width: 30%; height: 14px; left: 18%; bottom: 9%;
+  background: color-mix(in srgb, var(--ink) 16%, transparent);
+  transform: rotate(-2deg);
+}
+
+.ornament-letterbox::before, .ornament-letterbox::after {
+  content: ''; position: absolute; left: 0; right: 0; height: 34px; background: var(--panel);
+}
+.ornament-letterbox::before { top: 0; }
+.ornament-letterbox::after { bottom: 0; }
+
+.ornament-wedge::before {
+  content: ''; position: absolute; inset: 0;
+  clip-path: polygon(100% 0%, 100% 58%, 26% 100%, 0% 100%, 0% 86%);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.ornament-wedge::after {
+  content: ''; position: absolute; inset: 0;
+  clip-path: polygon(100% 58%, 100% 63%, 30% 100%, 26% 100%);
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+/* Broken grid's ghost numeral: the open entry's day, set as a data attribute
+   because content: attr() can't reach into a sibling's state. */
+.ornament-ghost::after {
+  content: attr(data-day);
+  position: absolute; left: 4%; top: 50%; transform: translateY(-50%);
+  font-family: var(--display); line-height: 1; white-space: nowrap;
+  font-size: 260px;
+  color: color-mix(in srgb, var(--ink) 5.5%, transparent);
+}
+.theme-preview .ornament-ghost::after { font-size: 70px; left: 6%; }
+
+.ornament-confetti .orn-a, .ornament-confetti .orn-b,
+.ornament-confetti .orn-c, .ornament-confetti .orn-d { display: block; }
+.ornament-confetti .orn-a {
+  left: 4%; bottom: 8%; width: 50px; height: 50px; border-radius: 50%;
+  border: 6px solid color-mix(in srgb, var(--tint) 55%, transparent);
+}
+.ornament-confetti .orn-b {
+  right: 5%; bottom: 8%; width: 0; height: 0;
+  border-left: 26px solid transparent; border-right: 26px solid transparent;
+  border-bottom: 38px solid color-mix(in srgb, var(--green) 65%, transparent);
+}
+.ornament-confetti .orn-c {
+  right: 8%; top: 5%; width: 90px; height: 12px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  transform: rotate(-8deg);
+}
+.ornament-confetti .orn-d {
+  left: 46%; bottom: 4%; width: 40px; height: 9px; border-radius: 999px;
+  background: color-mix(in srgb, var(--tint) 55%, transparent);
+  transform: rotate(-8deg);
+}
+.theme-preview .ornament-confetti .orn-a { width: 26px; height: 26px; border-width: 4px; }
+.theme-preview .ornament-confetti .orn-b {
+  border-left-width: 12px; border-right-width: 12px; border-bottom-width: 18px;
+}
+.theme-preview .ornament-confetti .orn-c { width: 44px; height: 7px; }
+.theme-preview .ornament-confetti .orn-d { width: 22px; height: 5px; }
+
+/* Bauhaus's rail: index furniture, not something drawn on the page — the
+   circle, triangle and square down the left edge, on a band of the theme's
+   third colour. It replaces the page ornament rather than joining it. */
+.ornament-rail {
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
+  position: absolute; inset: 0 auto 0 0; width: 74px; z-index: 0;
+  padding-top: 24px;
+  background: color-mix(in srgb, var(--tint) 35%, transparent);
+}
+.ornament-rail i { display: block; }
+.ornament-rail .orn-a { position: static; width: 34px; height: 34px; border-radius: 50%; background: var(--green); }
+.ornament-rail .orn-b {
+  position: static; width: 0; height: 0;
+  border-left: 18px solid transparent; border-right: 18px solid transparent;
+  border-bottom: 30px solid var(--accent);
+}
+.ornament-rail .orn-c { position: static; width: 32px; height: 32px; background: var(--paper); }
+
+.theme-preview .ornament-rail {
+  width: 26px; gap: 8px; padding-top: 8px;
+}
+.theme-preview .ornament-rail .orn-a { width: 13px; height: 13px; }
+.theme-preview .ornament-rail .orn-b {
+  border-left-width: 7px; border-right-width: 7px; border-bottom-width: 12px;
+}
+.theme-preview .ornament-rail .orn-c { width: 12px; height: 12px; }
+.theme-preview .ornament-rail .orn-d { display: none; }
+
+
+/* Auto / Light / Dark, in the theme page: choosing a look means seeing which
+   appearance it is for. */
+.paper-picker {
+  display: flex;
+  border: 1px solid var(--rule);
+  border-radius: var(--corner);
+  overflow: hidden;
+  margin-right: 10px;
+}
+.paper-picker button {
+  font-family: var(--label);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 7px 10px;
+}
+.paper-picker button.on { background: var(--accent); color: var(--paper); }
+.paper-picker button:not(.on):hover { color: var(--ink); }

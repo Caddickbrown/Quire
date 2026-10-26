@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><script src="./support.js"></script></head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,500;1,300&family=Zen+Kaku+Gothic+New:wght@300;500&display=swap">
+  <style>
+    body { margin: 0; font-family: "Zen Kaku Gothic New", system-ui, sans-serif; }
+    a { color: #b3372a; } a:hover { color: #85261c; }
+    .lbl { font-size: 9.5px; font-weight: 500; letter-spacing: .28em; text-transform: uppercase; color: #9c968c; }
+    .serif { font-family: "Cormorant Garamond", serif; }
+  </style>
+</helmet>
+<div style="width: 1240px; height: 800px; background: #f7f5f0; color: #1a1815; display: flex; overflow: hidden; position: relative">
+  <svg viewBox="0 0 1240 800" style="position: absolute; inset: 0; width: 100%; height: 100%" aria-hidden="true">
+    <defs>
+      <radialGradient id="wash" cx="50%" cy="50%"><stop offset="0%" stop-color="#1a1815" stop-opacity=".20"/><stop offset="68%" stop-color="#1a1815" stop-opacity=".045"/><stop offset="100%" stop-color="#1a1815" stop-opacity="0"/></radialGradient>
+    </defs>
+    <ellipse cx="930" cy="250" rx="290" ry="215" fill="url(#wash)"/>
+    <ellipse cx="1110" cy="640" rx="190" ry="120" fill="url(#wash)" opacity=".55"/>
+    <path d="M150 706 C 330 656, 540 716, 780 664" stroke="#1a1815" stroke-opacity=".28" stroke-width="15" fill="none" stroke-linecap="round"/>
+  </svg>
+
+  <!-- The vertical wordmark and seal, from Hanko -->
+  <div style="position: relative; width: 104px; border-right: 1px solid #ebe7df; display: flex; flex-direction: column; align-items: center; padding: 38px 0 30px">
+    <div class="lbl" style="writing-mode: vertical-rl; letter-spacing: .5em">WANDER</div>
+    <div style="flex: 1"></div>
+    <div style="width: 38px; height: 38px; background: #b3372a; color: #f7f5f0; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 500; border-radius: 2px">記</div>
+  </div>
+
+  <div style="position: relative; width: 224px; padding: 38px 24px 30px; display: flex; flex-direction: column; gap: 26px">
+    <div style="display: flex; flex-direction: column; gap: 7px">
+      <span class="lbl" style="color: #b3372a">Journal</span><span class="lbl">Inbox 1</span><span class="lbl">Starred</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 20px">
+      <div><div class="serif" style="font-size: 19px; font-weight: 500; line-height: 1.3">The long way round the reservoir</div><div class="lbl" style="margin-top: 7px; color: #b3372a">08 · 122</div></div>
+      <div style="color: #8c8880"><div class="serif" style="font-size: 18px; font-weight: 300; line-height: 1.3">Sunday, and the fence again</div><div class="lbl" style="margin-top: 6px">07 · 58</div></div>
+      <div style="color: #8c8880"><div class="serif" style="font-size: 18px; font-weight: 300; line-height: 1.3">Half a page still counts</div><div class="lbl" style="margin-top: 6px">06 · 42</div></div>
+      <div style="color: #8c8880"><div class="serif" style="font-size: 18px; font-weight: 300; line-height: 1.3">A note on measure</div><div class="lbl" style="margin-top: 6px">05 · 54</div></div>
+    </div>
+    <div style="flex: 1"></div>
+    <div class="lbl" style="color: #1a1815">＋ NEW ENTRY</div>
+  </div>
+
+  <div style="position: relative; flex: 1; min-width: 0; display: flex; padding: 38px 0 30px">
+    <div style="width: 1px; background: #ebe7df; margin-right: 52px"></div>
+    <div style="flex: 1; max-width: 560px; display: flex; flex-direction: column">
+      <div class="lbl">2026 · 09 · 08 &nbsp;&nbsp; 08:12 &nbsp;&nbsp; @admin @morning</div>
+      <div class="serif" style="font-size: 44px; font-weight: 300; line-height: 1.14; letter-spacing: .01em; padding: 20px 0 22px">The long way round<br>the reservoir</div>
+      <div style="width: 50px; height: 5px; background: #1a1815; border-radius: 3px; opacity: .8; margin-bottom: 26px"></div>
+      <div style="font-size: 15px; font-weight: 300; line-height: 2.0; color: #4a4740; display: flex; flex-direction: column; gap: 24px">
+        <div>Left before seven and took the <span style="color: #b3372a; font-weight: 500">long way</span> round the reservoir, which adds twenty minutes and, this morning, was worth every one of them.</div>
+        <div>Low and flat off the water, the kind that makes the far bank look printed rather than grown. Two swans, unbothered. A man with a thermos who nodded like we had an arrangement.</div>
+        <div class="serif" style="font-size: 19px; font-style: italic; color: #a8a49c; line-height: 1.6">The dull entries are the ones worth having in five years.</div>
+      </div>
+      <div style="flex: 1"></div>
+      <div class="lbl">122 · 一分 · SAVED</div>
+    </div>
+  </div>
+
+  <div style="position: relative; width: 146px; padding: 38px 30px 30px 0; display: flex; flex-direction: column; gap: 28px; text-align: right">
+    <div><div class="lbl">Words</div><div class="serif" style="font-size: 34px; font-weight: 300; margin-top: 2px">122</div></div>
+    <div><div class="lbl">Days</div><div class="serif" style="font-size: 34px; font-weight: 300; margin-top: 2px; color: #b3372a">4</div></div>
+    <div><div class="lbl">Month</div><div class="serif" style="font-size: 34px; font-weight: 300; margin-top: 2px">8</div></div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

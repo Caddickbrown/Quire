@@ -1,0 +1,1136 @@
+{
+  "themes": [
+    {
+      "id": "almanac",
+      "name": "Almanac",
+      "note": "Warm paper, hairline rules, one terracotta. What ships today.",
+      "type": {
+        "prose": {
+          "families": [
+            "Newsreader"
+          ],
+          "shape": "serif",
+          "weight": "regular",
+          "size": 17.5
+        },
+        "display": {
+          "families": [
+            "Newsreader"
+          ],
+          "shape": "serif",
+          "weight": "semibold",
+          "scale": 1.0
+        },
+        "label": {
+          "families": [
+            "IBM Plex Sans"
+          ],
+          "shape": "sans",
+          "weight": "semibold",
+          "size": 10.5,
+          "tracking": 1.15,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 2,
+        "rowStyle": "rule",
+        "corner": 0,
+        "border": 1,
+        "filledButtons": true,
+        "ornament": "none",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 760,
+        "lineHeight": 1.42,
+        "mastheadStyle": "rule",
+        "statsStyle": "rows",
+        "kicker": false,
+        "figureBlocks": false,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#F6F2EA",
+        "panel": "#F1ECE1",
+        "surface": "#FBF8F2",
+        "ink": "#171310",
+        "prose": "#453D33",
+        "muted": "#8A7F6D",
+        "rule": "#DDD5C7",
+        "ruleFaint": "#E6DED0",
+        "accent": "#9C3220",
+        "accentDeep": "#7A2416",
+        "tint": "#6B8CA8",
+        "green": "#2F5D4A"
+      },
+      "dark": {
+        "paper": "#16130F",
+        "panel": "#1B1713",
+        "surface": "#221D18",
+        "ink": "#F2ECE0",
+        "prose": "#D2C8B7",
+        "muted": "#93876F",
+        "rule": "#342D24",
+        "ruleFaint": "#27211A",
+        "accent": "#CC6A4C",
+        "accentDeep": "#E08B6E",
+        "tint": "#82A5C0",
+        "green": "#82A26B"
+      },
+      "scheme": "both"
+    },
+    {
+      "id": "quiet",
+      "name": "Quiet",
+      "note": "Sans prose, no rules at all, hierarchy from weight and air.",
+      "type": {
+        "prose": {
+          "families": [
+            "Karla"
+          ],
+          "shape": "sans",
+          "weight": "light",
+          "size": 17
+        },
+        "display": {
+          "families": [
+            "Karla"
+          ],
+          "shape": "sans",
+          "weight": "medium",
+          "scale": 0.72
+        },
+        "label": {
+          "families": [
+            "Karla"
+          ],
+          "shape": "sans",
+          "weight": "medium",
+          "size": 9.5,
+          "tracking": 1.5,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 0,
+        "rowStyle": "plain",
+        "corner": 0,
+        "border": 1,
+        "filledButtons": false,
+        "ornament": "none",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 680,
+        "lineHeight": 1.78,
+        "mastheadStyle": "none",
+        "statsStyle": "rows",
+        "kicker": false,
+        "figureBlocks": false,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#FBFBFA",
+        "panel": "#FBFBFA",
+        "surface": "#F4F4F2",
+        "ink": "#1A1A19",
+        "prose": "#3A3A37",
+        "muted": "#A8A8A2",
+        "rule": "#ECECE8",
+        "ruleFaint": "#F3F3F0",
+        "accent": "#1A1A19",
+        "accentDeep": "#7A7A76",
+        "tint": "#7A7A76",
+        "green": "#5A6B55"
+      },
+      "dark": {
+        "paper": "#131312",
+        "panel": "#131312",
+        "surface": "#1B1B1A",
+        "ink": "#EFEFEC",
+        "prose": "#C9C9C3",
+        "muted": "#6F6F6A",
+        "rule": "#262624",
+        "ruleFaint": "#1E1E1C",
+        "accent": "#EFEFEC",
+        "accentDeep": "#A8A8A2",
+        "tint": "#A8A8A2",
+        "green": "#8FA383"
+      },
+      "scheme": "light"
+    },
+    {
+      "id": "botanic",
+      "name": "Botanic",
+      "note": "One desaturated sage, pill buttons, serif italic for asides.",
+      "type": {
+        "prose": {
+          "families": [
+            "Nunito Sans"
+          ],
+          "shape": "sans",
+          "weight": "light",
+          "size": 16.5
+        },
+        "display": {
+          "families": [
+            "Nunito Sans"
+          ],
+          "shape": "sans",
+          "weight": "semibold",
+          "scale": 0.83
+        },
+        "label": {
+          "families": [
+            "Nunito Sans"
+          ],
+          "shape": "sans",
+          "weight": "semibold",
+          "size": 10,
+          "tracking": 1.2,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 0,
+        "rowStyle": "indent",
+        "corner": 20,
+        "border": 1,
+        "filledButtons": true,
+        "ornament": "none",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 700,
+        "lineHeight": 1.75,
+        "mastheadStyle": "none",
+        "statsStyle": "figures",
+        "kicker": false,
+        "figureBlocks": false,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#F7F8F4",
+        "panel": "#F7F8F4",
+        "surface": "#FFFFFF",
+        "ink": "#23291F",
+        "prose": "#3A4136",
+        "muted": "#9AA39A",
+        "rule": "#E4E8DF",
+        "ruleFaint": "#EDF0E9",
+        "accent": "#5C7A5E",
+        "accentDeep": "#445C46",
+        "tint": "#8FA88F",
+        "green": "#5C7A5E"
+      },
+      "dark": {
+        "paper": "#141711",
+        "panel": "#171B14",
+        "surface": "#1D221A",
+        "ink": "#EAEFE6",
+        "prose": "#C6CFC0",
+        "muted": "#818B7E",
+        "rule": "#2A3127",
+        "ruleFaint": "#20261E",
+        "accent": "#8FB690",
+        "accentDeep": "#A7CBA8",
+        "tint": "#6E8B70",
+        "green": "#8FB690"
+      },
+      "scheme": "light"
+    },
+    {
+      "id": "manuscript",
+      "name": "Manuscript",
+      "note": "A book page: centred measure, indented paragraphs, roman numerals.",
+      "type": {
+        "prose": {
+          "families": [
+            "EB Garamond"
+          ],
+          "shape": "serif",
+          "weight": "regular",
+          "size": 18.5
+        },
+        "display": {
+          "families": [
+            "EB Garamond"
+          ],
+          "shape": "serif",
+          "weight": "regular",
+          "scale": 1.0
+        },
+        "label": {
+          "families": [
+            "EB Garamond"
+          ],
+          "shape": "serif",
+          "weight": "regular",
+          "size": 11.5,
+          "tracking": 1.8,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 1,
+        "rowStyle": "plain",
+        "corner": 0,
+        "border": 1,
+        "filledButtons": false,
+        "ornament": "none",
+        "centred": true,
+        "statsTrace": false,
+        "measure": 620,
+        "lineHeight": 1.66,
+        "mastheadStyle": "centred",
+        "statsStyle": "figures",
+        "kicker": true,
+        "figureBlocks": false,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#FBF8F1",
+        "panel": "#FBF8F1",
+        "surface": "#FFFEFA",
+        "ink": "#221E17",
+        "prose": "#332D23",
+        "muted": "#A2977F",
+        "rule": "#ECE4D5",
+        "ruleFaint": "#F3EDE1",
+        "accent": "#6D5A3F",
+        "accentDeep": "#4E3F2B",
+        "tint": "#8E7A5C",
+        "green": "#4F6141"
+      },
+      "dark": {
+        "paper": "#17140F",
+        "panel": "#1A1712",
+        "surface": "#201C16",
+        "ink": "#F0E9DB",
+        "prose": "#D3CAB7",
+        "muted": "#8C826C",
+        "rule": "#302A20",
+        "ruleFaint": "#241F18",
+        "accent": "#C0A883",
+        "accentDeep": "#D8C3A2",
+        "tint": "#9E8C6E",
+        "green": "#8FA277"
+      },
+      "scheme": "light"
+    },
+    {
+      "id": "sumi",
+      "name": "Sumi",
+      "note": "Ink wash behind the page, a vermilion seal, 2.0 line-height.",
+      "type": {
+        "prose": {
+          "families": [
+            "IBM Plex Sans"
+          ],
+          "shape": "sans",
+          "weight": "light",
+          "size": 15
+        },
+        "display": {
+          "families": [
+            "Cormorant Garamond"
+          ],
+          "shape": "serif",
+          "weight": "light",
+          "scale": 1.25
+        },
+        "label": {
+          "families": [
+            "IBM Plex Sans"
+          ],
+          "shape": "sans",
+          "weight": "medium",
+          "size": 9.5,
+          "tracking": 2.4,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 0,
+        "rowStyle": "plain",
+        "corner": 0,
+        "border": 1,
+        "filledButtons": false,
+        "ornament": "wash",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 640,
+        "lineHeight": 2.0,
+        "mastheadStyle": "none",
+        "statsStyle": "figures",
+        "kicker": false,
+        "figureBlocks": false,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#F7F5F0",
+        "panel": "#F7F5F0",
+        "surface": "#FFFFFF",
+        "ink": "#1A1815",
+        "prose": "#4A4740",
+        "muted": "#9C968C",
+        "rule": "#EBE7DF",
+        "ruleFaint": "#F2EFE9",
+        "accent": "#B3372A",
+        "accentDeep": "#85261C",
+        "tint": "#8C8880",
+        "green": "#5C7A5E"
+      },
+      "dark": {
+        "paper": "#141311",
+        "panel": "#161512",
+        "surface": "#1C1A17",
+        "ink": "#EFEAE1",
+        "prose": "#C6C0B5",
+        "muted": "#8A857C",
+        "rule": "#2A2723",
+        "ruleFaint": "#201E1B",
+        "accent": "#D2604F",
+        "accentDeep": "#E4826F",
+        "tint": "#8A857C",
+        "green": "#8FA277"
+      },
+      "scheme": "light"
+    },
+    {
+      "id": "editorial",
+      "name": "Editorial",
+      "note": "Men's-magazine register: a slab headline on charcoal, wide kickers, magenta used twice.",
+      "type": {
+        "prose": {
+          "families": [
+            "Archivo"
+          ],
+          "shape": "sans",
+          "weight": "regular",
+          "size": 15.5
+        },
+        "display": {
+          "families": [
+            "Zilla Slab"
+          ],
+          "shape": "serif",
+          "weight": "bold",
+          "scale": 1.35,
+          "tracking": -0.4
+        },
+        "label": {
+          "families": [
+            "Archivo"
+          ],
+          "shape": "sans",
+          "weight": "semibold",
+          "size": 9.5,
+          "tracking": 2.4,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 3,
+        "rowStyle": "rule",
+        "corner": 0,
+        "border": 1,
+        "filledButtons": true,
+        "ornament": "none",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 680,
+        "lineHeight": 1.72,
+        "mastheadStyle": "rule",
+        "statsStyle": "figures",
+        "kicker": true,
+        "figureBlocks": false,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#F2F1EE",
+        "panel": "#E9E8E4",
+        "surface": "#FBFBF9",
+        "ink": "#15181A",
+        "prose": "#33373B",
+        "muted": "#85898E",
+        "rule": "#D6D5D0",
+        "ruleFaint": "#E3E2DD",
+        "accent": "#E10A57",
+        "accentDeep": "#B00742",
+        "tint": "#15181A",
+        "green": "#3F7A5C"
+      },
+      "dark": {
+        "paper": "#111315",
+        "panel": "#161A1C",
+        "surface": "#1C2124",
+        "ink": "#F0F1EF",
+        "prose": "#C2C7CB",
+        "muted": "#7E858B",
+        "rule": "#272C30",
+        "ruleFaint": "#1D2226",
+        "accent": "#FF2E74",
+        "accentDeep": "#FF5C93",
+        "tint": "#F0F1EF",
+        "green": "#79B396"
+      },
+      "scheme": "both"
+    },
+    {
+      "id": "broadsheet",
+      "name": "Broadsheet",
+      "note": "A front page in one column: Playfair masthead, a drop cap, ruled decks.",
+      "type": {
+        "prose": {
+          "families": [
+            "Libre Baskerville"
+          ],
+          "shape": "serif",
+          "weight": "regular",
+          "size": 15
+        },
+        "display": {
+          "families": [
+            "Playfair Display"
+          ],
+          "shape": "serif",
+          "weight": "bold",
+          "scale": 1.15
+        },
+        "label": {
+          "families": [
+            "Playfair Display"
+          ],
+          "shape": "serif",
+          "weight": "bold",
+          "size": 10.5,
+          "tracking": 1.9,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 3,
+        "rowStyle": "rule",
+        "corner": 0,
+        "border": 1,
+        "filledButtons": false,
+        "ornament": "none",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 660,
+        "lineHeight": 1.75,
+        "mastheadStyle": "double",
+        "statsStyle": "figures",
+        "kicker": true,
+        "figureBlocks": false,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#F4F0E6",
+        "panel": "#F4F0E6",
+        "surface": "#FFFDF6",
+        "ink": "#1A1712",
+        "prose": "#2E2A22",
+        "muted": "#6E675F",
+        "rule": "#CFC6B2",
+        "ruleFaint": "#E1D9C6",
+        "accent": "#7A1F16",
+        "accentDeep": "#521310",
+        "tint": "#9A8C6D",
+        "green": "#3F5F41"
+      },
+      "dark": {
+        "paper": "#15130F",
+        "panel": "#191713",
+        "surface": "#201D18",
+        "ink": "#F1ECE0",
+        "prose": "#CFC7B6",
+        "muted": "#8B8377",
+        "rule": "#2E2A22",
+        "ruleFaint": "#231F1A",
+        "accent": "#C4574A",
+        "accentDeep": "#DA7365",
+        "tint": "#9A8C6D",
+        "green": "#7F9A6F"
+      },
+      "scheme": "light"
+    },
+    {
+      "id": "cinema",
+      "name": "Cinema",
+      "note": "A title card: letterboxed, Oswald in caps, timecodes, one blood red.",
+      "type": {
+        "prose": {
+          "families": [
+            "Barlow"
+          ],
+          "shape": "sans",
+          "weight": "light",
+          "size": 16
+        },
+        "display": {
+          "families": [
+            "Oswald"
+          ],
+          "shape": "sans",
+          "weight": "bold",
+          "scale": 1.45,
+          "uppercase": true,
+          "tracking": 0.4
+        },
+        "label": {
+          "families": [
+            "Oswald"
+          ],
+          "shape": "sans",
+          "weight": "light",
+          "size": 11,
+          "tracking": 3.0,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 0,
+        "rowStyle": "block",
+        "corner": 0,
+        "border": 1,
+        "filledButtons": true,
+        "ornament": "letterbox",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 700,
+        "lineHeight": 1.72,
+        "mastheadStyle": "band",
+        "statsStyle": "figures",
+        "kicker": true,
+        "figureBlocks": false,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#EFEBE2",
+        "panel": "#E7E2D7",
+        "surface": "#FFFFFF",
+        "ink": "#14120F",
+        "prose": "#3B3830",
+        "muted": "#7D7970",
+        "rule": "#DAD4C6",
+        "ruleFaint": "#E6E1D5",
+        "accent": "#C8402F",
+        "accentDeep": "#9C3022",
+        "tint": "#7D7970",
+        "green": "#4E6B45"
+      },
+      "dark": {
+        "paper": "#0A0A0A",
+        "panel": "#000000",
+        "surface": "#111110",
+        "ink": "#E5E0D5",
+        "prose": "#B3AEA3",
+        "muted": "#7D7970",
+        "rule": "#1C1C1A",
+        "ruleFaint": "#141413",
+        "accent": "#C8402F",
+        "accentDeep": "#E4614E",
+        "tint": "#7D7970",
+        "green": "#6E9160"
+      },
+      "scheme": "dark"
+    },
+    {
+      "id": "seismograph",
+      "name": "Seismograph",
+      "note": "The month as a trace down the stats column, today at the top.",
+      "type": {
+        "prose": {
+          "families": [
+            "IBM Plex Sans"
+          ],
+          "shape": "sans",
+          "weight": "light",
+          "size": 16
+        },
+        "display": {
+          "families": [
+            "IBM Plex Sans"
+          ],
+          "shape": "sans",
+          "weight": "semibold",
+          "scale": 0.9
+        },
+        "label": {
+          "families": [
+            "IBM Plex Mono"
+          ],
+          "shape": "mono",
+          "weight": "regular",
+          "size": 10,
+          "tracking": 1.0,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 1,
+        "rowStyle": "indent",
+        "corner": 0,
+        "border": 1,
+        "filledButtons": false,
+        "ornament": "none",
+        "centred": false,
+        "statsTrace": true,
+        "measure": 700,
+        "lineHeight": 1.78,
+        "mastheadStyle": "rule",
+        "statsStyle": "rows",
+        "kicker": false,
+        "figureBlocks": false,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#F3F6F7",
+        "panel": "#EDF1F3",
+        "surface": "#FFFFFF",
+        "ink": "#101619",
+        "prose": "#39454B",
+        "muted": "#7C8794",
+        "rule": "#DCE3E6",
+        "ruleFaint": "#E9EEF0",
+        "accent": "#E8613C",
+        "accentDeep": "#B8452A",
+        "tint": "#7C8794",
+        "green": "#3E7A5E"
+      },
+      "dark": {
+        "paper": "#101619",
+        "panel": "#101619",
+        "surface": "#161E22",
+        "ink": "#E6ECEF",
+        "prose": "#B3BEC6",
+        "muted": "#7C8794",
+        "rule": "#222D33",
+        "ruleFaint": "#1A2429",
+        "accent": "#E8613C",
+        "accentDeep": "#F28364",
+        "tint": "#7C8794",
+        "green": "#6FA88A"
+      },
+      "scheme": "dark"
+    },
+    {
+      "id": "constructivist",
+      "name": "Constructivist",
+      "note": "One angle: a red wedge as ground, type set flush against it.",
+      "type": {
+        "prose": {
+          "families": [
+            "Barlow"
+          ],
+          "shape": "sans",
+          "weight": "regular",
+          "size": 15.5
+        },
+        "display": {
+          "families": [
+            "Oswald"
+          ],
+          "shape": "sans",
+          "weight": "bold",
+          "scale": 1.5,
+          "uppercase": true
+        },
+        "label": {
+          "families": [
+            "Oswald"
+          ],
+          "shape": "sans",
+          "weight": "medium",
+          "size": 10,
+          "tracking": 2.0,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 5,
+        "rowStyle": "block",
+        "corner": 0,
+        "border": 5,
+        "filledButtons": true,
+        "ornament": "wedge",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 700,
+        "lineHeight": 1.7,
+        "mastheadStyle": "rule",
+        "statsStyle": "figures",
+        "kicker": true,
+        "figureBlocks": true,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#EFECE3",
+        "panel": "#EFECE3",
+        "surface": "#FFFFFF",
+        "ink": "#14110F",
+        "prose": "#2A2622",
+        "muted": "#6D675E",
+        "rule": "#D8D3C6",
+        "ruleFaint": "#E4E0D5",
+        "accent": "#D92B1E",
+        "accentDeep": "#A81D13",
+        "tint": "#14110F",
+        "green": "#3F6B4A"
+      },
+      "dark": {
+        "paper": "#121110",
+        "panel": "#171614",
+        "surface": "#1D1B19",
+        "ink": "#EFECE3",
+        "prose": "#CFC9BE",
+        "muted": "#8B857A",
+        "rule": "#2C2924",
+        "ruleFaint": "#211F1B",
+        "accent": "#E64236",
+        "accentDeep": "#F26A5E",
+        "tint": "#EFECE3",
+        "green": "#6E9A78"
+      },
+      "scheme": "light"
+    },
+    {
+      "id": "bauhaus",
+      "name": "Bauhaus",
+      "note": "Primaries as structure: a red bar, a blue rail, yellow as highlighter.",
+      "type": {
+        "prose": {
+          "families": [
+            "Archivo"
+          ],
+          "shape": "sans",
+          "weight": "regular",
+          "size": 16
+        },
+        "display": {
+          "families": [
+            "Archivo"
+          ],
+          "shape": "sans",
+          "weight": "heavy",
+          "scale": 1.35,
+          "tracking": -0.6
+        },
+        "label": {
+          "families": [
+            "Archivo"
+          ],
+          "shape": "sans",
+          "weight": "heavy",
+          "size": 10,
+          "tracking": 1.4,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 4,
+        "rowStyle": "block",
+        "corner": 0,
+        "border": 4,
+        "filledButtons": true,
+        "ornament": "rail",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 700,
+        "lineHeight": 1.62,
+        "mastheadStyle": "band",
+        "statsStyle": "figures",
+        "kicker": false,
+        "figureBlocks": true,
+        "pageCard": false,
+        "rowColours": true
+      },
+      "light": {
+        "paper": "#F2EFE6",
+        "panel": "#F2EFE6",
+        "surface": "#FFFFFF",
+        "ink": "#14120F",
+        "prose": "#33302A",
+        "muted": "#6B665C",
+        "rule": "#DDD8CB",
+        "ruleFaint": "#E7E3D8",
+        "accent": "#E63329",
+        "accentDeep": "#B7241C",
+        "tint": "#1C53A8",
+        "green": "#F2C024"
+      },
+      "dark": {
+        "paper": "#131211",
+        "panel": "#181715",
+        "surface": "#1E1D1A",
+        "ink": "#F2EFE6",
+        "prose": "#CFCAC0",
+        "muted": "#8A857B",
+        "rule": "#2E2C27",
+        "ruleFaint": "#23211D",
+        "accent": "#F2483D",
+        "accentDeep": "#FF6E63",
+        "tint": "#4F86DA",
+        "green": "#F2C024"
+      },
+      "scheme": "light"
+    },
+    {
+      "id": "brutalist",
+      "name": "Brutalist",
+      "note": "3px boxes, Archivo Black in caps, Courier body, one acid yellow.",
+      "type": {
+        "prose": {
+          "families": [
+            "Courier Prime"
+          ],
+          "shape": "mono",
+          "weight": "regular",
+          "size": 14
+        },
+        "display": {
+          "families": [
+            "Archivo Black",
+            "Archivo"
+          ],
+          "shape": "sans",
+          "weight": "heavy",
+          "scale": 1.6,
+          "uppercase": true,
+          "tracking": -0.5
+        },
+        "label": {
+          "families": [
+            "Courier Prime"
+          ],
+          "shape": "mono",
+          "weight": "bold",
+          "size": 11,
+          "tracking": 0.6,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 3,
+        "rowStyle": "block",
+        "corner": 0,
+        "border": 3,
+        "filledButtons": true,
+        "ornament": "none",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 680,
+        "lineHeight": 1.72,
+        "mastheadStyle": "band",
+        "statsStyle": "figures",
+        "kicker": false,
+        "figureBlocks": true,
+        "pageCard": true,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#FFFFFF",
+        "panel": "#FFFFFF",
+        "surface": "#FFFFFF",
+        "ink": "#0B0B0B",
+        "prose": "#0B0B0B",
+        "muted": "#6A6A66",
+        "rule": "#0B0B0B",
+        "ruleFaint": "#D5D5D0",
+        "accent": "#0B0B0B",
+        "accentDeep": "#333330",
+        "tint": "#D6FF00",
+        "green": "#0B0B0B"
+      },
+      "dark": {
+        "paper": "#0B0B0B",
+        "panel": "#0B0B0B",
+        "surface": "#141413",
+        "ink": "#F2F2EE",
+        "prose": "#F2F2EE",
+        "muted": "#8A8A85",
+        "rule": "#F2F2EE",
+        "ruleFaint": "#2A2A28",
+        "accent": "#F2F2EE",
+        "accentDeep": "#D6FF00",
+        "tint": "#D6FF00",
+        "green": "#F2F2EE"
+      },
+      "scheme": "both"
+    },
+    {
+      "id": "brokengrid",
+      "name": "Broken grid",
+      "note": "A ghost numeral behind the page, Anton against Spectral Light.",
+      "type": {
+        "prose": {
+          "families": [
+            "Spectral Light",
+            "Spectral"
+          ],
+          "shape": "serif",
+          "weight": "light",
+          "size": 15.5
+        },
+        "display": {
+          "families": [
+            "Anton"
+          ],
+          "shape": "sans",
+          "weight": "regular",
+          "scale": 1.9,
+          "uppercase": true,
+          "tracking": -0.4
+        },
+        "label": {
+          "families": [
+            "Anton"
+          ],
+          "shape": "sans",
+          "weight": "regular",
+          "size": 10.5,
+          "tracking": 2.2,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 1,
+        "rowStyle": "indent",
+        "corner": 0,
+        "border": 1,
+        "filledButtons": false,
+        "ornament": "ghost",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 680,
+        "lineHeight": 1.68,
+        "mastheadStyle": "rule",
+        "statsStyle": "figures",
+        "kicker": true,
+        "figureBlocks": false,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#ECEAE5",
+        "panel": "#ECEAE5",
+        "surface": "#F6F5F2",
+        "ink": "#16150F",
+        "prose": "#33312B",
+        "muted": "#8E8B85",
+        "rule": "#DEDBD4",
+        "ruleFaint": "#E6E4DE",
+        "accent": "#E8552F",
+        "accentDeep": "#B83C1C",
+        "tint": "#8E8B85",
+        "green": "#4F6B45"
+      },
+      "dark": {
+        "paper": "#121210",
+        "panel": "#161614",
+        "surface": "#1C1C19",
+        "ink": "#EDEBE4",
+        "prose": "#C8C5BC",
+        "muted": "#86837C",
+        "rule": "#2A2926",
+        "ruleFaint": "#201F1C",
+        "accent": "#F26A44",
+        "accentDeep": "#FF8A66",
+        "tint": "#86837C",
+        "green": "#7C9A6C"
+      },
+      "scheme": "light"
+    },
+    {
+      "id": "memphis",
+      "name": "Memphis",
+      "note": "1984 unrepentant: confetti geometry, rounded cards, a hard drop shadow.",
+      "type": {
+        "prose": {
+          "families": [
+            "Poppins"
+          ],
+          "shape": "sans",
+          "weight": "regular",
+          "size": 15.5
+        },
+        "display": {
+          "families": [
+            "Poppins"
+          ],
+          "shape": "sans",
+          "weight": "heavy",
+          "scale": 1.3,
+          "tracking": -0.7
+        },
+        "label": {
+          "families": [
+            "Poppins"
+          ],
+          "shape": "sans",
+          "weight": "heavy",
+          "size": 10,
+          "tracking": 1.4,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 0,
+        "rowStyle": "card",
+        "corner": 16,
+        "border": 3,
+        "filledButtons": true,
+        "ornament": "confetti",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 700,
+        "lineHeight": 1.68,
+        "mastheadStyle": "none",
+        "statsStyle": "figures",
+        "kicker": false,
+        "figureBlocks": true,
+        "pageCard": true,
+        "rowColours": true
+      },
+      "light": {
+        "paper": "#FDFCF7",
+        "panel": "#FDFCF7",
+        "surface": "#FFFFFF",
+        "ink": "#1B1B1B",
+        "prose": "#3A3833",
+        "muted": "#6F6C66",
+        "rule": "#E7E4DA",
+        "ruleFaint": "#F0EEE6",
+        "accent": "#FF5C8A",
+        "accentDeep": "#E03A6D",
+        "tint": "#37C2C0",
+        "green": "#FFD23F"
+      },
+      "dark": {
+        "paper": "#141313",
+        "panel": "#181717",
+        "surface": "#1F1E1E",
+        "ink": "#F7F5F0",
+        "prose": "#D2CFC8",
+        "muted": "#8E8A83",
+        "rule": "#2C2A29",
+        "ruleFaint": "#211F1F",
+        "accent": "#FF7BA1",
+        "accentDeep": "#FF9BB8",
+        "tint": "#4FD6D4",
+        "green": "#FFD23F"
+      },
+      "scheme": "light"
+    }
+  ]
+}

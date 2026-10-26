@@ -1,0 +1,3632 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wander — theme demo</title>
+
+<!-- The app's own bundled woff2 files, so a theme here is set in the exact
+     typeface the shipping builds use, and the page needs no network. -->
+<link rel="stylesheet" href="../tauri/src/fonts/fonts.css">
+
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   The demo's own shell. Deliberately neutral greys: anything with a hue in it
+   would bias the eye towards whichever theme is on screen. The themed
+   surfaces below are the only coloured things on the page.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --shell: #141414;
+  --shell-2: #1c1c1c;
+  --shell-3: #262626;
+  --line: #303030;
+  --text: #d6d6d6;
+  --dim: #8a8a8a;
+  --hot: #e8e8e8;
+  --scale: 1;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--shell);
+  color: var(--text);
+  font: 13px/1.5 'IBM Plex Sans', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+[hidden] { display: none !important; }
+
+/* ── Top bar ───────────────────────────────────────────────────────────── */
+
+.bar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 14px 22px;
+  background: var(--shell-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.bar h1 {
+  margin: 0;
+  font: 600 14px/1 'IBM Plex Sans', sans-serif;
+  letter-spacing: .16em; text-transform: uppercase;
+  color: var(--hot);
+}
+.bar h1 small {
+  display: block; margin-top: 5px;
+  font: 400 10px/1 'IBM Plex Sans', sans-serif;
+  letter-spacing: .1em; text-transform: none;
+  color: var(--dim);
+}
+
+.group { display: flex; align-items: center; gap: 7px; }
+.group > .lbl {
+  font-size: 9.5px; font-weight: 600; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--dim);
+}
+
+.seg { display: flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.seg button {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--dim);
+  padding: 6px 11px;
+}
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--hot); color: var(--shell); }
+.seg button:not(.on):hover { color: var(--hot); }
+
+.act {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--text);
+  border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px;
+}
+.act:hover { border-color: var(--hot); }
+.bar .spacer { flex: 1; }
+
+.count { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+.count b { color: var(--hot); font-weight: 600; }
+
+/* ── Grid ──────────────────────────────────────────────────────────────── */
+
+.wrap { padding: 22px; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(430px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+.card {
+  margin: 0;
+  background: var(--shell-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.card:hover { border-color: #4a4a4a; }
+.card.is-new { border-color: #4d4d4d; }
+
+/* A real 1160×740 Wander window, scaled to fit the card with a transform, so
+   every px in the theme's CSS means exactly what it means in the app. */
+.frame { position: relative; width: 100%; overflow: hidden; background: #000; }
+.frame > .wapp {
+  position: absolute; top: 0; left: 0;
+  width: 1160px; height: 740px;
+  transform-origin: top left;
+}
+
+.caption { display: flex; align-items: center; gap: 9px; padding: 11px 14px; }
+.caption .name { font-size: 14px; font-weight: 600; color: var(--hot); }
+.caption .spacer { flex: 1; }
+
+.badge {
+  font-size: 9px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase;
+  padding: 3px 7px; border-radius: 3px;
+}
+.badge.new { background: var(--hot); color: var(--shell); }
+.badge.ship { background: var(--shell-3); color: var(--dim); }
+
+.caption p { margin: 0; padding: 0 14px 12px; font-size: 11.5px; line-height: 1.5; color: var(--dim); }
+
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; border: 1px solid #555; }
+.dot.light { background: #fafaf9; }
+.dot.dark { background: #171717; }
+.dot.both { background: linear-gradient(90deg, #fafaf9 0 50%, #171717 50% 100%); }
+
+/* ── Detail view ───────────────────────────────────────────────────────── */
+
+.detail { padding: 22px; }
+.detail-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.detail-head h2 { margin: 0; font-size: 22px; font-weight: 600; color: var(--hot); }
+.detail-head p { margin: 0; font-size: 12.5px; color: var(--dim); flex: 1; min-width: 220px; }
+
+.detail-stage {
+  border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  background: #000; position: relative;
+}
+.detail-stage > .wapp {
+  position: absolute; top: 0; left: 0;
+  width: 1160px; height: 740px;
+  transform-origin: top left;
+}
+
+.specs { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 1px; margin-top: 16px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+/* Direct children only — the swatch strip is a div too, and taking the cell's
+   padding would leave it no height to draw in. */
+.specs > div { background: var(--shell-2); padding: 10px 13px; }
+.specs dt { font-size: 9.5px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase; color: var(--dim); margin: 0 0 4px; }
+.specs dd { margin: 0; font-size: 12.5px; color: var(--text); }
+.specs .sw { display: flex; height: 22px; border-radius: 3px; overflow: hidden; margin: 2px 0 5px; }
+.specs .sw i { flex: 1; display: block; }
+.specs .sw i:last-child { border-right: 1px solid rgba(255, 255, 255, .12); }
+.specs .keys { font-size: 8.5px; letter-spacing: .06em; color: var(--dim); line-height: 1.4; }
+
+pre.json {
+  margin: 16px 0 0; padding: 14px 16px;
+  background: var(--shell-2); border: 1px solid var(--line); border-radius: 6px;
+  font: 12px/1.6 'IBM Plex Mono', ui-monospace, monospace;
+  color: var(--text); overflow: auto; max-height: 340px; white-space: pre;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Below this line: the Wander app's own stylesheet, ported from
+   tauri/src/styles.css with `:root` re-scoped to `.wapp` so a dozen of them
+   can sit on one page in a dozen palettes. Values are otherwise untouched —
+   the point of the demo is to see what the theme does, not a redrawing of it.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wapp {
+  --paper: #f6f2ea;  --panel: #f1ece1;  --surface: #fbf8f2;
+  --ink: #171310;    --muted: #8a7f6d;
+  --rule: #ddd5c7;   --rule-faint: #e6ded0;
+  --accent: #9c3220; --accent-deep: #7a2416; --green: #2f5d4a;
+  --prose: 'Newsreader', Georgia, serif;
+  --display: 'Newsreader', Georgia, serif;
+  --label: 'IBM Plex Sans', system-ui, sans-serif;
+  --label-size: 10.5px;
+  --label-tracking: .115em;
+  --display-scale: 1;
+  --display-tracking: -.015em;
+  --corner: 0px;  --border: 1px;  --masthead-rule: 2px;
+  --measure: 760px; --type: 17.5px; --lead: 1.42;
+  --index-width: 250px; --panel-width: 252px;
+  --panel-cols: 1;
+}
+
+.wapp * { box-sizing: border-box; }
+.wapp, .wapp input, .wapp button { font-family: var(--label); -webkit-font-smoothing: antialiased; }
+.wapp { display: flex; flex-direction: column; background: var(--paper); color: var(--ink); overflow: hidden; }
+.wapp .spacer { flex: 1; }
+
+.smallcaps {
+  font-family: var(--label);
+  font-size: var(--label-size);
+  font-weight: 600;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.rule { height: 1px; background: var(--rule); flex: none; }
+.rule-faint { height: 1px; background: var(--rule-faint); flex: none; }
+.rule-ink { height: 1px; background: var(--ink); flex: none; }
+.rule-heavy { height: var(--masthead-rule); background: var(--ink); margin: 0 34px; flex: none; }
+
+.marginalia {
+  font-family: var(--prose);
+  font-size: 12.5px; font-style: italic; line-height: 1.5;
+  color: var(--muted); margin: 0;
+}
+
+.wapp button.quiet {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .11em;
+  text-transform: uppercase; color: var(--muted); padding: 0;
+}
+.wapp button.quiet.on, .wapp button.quiet:hover { color: var(--accent); }
+
+.wapp button.block {
+  width: 100%; padding: 9px 10px;
+  font-size: 12.5px; font-weight: 600; letter-spacing: .03em;
+  color: var(--paper); background: var(--accent);
+}
+.wapp button.block:hover { background: var(--accent-deep); }
+.wapp button.block.outline { color: var(--accent); background: none; box-shadow: inset 0 0 0 1px var(--rule); }
+.wapp button.block.narrow { width: 82px; flex: none; }
+
+.wapp button.value {
+  font-size: 13px; font-weight: 500; color: var(--ink); padding: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Masthead --------------------------------------------------------------- */
+
+.masthead { flex: none; }
+.masthead-row { display: flex; align-items: baseline; gap: 14px; padding: 22px 34px 8px; }
+
+.wordmark {
+  font-family: var(--display);
+  font-size: calc(26px * var(--display-scale));
+  font-weight: 600;
+  letter-spacing: var(--display-tracking);
+  color: var(--ink);
+}
+
+/* The Mac and iOS apps set the entry title and the wordmark in the display
+   face's own case and tracking. The Linux build's stylesheet doesn't, so a
+   theme that is entirely capitals — Cinema, Brutalist, and half of what is
+   new here — would read wrong in this preview unless it were applied here too. */
+.wapp[data-upper='true'] .title,
+.wapp[data-upper='true'] .wordmark { text-transform: uppercase; }
+
+.pages { display: flex; align-items: baseline; gap: 13px; }
+.pages .on { color: var(--accent); }
+.toggles { display: flex; align-items: baseline; gap: 12px; }
+.pipe { font-size: 10px; color: var(--rule); }
+
+/* Columns ---------------------------------------------------------------- */
+
+.columns { flex: 1; display: flex; min-height: 0; }
+
+.panel { background: var(--panel); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.panel.index { width: var(--index-width); position: relative; border-right: 1px solid var(--rule); }
+.wapp[data-ornament='rail'] .panel.index { padding-left: 74px; }
+.panel.stats, .panel.options { width: var(--panel-width); border-left: 1px solid var(--rule); }
+
+.find { display: flex; align-items: baseline; gap: 9px; padding: 16px 14px 11px; }
+.find input { flex: 1; font-size: 13px; min-width: 0; color: var(--ink); }
+.find input::placeholder {
+  font-family: var(--prose); font-style: italic;
+  color: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.list { flex: 1; overflow: hidden; }
+
+.month {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 16px 14px 6px; background: var(--panel);
+  border-bottom: 1px solid var(--ink);
+}
+.month.inbox .smallcaps { color: var(--accent); }
+
+.row {
+  display: block; width: 100%; text-align: left;
+  padding: 9px 12px 9px 10px;
+  border-bottom: 1px solid var(--rule-faint);
+  border-left: 2px solid transparent;
+}
+.row.on { background: var(--surface); border-left-color: var(--accent); }
+
+.row .row-title {
+  font-family: var(--display); font-size: 14.5px; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.row .row-meta { display: flex; align-items: baseline; gap: 8px; margin-top: 3px; }
+.row .star { color: var(--accent); font-size: 9px; }
+.row .file { visibility: hidden; }
+.row:hover .file, .row.on .file { visibility: visible; }
+
+.index-actions { display: flex; gap: 8px; padding: 14px; }
+
+/* The page --------------------------------------------------------------- */
+
+.editor { flex: 1; min-width: 0; position: relative; display: flex; justify-content: center; background: var(--paper); }
+
+.page {
+  width: 100%; max-width: var(--measure);
+  display: flex; flex-direction: column; min-height: 0;
+  padding: 24px 40px 18px;
+}
+
+.kicker { color: var(--accent); margin-bottom: 4px; }
+.wapp[data-centred='true'] .title, .wapp[data-centred='true'] .kicker { text-align: center; }
+
+.title {
+  font-family: var(--display);
+  font-size: calc(30px * var(--display-scale));
+  letter-spacing: var(--display-tracking);
+  color: var(--ink); width: 100%;
+}
+.dateline { display: flex; align-items: baseline; gap: 12px; padding: 9px 0 11px; }
+
+.prose {
+  flex: 1; overflow: hidden;
+  padding: 12px 0 0;
+  font-family: var(--prose);
+  font-size: var(--type);
+  line-height: var(--lead);
+  color: var(--prose);
+  white-space: pre-wrap; word-wrap: break-word;
+}
+
+.prose .ln { display: block; min-height: 1em; }
+.prose .mark { color: color-mix(in srgb, var(--muted) 45%, transparent); }
+.prose .h1, .prose .h2, .prose .h3 { color: var(--ink); font-weight: 600; }
+.prose .h1 { font-size: 1.55em; }
+.prose .h2 { font-size: 1.3em; }
+.prose .h3 { font-size: 1.14em; }
+.prose .h1 .mark, .prose .h2 .mark, .prose .h3 .mark { font-size: .62em; font-weight: 400; }
+.prose .quote { font-style: italic; color: var(--muted); padding-left: 1.1em; }
+.prose .bullet .mark { color: var(--accent); }
+.prose .hr { color: color-mix(in srgb, var(--muted) 45%, transparent); letter-spacing: .18em; }
+.prose .strong { font-weight: 700; color: var(--ink); }
+.prose .em { font-style: italic; }
+.prose .code { background: color-mix(in srgb, var(--rule) 50%, transparent); }
+.prose .tag { color: var(--accent); }
+.prose .link { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.prose .url { font-size: .8em; color: color-mix(in srgb, var(--muted) 45%, transparent); }
+
+.status { display: flex; align-items: baseline; padding-top: 9px; }
+
+/* Panels ----------------------------------------------------------------- */
+
+.scroll { overflow: hidden; padding: 20px 18px 24px; display: flex; flex-direction: column; gap: 22px; }
+.group { display: flex; flex-direction: column; }
+.group.actions { gap: 10px; }
+.section { padding-bottom: 7px; }
+
+.field {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 5px 0; border-bottom: 1px solid var(--rule); font-size: 13px;
+}
+.field > span { color: var(--muted); }
+.field > b { font-weight: 500; font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; }
+.field .accent { color: var(--accent); }
+.field .green { color: var(--green); }
+
+.stepper { display: flex; align-items: baseline; gap: 10px; }
+.stepper button { font-size: 10.5px; font-weight: 600; color: var(--muted); }
+.stepper i { font-style: normal; font-size: 13px; }
+
+/* Per-theme structure ---------------------------------------------------- */
+
+.wapp[data-masthead='band'] .masthead-row { background: var(--ink); padding-bottom: 14px; }
+.wapp[data-masthead='band'] .wordmark,
+.wapp[data-masthead='band'] .masthead-row .smallcaps { color: var(--paper); }
+.wapp[data-masthead='band'] .pages .on { color: var(--accent); }
+.wapp[data-masthead='band'] .rule-heavy { display: none; }
+
+.wapp[data-masthead='none'] .rule-heavy { display: none; }
+
+.wapp[data-masthead='centred'] .masthead-row { flex-direction: column; align-items: center; gap: 6px; }
+.wapp[data-masthead='centred'] .spacer { display: none; }
+
+.wapp[data-masthead='double'] .rule-heavy { box-shadow: 0 4px 0 -3px var(--ink); }
+
+.wapp[data-rows='plain'] .row, .wapp[data-rows='indent'] .row { border-bottom: 0; }
+.wapp[data-rows='card'] .row {
+  border: 1px solid var(--rule); border-radius: var(--corner);
+  margin: 4px 10px; background: var(--surface);
+}
+.wapp[data-rows='card'] .row.on { background: var(--accent); border-color: var(--accent); }
+.wapp[data-rows='card'] .row.on .row-title,
+.wapp[data-rows='card'] .row.on .smallcaps { color: var(--paper); }
+.wapp[data-rows='block'] .row { border-bottom-width: 2px; border-bottom-color: var(--ink); }
+.wapp[data-rows='block'] .row.on { background: var(--ink); }
+.wapp[data-rows='block'] .row.on .row-title,
+.wapp[data-rows='block'] .row.on .smallcaps { color: var(--paper); }
+
+.wapp[data-page-card='true'] .page {
+  border: 3px solid var(--ink); border-radius: var(--corner);
+  background: var(--surface);
+  box-shadow: 9px 9px 0 var(--green);
+  margin: 18px;
+}
+
+/* Stats as figures rather than ruled rows. */
+.figures { display: flex; flex-direction: column; gap: 14px; }
+.figure { display: flex; flex-direction: column; gap: 2px; }
+.figure .value { font-family: var(--display); font-size: 34px; line-height: 1; font-variant-numeric: tabular-nums; }
+.figure.block { padding: 12px 14px; border-radius: var(--corner); }
+.figure.block .smallcaps { color: inherit; opacity: .75; }
+
+/* Ornaments — ported verbatim from the app. */
+.ornament { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.ornament i { display: none; position: absolute; }
+
+.ornament-wash .orn-a, .ornament-wash .orn-b, .ornament-wash .orn-c { display: block; border-radius: 999px; }
+.ornament-wash .orn-a {
+  width: 46%; height: 46%; right: -6%; top: 4%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--ink) 13%, transparent) 0%, transparent 70%);
+}
+.ornament-wash .orn-b {
+  width: 30%; height: 30%; right: 2%; bottom: -4%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--ink) 9%, transparent) 0%, transparent 70%);
+}
+.ornament-wash .orn-c {
+  width: 30%; height: 14px; left: 18%; bottom: 9%;
+  background: color-mix(in srgb, var(--ink) 16%, transparent);
+  transform: rotate(-2deg);
+}
+
+.ornament-letterbox::before, .ornament-letterbox::after {
+  content: ''; position: absolute; left: 0; right: 0; height: 34px; background: var(--panel);
+}
+.ornament-letterbox::before { top: 0; }
+.ornament-letterbox::after { bottom: 0; }
+
+.ornament-wedge::before {
+  content: ''; position: absolute; inset: 0;
+  clip-path: polygon(100% 0%, 100% 58%, 26% 100%, 0% 100%, 0% 86%);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.ornament-wedge::after {
+  content: ''; position: absolute; inset: 0;
+  clip-path: polygon(100% 58%, 100% 63%, 30% 100%, 26% 100%);
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+.ornament-ghost::after {
+  content: attr(data-day);
+  position: absolute; left: 4%; top: 50%; transform: translateY(-50%);
+  font-family: var(--display); line-height: 1; white-space: nowrap;
+  font-size: 260px;
+  color: color-mix(in srgb, var(--ink) 5.5%, transparent);
+}
+
+.ornament-confetti .orn-a, .ornament-confetti .orn-b,
+.ornament-confetti .orn-c, .ornament-confetti .orn-d { display: block; }
+.ornament-confetti .orn-a {
+  left: 4%; bottom: 8%; width: 50px; height: 50px; border-radius: 50%;
+  border: 6px solid color-mix(in srgb, var(--tint) 55%, transparent);
+}
+.ornament-confetti .orn-b {
+  right: 5%; bottom: 8%; width: 0; height: 0;
+  border-left: 26px solid transparent; border-right: 26px solid transparent;
+  border-bottom: 38px solid color-mix(in srgb, var(--green) 65%, transparent);
+}
+.ornament-confetti .orn-c {
+  right: 8%; top: 5%; width: 90px; height: 12px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  transform: rotate(-8deg);
+}
+.ornament-confetti .orn-d {
+  left: 46%; bottom: 4%; width: 40px; height: 9px; border-radius: 999px;
+  background: color-mix(in srgb, var(--tint) 55%, transparent);
+  transform: rotate(-8deg);
+}
+
+.ornament-rail {
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
+  position: absolute; inset: 0 auto 0 0; width: 74px; z-index: 0;
+  padding-top: 24px;
+  background: color-mix(in srgb, var(--tint) 35%, transparent);
+}
+.ornament-rail i { display: block; }
+.ornament-rail .orn-a { position: static; width: 34px; height: 34px; border-radius: 50%; background: var(--green); }
+.ornament-rail .orn-b {
+  position: static; width: 0; height: 0;
+  border-left: 18px solid transparent; border-right: 18px solid transparent;
+  border-bottom: 30px solid var(--accent);
+}
+.ornament-rail .orn-c { position: static; width: 32px; height: 32px; background: var(--paper); }
+</style>
+</head>
+
+<body>
+
+<div class="bar">
+  <h1>Wander — theme demo
+    <small>eighteen new looks, against the fourteen that ship</small>
+  </h1>
+
+  <div class="group">
+    <span class="lbl">Paper</span>
+    <div class="seg" id="paper">
+      <button data-v="light">Light</button>
+      <button data-v="dark" class="on">Dark</button>
+      <button data-v="both" title="Each theme in the appearance it was drawn for">Split</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <span class="lbl">Show</span>
+    <div class="seg" id="filter">
+      <button data-v="all" class="on">All</button>
+      <button data-v="new">New only</button>
+      <button data-v="ship">Shipped</button>
+    </div>
+  </div>
+
+  <span class="spacer"></span>
+  <span class="count" id="count"></span>
+  <button class="act" id="download">Download new-themes.json</button>
+</div>
+
+<div class="wrap" id="root"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   The themes.
+
+   SHIPPED is `Resources/themes.json` verbatim — kept here so the new looks can
+   be judged against what is already there, which is the only way to tell
+   whether one of them is actually new. NEW is the eighteen being proposed, in
+   exactly the schema every build decodes, so a reviewed file can be appended to
+   themes.json without editing a thing.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const SHIPPED = [
+  {
+    "id": "almanac",
+    "name": "Almanac",
+    "note": "Warm paper, hairline rules, one terracotta. What ships today.",
+    "type": {
+      "prose": {
+        "families": [
+          "Newsreader"
+        ],
+        "shape": "serif",
+        "weight": "regular",
+        "size": 17.5
+      },
+      "display": {
+        "families": [
+          "Newsreader"
+        ],
+        "shape": "serif",
+        "weight": "semibold",
+        "scale": 1.0
+      },
+      "label": {
+        "families": [
+          "IBM Plex Sans"
+        ],
+        "shape": "sans",
+        "weight": "semibold",
+        "size": 10.5,
+        "tracking": 1.15,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 2,
+      "rowStyle": "rule",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": true,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 760,
+      "lineHeight": 1.42,
+      "mastheadStyle": "rule",
+      "statsStyle": "rows",
+      "kicker": false,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#F6F2EA",
+      "panel": "#F1ECE1",
+      "surface": "#FBF8F2",
+      "ink": "#171310",
+      "prose": "#453D33",
+      "muted": "#8A7F6D",
+      "rule": "#DDD5C7",
+      "ruleFaint": "#E6DED0",
+      "accent": "#9C3220",
+      "accentDeep": "#7A2416",
+      "tint": "#6B8CA8",
+      "green": "#2F5D4A"
+    },
+    "dark": {
+      "paper": "#16130F",
+      "panel": "#1B1713",
+      "surface": "#221D18",
+      "ink": "#F2ECE0",
+      "prose": "#D2C8B7",
+      "muted": "#93876F",
+      "rule": "#342D24",
+      "ruleFaint": "#27211A",
+      "accent": "#CC6A4C",
+      "accentDeep": "#E08B6E",
+      "tint": "#82A5C0",
+      "green": "#82A26B"
+    },
+    "scheme": "both"
+  },
+  {
+    "id": "quiet",
+    "name": "Quiet",
+    "note": "Sans prose, no rules at all, hierarchy from weight and air.",
+    "type": {
+      "prose": {
+        "families": [
+          "Karla"
+        ],
+        "shape": "sans",
+        "weight": "light",
+        "size": 17
+      },
+      "display": {
+        "families": [
+          "Karla"
+        ],
+        "shape": "sans",
+        "weight": "medium",
+        "scale": 0.72
+      },
+      "label": {
+        "families": [
+          "Karla"
+        ],
+        "shape": "sans",
+        "weight": "medium",
+        "size": 9.5,
+        "tracking": 1.5,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 0,
+      "rowStyle": "plain",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": false,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 680,
+      "lineHeight": 1.78,
+      "mastheadStyle": "none",
+      "statsStyle": "rows",
+      "kicker": false,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#FBFBFA",
+      "panel": "#FBFBFA",
+      "surface": "#F4F4F2",
+      "ink": "#1A1A19",
+      "prose": "#3A3A37",
+      "muted": "#A8A8A2",
+      "rule": "#ECECE8",
+      "ruleFaint": "#F3F3F0",
+      "accent": "#1A1A19",
+      "accentDeep": "#7A7A76",
+      "tint": "#7A7A76",
+      "green": "#5A6B55"
+    },
+    "dark": {
+      "paper": "#131312",
+      "panel": "#131312",
+      "surface": "#1B1B1A",
+      "ink": "#EFEFEC",
+      "prose": "#C9C9C3",
+      "muted": "#6F6F6A",
+      "rule": "#262624",
+      "ruleFaint": "#1E1E1C",
+      "accent": "#EFEFEC",
+      "accentDeep": "#A8A8A2",
+      "tint": "#A8A8A2",
+      "green": "#8FA383"
+    },
+    "scheme": "light"
+  },
+  {
+    "id": "botanic",
+    "name": "Botanic",
+    "note": "One desaturated sage, pill buttons, serif italic for asides.",
+    "type": {
+      "prose": {
+        "families": [
+          "Nunito Sans"
+        ],
+        "shape": "sans",
+        "weight": "light",
+        "size": 16.5
+      },
+      "display": {
+        "families": [
+          "Nunito Sans"
+        ],
+        "shape": "sans",
+        "weight": "semibold",
+        "scale": 0.83
+      },
+      "label": {
+        "families": [
+          "Nunito Sans"
+        ],
+        "shape": "sans",
+        "weight": "semibold",
+        "size": 10,
+        "tracking": 1.2,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 0,
+      "rowStyle": "indent",
+      "corner": 20,
+      "border": 1,
+      "filledButtons": true,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 700,
+      "lineHeight": 1.75,
+      "mastheadStyle": "none",
+      "statsStyle": "figures",
+      "kicker": false,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#F7F8F4",
+      "panel": "#F7F8F4",
+      "surface": "#FFFFFF",
+      "ink": "#23291F",
+      "prose": "#3A4136",
+      "muted": "#9AA39A",
+      "rule": "#E4E8DF",
+      "ruleFaint": "#EDF0E9",
+      "accent": "#5C7A5E",
+      "accentDeep": "#445C46",
+      "tint": "#8FA88F",
+      "green": "#5C7A5E"
+    },
+    "dark": {
+      "paper": "#141711",
+      "panel": "#171B14",
+      "surface": "#1D221A",
+      "ink": "#EAEFE6",
+      "prose": "#C6CFC0",
+      "muted": "#818B7E",
+      "rule": "#2A3127",
+      "ruleFaint": "#20261E",
+      "accent": "#8FB690",
+      "accentDeep": "#A7CBA8",
+      "tint": "#6E8B70",
+      "green": "#8FB690"
+    },
+    "scheme": "light"
+  },
+  {
+    "id": "manuscript",
+    "name": "Manuscript",
+    "note": "A book page: centred measure, indented paragraphs, roman numerals.",
+    "type": {
+      "prose": {
+        "families": [
+          "EB Garamond"
+        ],
+        "shape": "serif",
+        "weight": "regular",
+        "size": 18.5
+      },
+      "display": {
+        "families": [
+          "EB Garamond"
+        ],
+        "shape": "serif",
+        "weight": "regular",
+        "scale": 1.0
+      },
+      "label": {
+        "families": [
+          "EB Garamond"
+        ],
+        "shape": "serif",
+        "weight": "regular",
+        "size": 11.5,
+        "tracking": 1.8,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 1,
+      "rowStyle": "plain",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": false,
+      "ornament": "none",
+      "centred": true,
+      "statsTrace": false,
+      "measure": 620,
+      "lineHeight": 1.66,
+      "mastheadStyle": "centred",
+      "statsStyle": "figures",
+      "kicker": true,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#FBF8F1",
+      "panel": "#FBF8F1",
+      "surface": "#FFFEFA",
+      "ink": "#221E17",
+      "prose": "#332D23",
+      "muted": "#A2977F",
+      "rule": "#ECE4D5",
+      "ruleFaint": "#F3EDE1",
+      "accent": "#6D5A3F",
+      "accentDeep": "#4E3F2B",
+      "tint": "#8E7A5C",
+      "green": "#4F6141"
+    },
+    "dark": {
+      "paper": "#17140F",
+      "panel": "#1A1712",
+      "surface": "#201C16",
+      "ink": "#F0E9DB",
+      "prose": "#D3CAB7",
+      "muted": "#8C826C",
+      "rule": "#302A20",
+      "ruleFaint": "#241F18",
+      "accent": "#C0A883",
+      "accentDeep": "#D8C3A2",
+      "tint": "#9E8C6E",
+      "green": "#8FA277"
+    },
+    "scheme": "light"
+  },
+  {
+    "id": "sumi",
+    "name": "Sumi",
+    "note": "Ink wash behind the page, a vermilion seal, 2.0 line-height.",
+    "type": {
+      "prose": {
+        "families": [
+          "IBM Plex Sans"
+        ],
+        "shape": "sans",
+        "weight": "light",
+        "size": 15
+      },
+      "display": {
+        "families": [
+          "Cormorant Garamond"
+        ],
+        "shape": "serif",
+        "weight": "light",
+        "scale": 1.25
+      },
+      "label": {
+        "families": [
+          "IBM Plex Sans"
+        ],
+        "shape": "sans",
+        "weight": "medium",
+        "size": 9.5,
+        "tracking": 2.4,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 0,
+      "rowStyle": "plain",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": false,
+      "ornament": "wash",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 640,
+      "lineHeight": 2.0,
+      "mastheadStyle": "none",
+      "statsStyle": "figures",
+      "kicker": false,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#F7F5F0",
+      "panel": "#F7F5F0",
+      "surface": "#FFFFFF",
+      "ink": "#1A1815",
+      "prose": "#4A4740",
+      "muted": "#9C968C",
+      "rule": "#EBE7DF",
+      "ruleFaint": "#F2EFE9",
+      "accent": "#B3372A",
+      "accentDeep": "#85261C",
+      "tint": "#8C8880",
+      "green": "#5C7A5E"
+    },
+    "dark": {
+      "paper": "#141311",
+      "panel": "#161512",
+      "surface": "#1C1A17",
+      "ink": "#EFEAE1",
+      "prose": "#C6C0B5",
+      "muted": "#8A857C",
+      "rule": "#2A2723",
+      "ruleFaint": "#201E1B",
+      "accent": "#D2604F",
+      "accentDeep": "#E4826F",
+      "tint": "#8A857C",
+      "green": "#8FA277"
+    },
+    "scheme": "light"
+  },
+  {
+    "id": "editorial",
+    "name": "Editorial",
+    "note": "Men's-magazine register: a slab headline on charcoal, wide kickers, magenta used twice.",
+    "type": {
+      "prose": {
+        "families": [
+          "Archivo"
+        ],
+        "shape": "sans",
+        "weight": "regular",
+        "size": 15.5
+      },
+      "display": {
+        "families": [
+          "Zilla Slab"
+        ],
+        "shape": "serif",
+        "weight": "bold",
+        "scale": 1.35,
+        "tracking": -0.4
+      },
+      "label": {
+        "families": [
+          "Archivo"
+        ],
+        "shape": "sans",
+        "weight": "semibold",
+        "size": 9.5,
+        "tracking": 2.4,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 3,
+      "rowStyle": "rule",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": true,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 680,
+      "lineHeight": 1.72,
+      "mastheadStyle": "rule",
+      "statsStyle": "figures",
+      "kicker": true,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#F2F1EE",
+      "panel": "#E9E8E4",
+      "surface": "#FBFBF9",
+      "ink": "#15181A",
+      "prose": "#33373B",
+      "muted": "#85898E",
+      "rule": "#D6D5D0",
+      "ruleFaint": "#E3E2DD",
+      "accent": "#E10A57",
+      "accentDeep": "#B00742",
+      "tint": "#15181A",
+      "green": "#3F7A5C"
+    },
+    "dark": {
+      "paper": "#111315",
+      "panel": "#161A1C",
+      "surface": "#1C2124",
+      "ink": "#F0F1EF",
+      "prose": "#C2C7CB",
+      "muted": "#7E858B",
+      "rule": "#272C30",
+      "ruleFaint": "#1D2226",
+      "accent": "#FF2E74",
+      "accentDeep": "#FF5C93",
+      "tint": "#F0F1EF",
+      "green": "#79B396"
+    },
+    "scheme": "both"
+  },
+  {
+    "id": "broadsheet",
+    "name": "Broadsheet",
+    "note": "A front page in one column: Playfair masthead, a drop cap, ruled decks.",
+    "type": {
+      "prose": {
+        "families": [
+          "Libre Baskerville"
+        ],
+        "shape": "serif",
+        "weight": "regular",
+        "size": 15
+      },
+      "display": {
+        "families": [
+          "Playfair Display"
+        ],
+        "shape": "serif",
+        "weight": "bold",
+        "scale": 1.15
+      },
+      "label": {
+        "families": [
+          "Playfair Display"
+        ],
+        "shape": "serif",
+        "weight": "bold",
+        "size": 10.5,
+        "tracking": 1.9,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 3,
+      "rowStyle": "rule",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": false,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 660,
+      "lineHeight": 1.75,
+      "mastheadStyle": "double",
+      "statsStyle": "figures",
+      "kicker": true,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#F4F0E6",
+      "panel": "#F4F0E6",
+      "surface": "#FFFDF6",
+      "ink": "#1A1712",
+      "prose": "#2E2A22",
+      "muted": "#6E675F",
+      "rule": "#CFC6B2",
+      "ruleFaint": "#E1D9C6",
+      "accent": "#7A1F16",
+      "accentDeep": "#521310",
+      "tint": "#9A8C6D",
+      "green": "#3F5F41"
+    },
+    "dark": {
+      "paper": "#15130F",
+      "panel": "#191713",
+      "surface": "#201D18",
+      "ink": "#F1ECE0",
+      "prose": "#CFC7B6",
+      "muted": "#8B8377",
+      "rule": "#2E2A22",
+      "ruleFaint": "#231F1A",
+      "accent": "#C4574A",
+      "accentDeep": "#DA7365",
+      "tint": "#9A8C6D",
+      "green": "#7F9A6F"
+    },
+    "scheme": "light"
+  },
+  {
+    "id": "cinema",
+    "name": "Cinema",
+    "note": "A title card: letterboxed, Oswald in caps, timecodes, one blood red.",
+    "type": {
+      "prose": {
+        "families": [
+          "Barlow"
+        ],
+        "shape": "sans",
+        "weight": "light",
+        "size": 16
+      },
+      "display": {
+        "families": [
+          "Oswald"
+        ],
+        "shape": "sans",
+        "weight": "bold",
+        "scale": 1.45,
+        "uppercase": true,
+        "tracking": 0.4
+      },
+      "label": {
+        "families": [
+          "Oswald"
+        ],
+        "shape": "sans",
+        "weight": "light",
+        "size": 11,
+        "tracking": 3.0,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 0,
+      "rowStyle": "block",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": true,
+      "ornament": "letterbox",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 700,
+      "lineHeight": 1.72,
+      "mastheadStyle": "band",
+      "statsStyle": "figures",
+      "kicker": true,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#EFEBE2",
+      "panel": "#E7E2D7",
+      "surface": "#FFFFFF",
+      "ink": "#14120F",
+      "prose": "#3B3830",
+      "muted": "#7D7970",
+      "rule": "#DAD4C6",
+      "ruleFaint": "#E6E1D5",
+      "accent": "#C8402F",
+      "accentDeep": "#9C3022",
+      "tint": "#7D7970",
+      "green": "#4E6B45"
+    },
+    "dark": {
+      "paper": "#0A0A0A",
+      "panel": "#000000",
+      "surface": "#111110",
+      "ink": "#E5E0D5",
+      "prose": "#B3AEA3",
+      "muted": "#7D7970",
+      "rule": "#1C1C1A",
+      "ruleFaint": "#141413",
+      "accent": "#C8402F",
+      "accentDeep": "#E4614E",
+      "tint": "#7D7970",
+      "green": "#6E9160"
+    },
+    "scheme": "dark"
+  },
+  {
+    "id": "seismograph",
+    "name": "Seismograph",
+    "note": "The month as a trace down the stats column, today at the top.",
+    "type": {
+      "prose": {
+        "families": [
+          "IBM Plex Sans"
+        ],
+        "shape": "sans",
+        "weight": "light",
+        "size": 16
+      },
+      "display": {
+        "families": [
+          "IBM Plex Sans"
+        ],
+        "shape": "sans",
+        "weight": "semibold",
+        "scale": 0.9
+      },
+      "label": {
+        "families": [
+          "IBM Plex Mono"
+        ],
+        "shape": "mono",
+        "weight": "regular",
+        "size": 10,
+        "tracking": 1.0,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 1,
+      "rowStyle": "indent",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": false,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": true,
+      "measure": 700,
+      "lineHeight": 1.78,
+      "mastheadStyle": "rule",
+      "statsStyle": "rows",
+      "kicker": false,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#F3F6F7",
+      "panel": "#EDF1F3",
+      "surface": "#FFFFFF",
+      "ink": "#101619",
+      "prose": "#39454B",
+      "muted": "#7C8794",
+      "rule": "#DCE3E6",
+      "ruleFaint": "#E9EEF0",
+      "accent": "#E8613C",
+      "accentDeep": "#B8452A",
+      "tint": "#7C8794",
+      "green": "#3E7A5E"
+    },
+    "dark": {
+      "paper": "#101619",
+      "panel": "#101619",
+      "surface": "#161E22",
+      "ink": "#E6ECEF",
+      "prose": "#B3BEC6",
+      "muted": "#7C8794",
+      "rule": "#222D33",
+      "ruleFaint": "#1A2429",
+      "accent": "#E8613C",
+      "accentDeep": "#F28364",
+      "tint": "#7C8794",
+      "green": "#6FA88A"
+    },
+    "scheme": "dark"
+  },
+  {
+    "id": "constructivist",
+    "name": "Constructivist",
+    "note": "One angle: a red wedge as ground, type set flush against it.",
+    "type": {
+      "prose": {
+        "families": [
+          "Barlow"
+        ],
+        "shape": "sans",
+        "weight": "regular",
+        "size": 15.5
+      },
+      "display": {
+        "families": [
+          "Oswald"
+        ],
+        "shape": "sans",
+        "weight": "bold",
+        "scale": 1.5,
+        "uppercase": true
+      },
+      "label": {
+        "families": [
+          "Oswald"
+        ],
+        "shape": "sans",
+        "weight": "medium",
+        "size": 10,
+        "tracking": 2.0,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 5,
+      "rowStyle": "block",
+      "corner": 0,
+      "border": 5,
+      "filledButtons": true,
+      "ornament": "wedge",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 700,
+      "lineHeight": 1.7,
+      "mastheadStyle": "rule",
+      "statsStyle": "figures",
+      "kicker": true,
+      "figureBlocks": true,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#EFECE3",
+      "panel": "#EFECE3",
+      "surface": "#FFFFFF",
+      "ink": "#14110F",
+      "prose": "#2A2622",
+      "muted": "#6D675E",
+      "rule": "#D8D3C6",
+      "ruleFaint": "#E4E0D5",
+      "accent": "#D92B1E",
+      "accentDeep": "#A81D13",
+      "tint": "#14110F",
+      "green": "#3F6B4A"
+    },
+    "dark": {
+      "paper": "#121110",
+      "panel": "#171614",
+      "surface": "#1D1B19",
+      "ink": "#EFECE3",
+      "prose": "#CFC9BE",
+      "muted": "#8B857A",
+      "rule": "#2C2924",
+      "ruleFaint": "#211F1B",
+      "accent": "#E64236",
+      "accentDeep": "#F26A5E",
+      "tint": "#EFECE3",
+      "green": "#6E9A78"
+    },
+    "scheme": "light"
+  },
+  {
+    "id": "bauhaus",
+    "name": "Bauhaus",
+    "note": "Primaries as structure: a red bar, a blue rail, yellow as highlighter.",
+    "type": {
+      "prose": {
+        "families": [
+          "Archivo"
+        ],
+        "shape": "sans",
+        "weight": "regular",
+        "size": 16
+      },
+      "display": {
+        "families": [
+          "Archivo"
+        ],
+        "shape": "sans",
+        "weight": "heavy",
+        "scale": 1.35,
+        "tracking": -0.6
+      },
+      "label": {
+        "families": [
+          "Archivo"
+        ],
+        "shape": "sans",
+        "weight": "heavy",
+        "size": 10,
+        "tracking": 1.4,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 4,
+      "rowStyle": "block",
+      "corner": 0,
+      "border": 4,
+      "filledButtons": true,
+      "ornament": "rail",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 700,
+      "lineHeight": 1.62,
+      "mastheadStyle": "band",
+      "statsStyle": "figures",
+      "kicker": false,
+      "figureBlocks": true,
+      "pageCard": false,
+      "rowColours": true
+    },
+    "light": {
+      "paper": "#F2EFE6",
+      "panel": "#F2EFE6",
+      "surface": "#FFFFFF",
+      "ink": "#14120F",
+      "prose": "#33302A",
+      "muted": "#6B665C",
+      "rule": "#DDD8CB",
+      "ruleFaint": "#E7E3D8",
+      "accent": "#E63329",
+      "accentDeep": "#B7241C",
+      "tint": "#1C53A8",
+      "green": "#F2C024"
+    },
+    "dark": {
+      "paper": "#131211",
+      "panel": "#181715",
+      "surface": "#1E1D1A",
+      "ink": "#F2EFE6",
+      "prose": "#CFCAC0",
+      "muted": "#8A857B",
+      "rule": "#2E2C27",
+      "ruleFaint": "#23211D",
+      "accent": "#F2483D",
+      "accentDeep": "#FF6E63",
+      "tint": "#4F86DA",
+      "green": "#F2C024"
+    },
+    "scheme": "light"
+  },
+  {
+    "id": "brutalist",
+    "name": "Brutalist",
+    "note": "3px boxes, Archivo Black in caps, Courier body, one acid yellow.",
+    "type": {
+      "prose": {
+        "families": [
+          "Courier Prime"
+        ],
+        "shape": "mono",
+        "weight": "regular",
+        "size": 14
+      },
+      "display": {
+        "families": [
+          "Archivo Black",
+          "Archivo"
+        ],
+        "shape": "sans",
+        "weight": "heavy",
+        "scale": 1.6,
+        "uppercase": true,
+        "tracking": -0.5
+      },
+      "label": {
+        "families": [
+          "Courier Prime"
+        ],
+        "shape": "mono",
+        "weight": "bold",
+        "size": 11,
+        "tracking": 0.6,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 3,
+      "rowStyle": "block",
+      "corner": 0,
+      "border": 3,
+      "filledButtons": true,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 680,
+      "lineHeight": 1.72,
+      "mastheadStyle": "band",
+      "statsStyle": "figures",
+      "kicker": false,
+      "figureBlocks": true,
+      "pageCard": true,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#FFFFFF",
+      "panel": "#FFFFFF",
+      "surface": "#FFFFFF",
+      "ink": "#0B0B0B",
+      "prose": "#0B0B0B",
+      "muted": "#6A6A66",
+      "rule": "#0B0B0B",
+      "ruleFaint": "#D5D5D0",
+      "accent": "#0B0B0B",
+      "accentDeep": "#333330",
+      "tint": "#D6FF00",
+      "green": "#0B0B0B"
+    },
+    "dark": {
+      "paper": "#0B0B0B",
+      "panel": "#0B0B0B",
+      "surface": "#141413",
+      "ink": "#F2F2EE",
+      "prose": "#F2F2EE",
+      "muted": "#8A8A85",
+      "rule": "#F2F2EE",
+      "ruleFaint": "#2A2A28",
+      "accent": "#F2F2EE",
+      "accentDeep": "#D6FF00",
+      "tint": "#D6FF00",
+      "green": "#F2F2EE"
+    },
+    "scheme": "both"
+  },
+  {
+    "id": "brokengrid",
+    "name": "Broken grid",
+    "note": "A ghost numeral behind the page, Anton against Spectral Light.",
+    "type": {
+      "prose": {
+        "families": [
+          "Spectral Light",
+          "Spectral"
+        ],
+        "shape": "serif",
+        "weight": "light",
+        "size": 15.5
+      },
+      "display": {
+        "families": [
+          "Anton"
+        ],
+        "shape": "sans",
+        "weight": "regular",
+        "scale": 1.9,
+        "uppercase": true,
+        "tracking": -0.4
+      },
+      "label": {
+        "families": [
+          "Anton"
+        ],
+        "shape": "sans",
+        "weight": "regular",
+        "size": 10.5,
+        "tracking": 2.2,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 1,
+      "rowStyle": "indent",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": false,
+      "ornament": "ghost",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 680,
+      "lineHeight": 1.68,
+      "mastheadStyle": "rule",
+      "statsStyle": "figures",
+      "kicker": true,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#ECEAE5",
+      "panel": "#ECEAE5",
+      "surface": "#F6F5F2",
+      "ink": "#16150F",
+      "prose": "#33312B",
+      "muted": "#8E8B85",
+      "rule": "#DEDBD4",
+      "ruleFaint": "#E6E4DE",
+      "accent": "#E8552F",
+      "accentDeep": "#B83C1C",
+      "tint": "#8E8B85",
+      "green": "#4F6B45"
+    },
+    "dark": {
+      "paper": "#121210",
+      "panel": "#161614",
+      "surface": "#1C1C19",
+      "ink": "#EDEBE4",
+      "prose": "#C8C5BC",
+      "muted": "#86837C",
+      "rule": "#2A2926",
+      "ruleFaint": "#201F1C",
+      "accent": "#F26A44",
+      "accentDeep": "#FF8A66",
+      "tint": "#86837C",
+      "green": "#7C9A6C"
+    },
+    "scheme": "light"
+  },
+  {
+    "id": "memphis",
+    "name": "Memphis",
+    "note": "1984 unrepentant: confetti geometry, rounded cards, a hard drop shadow.",
+    "type": {
+      "prose": {
+        "families": [
+          "Poppins"
+        ],
+        "shape": "sans",
+        "weight": "regular",
+        "size": 15.5
+      },
+      "display": {
+        "families": [
+          "Poppins"
+        ],
+        "shape": "sans",
+        "weight": "heavy",
+        "scale": 1.3,
+        "tracking": -0.7
+      },
+      "label": {
+        "families": [
+          "Poppins"
+        ],
+        "shape": "sans",
+        "weight": "heavy",
+        "size": 10,
+        "tracking": 1.4,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 0,
+      "rowStyle": "card",
+      "corner": 16,
+      "border": 3,
+      "filledButtons": true,
+      "ornament": "confetti",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 700,
+      "lineHeight": 1.68,
+      "mastheadStyle": "none",
+      "statsStyle": "figures",
+      "kicker": false,
+      "figureBlocks": true,
+      "pageCard": true,
+      "rowColours": true
+    },
+    "light": {
+      "paper": "#FDFCF7",
+      "panel": "#FDFCF7",
+      "surface": "#FFFFFF",
+      "ink": "#1B1B1B",
+      "prose": "#3A3833",
+      "muted": "#6F6C66",
+      "rule": "#E7E4DA",
+      "ruleFaint": "#F0EEE6",
+      "accent": "#FF5C8A",
+      "accentDeep": "#E03A6D",
+      "tint": "#37C2C0",
+      "green": "#FFD23F"
+    },
+    "dark": {
+      "paper": "#141313",
+      "panel": "#181717",
+      "surface": "#1F1E1E",
+      "ink": "#F7F5F0",
+      "prose": "#D2CFC8",
+      "muted": "#8E8A83",
+      "rule": "#2C2A29",
+      "ruleFaint": "#211F1F",
+      "accent": "#FF7BA1",
+      "accentDeep": "#FF9BB8",
+      "tint": "#4FD6D4",
+      "green": "#FFD23F"
+    },
+    "scheme": "light"
+  }
+];
+
+const NEW = [
+  {
+    "id": "terminal",
+    "name": "Terminal",
+    "note": "One mono face, phosphor green, a cursor and nothing else. The journal as a terminal.",
+    "type": {
+      "prose": {
+        "families": [
+          "IBM Plex Mono"
+        ],
+        "shape": "mono",
+        "weight": "regular",
+        "size": 15
+      },
+      "display": {
+        "families": [
+          "IBM Plex Mono"
+        ],
+        "shape": "mono",
+        "weight": "medium",
+        "scale": 1.0
+      },
+      "label": {
+        "families": [
+          "IBM Plex Mono"
+        ],
+        "shape": "mono",
+        "weight": "medium",
+        "size": 10,
+        "tracking": 1.4,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 1,
+      "rowStyle": "rule",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": true,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": true,
+      "measure": 720,
+      "lineHeight": 1.6,
+      "mastheadStyle": "rule",
+      "statsStyle": "figures",
+      "kicker": false,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#F5F5F0",
+      "panel": "#EDEDE7",
+      "surface": "#FFFFFF",
+      "ink": "#0F120C",
+      "prose": "#2B3026",
+      "muted": "#6D7566",
+      "rule": "#D0D4C9",
+      "ruleFaint": "#E2E5DC",
+      "accent": "#1C7A3B",
+      "accentDeep": "#12562A",
+      "tint": "#2F6F9E",
+      "green": "#5C7A1F"
+    },
+    "dark": {
+      "paper": "#0B0E0A",
+      "panel": "#0F130D",
+      "surface": "#151A12",
+      "ink": "#D9E3D0",
+      "prose": "#9FB295",
+      "muted": "#5A6753",
+      "rule": "#232B1F",
+      "ruleFaint": "#1A2016",
+      "accent": "#4FD97F",
+      "accentDeep": "#7BE8A1",
+      "tint": "#6FA8C7",
+      "green": "#C2D45C"
+    },
+    "scheme": "dark"
+  },
+  {
+    "id": "blueprint",
+    "name": "Blueprint",
+    "note": "Cyanotype ground, white hairlines, a dimensioned grid. Half drafting, half drawing paper.",
+    "type": {
+      "prose": {
+        "families": [
+          "Barlow"
+        ],
+        "shape": "sans",
+        "weight": "light",
+        "size": 15.5
+      },
+      "display": {
+        "families": [
+          "IBM Plex Sans"
+        ],
+        "shape": "sans",
+        "weight": "semibold",
+        "scale": 1.05,
+        "tracking": 0.01
+      },
+      "label": {
+        "families": [
+          "IBM Plex Mono"
+        ],
+        "shape": "mono",
+        "weight": "medium",
+        "size": 9.5,
+        "tracking": 1.5,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 1,
+      "rowStyle": "rule",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": false,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": true,
+      "measure": 700,
+      "lineHeight": 1.62,
+      "mastheadStyle": "rule",
+      "statsStyle": "figures",
+      "kicker": false,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#FFFFFF",
+      "panel": "#F3F7FA",
+      "surface": "#FFFFFF",
+      "ink": "#0F3050",
+      "prose": "#2A4E6E",
+      "muted": "#7189A3",
+      "rule": "#C4D7E6",
+      "ruleFaint": "#E1EAF2",
+      "accent": "#1D5FA8",
+      "accentDeep": "#14477F",
+      "tint": "#B3541E",
+      "green": "#2E6E4E"
+    },
+    "dark": {
+      "paper": "#0A1929",
+      "panel": "#0D1F33",
+      "surface": "#132840",
+      "ink": "#E2EFFA",
+      "prose": "#A6C2D9",
+      "muted": "#587791",
+      "rule": "#1D3750",
+      "ruleFaint": "#152838",
+      "accent": "#5BA8E8",
+      "accentDeep": "#93C6F1",
+      "tint": "#D98A3A",
+      "green": "#57B98A"
+    },
+    "scheme": "both"
+  },
+  {
+    "id": "deco",
+    "name": "Deco",
+    "note": "Bodoni at its highest contrast, gold on black, wide-tracked capitals and a double rule.",
+    "type": {
+      "prose": {
+        "families": [
+          "Bodoni Moda"
+        ],
+        "shape": "serif",
+        "weight": "regular",
+        "size": 17
+      },
+      "display": {
+        "families": [
+          "Bodoni Moda"
+        ],
+        "shape": "serif",
+        "weight": "bold",
+        "scale": 1.3,
+        "tracking": 0.05,
+        "uppercase": true
+      },
+      "label": {
+        "families": [
+          "Bodoni Moda"
+        ],
+        "shape": "serif",
+        "weight": "regular",
+        "size": 10,
+        "tracking": 2.2,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 3,
+      "rowStyle": "rule",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": true,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 660,
+      "lineHeight": 1.74,
+      "mastheadStyle": "double",
+      "statsStyle": "figures",
+      "kicker": true,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#F6F1E3",
+      "panel": "#EFE7D4",
+      "surface": "#FCF8EC",
+      "ink": "#14110B",
+      "prose": "#3A3325",
+      "muted": "#8A7C5E",
+      "rule": "#D6C9A9",
+      "ruleFaint": "#E6DCC4",
+      "accent": "#A8822B",
+      "accentDeep": "#7A5C16",
+      "tint": "#1F5B4E",
+      "green": "#2F5D3A"
+    },
+    "dark": {
+      "paper": "#0B0906",
+      "panel": "#100D08",
+      "surface": "#17130C",
+      "ink": "#F3E9D2",
+      "prose": "#C4B492",
+      "muted": "#7B6E51",
+      "rule": "#2C2518",
+      "ruleFaint": "#201A11",
+      "accent": "#D8B15C",
+      "accentDeep": "#F0CE8A",
+      "tint": "#3E8C78",
+      "green": "#7FA85C"
+    },
+    "scheme": "both"
+  },
+  {
+    "id": "swiss",
+    "name": "Swiss",
+    "note": "White, black, one red, and a grid that never breaks. Hierarchy by size alone.",
+    "type": {
+      "prose": {
+        "families": [
+          "Archivo"
+        ],
+        "shape": "sans",
+        "weight": "regular",
+        "size": 16
+      },
+      "display": {
+        "families": [
+          "Archivo"
+        ],
+        "shape": "sans",
+        "weight": "heavy",
+        "scale": 1.25,
+        "tracking": -0.03
+      },
+      "label": {
+        "families": [
+          "Archivo"
+        ],
+        "shape": "sans",
+        "weight": "semibold",
+        "size": 9.5,
+        "tracking": 1.3,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 2,
+      "rowStyle": "plain",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": false,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 720,
+      "lineHeight": 1.55,
+      "mastheadStyle": "rule",
+      "statsStyle": "figures",
+      "kicker": false,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#FFFFFF",
+      "panel": "#F2F2F0",
+      "surface": "#FFFFFF",
+      "ink": "#0A0A0A",
+      "prose": "#2A2A28",
+      "muted": "#78786F",
+      "rule": "#D6D6D2",
+      "ruleFaint": "#E8E8E5",
+      "accent": "#E1121C",
+      "accentDeep": "#B00A13",
+      "tint": "#0B4FD8",
+      "green": "#00694A"
+    },
+    "dark": {
+      "paper": "#0E0E0E",
+      "panel": "#141414",
+      "surface": "#1C1C1C",
+      "ink": "#FAFAF8",
+      "prose": "#D2D2CE",
+      "muted": "#83837B",
+      "rule": "#2E2E2C",
+      "ruleFaint": "#222220",
+      "accent": "#FF3B30",
+      "accentDeep": "#FF7A72",
+      "tint": "#5B90FF",
+      "green": "#4FC48C"
+    },
+    "scheme": "both"
+  },
+  {
+    "id": "riso",
+    "name": "Riso",
+    "note": "Two spot inks on newsprint, overprinted by hand. Fluoro pink, federal blue, misregistered on purpose.",
+    "type": {
+      "prose": {
+        "families": [
+          "Karla"
+        ],
+        "shape": "sans",
+        "weight": "light",
+        "size": 16.5
+      },
+      "display": {
+        "families": [
+          "Poppins"
+        ],
+        "shape": "sans",
+        "weight": "heavy",
+        "scale": 1.3,
+        "tracking": -0.04
+      },
+      "label": {
+        "families": [
+          "IBM Plex Mono"
+        ],
+        "shape": "mono",
+        "weight": "medium",
+        "size": 9.5,
+        "tracking": 1.5,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 0,
+      "rowStyle": "card",
+      "corner": 3,
+      "border": 2,
+      "filledButtons": true,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 690,
+      "lineHeight": 1.7,
+      "mastheadStyle": "none",
+      "statsStyle": "figures",
+      "kicker": true,
+      "figureBlocks": true,
+      "pageCard": false,
+      "rowColours": true
+    },
+    "light": {
+      "paper": "#F4F0E6",
+      "panel": "#EDE8DA",
+      "surface": "#FBF8F0",
+      "ink": "#1C1B22",
+      "prose": "#3B3A42",
+      "muted": "#86828C",
+      "rule": "#D6D0BE",
+      "ruleFaint": "#E4DFCF",
+      "accent": "#FF4A8C",
+      "accentDeep": "#D42A6B",
+      "tint": "#0B4EA2",
+      "green": "#00A98F"
+    },
+    "dark": {
+      "paper": "#16151A",
+      "panel": "#1B1A20",
+      "surface": "#232128",
+      "ink": "#F4F1EA",
+      "prose": "#CFCBD6",
+      "muted": "#837F8C",
+      "rule": "#302E38",
+      "ruleFaint": "#24222A",
+      "accent": "#FF7FAE",
+      "accentDeep": "#FFA8C8",
+      "tint": "#5B90E0",
+      "green": "#3FCFB4"
+    },
+    "scheme": "both"
+  },
+  {
+    "id": "nocturne",
+    "name": "Nocturne",
+    "note": "Cormorant on plum-black, brass for the numbers, the page washed in ink. Written late.",
+    "type": {
+      "prose": {
+        "families": [
+          "Cormorant Garamond"
+        ],
+        "shape": "serif",
+        "weight": "regular",
+        "size": 19
+      },
+      "display": {
+        "families": [
+          "Cormorant Garamond"
+        ],
+        "shape": "serif",
+        "weight": "regular",
+        "scale": 1.5,
+        "tracking": 0.01
+      },
+      "label": {
+        "families": [
+          "Karla"
+        ],
+        "shape": "sans",
+        "weight": "light",
+        "size": 10,
+        "tracking": 1.6,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 0,
+      "rowStyle": "plain",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": false,
+      "ornament": "wash",
+      "centred": true,
+      "statsTrace": false,
+      "measure": 620,
+      "lineHeight": 1.85,
+      "mastheadStyle": "none",
+      "statsStyle": "figures",
+      "kicker": true,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#F7F3F8",
+      "panel": "#F1EBF4",
+      "surface": "#FCFAFD",
+      "ink": "#1E1526",
+      "prose": "#453553",
+      "muted": "#8B7C99",
+      "rule": "#DFD3E6",
+      "ruleFaint": "#EAE1EF",
+      "accent": "#7A3E8F",
+      "accentDeep": "#59296C",
+      "tint": "#B0843C",
+      "green": "#2F6B58"
+    },
+    "dark": {
+      "paper": "#120E18",
+      "panel": "#171222",
+      "surface": "#1E1830",
+      "ink": "#F0E9F7",
+      "prose": "#C4B7D4",
+      "muted": "#7A6C8C",
+      "rule": "#2C2440",
+      "ruleFaint": "#221B32",
+      "accent": "#C08FE0",
+      "accentDeep": "#DCB4F0",
+      "tint": "#D8B45C",
+      "green": "#5FBF9A"
+    },
+    "scheme": "both"
+  },
+  {
+    "id": "ledger",
+    "name": "Ledger",
+    "note": "The account book: pale green rules, a red margin, mono for anything countable.",
+    "type": {
+      "prose": {
+        "families": [
+          "Libre Baskerville"
+        ],
+        "shape": "serif",
+        "weight": "regular",
+        "size": 16
+      },
+      "display": {
+        "families": [
+          "Libre Baskerville"
+        ],
+        "shape": "serif",
+        "weight": "bold",
+        "scale": 1.1
+      },
+      "label": {
+        "families": [
+          "IBM Plex Mono"
+        ],
+        "shape": "mono",
+        "weight": "medium",
+        "size": 9.5,
+        "tracking": 1.4,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 2,
+      "rowStyle": "rule",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": true,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": true,
+      "measure": 700,
+      "lineHeight": 1.74,
+      "mastheadStyle": "double",
+      "statsStyle": "rows",
+      "kicker": false,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#FAF7EA",
+      "panel": "#F1EDDC",
+      "surface": "#FFFDF4",
+      "ink": "#1B1F17",
+      "prose": "#3A4034",
+      "muted": "#838B79",
+      "rule": "#C4CEAF",
+      "ruleFaint": "#DCE3CC",
+      "accent": "#A32B23",
+      "accentDeep": "#7E1F19",
+      "tint": "#2E5C8A",
+      "green": "#3F6B36"
+    },
+    "dark": {
+      "paper": "#14180F",
+      "panel": "#181D13",
+      "surface": "#1F2618",
+      "ink": "#EDF1E4",
+      "prose": "#BFC8B2",
+      "muted": "#7D8A70",
+      "rule": "#2C3524",
+      "ruleFaint": "#222A1B",
+      "accent": "#E05A48",
+      "accentDeep": "#F08A78",
+      "tint": "#6FA3D6",
+      "green": "#86B368"
+    },
+    "scheme": "both"
+  },
+  {
+    "id": "passport",
+    "name": "Passport",
+    "note": "Navy boards, gold foil, everything in capitals. An entry is a stamped page.",
+    "type": {
+      "prose": {
+        "families": [
+          "Barlow"
+        ],
+        "shape": "sans",
+        "weight": "regular",
+        "size": 15.5
+      },
+      "display": {
+        "families": [
+          "Bodoni Moda"
+        ],
+        "shape": "serif",
+        "weight": "bold",
+        "scale": 1.15,
+        "tracking": 0.04,
+        "uppercase": true
+      },
+      "label": {
+        "families": [
+          "Barlow"
+        ],
+        "shape": "sans",
+        "weight": "semibold",
+        "size": 9.5,
+        "tracking": 1.8,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 0,
+      "rowStyle": "block",
+      "corner": 0,
+      "border": 2,
+      "filledButtons": true,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 680,
+      "lineHeight": 1.68,
+      "mastheadStyle": "band",
+      "statsStyle": "figures",
+      "kicker": true,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#F0EDE4",
+      "panel": "#E6E2D5",
+      "surface": "#F8F6EE",
+      "ink": "#101C33",
+      "prose": "#2E3A50",
+      "muted": "#7C8598",
+      "rule": "#CDC7B6",
+      "ruleFaint": "#DED9CA",
+      "accent": "#1D3A6B",
+      "accentDeep": "#12254A",
+      "tint": "#9A7B2E",
+      "green": "#3F6B52"
+    },
+    "dark": {
+      "paper": "#0B1526",
+      "panel": "#0F1B30",
+      "surface": "#14233D",
+      "ink": "#EDF1F7",
+      "prose": "#B6C2D4",
+      "muted": "#6B7B94",
+      "rule": "#22314B",
+      "ruleFaint": "#1A2739",
+      "accent": "#5B8FD6",
+      "accentDeep": "#8FB6E8",
+      "tint": "#D4B05C",
+      "green": "#6FBF95"
+    },
+    "scheme": "dark"
+  },
+  {
+    "id": "gallery",
+    "name": "Gallery",
+    "note": "A hang label and a lot of white. Bodoni, 19pt, a 560 measure, nothing but the entry.",
+    "type": {
+      "prose": {
+        "families": [
+          "EB Garamond"
+        ],
+        "shape": "serif",
+        "weight": "regular",
+        "size": 19.5
+      },
+      "display": {
+        "families": [
+          "Bodoni Moda"
+        ],
+        "shape": "serif",
+        "weight": "regular",
+        "scale": 1.4,
+        "tracking": 0.01
+      },
+      "label": {
+        "families": [
+          "Karla"
+        ],
+        "shape": "sans",
+        "weight": "light",
+        "size": 9,
+        "tracking": 2.4,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 0,
+      "rowStyle": "plain",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": false,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 560,
+      "lineHeight": 1.95,
+      "mastheadStyle": "centred",
+      "statsStyle": "figures",
+      "kicker": true,
+      "figureBlocks": false,
+      "pageCard": false,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#FFFFFF",
+      "panel": "#FBFBF9",
+      "surface": "#FFFFFF",
+      "ink": "#111111",
+      "prose": "#3C3C3A",
+      "muted": "#8E8E88",
+      "rule": "#E4E4E0",
+      "ruleFaint": "#EFEFEF",
+      "accent": "#2F5D50",
+      "accentDeep": "#1E4238",
+      "tint": "#8A8A82",
+      "green": "#6B8F3E"
+    },
+    "dark": {
+      "paper": "#101010",
+      "panel": "#151515",
+      "surface": "#1C1C1C",
+      "ink": "#F2F2EE",
+      "prose": "#CFCFC8",
+      "muted": "#7E7E78",
+      "rule": "#2A2A28",
+      "ruleFaint": "#202020",
+      "accent": "#6FBFA4",
+      "accentDeep": "#9BDCC6",
+      "tint": "#B8B0A0",
+      "green": "#93B86A"
+    },
+    "scheme": "both"
+  },
+  {
+    "id": "zine",
+    "name": "Zine",
+    "note": "Photocopier black, one orange, and a rule so thick it is a graphic. Staple, don't file.",
+    "type": {
+      "prose": {
+        "families": [
+          "Archivo"
+        ],
+        "shape": "sans",
+        "weight": "regular",
+        "size": 15.5
+      },
+      "display": {
+        "families": [
+          "Archivo Black"
+        ],
+        "shape": "sans",
+        "weight": "heavy",
+        "scale": 1.45,
+        "tracking": -0.045
+      },
+      "label": {
+        "families": [
+          "Archivo"
+        ],
+        "shape": "sans",
+        "weight": "bold",
+        "size": 10,
+        "tracking": 0.6,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 6,
+      "rowStyle": "block",
+      "corner": 0,
+      "border": 3,
+      "filledButtons": true,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 620,
+      "lineHeight": 1.48,
+      "mastheadStyle": "rule",
+      "statsStyle": "figures",
+      "kicker": false,
+      "figureBlocks": true,
+      "pageCard": true,
+      "rowColours": false
+    },
+    "light": {
+      "paper": "#F2F0EA",
+      "panel": "#E7E4DC",
+      "surface": "#FFFFFF",
+      "ink": "#101010",
+      "prose": "#242424",
+      "muted": "#6E6E6A",
+      "rule": "#CFCBC1",
+      "ruleFaint": "#E1DED5",
+      "accent": "#E24A11",
+      "accentDeep": "#B03500",
+      "tint": "#111111",
+      "green": "#8A8A8A"
+    },
+    "dark": {
+      "paper": "#0D0D0D",
+      "panel": "#131313",
+      "surface": "#1A1A1A",
+      "ink": "#F4F4F2",
+      "prose": "#D2D2CE",
+      "muted": "#82827C",
+      "rule": "#2C2C2A",
+      "ruleFaint": "#212120",
+      "accent": "#FF6B2C",
+      "accentDeep": "#FF9A66",
+      "tint": "#F4F4F2",
+      "green": "#8A8A8A"
+    },
+    "scheme": "both"
+  },
+  {
+    "id": "departures",
+    "name": "Departure board",
+    "note": "Split-flap amber on charcoal. Entries as departures, times in the right column.",
+    "type": {
+      "prose": {
+        "families": [
+          "IBM Plex Mono"
+        ],
+        "shape": "mono",
+        "weight": "regular",
+        "size": 15
+      },
+      "display": {
+        "families": [
+          "IBM Plex Mono"
+        ],
+        "shape": "mono",
+        "weight": "medium",
+        "scale": 1.3,
+        "tracking": 0.02
+      },
+      "label": {
+        "families": [
+          "IBM Plex Mono"
+        ],
+        "shape": "mono",
+        "weight": "medium",
+        "size": 10,
+        "tracking": 2,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 0,
+      "rowStyle": "block",
+      "corner": 0,
+      "border": 1,
+      "filledButtons": true,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": true,
+      "measure": 720,
+      "lineHeight": 1.62,
+      "mastheadStyle": "band",
+      "statsStyle": "figures",
+      "kicker": false,
+      "figureBlocks": true,
+      "pageCard": false,
+      "rowColours": true
+    },
+    "light": {
+      "paper": "#E8E6E1",
+      "panel": "#DEDCD6",
+      "surface": "#F5F3EE",
+      "ink": "#1A1A18",
+      "prose": "#3A3A36",
+      "muted": "#83837C",
+      "rule": "#C6C3BA",
+      "ruleFaint": "#D8D5CC",
+      "accent": "#C96A12",
+      "accentDeep": "#9C4E08",
+      "tint": "#2A5F8A",
+      "green": "#3F7A55"
+    },
+    "dark": {
+      "paper": "#15171A",
+      "panel": "#1A1D21",
+      "surface": "#21252A",
+      "ink": "#EDEFF2",
+      "prose": "#B9BEC5",
+      "muted": "#6E757E",
+      "rule": "#2C3036",
+      "ruleFaint": "#23272C",
+      "accent": "#F0A63C",
+      "accentDeep": "#FFC673",
+      "tint": "#5FA0D6",
+      "green": "#6BBF8F"
+    },
+    "scheme": "both"
+  },
+  {
+    "id": "neon",
+    "name": "Neon",
+    "note": "Magenta and cyan on wet black, condensed caps, hard edges, nothing rounded.",
+    "type": {
+      "prose": {
+        "families": [
+          "Barlow"
+        ],
+        "shape": "sans",
+        "weight": "regular",
+        "size": 15.5
+      },
+      "display": {
+        "families": [
+          "Oswald"
+        ],
+        "shape": "sans",
+        "weight": "bold",
+        "scale": 1.4,
+        "tracking": 0.01,
+        "uppercase": true
+      },
+      "label": {
+        "families": [
+          "IBM Plex Mono"
+        ],
+        "shape": "mono",
+        "weight": "medium",
+        "size": 9.5,
+        "tracking": 1.6,
+        "uppercase": true
+      }
+    },
+    "chrome": {
+      "mastheadRule": 0,
+      "rowStyle": "block",
+      "corner": 0,
+      "border": 2,
+      "filledButtons": true,
+      "ornament": "none",
+      "centred": false,
+      "statsTrace": false,
+      "measure": 700,
+      "lineHeight": 1.66,
+      "mastheadStyle": "band",
+      "statsStyle": "figures",
+      "kicker": true,
+      "figureBlocks": true,
+      "pageCard": false,
+      "rowColours": true
+    },
+    "light": {
+      "paper": "#F7F4F9",
+      "panel": "#EFE9F2",
+      "surface": "#FFFFFF",
+      "ink": "#17131B",
+      "prose": "#36303E",
+      "muted": "#807790",
+      "rule": "#DAD2E0",
+      "ruleFaint": "#E9E3EE",
+      "accent": "#E6007E",
+      "accentDeep": "#B00063",
+      "tint": "#00A6C8",
+      "green": "#5B2E8C"
+    },
+    "dark": {
+      "paper": "#0A060E",
+      "panel": "#0E0914",
+      "surface": "#150E1D",
+      "ink": "#F5EEF9",
+      "prose": "#C4B7CE",
+      "muted": "#7E6F8B",
+      "rule": "#2A1B38",
+      "ruleFaint": "#1E1329",
+      "accent": "#FF2D95",
+      "accentDeep": "#FF73B8",
+      "tint": "#22D3EE",
+      "green": "#A855F7"
+    },
+    "scheme": "dark"
+  },
+    {
+      "id": "slug",
+      "name": "Slug",
+      "note": "Courier Prime, the only face a script is set in, on white stock. The entry is a scene: slug above, dialogue below, and a page count where the word count usually sits.",
+      "type": {
+        "prose": {
+          "families": [
+            "Courier Prime"
+          ],
+          "shape": "mono",
+          "weight": "regular",
+          "size": 15
+        },
+        "display": {
+          "families": [
+            "Courier Prime"
+          ],
+          "shape": "mono",
+          "weight": "bold",
+          "scale": 1.0
+        },
+        "label": {
+          "families": [
+            "IBM Plex Mono"
+          ],
+          "shape": "mono",
+          "weight": "medium",
+          "size": 10.5,
+          "tracking": 1.4,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 0,
+        "rowStyle": "plain",
+        "corner": 0,
+        "border": 0,
+        "filledButtons": false,
+        "ornament": "none",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 640,
+        "lineHeight": 1.32,
+        "mastheadStyle": "none",
+        "statsStyle": "rows",
+        "kicker": true,
+        "figureBlocks": false,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#FCFCF8",
+        "panel": "#F4F4EE",
+        "surface": "#FFFFFF",
+        "ink": "#14140F",
+        "prose": "#33332C",
+        "muted": "#83837A",
+        "rule": "#DEDEDA",
+        "ruleFaint": "#ECECE6",
+        "accent": "#2B4C7E",
+        "accentDeep": "#1B3358",
+        "tint": "#7A7A6F",
+        "green": "#55684A"
+      },
+      "dark": {
+        "paper": "#101013",
+        "panel": "#16161A",
+        "surface": "#1C1C21",
+        "ink": "#E8E8E2",
+        "prose": "#B4B4AC",
+        "muted": "#6E6E68",
+        "rule": "#2A2A30",
+        "ruleFaint": "#202026",
+        "accent": "#7FA8DE",
+        "accentDeep": "#A8C6E8",
+        "tint": "#8A8A80",
+        "green": "#7E9468"
+      },
+      "scheme": "light"
+    },
+    {
+      "id": "negative",
+      "name": "Negative",
+      "note": "Bleach-bypass silver with teal shadows and a rust in the highlights. No rules anywhere — a print, not a page, with the ink reading as light on the ground.",
+      "type": {
+        "prose": {
+          "families": [
+            "Spectral"
+          ],
+          "shape": "serif",
+          "weight": "light",
+          "size": 18.5
+        },
+        "display": {
+          "families": [
+            "Spectral"
+          ],
+          "shape": "serif",
+          "weight": "semibold",
+          "scale": 1.15
+        },
+        "label": {
+          "families": [
+            "IBM Plex Sans"
+          ],
+          "shape": "sans",
+          "weight": "medium",
+          "size": 10,
+          "tracking": 1.6,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 0,
+        "rowStyle": "plain",
+        "corner": 0,
+        "border": 0,
+        "filledButtons": false,
+        "ornament": "wash",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 680,
+        "lineHeight": 1.5,
+        "mastheadStyle": "none",
+        "statsStyle": "figures",
+        "kicker": false,
+        "figureBlocks": true,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#E8E9E6",
+        "panel": "#DEDFDA",
+        "surface": "#F2F3EF",
+        "ink": "#1A1C1E",
+        "prose": "#3C4043",
+        "muted": "#85888A",
+        "rule": "#C9CBC7",
+        "ruleFaint": "#DBDCD8",
+        "accent": "#0F6E7A",
+        "accentDeep": "#0A4E57",
+        "tint": "#A64B2A",
+        "green": "#4A6B3A"
+      },
+      "dark": {
+        "paper": "#0C0E0F",
+        "panel": "#121516",
+        "surface": "#181C1D",
+        "ink": "#E4E7E6",
+        "prose": "#A8B0B0",
+        "muted": "#6A7373",
+        "rule": "#232829",
+        "ruleFaint": "#1A1E1F",
+        "accent": "#58C4D0",
+        "accentDeep": "#8FDEE6",
+        "tint": "#D9793F",
+        "green": "#93B87A"
+      },
+      "scheme": "dark"
+    },
+    {
+      "id": "jcard",
+      "name": "J-card",
+      "note": "The liner folded out of a tape box: narrow, dense, ruled top to bottom, with an A/B side at the head. 420 of measure at 15px — the tightest thing on the board, and the only theme that looks like paperwork.",
+      "type": {
+        "prose": {
+          "families": [
+            "IBM Plex Sans"
+          ],
+          "shape": "sans",
+          "weight": "regular",
+          "size": 15
+        },
+        "display": {
+          "families": [
+            "Archivo"
+          ],
+          "shape": "sans",
+          "weight": "heavy",
+          "scale": 1.0
+        },
+        "label": {
+          "families": [
+            "IBM Plex Mono"
+          ],
+          "shape": "mono",
+          "weight": "medium",
+          "size": 10,
+          "tracking": 1.2,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 0,
+        "rowStyle": "indent",
+        "corner": 0,
+        "border": 1,
+        "filledButtons": false,
+        "ornament": "none",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 420,
+        "lineHeight": 1.5,
+        "mastheadStyle": "band",
+        "statsStyle": "rows",
+        "kicker": true,
+        "figureBlocks": false,
+        "pageCard": true,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#F2F0E8",
+        "panel": "#E4E1D4",
+        "surface": "#FAF8F0",
+        "ink": "#1B1B18",
+        "prose": "#3A3A34",
+        "muted": "#7C7A6E",
+        "rule": "#CFCBB8",
+        "ruleFaint": "#E0DCCB",
+        "accent": "#B23A2E",
+        "accentDeep": "#8C2A21",
+        "tint": "#2E5A8A",
+        "green": "#556B3A"
+      },
+      "dark": {
+        "paper": "#14140F",
+        "panel": "#1C1C16",
+        "surface": "#23231C",
+        "ink": "#E8E6DC",
+        "prose": "#B0AEA2",
+        "muted": "#6E6C60",
+        "rule": "#2E2E25",
+        "ruleFaint": "#23231C",
+        "accent": "#D4614F",
+        "accentDeep": "#E08376",
+        "tint": "#5A87B8",
+        "green": "#8AA05E"
+      },
+      "scheme": "light"
+    },
+    {
+      "id": "stencil",
+      "name": "Stencil",
+      "note": "Marking paint on asphalt, knocked out. Archivo Black in caps at 1.3, zero radius, no rules and nothing soft anywhere in it — the type is the graphic.",
+      "type": {
+        "prose": {
+          "families": [
+            "Archivo"
+          ],
+          "shape": "sans",
+          "weight": "regular",
+          "size": 16.5
+        },
+        "display": {
+          "families": [
+            "Anton"
+          ],
+          "shape": "sans",
+          "weight": "regular",
+          "scale": 1.3,
+          "uppercase": true
+        },
+        "label": {
+          "families": [
+            "Archivo"
+          ],
+          "shape": "sans",
+          "weight": "semibold",
+          "size": 10,
+          "tracking": 1.8,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 0,
+        "rowStyle": "block",
+        "corner": 0,
+        "border": 0,
+        "filledButtons": true,
+        "ornament": "none",
+        "centred": false,
+        "statsTrace": false,
+        "measure": 620,
+        "lineHeight": 1.45,
+        "mastheadStyle": "band",
+        "statsStyle": "rows",
+        "kicker": true,
+        "figureBlocks": false,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#F0F0EE",
+        "panel": "#E2E2E0",
+        "surface": "#FFFFFF",
+        "ink": "#15161A",
+        "prose": "#34363C",
+        "muted": "#82848A",
+        "rule": "#D2D3D6",
+        "ruleFaint": "#E4E4E6",
+        "accent": "#E4572E",
+        "accentDeep": "#C23F1B",
+        "tint": "#1F5FA8",
+        "green": "#4B7A2E"
+      },
+      "dark": {
+        "paper": "#101114",
+        "panel": "#17181C",
+        "surface": "#1E1F24",
+        "ink": "#F0F0EE",
+        "prose": "#C2C4C8",
+        "muted": "#74767C",
+        "rule": "#2A2B31",
+        "ruleFaint": "#202126",
+        "accent": "#FF6B35",
+        "accentDeep": "#FF8B5E",
+        "tint": "#4E9BE0",
+        "green": "#86C24A"
+      },
+      "scheme": "dark"
+    },
+    {
+      "id": "isobar",
+      "name": "Isobar",
+      "note": "A synoptic chart: isobar hairlines, a cold ground, the readings in the right-hand column. One warm front, used exactly once, the way a chart uses it.",
+      "type": {
+        "prose": {
+          "families": [
+            "IBM Plex Sans"
+          ],
+          "shape": "sans",
+          "weight": "light",
+          "size": 16
+        },
+        "display": {
+          "families": [
+            "Archivo"
+          ],
+          "shape": "sans",
+          "weight": "medium",
+          "scale": 1.05
+        },
+        "label": {
+          "families": [
+            "IBM Plex Mono"
+          ],
+          "shape": "mono",
+          "weight": "medium",
+          "size": 10,
+          "tracking": 1.3,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 1,
+        "rowStyle": "rule",
+        "corner": 0,
+        "border": 1,
+        "filledButtons": false,
+        "ornament": "wash",
+        "centred": false,
+        "statsTrace": true,
+        "measure": 660,
+        "lineHeight": 1.55,
+        "mastheadStyle": "rule",
+        "statsStyle": "figures",
+        "kicker": true,
+        "figureBlocks": true,
+        "pageCard": false,
+        "rowColours": false
+      },
+      "light": {
+        "paper": "#EEF2F4",
+        "panel": "#E2E9ED",
+        "surface": "#F8FAFB",
+        "ink": "#16232B",
+        "prose": "#33454F",
+        "muted": "#74858E",
+        "rule": "#C6D2D9",
+        "ruleFaint": "#DDE5E9",
+        "accent": "#C2410C",
+        "accentDeep": "#9A3412",
+        "tint": "#0E7490",
+        "green": "#3F7D5C"
+      },
+      "dark": {
+        "paper": "#0A1418",
+        "panel": "#101D22",
+        "surface": "#16262C",
+        "ink": "#E2EDF0",
+        "prose": "#A9BDC4",
+        "muted": "#63787F",
+        "rule": "#1E343B",
+        "ruleFaint": "#16272D",
+        "accent": "#F97316",
+        "accentDeep": "#FB923C",
+        "tint": "#22B8CF",
+        "green": "#5FBF8B"
+      },
+      "scheme": "dark"
+    },
+    {
+      "id": "spectrogram",
+      "name": "Spectrogram",
+      "note": "Frequency bins as cards on wet black, a heat ramp across the accents, and the rows banded in colour underneath. The loudest thing on the board, and the only one that asks the index to shout.",
+      "type": {
+        "prose": {
+          "families": [
+            "Archivo"
+          ],
+          "shape": "sans",
+          "weight": "light",
+          "size": 15.5
+        },
+        "display": {
+          "families": [
+            "Anton"
+          ],
+          "shape": "sans",
+          "weight": "regular",
+          "scale": 1.2,
+          "uppercase": true
+        },
+        "label": {
+          "families": [
+            "IBM Plex Mono"
+          ],
+          "shape": "mono",
+          "weight": "medium",
+          "size": 9.5,
+          "tracking": 1.0,
+          "uppercase": true
+        }
+      },
+      "chrome": {
+        "mastheadRule": 0,
+        "rowStyle": "card",
+        "corner": 2,
+        "border": 1,
+        "filledButtons": true,
+        "ornament": "none",
+        "centred": false,
+        "statsTrace": true,
+        "measure": 600,
+        "lineHeight": 1.5,
+        "mastheadStyle": "band",
+        "statsStyle": "figures",
+        "kicker": false,
+        "figureBlocks": true,
+        "pageCard": false,
+        "rowColours": true
+      },
+      "light": {
+        "paper": "#F4F2F5",
+        "panel": "#E9E6EC",
+        "surface": "#FFFFFF",
+        "ink": "#16121A",
+        "prose": "#37303F",
+        "muted": "#7D7488",
+        "rule": "#D6D0DE",
+        "ruleFaint": "#E7E2EC",
+        "accent": "#6D28D9",
+        "accentDeep": "#4C1D95",
+        "tint": "#DB2777",
+        "green": "#059669"
+      },
+      "dark": {
+        "paper": "#08060B",
+        "panel": "#0E0B13",
+        "surface": "#15111C",
+        "ink": "#F0EBF5",
+        "prose": "#BDB2C9",
+        "muted": "#746A80",
+        "rule": "#211B2B",
+        "ruleFaint": "#18131F",
+        "accent": "#A78BFA",
+        "accentDeep": "#C4B5FD",
+        "tint": "#F472B6",
+        "green": "#34D399"
+      },
+      "scheme": "dark"
+    }
+];
+
+const ALL = SHIPPED.concat(NEW);
+const IS_NEW = new Set(NEW.map((t) => t.id));
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Sample content — the same entry in every window, so the only thing that
+   changes between two cards is the theme. Shaped like the parser's output:
+   one `.ln` per source line, markers in `.mark`.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* One source line per paragraph, as a journal file actually holds them: the
+   parser makes a block of each line and lets the measure wrap it, so hard
+   wrapping the sample here would double-wrap every theme that sets a narrow
+   one. The line breaks below are the ones the file has. */
+const BODY = [
+  'Left before seven and took the **long way** round the reservoir, which adds twenty minutes and, this morning, was worth every one of them.',
+  '',
+  '## What the light was doing',
+  '',
+  'Low and flat off the water, the kind that makes the far bank look printed rather than grown. Two swans, *entirely* unbothered.',
+  '',
+  '> Nothing here writes itself. The twenty minutes are the entry.',
+  '',
+  '- The gate at the north end is finally open again',
+  '- Rain by Thursday, apparently',
+  '- `severn` minutes of nothing, on purpose #walking @morning',
+  ''
+].join('\n');
+
+const SECTIONS = [
+  { title: 'September', count: 7, rows: [
+    { title: 'The long way round the reservoir', meta: '8 Sep · 122 words', on: true, star: true },
+    { title: 'Sunday, and the fence again', meta: '7 Sep · 88 words' },
+    { title: 'Half a page still counts', meta: '6 Sep · 34 words' },
+    { title: 'A note on measure', meta: '5 Sep · 210 words' },
+    { title: 'Things I meant to write down', meta: '2 Sep · 45 words', file: 'File' }
+  ]},
+  { title: 'August', count: 12, rows: [
+    { title: 'The long train home', meta: '29 Aug · 311 words' },
+    { title: 'Three kinds of rain', meta: '27 Aug · 96 words' }
+  ]}
+];
+
+/* ── markdown, as app.js renders it ────────────────────────────────────── */
+
+const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const mark = (s) => '<span class="mark">' + s + '</span>';
+
+function inline(text) {
+  let out = esc(text);
+  out = out.replace(/`([^`\n]+)`/g, (_, c) => '<span class="code">' + mark('`') + c + mark('`') + '</span>');
+  out = out.replace(/\*\*(.+?)\*\*/g, (_, b) => mark('**') + '<span class="strong">' + b + '</span>' + mark('**'));
+  out = out.replace(/\*([^*\n]+?)\*/g, (_, b) => mark('*') + '<span class="em">' + b + '</span>' + mark('*'));
+  out = out.replace(/#[a-zA-Z][a-zA-Z0-9_-]*/g, (t) => '<span class="tag">' + t + '</span>');
+  out = out.replace(/@[a-zA-Z][a-zA-Z0-9_-]*/g, (t) => '<span class="tag">' + t + '</span>');
+  return out;
+}
+
+function line(l) {
+  if (!l) return '<span class="ln"><br></span>';
+  let m = l.match(/^(#{1,6})\s+(.*)$/);
+  if (m) return '<span class="ln h' + Math.min(m[1].length, 3) + '">' + mark(m[1]) + ' ' + inline(m[2]) + '</span>';
+  m = l.match(/^(\s*>\s?)(.*)$/);
+  if (m) return '<span class="ln quote">' + mark(m[1]) + inline(m[2]) + '</span>';
+  m = l.match(/^(\s*(?:[-*+]|\d{1,3}\.)\s)(.*)$/);
+  if (m) return '<span class="ln bullet">' + mark(m[1]) + inline(m[2]) + '</span>';
+  if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) return '<span class="ln hr">' + esc(l) + '</span>';
+  return '<span class="ln">' + inline(l) + '</span>';
+}
+
+const PROSE = BODY.split('\n').map(line).join('');
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Applying a theme. This is app.js's applyTheme(), unchanged — the same
+   palette → custom properties, the same face stacks, the same structural
+   data-attributes. Landing them on an element rather than :root is the only
+   edit, so a page can hold twenty-six of them at once.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const hexLum = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  return 0.2126 * ((n >> 16) & 255) / 255 +
+         0.7152 * ((n >> 8) & 255) / 255 +
+         0.0722 * (n & 255) / 255;
+};
+
+const readableOn = (fill, a, b) =>
+  Math.abs(hexLum(a) - hexLum(fill)) >= Math.abs(hexLum(b) - hexLum(fill)) ? a : b;
+
+const figureFills = (p) => {
+  const out = [];
+  for (const k of ['accent', 'tint', 'green', 'ink']) if (!out.includes(p[k])) out.push(p[k]);
+  while (out.length < 3) out.push(p.surface);
+  return out;
+};
+
+const stack = (face, fallback) => "'" + face.families.join("', '") + "', " + fallback;
+
+function applyTheme(el, theme, dark) {
+  const c = theme.chrome, t = theme.type;
+  const p = dark ? theme.dark : theme.light;
+
+  el.dataset.masthead = c.mastheadStyle || 'rule';
+  el.dataset.rows = c.rowStyle || 'rule';
+  el.dataset.stats = c.statsStyle || 'rows';
+  el.dataset.pageCard = String(!!c.pageCard);
+  el.dataset.ornament = c.ornament || 'none';
+  el.dataset.kicker = String(!!c.kicker);
+  el.dataset.centred = String(!!c.centred);
+
+  const vars = [
+    ['--paper', p.paper], ['--panel', p.panel], ['--surface', p.surface],
+    ['--ink', p.ink], ['--prose', p.prose], ['--muted', p.muted],
+    ['--rule', p.rule], ['--rule-faint', p.ruleFaint],
+    ['--accent', p.accent], ['--accent-deep', p.accentDeep],
+    ['--tint', p.tint], ['--green', p.green],
+    ['--prose', stack(t.prose, 'Georgia, serif')],
+    ['--display', stack(t.display, 'Georgia, serif')],
+    ['--label', stack(t.label, 'system-ui, sans-serif')],
+    ['--label-size', (t.label.size || 10.5) + 'px'],
+    ['--label-tracking', (t.label.tracking || 1.15) / 10 + 'em'],
+    ['--display-scale', t.display.scale || 1],
+    ['--display-tracking', (t.display.tracking || 0) / 10 + 'em'],
+    ['--corner', (c.corner || 0) + 'px'],
+    ['--border', (c.border || 1) + 'px'],
+    ['--masthead-rule', (c.mastheadRule || 0) + 'px'],
+    // Measure, type size and leading ride with the theme on a first run —
+    // in the app they are the reader's settings and survive a switch, but a
+    // theme that declares a measure is declaring how it wants to be read.
+    ['--measure', c.measure + 'px'],
+    ['--type', (t.prose.size || 17.5) + 'px'],
+    ['--lead', c.lineHeight]
+  ];
+  figureFills(p).forEach((fill, i) => {
+    vars.push(['--fill-' + i, fill]);
+    vars.push(['--fill-' + i + '-on', readableOn(fill, p.paper, p.ink)]);
+  });
+  for (const [k, v] of vars) el.style.setProperty(k, v);
+
+  el.dataset.upper = t.display.uppercase ? 'true' : 'false';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   The window.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const fieldRow = (label, value, tone) =>
+  '<div class="field"><span>' + label + '</span><b' + (tone ? ' class="' + tone + '"' : '') + '>' + value + '</b></div>';
+
+function statsPanel(theme) {
+  const figures = theme.chrome.statsStyle === 'figures';
+  /* Figure blocks take their fill from --fill-N, which applyTheme() has
+     already resolved for this theme's palette; the rest just tint the
+     numeral. */
+  const tile = (i, label, value, tone) =>
+    theme.chrome.figureBlocks
+      ? '<div class="figure block" style="background:var(--fill-' + i + ');color:var(--fill-' + i + '-on)">' +
+        '<span class="smallcaps">' + label + '</span><span class="value">' + value + '</span></div>'
+      : '<div class="figure"><span class="smallcaps">' + label + '</span>' +
+        '<span class="value" style="color:var(' + (tone || '--ink') + ')">' + value + '</span></div>';
+  const entry = figures
+    ? '<div class="figures">' + tile(0, 'Words', 122) + tile(1, 'Days running', 4, '--accent') +
+      tile(2, 'This month', 7) + tile(0, 'Reading', '1 min') + '</div>'
+    : '<div class="smallcaps section">This entry</div>' +
+      fieldRow('Words', 122) + fieldRow('Characters', 691) + fieldRow('Paragraphs', 4) +
+      fieldRow('Reading', '1 min');
+
+  const journal = '<div class="smallcaps section">Journal</div>' +
+    fieldRow('Entries', 128) + fieldRow('Words', '41,206') +
+    (figures ? '' : fieldRow('This month', 7) + fieldRow('Streak', '4 days', 'green'));
+
+  return '<div class="scroll">' + entry +
+    '<div class="group"><div class="smallcaps section">Filed</div>' +
+      fieldRow('Number', 'No. 128') + fieldRow('Written', 'Tue · 08:12') +
+      fieldRow('Tags', 'walking morning', 'accent') + fieldRow('Status', 'Filed') +
+      fieldRow('File', '08.md') + '</div>' + journal +
+    '<div class="group actions"><button class="block">Copy markdown</button></div></div>';
+}
+
+function indexPanel(theme) {
+  const rail = theme.chrome.ornament === 'rail';
+  /* The row-colour cycle is app.js's: surface, tint, surface, restarting under
+     each month heading. The selected row takes the accent from CSS instead. */
+  const FILLS = ['--surface', '--tint', '--surface'];
+  let position = 0;
+
+  let list = '';
+  for (const s of SECTIONS) {
+    list += '<div class="month"><span class="smallcaps">' + s.title + '</span>' +
+            '<span class="smallcaps">' + s.count + '</span></div>';
+    for (const r of s.rows) {
+      const at = position++;
+      let bg = '';
+      if (!r.on && theme.chrome.rowColours && theme.chrome.rowStyle === 'card') {
+        bg = ' style="background:var(' + FILLS[at % FILLS.length] + ')"';
+      }
+      list += '<div class="row' + (r.on ? ' on' : '') + '"' + bg + '>' +
+        '<div class="row-title">' + r.title + (r.star ? '<span class="star"> ✱</span>' : '') + '</div>' +
+        '<div class="row-meta"><span class="smallcaps">' + r.meta + '</span><span class="spacer"></span>' +
+        (r.file ? '<span class="smallcaps file">' + r.file + '</span>' : '') + '</div></div>';
+    }
+  }
+
+  return '<div class="ornament ornament-' + (rail ? 'rail' : 'none') + '" data-day="08">' +
+      '<i class="orn-a"></i><i class="orn-b"></i><i class="orn-c"></i><i class="orn-d"></i></div>' +
+    '<div class="find"><span class="smallcaps">Find</span>' +
+      '<input type="text" placeholder="title, text or @tag"></div>' +
+    '<div class="rule"></div><div class="list">' + list + '</div><div class="rule"></div>' +
+    '<div class="index-actions"><button class="block">New</button></div>';
+}
+
+function windowHTML(theme) {
+  const c = theme.chrome;
+  const pageOrn = c.ornament === 'rail' ? 'none' : (c.ornament || 'none');
+  const kicker = c.kicker
+    ? '<div class="kicker smallcaps">Tuesday, 8 September · walking</div>'
+    : '';
+  const title = 'The long way round the reservoir';
+
+  return '' +
+  '<header class="masthead">' +
+    '<div class="masthead-row">' +
+      '<span class="wordmark">wander</span>' +
+      '<nav class="pages"><span class="on">journal</span><span>inbox 1</span><span>starred</span></nav>' +
+      '<span class="spacer"></span>' +
+      '<span class="smallcaps">08.09.26 / streak 4</span>' +
+      '<span class="toggles"><span class="pipe">│</span>' +
+        '<span class="smallcaps">index</span><span class="smallcaps">stats</span><span class="smallcaps">options</span></span>' +
+    '</div><div class="rule-heavy"></div>' +
+  '</header>' +
+  '<main class="columns">' +
+    '<section class="panel index">' + indexPanel(theme) + '</section>' +
+    '<section class="editor">' +
+      '<div class="ornament ornament-' + pageOrn + '" data-day="08">' +
+        '<i class="orn-a"></i><i class="orn-b"></i><i class="orn-c"></i><i class="orn-d"></i></div>' +
+      '<div class="page">' + kicker +
+        '<div class="title">' + title + '</div>' +
+        '<div class="dateline"><span class="smallcaps">Tuesday, 8 September 2026 · 08:12 · @WALKING @MORNING</span>' +
+          '<span class="spacer"></span><span class="smallcaps">✱ Starred</span></div>' +
+        '<div class="rule-ink"></div>' +
+        '<div class="prose">' + PROSE + '</div>' +
+        '<div class="rule"></div>' +
+        '<div class="status"><span class="smallcaps">122 words · 691 characters · 1 min read</span>' +
+          '<span class="spacer"></span><span class="smallcaps">Saved</span></div>' +
+      '</div>' +
+    '</section>' +
+    '<section class="panel stats">' + statsPanel(theme) + '</section>' +
+  '</main>';
+}
+
+function makeWindow(theme, dark) {
+  const el = document.createElement('div');
+  el.className = 'wapp';
+  el.innerHTML = windowHTML(theme);
+  applyTheme(el, theme, dark);
+  return el;
+}
+
+/* ── scale-to-fit ──────────────────────────────────────────────────────── */
+
+const APP_W = 1160, APP_H = 740;
+
+/* The window is laid out at a real 1160×740 and then scaled to whatever width
+   it has been given. Nothing inside it is resolution-adjusted, so a 430px card
+   is the same drawing as a 1500px stage, smaller. */
+function fit(frame) {
+  const z = frame.clientWidth / APP_W;
+  frame.querySelector('.wapp').style.transform = 'scale(' + z + ')';
+  frame.style.height = APP_H * z + 'px';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Views
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const state = { paper: 'dark', filter: 'all', open: null };
+const root = document.getElementById('root');
+const countEl = document.getElementById('count');
+
+function wanted(theme) {
+  if (state.paper !== 'both') return state.paper;
+  /* Split: each theme in the appearance it was drawn for. A theme that claims
+     both has no answer, so it shows light — the dot beside its name is what
+     says which half it prefers. */
+  return theme.scheme === 'dark' ? 'dark' : 'light';
+}
+
+function visible() {
+  if (state.filter === 'new') return NEW;
+  if (state.filter === 'ship') return SHIPPED;
+  return ALL;
+}
+
+/* The palette, in the order the app uses them: the three colour-carrying keys
+   first, then the neutrals, so a swatch strip reads left to right as
+   accent → tint → green → ink → muted → paper → panel → surface. */
+const SWATCH_KEYS = ['accent', 'tint', 'green', 'ink', 'muted', 'paper', 'panel', 'surface'];
+
+function swatches(p) {
+  return '<div class="sw">' + SWATCH_KEYS.map((k) => '<i style="background:' + p[k] + '"></i>').join('') +
+    '</div><div class="keys">' + SWATCH_KEYS.join(' · ') + '</div>';
+}
+
+function card(theme) {
+  const dark = wanted(theme) === 'dark';
+  const fig = document.createElement('figure');
+  fig.className = 'card' + (IS_NEW.has(theme.id) ? ' is-new' : '');
+
+  const frame = document.createElement('div');
+  frame.className = 'frame';
+  frame.appendChild(makeWindow(theme, dark));
+
+  const cap = document.createElement('figcaption');
+  cap.innerHTML =
+    '<div class="caption">' +
+      '<span class="dot ' + (theme.scheme || 'both') + '"></span>' +
+      '<span class="name">' + theme.name + '</span>' +
+      '<span class="spacer"></span>' +
+      '<span class="badge ' + (IS_NEW.has(theme.id) ? 'new">New' : 'ship">Ships') + '</span>' +
+    '</div><p>' + theme.note + '</p>';
+
+  fig.appendChild(frame);
+  fig.appendChild(cap);
+  fig.onclick = () => { state.open = theme.id; render(); window.scrollTo(0, 0); };
+  return { fig, frame };
+}
+
+function specs(theme) {
+  const t = theme.type, c = theme.chrome;
+  const row = (k, v) => '<div><dt>' + k + '</dt><dd>' + v + '</dd></div>';
+  return '<div class="specs">' +
+    row('Masthead', c.mastheadStyle + ' · ' + c.mastheadRule + 'px') +
+    row('Rows', c.rowStyle) +
+    row('Ornament', c.ornament) +
+    row('Stats', c.statsStyle + (c.figureBlocks ? ' · filled' : '')) +
+    row('Measure', c.measure + 'px') +
+    row('Leading', c.lineHeight) +
+    row('Corner / border', c.corner + ' / ' + c.border) +
+    row('Page card', c.pageCard ? 'yes' : 'no') +
+    row('Row colours', c.rowColours ? 'yes' : 'no') +
+    row('Kicker', c.kicker ? 'yes' : 'no') +
+    row('Centred', c.centred ? 'yes' : 'no') +
+    row('Trace', c.statsTrace ? 'yes' : 'no') +
+    row('Prose', t.prose.families[0] + ' ' + t.prose.weight + ' · ' + t.prose.size) +
+    row('Display', t.display.families[0] + ' ' + t.display.weight + ' · ×' + (t.display.scale || 1)) +
+    row('Label', t.label.families[0] + ' · ' + t.label.size + ' · ' + t.label.tracking) +
+    '<div><dt>Palette · light</dt><dd>' + swatches(theme.light) + '</dd></div>' +
+    '<div><dt>Palette · dark</dt><dd>' + swatches(theme.dark) + '</dd></div>' +
+    '</div>';
+}
+
+function detail(theme) {
+  const dark = wanted(theme) === 'dark';
+  const wrap = document.createElement('div');
+  wrap.className = 'detail';
+  wrap.innerHTML =
+    '<div class="detail-head">' +
+      '<button class="act" id="back">← All themes</button>' +
+      '<h2>' + theme.name + '</h2>' +
+      '<span class="dot ' + (theme.scheme || 'both') + '"></span>' +
+      '<span class="badge ' + (IS_NEW.has(theme.id) ? 'new">New' : 'ship">Ships') + '</span>' +
+      '<p>' + theme.note + '</p>' +
+    '</div>' +
+    '<div class="detail-stage" id="stage"></div>' +
+    specs(theme) +
+    '<pre class="json" id="json"></pre>';
+
+  const stage = wrap.querySelector('#stage');
+  stage.appendChild(makeWindow(theme, dark));
+  wrap.querySelector('#back').onclick = () => { state.open = null; render(); };
+  wrap.querySelector('#back').textContent = '← All themes  (esc)';
+  wrap.querySelector('#json').textContent = JSON.stringify(theme, null, 2);
+  return wrap;
+}
+
+/* Repaints the view from `state`. Everything downstream of it is declarative:
+   the theme tables are the only input, so a card cannot disagree with the
+   detail view about what a theme looks like. */
+let refit = () => {};
+
+function draw() {
+  root.innerHTML = '';
+  const list = visible();
+  countEl.innerHTML = '<b>' + list.length + '</b> shown · <b>' + NEW.length +
+    '</b> new of <b>' + ALL.length + '</b>';
+
+  if (state.open) {
+    const t = ALL.find((x) => x.id === state.open);
+    if (t) {
+      root.appendChild(detail(t));
+      const stage = root.querySelector('.detail-stage');
+      refit = () => fit(stage);
+      refit();
+      return;
+    }
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'grid';
+  const frames = [];
+  for (const t of list) {
+    const { fig, frame } = card(t);
+    grid.appendChild(fig);
+    frames.push(frame);
+  }
+  root.appendChild(grid);
+
+  refit = () => frames.forEach(fit);
+  refit();
+}
+
+window.addEventListener('resize', () => refit());
+
+/* ── controls ──────────────────────────────────────────────────────────── */
+
+/* A view is a URL, so a link can point at exactly one theme in exactly one
+   appearance: ?paper=light&filter=new#deco */
+const params = new URLSearchParams(location.search);
+if (['light', 'dark', 'both'].includes(params.get('paper'))) state.paper = params.get('paper');
+if (['all', 'new', 'ship'].includes(params.get('filter'))) state.filter = params.get('filter');
+if (ALL.some((t) => t.id === location.hash.slice(1))) state.open = location.hash.slice(1);
+
+function markSeg(id, value) {
+  for (const b of document.getElementById(id).children) b.classList.toggle('on', b.dataset.v === value);
+}
+
+function pushURL() {
+  const q = new URLSearchParams();
+  if (state.paper !== 'dark') q.set('paper', state.paper);
+  if (state.filter !== 'all') q.set('filter', state.filter);
+  const search = q.toString();
+  const url = location.pathname + (search ? '?' + search : '') + (state.open ? '#' + state.open : '');
+  // Opened straight off the disk there is no history to rewrite, and Chrome
+  // refuses rather than throwing the view away.
+  try { history.replaceState(null, '', url); } catch (e) { /* file:// */ }
+}
+
+function seg(id, key) {
+  document.getElementById(id).onclick = (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    state[key] = b.dataset.v;
+    render();
+  };
+}
+seg('paper', 'paper');
+seg('filter', 'filter');
+
+/* Left and right walk the list in whichever filter is showing; Escape backs
+   out to the grid. Reviewing twenty-six looks one mouse click at a time is
+   the wrong shape of work. */
+document.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'Escape' && state.open) { state.open = null; render(); return; }
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  const list = visible();
+  if (!list.length) return;
+  const at = state.open ? list.findIndex((t) => t.id === state.open) : -1;
+  const step = e.key === 'ArrowRight' ? 1 : -1;
+  const next = at < 0 ? 0 : (at + step + list.length) % list.length;
+  state.open = list[next].id;
+  render();
+  window.scrollTo(0, 0);
+});
+
+document.getElementById('download').onclick = () => {
+  const body = JSON.stringify(NEW, null, 2);
+  const url = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'new-themes.json';
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+function render() {
+  markSeg('paper', state.paper);
+  markSeg('filter', state.filter);
+  pushURL();
+  draw();
+}
+
+render();
+</script>
+</body>
+</html>

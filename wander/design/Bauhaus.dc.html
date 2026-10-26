@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><script src="./support.js"></script></head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap">
+  <style>
+    body { margin: 0; font-family: "Archivo", Helvetica, sans-serif; }
+    a { color: #1c53a8; } a:hover { color: #e63329; }
+    .lbl { font-size: 10px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+  </style>
+</helmet>
+<div style="width: 1240px; height: 800px; background: #f2efe6; color: #14120f; display: grid; grid-template-columns: 96px 1fr 300px; overflow: hidden">
+
+  <div style="background: #1c53a8; display: flex; flex-direction: column; align-items: center; padding: 24px 0; gap: 20px">
+    <div style="width: 44px; height: 44px; border-radius: 50%; background: #f2c024"></div>
+    <div style="width: 0; height: 0; border-left: 22px solid transparent; border-right: 22px solid transparent; border-bottom: 38px solid #e63329"></div>
+    <div style="width: 44px; height: 44px; background: #f2efe6"></div>
+    <div style="flex: 1"></div>
+    <div class="lbl" style="color: #f2efe6; writing-mode: vertical-rl; letter-spacing: .4em">WANDER</div>
+  </div>
+
+  <div style="min-width: 0; display: flex; flex-direction: column">
+    <div style="display: flex; align-items: stretch; border-bottom: 4px solid #14120f">
+      <div style="background: #f2c024; padding: 16px 22px" class="lbl">Journal</div>
+      <div style="padding: 16px 18px; color: #6b665c" class="lbl">Inbox 1</div>
+      <div style="padding: 16px 18px; color: #6b665c" class="lbl">Starred</div>
+      <div style="flex: 1"></div>
+      <div style="padding: 16px 22px" class="lbl">08.09.26 / streak 4</div>
+    </div>
+
+    <div style="padding: 30px 34px 0; display: flex; flex-direction: column; flex: 1; min-height: 0">
+      <div style="display: flex; align-items: flex-start; gap: 18px">
+        <div style="width: 14px; height: 58px; background: #e63329; flex: none; margin-top: 4px"></div>
+        <div style="font-size: 40px; font-weight: 800; letter-spacing: -.035em; line-height: .98">The long way round<br>the reservoir</div>
+      </div>
+      <div class="lbl" style="color: #6b665c; padding: 18px 0 20px">08:12 — @admin @morning @walking</div>
+      <div style="font-size: 16px; line-height: 1.62; color: #33302a; max-width: 62ch; display: flex; flex-direction: column; gap: 16px">
+        <div>Left before seven and took the <span style="background: #f2c024; padding: 0 4px; font-weight: 600">long way</span> round the reservoir, which adds twenty minutes and, this morning, was worth every one of them.</div>
+        <div style="font-size: 20px; font-weight: 800; letter-spacing: -.02em">What the light was doing</div>
+        <div>Low and flat off the water, the kind that makes the far bank look printed rather than grown. Two swans, unbothered.</div>
+        <div style="display: flex; gap: 14px; align-items: flex-start"><span style="width: 26px; height: 26px; border-radius: 50%; background: #1c53a8; flex: none"></span><span style="color: #6b665c">The dull entries are the ones worth having in five years.</span></div>
+      </div>
+      <div style="flex: 1"></div>
+      <div class="lbl" style="padding: 18px 0 22px; border-top: 2px solid #14120f; display: flex; gap: 22px"><span>122 words</span><span>691 characters</span><span style="flex: 1"></span><span style="color: #1c53a8">Saved</span></div>
+    </div>
+  </div>
+
+  <div style="border-left: 4px solid #14120f; display: flex; flex-direction: column">
+    <div class="lbl" style="padding: 16px 20px; border-bottom: 2px solid #14120f">September — 7</div>
+    <div style="padding: 14px 20px; background: #e63329; color: #f2efe6"><div style="font-size: 15px; font-weight: 600; line-height: 1.25">The long way round the reservoir</div><div class="lbl" style="margin-top: 6px; opacity: .8">8 SEP · 122 W</div></div>
+    <div style="padding: 14px 20px; border-bottom: 1px solid #ddd8cb"><div style="font-size: 15px; line-height: 1.25">Sunday, and the fence again</div><div class="lbl" style="margin-top: 6px; color: #6b665c">7 SEP</div></div>
+    <div style="padding: 14px 20px; border-bottom: 1px solid #ddd8cb"><div style="font-size: 15px; line-height: 1.25">Half a page still counts</div><div class="lbl" style="margin-top: 6px; color: #6b665c">6 SEP</div></div>
+    <div style="padding: 14px 20px; border-bottom: 1px solid #ddd8cb"><div style="font-size: 15px; line-height: 1.25">A note on measure</div><div class="lbl" style="margin-top: 6px; color: #6b665c">5 SEP</div></div>
+    <div style="flex: 1"></div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #14120f">
+      <div style="padding: 16px 20px; border-right: 2px solid #14120f"><div class="lbl" style="color: #6b665c">Words</div><div style="font-size: 30px; font-weight: 800; letter-spacing: -.03em">122</div></div>
+      <div style="padding: 16px 20px"><div class="lbl" style="color: #6b665c">Streak</div><div style="font-size: 30px; font-weight: 800; letter-spacing: -.03em; color: #e63329">4</div></div>
+    </div>
+    <div style="padding: 16px 20px; background: #14120f; color: #f2efe6; text-align: center" class="lbl">New entry</div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
