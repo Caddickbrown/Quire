@@ -20,6 +20,8 @@ struct ComposerScreen: View {
     @AppStorage(PromptDeck.enabledKey) private var promptsOn = false
 
     let target: ComposeTarget
+    var onUpdate: (EntryRef) -> Void = { _ in }
+    var onRemove: () -> Void = {}
 
     @State private var title = ""
     @State private var text = ""
@@ -34,7 +36,13 @@ struct ComposerScreen: View {
     /// opening an entry never re-normalises it on disk.
     @State private var opened: (title: String, text: String, starred: Bool)?
     @State private var pending: Task<Void, Never>?
-    @FocusState private var bodyFocused: Bool
+    private enum Field: Hashable { case title, body }
+    @FocusState private var focus: Field?
+    @State private var caret: Int?
+    @State private var savedSource: EntrySource?
+    @State private var saveError: String?
+    @State private var saveGeneration = 0
+    @State private var recoverCopy = false
     @State private var routerID = UUID()
     @State private var showStamp = false
     /// A date and time chosen (^t) before the first save of a new page.
@@ -49,18 +57,31 @@ struct ComposerScreen: View {
     }
 
     private var editing: EntryRef? { target.ref }
-    private var isDraft: Bool { editing == nil || editing?.source == .inbox }
+    private var source: EntrySource { savedSource ?? editing?.source ?? .inbox }
+    private var isDraft: Bool { source == .inbox }
     private var words: Int { text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count }
-    private var quiet: Double { focusMode && bodyFocused ? 0.25 : 1 }
+    private var quiet: Double { focusMode && focus == .body ? 0.25 : 1 }
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let saveError {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(saveError).font(q.ui(14)).foregroundStyle(q.accentColor)
+                    HStack {
+                        Button("Retry save") { _ = saveNow() }
+                        Button("Save a copy to Inbox") { recoverCopy = true }
+                    }.font(q.ui(14))
+                }.padding(.horizontal, 20).padding(.vertical, 8)
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("\(themeLabel) · \(QDate.longDay(stampDate))".uppercased()).tracking(1.6)
                         .font(q.ui(11)).foregroundStyle(q.mutedColor).opacity(quiet)
-                    TextField("", text: $title, prompt: Text("Title").foregroundColor(q.faintColor), axis: .vertical)
+                    TextField("", text: $title, prompt: Text("Title").foregroundColor(q.faintColor))
+                        .focused($focus, equals: .title)
+                        .submitLabel(.next)
+                        .onSubmit { focus = .body }
                         .font(q.isMarathon ? q.display(30) : q.writing(32, weight: .medium)).foregroundStyle(q.inkColor)
                         .textCase(q.isMarathon ? .uppercase : nil)
                         .opacity(quiet)
@@ -77,8 +98,18 @@ struct ComposerScreen: View {
         .onChange(of: title) { _, _ in scheduleSave(); mirror() }
         .onChange(of: text) { _, _ in scheduleSave(); mirror() }
         .onDisappear {
-            ExternalDisplayModel.shared.clearEntry(writing: true)
+            pending?.cancel()
+            ExternalDisplayModel.shared.releasePage(owner: routerID)
             KeyCommandRouter.shared.unregister(routerID)
+        }
+        .interactiveDismissDisabled()
+        .onChange(of: caret) { _, _ in mirror() }
+        .onChange(of: starred) { _, _ in scheduleSave(); mirror() }
+        .alert("Save a recovery copy?", isPresented: $recoverCopy) {
+            Button("Save copy") { saveRecoveryCopy() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your edits will be saved as a new Inbox draft. The original entry will be kept.")
         }
         .sheet(isPresented: $showStamp) {
             StampSheet(initial: stampDate) { applyStamp($0) }.environment(\.quire, q)
@@ -93,11 +124,14 @@ struct ComposerScreen: View {
 
     private var header: some View {
         HStack {
-            QLink(title: "Close") { saveNow(); dismiss() }
+            QLink(title: "Close") { close() }
             Spacer()
-            Text("[\(stampText)]").font(q.mono(12)).foregroundStyle(q.mutedColor)
+            Button { showStamp = true } label: {
+                Text("[\(stampText)]").font(q.mono(12)).foregroundStyle(q.mutedColor).underline(pattern: .dot)
+                    .frame(minHeight: 44)
+            }.buttonStyle(.plain).accessibilityLabel("Change date and time")
             Spacer()
-            QLink(title: starred ? "★" : "☆") { starred.toggle(); scheduleSave() }
+            QLink(title: starred ? "★" : "☆") { starred.toggle() }
                 .accessibilityLabel(starred ? "Starred" : "Star")
                 .frame(minWidth: 44)
         }
@@ -110,14 +144,15 @@ struct ComposerScreen: View {
                 Text(editing == nil ? (promptsOn ? Self.prompt : "Begin writing") : "").font(q.writing(fontSize + 2, italic: true))
                     .foregroundStyle(q.faintColor).padding(.top, 8).allowsHitTesting(false)
             }
-            TextEditor(text: $text)
-                .font(q.writing(fontSize + 2)).foregroundStyle(q.inkColor).tint(q.accentColor)
-                .lineSpacing(8)
-                .scrollContentBackground(.hidden)
-                .scrollDisabled(true)
-                .focused($bodyFocused)
+            WritingTextEditor(text: $text, fontRaw: q.editorFontName,
+                              size: fontSize + 2, textColor: q.inkColor, lineSpacing: 8,
+                              accent: q.accentColor, sizeToFit: true,
+                              tagSuggestions: store.tagCounts.map { String($0.tag.dropFirst()) },
+                              onCaretChange: { caret = $0 },
+                              focused: Binding(get: { focus == .body }, set: { if $0 { focus = .body } else if focus == .body { focus = nil } }))
+                .focused($focus, equals: .body)
                 .frame(minHeight: 360, alignment: .top)
-                .padding(.horizontal, -5)
+
         }
     }
 
@@ -136,7 +171,7 @@ struct ComposerScreen: View {
                 }
                 .buttonStyle(.plain).accessibilityAddTraits(focusMode ? .isSelected : [])
                 Button(action: finish) {
-                    Text(q.caps(editing == nil ? "File to today" : isDraft ? "File" : "Done"))
+                    Text(q.caps(isDraft ? "File" : "Done"))
                         .font(q.isMarathon ? q.label(12, weight: .medium) : q.ui(14, weight: .semibold)).foregroundStyle(q.onSignalColor)
                         .padding(.horizontal, 18).frame(minHeight: 44).background(q.signalColor)
                 }
@@ -149,7 +184,7 @@ struct ComposerScreen: View {
 
     // MARK: Time
 
-    private var stampText: String { current?.ts ?? startedAt ?? pendingTS ?? JournalStore.nowTS() }
+    private var stampText: String { pendingTS ?? current?.ts ?? startedAt ?? JournalStore.nowTS() }
     private var stampDate: Date { JournalStore.date(from: stampText) ?? Date() }
     private var themeLabel: String { q.name }
 
@@ -166,7 +201,8 @@ struct ComposerScreen: View {
             opened = (title, text, starred)
         }
         // The page opens ready to type into.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { if editing == nil { bodyFocused = true } }
+        DispatchQueue.main.async { if editing == nil { focus = .title } }
+        mirror()
         // The edits above would otherwise schedule a save of unchanged text.
         pending?.cancel()
     }
@@ -180,51 +216,77 @@ struct ComposerScreen: View {
     /// Republish the page to a connected monitor as you type.
     private func mirror() {
         guard loaded else { return }
-        ExternalDisplayModel.shared.present(editing == nil
-            ? .composing(title: title, date: stampDate, text: text, caret: nil)
-            : .editing(title: title, date: stampDate, text: text, caret: nil, isStarred: starred))
+        let content: ExternalDisplayContent = editing == nil
+            ? .composing(title: title, date: stampDate, text: text, caret: caret)
+            : .editing(title: title, date: stampDate, text: text, caret: caret, isStarred: starred, isDraft: isDraft)
+        ExternalDisplayModel.shared.present(content, owner: routerID)
     }
 
     private func scheduleSave() {
         guard loaded else { return }
+        savedFlash = false
         pending?.cancel()
+        saveGeneration += 1
+        let generation = saveGeneration
         pending = Task {
             try? await Task.sleep(nanoseconds: 700_000_000)
-            if !Task.isCancelled { saveNow() }
+            if !Task.isCancelled, generation == saveGeneration { saveNow() }
         }
     }
 
-    private func saveNow() {
+    @discardableResult
+    private func saveNow(timestamp: String? = nil) -> Bool {
         pending?.cancel()
-        let title = headerTitle
+        saveGeneration += 1
         let body = text.trimmingCharacters(in: .newlines)
-        if let ref = editing, let cur = current {
-            if let o = opened, o.title == self.title, o.text == text, o.starred == starred { return }
-            let newText = JournalStore.makeEntry(timestamp: cur.ts, title: title, body: body).raw
-            guard newText != cur.raw else { return }
-            let fallback = JournalStore.makeEntry(timestamp: cur.ts, title: title, body: body)
-            let written: Bool
-            switch ref.source {
-            case .inbox:
-                written = store.updateDraft(cur, newText: newText)
-            case .archive(let d):
-                written = store.updateFiledEntry(date: d, original: cur, newText: newText) != nil
-            case .journal(let n):
-                written = store.updateJournalEntry(name: n, original: cur, newText: newText)
+        let stamp = timestamp ?? pendingTS ?? current?.ts ?? startedAt ?? JournalStore.nowTS()
+        let raw = JournalStore.makeEntry(timestamp: stamp, title: headerTitle, body: body).raw
+        if let current {
+            if raw == current.raw { saveError = nil; return true }
+            // Opened and untouched: never re-normalise it on disk.
+            if let o = opened, o.title == title, o.text == text, o.starred == starred { saveError = nil; return true }
+            guard let result = store.saveEditorEntry(current, source: source, text: raw) else {
+                reportFailure(); return false
             }
-            if written {
-                current = store.writtenEntry(fallback: fallback)
-                // What's on disk now is the baseline an unchanged page compares to.
-                opened = (self.title, text, starred)
+            self.current = result.entry
+            savedSource = result.source
+            // What's on disk now is the baseline an unchanged page compares to.
+            opened = (title, text, starred)
+            onUpdate(EntryRef(entry: result.entry, source: result.source))
+        } else if !headerTitle.isEmpty || !body.isEmpty {
+            guard let entry = store.createEditorDraft(timestamp: stamp, title: headerTitle, body: body) else {
+                reportFailure(); return false
             }
-        } else {
-            let stamp = startedAt ?? pendingTS ?? JournalStore.nowTS()
-            if let used = store.upsertDraft(previous: startedAt, timestamp: stamp, title: title, body: body) {
-                startedAt = used
-            } else {
-                startedAt = nil
-            }
+            current = entry
+            savedSource = .inbox
+            startedAt = entry.ts
         }
+        saveError = nil
+        if current != nil { pendingTS = nil }
+        mirror()
+        return true
+    }
+
+    private func reportFailure() {
+        savedFlash = false
+        saveError = (store.lastWriteError ?? "The entry could not be saved.") + " Your edits are still open here. Retry, or save a copy to Inbox."
+    }
+
+    private func close() { if saveNow() { dismiss() } }
+
+    private func saveRecoveryCopy() {
+        pending?.cancel()
+        saveGeneration += 1
+        guard let entry = store.createEditorDraft(timestamp: stampText, title: headerTitle, body: text) else {
+            reportFailure(); return
+        }
+        current = entry
+        savedSource = .inbox
+        startedAt = entry.ts
+        onUpdate(EntryRef(entry: entry, source: .inbox))
+        pendingTS = nil
+        saveError = nil
+        mirror()
     }
 
     // MARK: The terminal app's keys while writing
@@ -234,13 +296,13 @@ struct ComposerScreen: View {
     private func registerKeys() {
         KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
             moveUp: {}, moveDown: {}, open: {},
-            clear: { saveNow(); dismiss() },
+            clear: { close() },
             key: { _ in false },
             wantsChords: true,
             chord: { k in
                 switch k {
                 case "j": if isDraft { finish(); return true }; return false
-                case "s": saveNow(); flashSaved(); return true
+                case "s": if saveNow() { flashSaved() }; return true
                 case "t": showStamp = true; return true
                 case "f": focusMode.toggle(); return true
                 case "p": insertPrompt(); return true
@@ -262,39 +324,28 @@ struct ComposerScreen: View {
 
     private func discard() {
         pending?.cancel()
-        if let cur = current { store.deleteDraft(cur) }
-        else if let ts = startedAt { store.removeDraft(timestamp: ts) }
+        saveGeneration += 1
+        if let cur = current {
+            guard store.deleteEditorDraft(cur) else { reportFailure(); return }
+        }
+        onRemove()
         dismiss()
     }
 
-    /// A chosen date and time. A new page keeps it for its first save, or moves
-    /// its draft; an entry that already exists is rewritten under it and the page
-    /// closes, since it now lives under another time.
+    /// Retiming adopts the returned reference and leaves the editor open.
     private func applyStamp(_ date: Date) {
         let ts = JournalStore.ts(from: date)
-        let body = text.trimmingCharacters(in: .newlines)
-        if let ref = editing, let cur = current {
-            let rewritten = JournalStore.makeEntry(timestamp: ts, title: headerTitle, body: body).raw
-            switch ref.source {
-            case .inbox: store.updateDraft(cur, newText: rewritten)
-            case .archive(let d): store.updateFiledEntry(date: d, original: cur, newText: rewritten)
-            case .journal(let n): _ = store.updateJournalEntry(name: n, original: cur, newText: rewritten)
-            }
-            dismiss()
-        } else {
-            pendingTS = ts
-            if startedAt != nil {
-                startedAt = store.upsertDraft(previous: startedAt, timestamp: ts, title: headerTitle, body: body) ?? startedAt
-            }
-        }
+        pendingTS = ts
+        _ = saveNow(timestamp: ts)
+        mirror()
     }
 
     /// File the draft, or just close a filed entry.
     private func finish() {
-        saveNow()
-        if isDraft {
-            let ts = current?.ts ?? startedAt
-            if let draft = store.inboxDrafts.first(where: { $0.ts == ts }) { store.fileDraft(draft) }
+        guard saveNow() else { return }
+        if isDraft, let current {
+            guard store.fileDraft(current) != nil else { reportFailure(); return }
+            onRemove()
         }
         dismiss()
     }
@@ -321,6 +372,8 @@ private struct StampSheet: View {
         }
         .padding(.horizontal, 26).padding(.top, 16)
         .background(q.pageColor.ignoresSafeArea())
+        .preferredColorScheme(q.colorScheme)
+        .environment(\.colorScheme, q.colorScheme)
         .presentationDetents([.large])
     }
 }

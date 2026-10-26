@@ -184,7 +184,15 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   each read cost ~25 ms a file on a file-provider folder and made a journal of a
   few thousand entries take most of a minute to open; iCloud is only consulted
   when a file turns out to be missing. Keep it that way.
-  Each edit carries `(file, index, raw)` and adopts Rust's returned reference.
+  Each edit carries `(file, index, raw)` and adopts Rust's returned reference. The
+  iPhone composer uses `saveEditorEntry` / `createEditorDraft`, which return the
+  write's own reference. Save failures keep the editor open; recovery creates an
+  explicit, distinct Inbox copy. Retiming updates the navigation reference and
+  stays in the composer. `WritingTextEditor` styles the live markdown (markers
+  remain editable) and supplies UTF-16 caret positions to its desk mirror.
+  Reader/composer pages claim the monitor by owner token so background list
+  refreshes cannot replace them. Desk mode disables auto-lock only while connected,
+  active, unlocked and unpaused; this is independent of brightness dimming.
   Native media, backup, bookmarks, watchers, widgets, sharing and reminders
   remain Swift. `make apple` builds the Rust XCFramework and both unsigned apps;
   `make apple-test` runs hostless XCTest. Requires macOS, full Xcode and rustup.

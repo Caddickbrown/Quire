@@ -16,6 +16,7 @@ import SwiftUI
 extension View {
     /// Arrow-key selection over `entries` with a per-row letter handler.
     /// `index` is the host's selection, so the list can highlight and scroll to it.
+    /// `autoSelect` adopts the first row only while a monitor is connected.
     func qKeyList(entries: [Entry],
                   index: Binding<Int?>,
                   listTitle: String,
@@ -38,31 +39,47 @@ private struct QKeyList: ViewModifier {
     let onOpen: (Entry) -> Void
     let letter: (Entry, String) -> Bool
 
+    @ObservedObject private var monitor = ExternalDisplayModel.shared
+
+    private var selectsAutomatically: Bool { autoSelect && monitor.isConnected }
+
     @State private var routerID = UUID()
-    @State private var didAutoSelect = false
+    @State private var visible = false
+    @State private var published: ExternalDisplayContent?
 
     func body(content: Content) -> some View {
         content
             .background(KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false))
-            .onAppear { adopt(); register(); publish() }
+            .onAppear {
+                visible = true
+                if !monitor.isConnected { index = nil }
+                adopt(); register(); publish()
+            }
+            .task { adopt(); register(); publish() }
+            .onChange(of: monitor.isConnected) { _, connected in
+                if !connected { index = nil }
+                adopt(); register(); publish()
+            }
             .onChange(of: index) { _, _ in register(); publish() }
-            .onChange(of: entries.map(\.ts)) { _, _ in
+            .onChange(of: entries) { _, _ in
                 adopt()
                 if let i = index, i >= entries.count { index = entries.isEmpty ? nil : entries.count - 1 }
                 register(); publish()
             }
             .onDisappear {
+                visible = false
                 KeyCommandRouter.shared.unregister(routerID)
-                ExternalDisplayModel.shared.clearBrowse(listTitle: listTitle)
+                if let published { ExternalDisplayModel.shared.clear(ifShowing: published) }
             }
     }
 
-    /// A list opens with its top row selected, so ↵ and the letters work at once.
+    /// Desk mode starts ready for ↵; phone-only lists wait for keyboard movement.
     private func adopt() {
-        if autoSelect, !didAutoSelect, index == nil, !entries.isEmpty { index = 0; didAutoSelect = true }
+        if visible, selectsAutomatically, index == nil, !entries.isEmpty { index = 0 }
     }
 
     private func register() {
+        guard visible else { return }
         // An empty list leaves the keys to the screen beneath (↓ from Look back
         // still goes to the Journal).
         // It keeps its place in the stack (see `deactivate`), so its first row
@@ -72,7 +89,7 @@ private struct QKeyList: ViewModifier {
             moveUp: { move(-1) },
             moveDown: { move(1) },
             open: { if let e = selected { onOpen(e) } },
-            clear: { if index != nil, !autoSelect { index = nil } else { KeyCommandRouter.shared.onBack?() } },
+            clear: { if index != nil, !selectsAutomatically { index = nil } else { KeyCommandRouter.shared.onBack?() } },
             key: { k in
                 // The terminal's j/k: down and up, as the arrows.
                 if k == "j" { move(1); return true }
@@ -96,13 +113,24 @@ private struct QKeyList: ViewModifier {
     }
 
     private func publish() {
-        guard let i = index, entries.indices.contains(i) else {
-            ExternalDisplayModel.shared.clearBrowse(listTitle: listTitle)
+        guard visible else { return }
+        let i = index.flatMap { entries.indices.contains($0) ? $0 : nil }
+        guard selectsAutomatically || i != nil else {
+            if let published { ExternalDisplayModel.shared.clear(ifShowing: published) }
             return
         }
-        ExternalDisplayModel.shared.present(.browsing(listTitle: listTitle,
-                                                      rows: ExternalRow.rows(from: entries), selected: i))
+        // Bound the mirror's payload while keeping the selected row visible
+        // in journals larger than the monitor's 300-row window.
+        let selected = i ?? 0
+        let start = min(max(0, selected - ExternalRow.maxRows / 2), max(0, entries.count - ExternalRow.maxRows))
+        let end = min(entries.count, start + ExternalRow.maxRows)
+        let content = ExternalDisplayContent.browsing(listTitle: listTitle,
+            rows: ExternalRow.rows(from: Array(entries[start..<end])), selected: selected - start,
+            offset: start, total: entries.count)
+        published = content
+        ExternalDisplayModel.shared.present(content)
     }
+
 }
 
 private struct QKeyBlocker: ViewModifier {

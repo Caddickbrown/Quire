@@ -51,7 +51,7 @@ imports prepared entries, runs cleanup, manages templates and saved searches,
 and determines orphan media. There is no Swift journal parser or Swift
 read-modify-write store in parallel with Rust.
 
-`AppleVault` coordinates reads, atomic replacements, deletions and renames with
+`AppleVault` uses plain reads and coordinates atomic replacements, deletions and renames with
 `NSFileCoordinator` within the folder access held by the store. It rejects
 paths that escape the root, including symlinks. It exposes no local filesystem
 path to Rust, so the Rust ffmpeg and filesystem backup paths cannot run on iOS.
@@ -64,12 +64,21 @@ rejected. The native shell uses `inbox/YYYY/MM/DD.md`,
 `journal/YYYY/MM/DD.md`, `split/<tag>/YYYY/MM/DD.md`, and `.quire/`. Old
 `inbox.md`, `<tag>.md`, and `.nook/` follow the core's existing migration rules.
 
+The iPhone composer keeps failed writes open for retry or an explicit recovery
+copy in Inbox. New entries start in the title; Return moves into the body.
+The timestamp button retimes without closing the composer. The native editor
+styles markdown in place, with editable markers, and shares its UTF-16 caret
+with a styled monitor mirror. Desk mode stays awake independently of dimming
+while connected, active, unlocked and unpaused.
+
 ## Verification status
 
 Rust bridge tests run on Linux, including callback storage, migration,
 stale-index relocation, stale-raw rejection, retiming, and unreadable data.
 The Swift sources, plist files and generated project can be checked here.
-`make apple` and `make apple-test` pass (37 tests) and the iPhone app has been
+The iOS Simulator build and macOS XCTest pass (42 tests, including continued
+saves after retiming, same-second drafts, split journals and conflict recovery);
+`make test`, `make check` and Apple project wiring validation also pass. The iPhone app has been
 built signed and run on a device with a real journal. iCloud, widgets, share
 capture, media capture and the external display still need a signed-device
 check; the iPad and Mac shells have not had the design pass.

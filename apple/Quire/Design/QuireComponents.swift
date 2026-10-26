@@ -113,7 +113,11 @@ struct QMasthead: View {
             .overlay(alignment: .bottom) { QRule() }
         } else {
             HStack(alignment: .firstTextBaseline, spacing: 18) {
-                Text("Quire").font(q.writing(22, italic: true)).foregroundStyle(q.inkColor)
+                HStack(spacing: 8) {
+                    QMark().stroke(q.inkColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .frame(width: 16, height: 18).accessibilityHidden(true)
+                    Text("Quire").font(q.writing(22, italic: true)).foregroundStyle(q.inkColor)
+                }
                 Spacer()
                 QLink(title: "Search", action: onSearch)
                 QLink(title: "Settings", action: onSettings)
@@ -263,7 +267,7 @@ struct QTabBar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .overlay(alignment: .trailing) { Rectangle().fill(q.lineColor).frame(width: 1) }
+        .overlay(alignment: .trailing) { if target != .lookBack { Rectangle().fill(q.lineColor).frame(width: 1) } }
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
@@ -311,7 +315,8 @@ struct QEntryRow: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.vertical, selected ? 4 : 0)
+        .padding(.leading, 8)
+        .padding(.vertical, 4)
         .background(selected ? q.accentSoftColor : Color.clear)
         .overlay(alignment: .leading) {
             if selected { Rectangle().fill(q.accentColor).frame(width: 3) }

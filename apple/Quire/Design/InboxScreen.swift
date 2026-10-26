@@ -14,6 +14,7 @@ import SwiftUI
 struct InboxScreen: View {
     @EnvironmentObject private var store: JournalStore
     @Environment(\.quire) private var q
+    @ObservedObject private var monitor = ExternalDisplayModel.shared
 
     var open: (EntryRef) -> Void
     var edit: (EntryRef) -> Void
@@ -57,7 +58,7 @@ struct InboxScreen: View {
                     Spacer()
                     if let _ = store.inboxDrafts.first {
                         QLink(title: "Random") {
-                            if let draft = store.inboxDrafts.randomElement() { open(EntryRef(entry: draft, source: .inbox)) }
+                            if let draft = store.inboxDrafts.randomElement() { openDraft(draft) }
                         }
                     }
                     if store.inboxDrafts.count > 1 {
@@ -80,7 +81,7 @@ struct InboxScreen: View {
                                     .font(q.label(11)).foregroundStyle(q.mutedColor)
                                 ForEach(day.entries) { entry in
                                     QEntryRow(entry: entry, selected: entry.id == selectedID,
-                                              onOpen: { open(EntryRef(entry: entry, source: .inbox)) })
+                                              onOpen: { openDraft(entry) })
                                 }
                             }
                         }
@@ -94,7 +95,7 @@ struct InboxScreen: View {
             if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
         }
         .qKeyList(entries: flat, index: $selected, listTitle: "Inbox", autoSelect: true,
-                  onOpen: { open(EntryRef(entry: $0, source: .inbox)) },
+                  onOpen: { openDraft($0) },
                   letter: { entry, key in
                       switch key {
                       case "f": store.fileDraft(entry); return true
@@ -114,6 +115,11 @@ struct InboxScreen: View {
             Button("File all") { _ = store.fileAllDrafts() }
         } message: { Text("Each goes to the day in its own timestamp.") }
         }
+    }
+
+    private func openDraft(_ entry: Entry) {
+        let ref = EntryRef(entry: entry, source: .inbox)
+        if monitor.isConnected { edit(ref) } else { open(ref) }
     }
 
     private var kicker: String {

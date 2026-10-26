@@ -56,7 +56,7 @@ struct SearchScreen: View {
         .onChange(of: selectedID) { _, id in
             if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
         }
-        .qKeyList(entries: shownResults.map(\.entry), index: $selected, listTitle: "Search",
+        .qKeyList(entries: shownResults.map(\.entry), index: $selected, listTitle: "Search", autoSelect: true,
                   onOpen: { entry in if let ref = shownResults.first(where: { $0.entry.id == entry.id }) { onOpen(ref) } })
         .onChange(of: query) { _, _ in selected = nil }
         .onAppear {

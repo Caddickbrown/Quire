@@ -18,6 +18,7 @@ struct ComposeTarget: Identifiable {
 }
 
 struct PhoneRoot: View {
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
     @Environment(\.quire) private var q
@@ -61,11 +62,16 @@ struct PhoneRoot: View {
         }
         .background(KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false))
         .qKeyBlocker(active: composing != nil || retiming != nil || showSearch || showSettings || showMedia)
-        .fullScreenCover(item: $composing) { target in
-            ComposerScreen(target: target)
+        .fullScreenCover(item: $composing, onDismiss: { restoreMonitorPage() }) { target in
+            ComposerScreen(target: target, onUpdate: { updated in
+                if target.ref != nil, !path.isEmpty { path[path.count - 1] = updated }
+            }, onRemove: {
+                if target.ref != nil, !path.isEmpty { path.removeLast() }
+            })
         }
         .sheet(item: $retiming) { ref in
-            RetimeSheet(ref: ref)
+            RetimeSheet(ref: ref, onUpdate: { replaceReference(ref, with: $0) })
+                .environment(\.quire, q)
         }
         .sheet(isPresented: $showSearch) {
             SearchScreen(onOpen: { ref in
@@ -116,6 +122,7 @@ struct PhoneRoot: View {
             ExternalDisplayModel.shared.store = store
             ExternalDisplayModel.shared.colorScheme = q.colorScheme
         }
+        .onChange(of: scenePhase) { _, _ in ExternalDisplayModel.shared.updateIdleTimer() }
         .onChange(of: q.id) { _, _ in ExternalDisplayModel.shared.colorScheme = q.colorScheme }
         .onAppear(perform: registerRootKeys)
         .onAppear {
@@ -133,6 +140,7 @@ struct PhoneRoot: View {
         case .today:
             TodayScreen(open: open, compose: { composing = ComposeTarget(ref: nil) },
                         showInbox: { tab = .inbox }, search: { showSearch = true }, settings: { showSettings = true })
+                .onAppear { ExternalDisplayModel.shared.present(.idle) }
         case .inbox:
             InboxScreen(open: open, edit: { composing = ComposeTarget(ref: $0) }, retime: { retiming = $0 },
                         search: { showSearch = true }, settings: { showSettings = true })
@@ -157,6 +165,17 @@ struct PhoneRoot: View {
             }
             .accessibilityElement(children: .combine)
         }
+    }
+
+    private func restoreMonitorPage() {
+        if let ref = path.last {
+            ExternalDisplayModel.shared.present(.reading(title: ref.entry.displayTitle,
+                date: QDate.date(ref.entry.ts) ?? Date(), text: ref.entry.body, isStarred: ref.entry.isStarred))
+        } else if tab == .today { ExternalDisplayModel.shared.present(.idle) }
+    }
+
+    private func replaceReference(_ old: EntryRef, with updated: EntryRef) {
+        path = path.map { $0 == old ? updated : $0 }
     }
 
     private func open(_ ref: EntryRef) { path.append(ref) }

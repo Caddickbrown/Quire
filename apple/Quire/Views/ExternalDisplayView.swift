@@ -38,13 +38,13 @@ enum ExternalDisplayContent: Equatable {
     /// hint bar tells you which keys get you out of it.
     case idle
     /// A list being arrowed through. Stats give way to this on the first ↑/↓.
-    case browsing(listTitle: String, rows: [ExternalRow], selected: Int)
+    case browsing(listTitle: String, rows: [ExternalRow], selected: Int, offset: Int = 0, total: Int? = nil)
     /// The composer's live text, republished as you type. `caret` is the
     /// editor's caret (a UTF-16 offset), nil while the body isn't focused.
     case composing(title: String, date: Date, text: String, caret: Int?)
     /// An existing entry open in its editor — the same live mirror as the
     /// composer, with the entry editor's own key hints.
-    case editing(title: String, date: Date, text: String, caret: Int?, isStarred: Bool)
+    case editing(title: String, date: Date, text: String, caret: Int?, isStarred: Bool, isDraft: Bool = false)
     /// An entry being read, rendered with its media inline.
     case reading(title: String, date: Date, text: String, isStarred: Bool)
 }
@@ -60,8 +60,6 @@ struct ExternalRow: Equatable, Identifiable {
     let time: String
     let body: String
 
-    /// Cap what's handed over: the monitor shows a window of about a dozen
-    /// rows, so shipping a whole journal would be copying for nobody.
     static let maxRows = 300
 
     static func rows(from entries: [Entry]) -> [ExternalRow] {
@@ -111,7 +109,18 @@ struct ExternalRow: Equatable, Identifiable {
     /// keystroke in the composer would publish to nobody.
     private var latest: ExternalDisplayContent = .idle
 
-    func present(_ new: ExternalDisplayContent) {
+    private var pageOwner: UUID?
+    private var pendingUnderlay: ExternalDisplayContent?
+
+    /// Lists can refresh beneath a presented page; they must not replace it.
+    func present(_ new: ExternalDisplayContent, owner: UUID? = nil) {
+        if let owner { pageOwner = owner }
+        else if pageOwner != nil {
+            switch new {
+            case .browsing, .idle: pendingUnderlay = new; return
+            default: break
+            }
+        }
         latest = new
         // Nothing goes to the monitor while the app lock is up. The veil only
         // covers the device — the monitor is a window of its own, and left to
@@ -121,10 +130,19 @@ struct ExternalRow: Equatable, Identifiable {
         if isConnected { content = new }
     }
 
+    func releasePage(owner: UUID) {
+        guard pageOwner == owner else { return }
+        pageOwner = nil
+        let next = pendingUnderlay ?? .idle
+        pendingUnderlay = nil
+        present(next)
+    }
+
     /// The app lock engaged or lifted (called by AppLockManager): the monitor
     /// falls back to the idle stats screen while covered, and picks up where it
     /// left off once the app is unlocked.
     func applyLockState(locked: Bool) {
+        updateIdleTimer()
         guard isConnected else { return }
         content = locked || isPaused ? .idle : latest
     }
@@ -134,6 +152,7 @@ struct ExternalRow: Equatable, Identifiable {
     /// incoming view has already claimed the screen, which would otherwise
     /// blank a display that just started showing something.
     func clear(ifShowing shown: ExternalDisplayContent) {
+        if pendingUnderlay == shown { pendingUnderlay = nil }
         guard latest == shown else { return }
         present(.idle)
     }
@@ -152,6 +171,7 @@ struct ExternalRow: Equatable, Identifiable {
     func togglePause() {
         guard isConnected else { return }
         isPaused.toggle()
+        updateIdleTimer()
         content = isPaused || AppLockManager.shared.showsVeil ? .idle : latest
     }
     func adjustTextSize(_ delta: Int) {
@@ -173,12 +193,22 @@ struct ExternalRow: Equatable, Identifiable {
     /// only from *that* list's browse screen, so a list disappearing behind a
     /// pushed entry doesn't yank the entry off the monitor.
     func clearBrowse(listTitle: String) {
-        if case .browsing(let title, _, _) = latest, title == listTitle {
+        if case .browsing(let title, _, _, _, _) = latest, title == listTitle {
             present(.idle)
         }
     }
 
+    #if !os(iOS)
+    func updateIdleTimer() {}
+    #endif
+
     #if os(iOS)
+
+    /// Staying awake is independent of dimming the phone panel.
+    func updateIdleTimer() {
+        UIApplication.shared.isIdleTimerDisabled = isConnected && !isPaused
+            && !AppLockManager.shared.showsVeil && UIApplication.shared.applicationState == .active
+    }
 
     /// The user's brightness before we touched it, so unplugging puts it back
     /// exactly. Nil whenever we haven't dimmed.
@@ -187,6 +217,7 @@ struct ExternalRow: Equatable, Identifiable {
 
     func displayDidConnect() {
         isConnected = true
+        updateIdleTimer()
         // Not `latest` while the app is locked or veiled: a phone plugged in
         // from the lock screen would otherwise put the open entry straight
         // up on the monitor. `applyLockState` restores it on unlock.
@@ -197,6 +228,7 @@ struct ExternalRow: Equatable, Identifiable {
     func displayDidDisconnect() {
         ExternalSettingsModel.shared.close()
         isConnected = false
+        updateIdleTimer()
         content = .idle
         restoreBrightness()
     }

@@ -40,6 +40,81 @@ final class JournalStoreTests: XCTestCase {
         (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
+    // MARK: Editor identity, retiming and conflict recovery
+
+    func testEditorCanKeepSavingAfterCrossDayRetime() throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        write("[2026-05-10 08:00:00] original\nbody\n", to: day(base, "2026-05-10"))
+        store.reload()
+        let original = try XCTUnwrap(CoreJournal(base: base).load().first?.entry)
+        let moved = try XCTUnwrap(store.saveEditorEntry(original, source: .archive(date: original.date),
+            text: "[2026-05-11 09:00:00] moved\nbody"))
+        XCTAssertEqual(moved.source, .archive(date: "2026-05-11"))
+        XCTAssertEqual(moved.entry.file, "journal/2026/05/11.md")
+        let edited = try XCTUnwrap(store.saveEditorEntry(moved.entry, source: moved.source,
+            text: "[2026-05-11 09:00:00] moved\ncontinued writing"))
+        XCTAssertTrue(read(day(base, "2026-05-11")).contains("continued writing"))
+        XCTAssertEqual(edited.entry.raw, "[2026-05-11 09:00:00] moved\ncontinued writing")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: day(base, "2026-05-10").path))
+    }
+
+    func testEditorDraftRetimeKeepsReferenceWithSameSecondTwin() throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let first = try XCTUnwrap(store.createEditorDraft(timestamp: "2026-05-10 08:00:00", title: "first", body: "keep"))
+        let second = try XCTUnwrap(store.createEditorDraft(timestamp: first.ts, title: "second", body: "edit"))
+        XCTAssertNotEqual(first.ts, second.ts)
+        let moved = try XCTUnwrap(store.saveEditorEntry(second, source: .inbox,
+            text: "[2026-05-10 08:00:00] second\nedit"))
+        let next = try XCTUnwrap(store.saveEditorEntry(moved.entry, source: moved.source,
+            text: "[2026-05-10 08:00:00] second\nmore"))
+        XCTAssertTrue(next.entry.raw.contains("more"))
+        XCTAssertEqual(store.inboxDrafts.count, 2)
+        XCTAssertTrue(store.inboxDrafts.contains { $0.suffix == "first" && $0.body == "keep" })
+    }
+
+    func testConflictRecoveryCreatesDistinctDraftAndPreservesExternalEdit() throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let original = try XCTUnwrap(store.createEditorDraft(timestamp: "2026-05-10 08:00:00", title: "original", body: "body"))
+        let file = try XCTUnwrap(original.file)
+        let external = "[2026-05-10 08:00:00] original\nchanged on another device\n"
+        write(external, to: base.appendingPathComponent(file))
+        XCTAssertNil(store.saveEditorEntry(original, source: .inbox,
+            text: "[2026-05-10 08:00:00] original\nmy unsaved text"))
+        XCTAssertNotNil(store.lastWriteError)
+        let copy = try XCTUnwrap(store.createEditorDraft(timestamp: original.ts, title: "original", body: "my unsaved text"))
+        XCTAssertNotEqual(copy.ts, original.ts)
+        XCTAssertTrue(store.inboxDrafts.contains { $0.body == "changed on another device" })
+        XCTAssertTrue(store.inboxDrafts.contains { $0.body == "my unsaved text" })
+    }
+
+    func testSplitEditorCanKeepSavingAfterRetime() throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        write("[2026-05-10 08:00:00] split\nbody\n", to: base.appendingPathComponent("split/work/2026/05/10.md"))
+        store.reload()
+        let original = try XCTUnwrap(CoreJournal(base: base).load().first?.entry)
+        let moved = try XCTUnwrap(store.saveEditorEntry(original, source: .journal(name: "work"),
+            text: "[2026-05-11 08:00:00] split\nbody"))
+        XCTAssertEqual(moved.source, .journal(name: "work"))
+        XCTAssertEqual(moved.entry.file, "split/work/2026/05/11.md")
+        XCTAssertNotNil(store.saveEditorEntry(moved.entry, source: moved.source,
+            text: "[2026-05-11 08:00:00] split\ncontinued"))
+        XCTAssertTrue(read(base.appendingPathComponent("split/work/2026/05/11.md")).contains("continued"))
+    }
+
+    func testEditorFailureDoesNotReturnPreviousSuccessfulWrite() throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let original = try XCTUnwrap(store.createEditorDraft(timestamp: "2026-05-10 08:00:00", title: "first", body: "body"))
+        write("[2026-05-10 08:00:00] replaced\nexternal\n", to: base.appendingPathComponent(try XCTUnwrap(original.file)))
+        XCTAssertNil(store.saveEditorEntry(original, source: .inbox, text: "[2026-05-10 08:00:00] first\nlocal"))
+        XCTAssertFalse(store.deleteEditorDraft(original))
+        XCTAssertTrue(read(base.appendingPathComponent(try XCTUnwrap(original.file))).contains("external"))
+    }
+
     // MARK: D1 — an unreadable file is not an empty one
 
     func testReadForRewriteSeparatesMissingFromUnreadable() throws {

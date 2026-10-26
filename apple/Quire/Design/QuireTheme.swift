@@ -72,6 +72,10 @@ struct QuireTheme: Decodable, Identifiable, Equatable {
         return all.first { $0.id == wanted } ?? all[0]
     }
 
+    /// The same font is used by the native editor and its monitor mirror.
+    var editorFontName: String { isMarathon ? "ArchivoRoman-Regular" : "Newsreader16pt-Regular" }
+    var accentInkColor: Color { Color(hex: accentInk) }
+
     var pageColor: Color { Color(hex: page) }
     var groundColor: Color { Color(hex: ground) }
     var chromeColor: Color { Color(hex: chrome) }

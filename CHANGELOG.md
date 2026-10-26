@@ -21,6 +21,15 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Changed
+- **iPhone**: the composer styles emphasis, bold, code and theme-coloured tags as you type, starts new entries in the title, moves Return to the body, and lets you change the date without leaving the editor.
+
+### Fixed
+- **iPhone**: lists select a row automatically only with an external display connected; unplugging clears the selection, while phone-only keyboard navigation still highlights the row you move to.
+- **iPhone**: failed saves keep edits open with retry and recovery-copy actions; retiming carries the entry's new reference into subsequent edits, and filing, closing and save confirmations respect write failures.
+- **iPhone**: external desk mode stays awake while active, opens Inbox drafts for editing, follows list navigation even when empty, tracks the actual body caret without jumping between layouts, and shows draft filing shortcuts. On this day uses the same entries as the phone.
+- **iPhone**: calendars follow the chosen theme, classic mastheads include the Quire mark, selected rows leave room for the time, Marathon's final tab has no trailing divider, and tag badges use theme colours.
+
 ## [0.10.1] — 2026-10-25
 
 ### Fixed

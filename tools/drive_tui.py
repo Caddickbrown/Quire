@@ -36,7 +36,13 @@ def paste(s, t=0.6): send("\x1b[200~" + s + "\x1b[201~", t)
 def click(x, y, t=0.5): send(f"\x1b[<0;{x + 1};{y + 1}M\x1b[<0;{x + 1};{y + 1}m", t)   # 0-based cell, SGR mouse
 checks = []
 def check(name, cond): checks.append((name, bool(cond)))
-pump(1.0)
+# Cold starts can outlast one second while Xcode/cargo are building. Wait
+# for the same readiness assertion, with a deadline so a broken screen fails.
+startup_deadline = time.monotonic() + 10
+while time.monotonic() < startup_deadline:
+    pump(0.1)
+    if seen("ON THIS DAY") and seen("A PROMPT") and seen("INBOX"):
+        break
 check("today screen drew", seen("ON THIS DAY") and seen("A PROMPT") and seen("INBOX"))
 send("n"); check("write screen", seen("saves to the inbox"))
 send("Smoke test"); send(ENTER); send("Hello from the pty, a list:"); send(ENTER); send("- one"); send(ENTER); send("two @gar", 0.5)

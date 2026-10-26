@@ -453,11 +453,15 @@ import UIKit
 
 private func platformFont(_ raw: String, _ size: CGFloat, scaled: Bool = true) -> UIFont {
     let base: UIFont
-    switch WritingFont(rawValue: raw) ?? .lato {
-    case .lato:   base = UIFont(name: "Lato-Regular", size: size) ?? .systemFont(ofSize: size)
-    case .system: base = .systemFont(ofSize: size)
-    case .serif:  base = designed(size, .serif)
-    case .mono:   base = .monospacedSystemFont(ofSize: size, weight: .regular)
+    if let custom = UIFont(name: raw, size: size) {
+        base = custom
+    } else {
+        switch WritingFont(rawValue: raw) ?? .lato {
+        case .lato:   base = UIFont(name: "Lato-Regular", size: size) ?? .systemFont(ofSize: size)
+        case .system: base = .systemFont(ofSize: size)
+        case .serif:  base = designed(size, .serif)
+        case .mono:   base = .monospacedSystemFont(ofSize: size, weight: .regular)
+        }
     }
     // Track Dynamic Type: the px preference is the base size; the system's
     // text-size setting scales it, so accessibility sizes reach the editor too
@@ -498,6 +502,7 @@ struct WritingTextEditor: UIViewRepresentable {
     /// view as the text grows.
     var mirror = false
     var mirrorCaret: Int? = nil
+    var focused: Binding<Bool>? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
@@ -526,6 +531,7 @@ struct WritingTextEditor: UIViewRepresentable {
     func updateUIView(_ tv: UITextView, context: Context) {
         context.coordinator.text = $text
         context.coordinator.textView = tv
+        context.coordinator.focused = focused
         if mirror { updateMirror(tv, context: context); return }
         tv.isScrollEnabled = !sizeToFit
         // Restyle only when something actually changed — the coordinator has
@@ -557,6 +563,15 @@ struct WritingTextEditor: UIViewRepresentable {
         context.coordinator.focusParagraph = focusParagraph
         context.coordinator.tagSuggestions = tagSuggestions
         context.coordinator.onCaretChange = onCaretChange
+        // UIKit focus callbacks update SwiftUI state; wait until this update
+        // has finished and the text view is attached to its window.
+        if focused != nil {
+            DispatchQueue.main.async { [weak tv, weak coordinator = context.coordinator] in
+                guard let tv, tv.window != nil, let focused = coordinator?.focused else { return }
+                if focused.wrappedValue, !tv.isFirstResponder { tv.becomeFirstResponder() }
+                else if !focused.wrappedValue, tv.isFirstResponder { tv.resignFirstResponder() }
+            }
+        }
     }
 
     /// The mirror's update: merge the new text in as one edit, restyle what
@@ -722,6 +737,7 @@ struct WritingTextEditor: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
+        var focused: Binding<Bool>?
         var text: Binding<String>
         weak var textView: UITextView?
         /// Re-applies styling with current settings (the focus dim tracks the caret).
@@ -772,8 +788,8 @@ struct WritingTextEditor: UIViewRepresentable {
             reportCaret(textView)
         }
 
-        func textViewDidBeginEditing(_ textView: UITextView) { reportCaret(textView) }
-        func textViewDidEndEditing(_ textView: UITextView) { onCaretChange?(nil) }
+        func textViewDidBeginEditing(_ textView: UITextView) { focused?.wrappedValue = true; reportCaret(textView) }
+        func textViewDidEndEditing(_ textView: UITextView) { focused?.wrappedValue = false; onCaretChange?(nil) }
 
         /// The end of the selection, or nil while the keyboard is elsewhere
         /// (the title field, say) — the monitor shouldn't blink a caret the

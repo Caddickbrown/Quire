@@ -10,6 +10,7 @@
 import SwiftUI
 
 struct TagsView: View {
+    @Environment(\.quire) private var q
     @EnvironmentObject private var store: JournalStore
     @State private var searchText = ""
     @State private var selectedTag: String?
@@ -108,35 +109,28 @@ struct TagsView: View {
     }
 
     private func chip(_ item: (tag: String, count: Int), selected: Bool) -> some View {
-        let color = Self.color(for: item.tag)
+        let color = q.accentColor
         return HStack(spacing: 6) {
             Text(item.tag)
                 .fontWeight(.medium)
-                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(color))
+                .foregroundStyle(selected ? AnyShapeStyle(q.onAccentColor) : AnyShapeStyle(q.accentInkColor))
             Text("\(item.count)")
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.9)) : AnyShapeStyle(.secondary))
+                .foregroundStyle(selected ? AnyShapeStyle(q.onAccentColor.opacity(0.9)) : AnyShapeStyle(q.mutedColor))
         }
         .font(.callout)
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .background(selected ? color : color.opacity(0.16), in: Capsule())
+        .background(selected ? color : q.accentSoftColor, in: Capsule())
         .overlay(Capsule().strokeBorder(color.opacity(selected ? 0 : 0.35), lineWidth: 1))
     }
 
-    /// A palette so the tags aren't a sea of one colour; each tag maps to a stable colour.
-    static let palette: [Color] = [
-        .blue, .teal, .green, .orange, .pink, .purple, .red, .indigo, .mint, .cyan, .brown,
-    ]
 
-    static func color(for tag: String) -> Color {
-        let hash = tag.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
-        return palette[hash % palette.count]
-    }
 }
 
 /// Still reachable via Route.tag; a plain list of a tag's entries.
 struct TagDetailView: View {
+    @Environment(\.quire) private var q
     @EnvironmentObject private var store: JournalStore
     let tag: String
 

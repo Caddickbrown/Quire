@@ -63,11 +63,11 @@ struct ExternalDisplayRoot: View {
             switch model.content {
             case .idle:
                 DeskToday(metrics: metrics)
-            case .browsing(let listTitle, let rows, let selected):
-                DeskBrowse(listTitle: listTitle, rows: rows, selected: selected, metrics: metrics)
+            case .browsing(let listTitle, let rows, let selected, let offset, let total):
+                DeskBrowse(listTitle: listTitle, rows: rows, selected: selected, offset: offset, total: total ?? rows.count, metrics: metrics)
             case .composing(let title, let date, let text, let caret):
                 DeskEntry(title: title, date: date, text: text, isStarred: false, live: true, caret: caret, metrics: metrics)
-            case .editing(let title, let date, let text, let caret, let isStarred):
+            case .editing(let title, let date, let text, let caret, let isStarred, _):
                 DeskEntry(title: title, date: date, text: text, isStarred: isStarred, live: true, caret: caret, metrics: metrics)
             case .reading(let title, let date, let text, let isStarred):
                 DeskEntry(title: title, date: date, text: text, isStarred: isStarred, live: false, caret: nil, metrics: metrics)
@@ -87,7 +87,7 @@ struct ExternalDisplayRoot: View {
             return [.init(key: "n", label: "New"), .init(key: "i", label: "Inbox"), .init(key: "j", label: "Journal"),
                     .init(key: "l", label: "Look back"), .init(key: "/", label: "Search"), .init(key: "r", label: "Random"),
                     .init(key: ",", label: "Settings"), .init(key: "?", label: "Hints")]
-        case .browsing(let listTitle, _, _):
+        case .browsing(let listTitle, _, _, _, _):
             let base: [ShortcutHint] = [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Open"), .init(key: "⎋", label: "Back")]
             switch listTitle {
             case "Inbox":
@@ -102,9 +102,12 @@ struct ExternalDisplayRoot: View {
         case .composing:
             // No `?` or `,` here: with the editor focused they type.
             return [.init(key: "^J", label: "File"), .init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"),
-                    .init(key: "^F", label: "Focus"), .init(key: "^D", label: "Discard"), .init(key: "⎋", label: "Done")]
-        case .editing:
-            return [.init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"), .init(key: "^F", label: "Focus"), .init(key: "⎋", label: "Back")]
+                    .init(key: "^F", label: "Focus"), .init(key: "^P", label: "Prompt"), .init(key: "^D", label: "Discard"), .init(key: "⎋", label: "Done")]
+        case .editing(_, _, _, _, _, let isDraft):
+            return (isDraft ? [.init(key: "^J", label: "File")] : []) +
+                [.init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"), .init(key: "^F", label: "Focus"),
+                 .init(key: "^P", label: "Prompt")] +
+                (isDraft ? [.init(key: "^D", label: "Discard")] : []) + [.init(key: "⎋", label: "Back")]
         case .reading:
             return [.init(key: "e", label: "Edit"), .init(key: "*", label: "Star"), .init(key: "t", label: "Time"),
                     .init(key: "d", label: "Delete"), .init(key: "⎋", label: "Back"), .init(key: ",", label: "Settings")] + common
@@ -198,7 +201,7 @@ private struct DeskToday: View {
     @EnvironmentObject private var store: JournalStore
     @Environment(\.quire) private var q
     @AppStorage("quirePromptOffset") private var promptOffset = 0
-    @State private var snapshot = QuireSnapshot.load()
+
 
     private var prompt: String {
         let day = Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 0
@@ -249,18 +252,21 @@ private struct DeskToday: View {
                     .lineLimit(2)
                 Rectangle().fill(q.lineColor).frame(height: 1)
             }
-            if let preview = snapshot.onThisDayPreview, !preview.isEmpty, let ago = snapshot.onThisDayYearsAgo {
+            if let past = store.qOnThisDay().first {
                 VStack(alignment: .leading, spacing: metrics.caption * 0.4) {
-                    Text(q.caps("On this day, \(ago) year\(ago == 1 ? "" : "s") ago")).font(q.label(metrics.caption, weight: .medium))
-                        .tracking(metrics.caption * 0.16).foregroundStyle(q.mutedColor)
-                    Text(preview).font(q.writing(metrics.text * 0.85)).lineLimit(2)
+                    Text(q.caps("On this day · " + String(past.date.prefix(4))))
+                        .font(q.label(metrics.caption, weight: .medium)).foregroundStyle(q.mutedColor)
+                    ForEach(past.entries.prefix(2)) { entry in
+                        Text(entry.qTitle.isEmpty ? "Untitled" : entry.qTitle)
+                            .font(q.writing(metrics.text * 0.85)).lineLimit(2)
+                    }
                 }
             }
             Spacer(minLength: 0)
         }
         .padding(metrics.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear { snapshot = QuireSnapshot.load() }
+
     }
 }
 
@@ -271,6 +277,8 @@ private struct DeskBrowse: View {
     let listTitle: String
     let rows: [ExternalRow]
     let selected: Int
+    let offset: Int
+    let total: Int
     let metrics: ExternalDisplayMetrics
     @Environment(\.quire) private var q
 
@@ -289,7 +297,8 @@ private struct DeskBrowse: View {
 
     private var list: some View {
         VStack(alignment: .leading, spacing: metrics.caption) {
-            DeskHeader(kicker: "\(selected + 1) of \(rows.count)", title: listTitle, metrics: metrics)
+            DeskHeader(kicker: rows.isEmpty ? "No entries" : "\(offset + selected + 1) of \(total)", title: listTitle, metrics: metrics)
+            if rows.isEmpty { Text("No entries here yet.").font(q.writing(metrics.text)).foregroundStyle(q.mutedColor) }
             ScrollViewReader { proxy in
                 ScrollView(showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -386,29 +395,15 @@ private struct DeskEntry: View {
 
     @ViewBuilder private var bodyText: some View {
         if live {
-            ScrollView(showsIndicators: false) {
-                (Text(before) + Text("▏").foregroundColor(q.accentColor) + Text(after))
-                    .font(q.writing(metrics.text)).foregroundStyle(q.inkColor)
-                    .lineSpacing(metrics.text * 0.3)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .overlay(alignment: .topLeading) {
-                        if text.isEmpty {
-                            Text("Start writing").font(q.writing(metrics.text, italic: true)).foregroundStyle(q.faintColor)
-                        }
-                    }
-            }
-            .defaultScrollAnchor(.bottom)
+            WritingTextEditor(text: .constant(text), fontRaw: q.editorFontName,
+                              size: metrics.text, textColor: q.inkColor,
+                              lineSpacing: metrics.text * 0.3, accent: q.accentColor,
+                              mirror: true, mirrorCaret: caret)
         } else {
             MediaPreview(text: text, font: q.writing(metrics.text), textColor: q.inkColor, contentPadding: 0)
         }
     }
 
-    private var split: Int {
-        guard let caret else { return text.utf16.count }
-        return min(max(caret, 0), text.utf16.count)
-    }
-    private var before: String { String(text.utf16.prefix(split)) ?? "" }
-    private var after: String { String(text.utf16.dropFirst(split)) ?? "" }
 }
 
 #endif

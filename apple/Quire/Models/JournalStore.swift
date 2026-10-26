@@ -170,10 +170,47 @@ final class JournalStore: ObservableObject {
         e.file = lastWritten.file; e.fileIndex = lastWritten.index
         return e
     }
+    /// Editor writes return their own reference, never a shared last-write slot.
+    /// A conflict leaves the caller's text and original reference untouched.
+    func saveEditorEntry(_ original: Entry, source: EntrySource, text: String) -> (entry: Entry, source: EntrySource)? {
+        guard let result = coreMutation({ try $0.update(original, text: text) }),
+              var entry = JournalParser.parseEntries(result.raw).first else { return nil }
+        entry.file = result.file
+        entry.fileIndex = result.index
+        let destination: EntrySource
+        switch source {
+        case .archive: destination = .archive(date: entry.date)
+        default: destination = source
+        }
+        publishCoreChange()
+        return (entry, destination)
+    }
+
+    /// Always inserts a distinct draft, including for explicit conflict recovery.
+    /// Returns nil on failure instead of returning a previous timestamp as success.
+    func createEditorDraft(timestamp: String, title: String, body: String) -> Entry? {
+        let result: CoreWritten? = coreMutation { core in
+            var ts = timestamp
+            let used = Set(try core.inbox().map(\.ts))
+            while used.contains(ts) {
+                let next = Self.timestamp(after: ts)
+                guard next != ts else { throw JournalError.journalUnavailable }
+                ts = next
+            }
+            return try core.call("new", ["ts": ts, "title": title, "body": body])
+        }
+        guard let result, var entry = JournalParser.parseEntries(result.raw).first else { return nil }
+        entry.file = result.file
+        entry.fileIndex = result.index
+        publishCoreChange()
+        return entry
+    }
+
     private func coreMutation<T>(_ action: (CoreJournal) throws -> T) -> T? {
         guard let core else { lastWriteError = "The journal folder is unavailable."; return nil }
         do {
             let result = try action(core)
+            lastWriteError = nil
             lastLocalWriteAt = Date()
             journalDidChange()
             return result
@@ -1677,6 +1714,12 @@ final class JournalStore: ObservableObject {
         lastWritten = result
         publishCoreChange(reindex: reindex)
         return true
+    }
+
+    func deleteEditorDraft(_ entry: Entry) -> Bool {
+        let ok = coreMutation { try $0.delete(entry); return true } ?? false
+        if ok { publishCoreChange() }
+        return ok
     }
 
     /// Sort the inbox into date order in place (jnl cmdSort).

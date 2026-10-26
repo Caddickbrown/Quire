@@ -25,6 +25,7 @@ struct ReaderScreen: View {
     @State private var entry: Entry
     @State private var confirmDelete = false
     @State private var routerID = UUID()
+    @State private var visible = false
 
     init(ref: EntryRef, onEdit: @escaping (EntryRef) -> Void, onRetime: @escaping (EntryRef) -> Void) {
         self.ref = ref
@@ -55,10 +56,12 @@ struct ReaderScreen: View {
         }
         .background(q.pageColor)
         .toolbar(.hidden, for: .navigationBar)
+        .onChange(of: ref) { _, new in entry = new.entry; mirror() }
         .onChange(of: store.revision) { _, _ in refresh(); mirror() }
-        .onAppear { mirror(); registerKeys() }
+        .onAppear { visible = true; mirror(); registerKeys() }
         .onDisappear {
-            ExternalDisplayModel.shared.clearEntry(writing: false)
+            visible = false
+            ExternalDisplayModel.shared.releasePage(owner: routerID)
             KeyCommandRouter.shared.unregister(routerID)
         }
         .confirmationDialog("Delete this entry?", isPresented: $confirmDelete, titleVisibility: .visible) {
@@ -107,8 +110,9 @@ struct ReaderScreen: View {
 
     /// Show the entry on a connected monitor while it is open.
     private func mirror() {
+        guard visible else { return }
         ExternalDisplayModel.shared.present(.reading(
-            title: entry.displayTitle, date: QDate.date(entry.ts) ?? Date(), text: entry.body, isStarred: entry.isStarred))
+            title: entry.displayTitle, date: QDate.date(entry.ts) ?? Date(), text: entry.body, isStarred: entry.isStarred), owner: routerID)
     }
 
     /// The terminal app's keys for an open entry: e edit, * star, f file, u return
