@@ -1,0 +1,72 @@
+//
+//  .gitignore
+//  freewrite
+//
+//  Created by thorfinn on 4/5/25.
+//
+
+# Xcode
+build/
+DerivedData/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.xcuserstate
+
+# Swift Package Manager
+.build/
+Packages/
+Package.pins
+Package.resolved
+.swiftpm/xcode/package.xcworkspace/
+
+# CocoaPods
+Pods/
+Podfile.lock
+
+# Carthage
+Carthage/Build/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
+
+# Archives
+*.xcarchive
+
+# Xcode Server
+*.xcscheme
+# …except the shared schemes gen_pbxproj.py generates (they carry the widget's
+# _XCWidgetKind, without which Xcode won't launch a multi-widget extension).
+!Nook.xcodeproj/xcshareddata/xcschemes/*.xcscheme
+*.xctestrun
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# App data
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Icon?
+Icon?
+
+# Claude Code local settings
+.claude/settings.local.json
