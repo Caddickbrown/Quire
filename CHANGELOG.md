@@ -21,6 +21,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-10-26
+
 ### Changed
 - **iPhone**: the composer styles emphasis, bold, code and theme-coloured tags as you type, starts new entries in the title, moves Return to the body, and lets you change the date without leaving the editor.
 
