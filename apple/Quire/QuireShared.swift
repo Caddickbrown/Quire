@@ -12,6 +12,9 @@
 //
 
 import Foundation
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 // ActivityKit imports on macOS but its types are iOS-only, so gate on the OS.
 #if os(iOS) && canImport(ActivityKit)
 import ActivityKit
@@ -35,11 +38,16 @@ public struct QuireTimerAttributes: ActivityAttributes {
         }
     }
     public var accentRaw: String
-    public init(accentRaw: String = "blue") { self.accentRaw = accentRaw }
+    /// The Quire look (themes.json id, or "auto"); nil from an older app build.
+    public var themeID: String?
+    public init(accentRaw: String = "blue", themeID: String? = nil) {
+        self.accentRaw = accentRaw
+        self.themeID = themeID
+    }
 }
 #endif
 
-public struct QuireSnapshot: Codable {
+public struct QuireSnapshot: Codable, Equatable {
     public var currentStreak: Int = 0
     public var bestStreak: Int    = 0
     public var totalDays: Int     = 0
@@ -61,6 +69,17 @@ public struct QuireSnapshot: Codable {
     public var onThisDayYearsAgo: Int?
     public var onThisDayDate: String?
     public var onThisDayTS: String?
+    /// The next line of the teased entry's body, under its title.
+    public var onThisDayExcerpt: String?
+    /// The look the app is in (themes.json id, or "auto"), so the widget
+    /// matches it.
+    public var themeID: String?
+    /// The day (`dayKey`) the "today" figures describe. A widget showing a
+    /// later day reads today's words as 0 rather than yesterday's.
+    public var day: String?
+    /// Entries filed today, and whether anything at all was written today.
+    public var filedToday: Int?
+    public var wroteToday: Bool?
 
     public init() {}
 
@@ -84,12 +103,24 @@ public struct QuireSnapshot: Codable {
         onThisDayYearsAgo = try c.decodeIfPresent(Int.self, forKey: .onThisDayYearsAgo)
         onThisDayDate     = try c.decodeIfPresent(String.self, forKey: .onThisDayDate)
         onThisDayTS       = try c.decodeIfPresent(String.self, forKey: .onThisDayTS)
+        onThisDayExcerpt  = try c.decodeIfPresent(String.self, forKey: .onThisDayExcerpt)
+        themeID    = try c.decodeIfPresent(String.self, forKey: .themeID)
+        day        = try c.decodeIfPresent(String.self, forKey: .day)
+        filedToday = try c.decodeIfPresent(Int.self, forKey: .filedToday)
+        wroteToday = try c.decodeIfPresent(Bool.self, forKey: .wroteToday)
     }
 
     enum CodingKeys: String, CodingKey {
         case currentStreak, bestStreak, totalDays, totalEntries, totalWords
         case inboxDrafts, accentRaw, updatedAt, wordsToday, wordGoal
         case onThisDayPreview, onThisDayYearsAgo, onThisDayDate, onThisDayTS
+        case onThisDayExcerpt, themeID, day, filedToday, wroteToday
+    }
+
+    /// "2026-10-26" for a date in the device's calendar: the key `day` holds.
+    public static func dayKey(_ date: Date) -> String {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
     }
 
     /// Deep link to one entry (`quire://entry?date=…&ts=…`), used by the widget
@@ -123,5 +154,68 @@ public struct QuireSnapshot: Codable {
         else { return }
         defaults.set(data, forKey: QuireSnapshot.defaultsKey)
         defaults.synchronize()
+    }
+
+    /// The look changed in the app: tell the widgets now rather than at the
+    /// next journal rebuild.
+    public static func updateTheme(_ id: String) {
+        var snap = load()
+        guard snap.themeID != id else { return }
+        snap.themeID = id
+        snap.save()
+        reloadWidgets()
+    }
+
+    public static func reloadWidgets() {
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadAllTimelines()
+        #endif
+    }
+}
+
+/// The deck of writing prompts, and which one is up today. The offset (each
+/// "another prompt" — `p` in the app, the widget's button) lives in the App
+/// Group so the app and its widgets show the same prompt.
+public enum QuirePrompts {
+    public static let deck: [String] = [
+        "What surprised you today?",
+        "What would you tell yourself a year ago?",
+        "Describe where you are right now — all five senses.",
+        "What's the smallest thing that made you smile lately?",
+        "What are you avoiding writing about?",
+        "Who did you last have a real conversation with?",
+        "What did you almost do today?",
+        "What's changed since this time last month?",
+        "Write about something you're looking forward to.",
+        "What's a question you can't answer yet?",
+        "What did you notice on the way somewhere today?",
+        "What would you do with a free afternoon tomorrow?",
+        "What's worth remembering about this week?",
+        "Describe today in exactly three sentences.",
+        "What are you carrying that you could put down?",
+        "What did you learn the hard way recently?",
+        "Write the first paragraph of the story of today.",
+        "What sound, smell, or taste took you somewhere else?",
+        "What do you want more of? Less of?",
+        "Who deserves a thank-you you haven't sent?",
+    ]
+
+    public static let offsetKey = "quirePromptOffset"
+    public static var defaults: UserDefaults {
+        UserDefaults(suiteName: QuireSnapshot.suiteName) ?? .standard
+    }
+    public static var offset: Int { defaults.integer(forKey: offsetKey) }
+
+    /// Today's prompt (the day of the year walks the deck), `offset` rerolls on.
+    public static func prompt(on date: Date = Date(), offset: Int) -> String {
+        let day = Calendar.current.ordinality(of: .day, in: .year, for: date) ?? 0
+        let n = deck.count
+        return deck[((day + offset) % n + n) % n]
+    }
+
+    /// Another prompt, everywhere.
+    public static func next() {
+        defaults.set(offset + 1, forKey: offsetKey)
+        QuireSnapshot.reloadWidgets()
     }
 }

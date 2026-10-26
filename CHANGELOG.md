@@ -21,6 +21,16 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+- **Apple**: an On this day widget, a Lock Screen Today accessory (a ring of today's words against the goal, or the streak; figures; an inline line), and a Write a Line control that opens Today with its one-line field ready.
+- **Apple**: the Today widget's "Another prompt" button rerolls the prompt for the app and every widget.
+
+### Changed
+- **Apple**: the widgets, the Lock Screen New Draft accessory and the writing-timer Live Activity are set in Quire's design instead of Nook's: the app's theme (Marathon included), Newsreader and IBM Plex, and the mark. Small shows today's words, Medium opens on today's prompt, Large is the Today page in miniature; they turn over at midnight on their own and tint on a tinted Home Screen.
+
+### Fixed
+- **Apple**: with the word goal on but never changed, the widget compared today's words against a goal of 1 instead of 750.
+
 ## [0.11.0] — 2026-10-26
 
 ### Changed

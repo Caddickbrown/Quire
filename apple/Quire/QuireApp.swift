@@ -238,12 +238,20 @@ struct QuireApp: App {
                 )
                 // Deep links: quire://write (composer), quire://timer (start a
                 // session), quire://entry?date=…&ts=… (open one entry — the
-                // widget's On This Day line and notifications land here).
+                // widget's On This Day line and notifications land here),
+                // quire://today, quire://inbox and quire://capture (Today with
+                // its one-line field focused) from the widgets and controls.
                 .onOpenURL { url in
                     guard url.scheme == "quire" else { return }
                     switch url.host {
                     case "write":
                         nav.requestNewEntry()
+                    case "today":
+                        nav.request(.today)
+                    case "inbox":
+                        nav.request(.inbox)
+                    case "capture":
+                        nav.request(.capture)
                     case "timer":
                         if !nav.timerRunning {
                             if nav.timerRemaining <= 0 {

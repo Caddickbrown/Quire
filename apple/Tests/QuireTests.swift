@@ -317,3 +317,52 @@ final class ListContinuationTests: XCTestCase {
         XCTAssertEqual(ListContinuation.action(for: ""), .none)
     }
 }
+
+// MARK: - Widget snapshot and prompts (QuireShared)
+
+final class WidgetSnapshotTests: XCTestCase {
+    func testOlderSnapshotStillDecodes() throws {
+        // Written by a build from before the redesign: no theme, no day.
+        let json = #"{"currentStreak":4,"bestStreak":9,"inboxDrafts":2,"accentRaw":"teal"}"#
+        let snap = try JSONDecoder().decode(QuireSnapshot.self, from: Data(json.utf8))
+        XCTAssertEqual(snap.currentStreak, 4)
+        XCTAssertEqual(snap.inboxDrafts, 2)
+        XCTAssertNil(snap.themeID)
+        XCTAssertNil(snap.day)
+        XCTAssertNil(snap.filedToday)
+    }
+
+    func testNewFieldsRoundTrip() throws {
+        var snap = QuireSnapshot()
+        snap.themeID = "marathon"
+        snap.day = "2026-10-26"
+        snap.filedToday = 2
+        snap.wroteToday = true
+        snap.onThisDayExcerpt = "Sun on the water."
+        let back = try JSONDecoder().decode(QuireSnapshot.self, from: JSONEncoder().encode(snap))
+        XCTAssertEqual(back, snap)
+    }
+
+    func testDayKeyIsZeroPadded() {
+        let date = Calendar.current.date(from: DateComponents(year: 2026, month: 3, day: 5, hour: 12))!
+        XCTAssertEqual(QuireSnapshot.dayKey(date), "2026-03-05")
+    }
+
+    func testPromptWalksTheDeckAndWraps() {
+        let date = Calendar.current.date(from: DateComponents(year: 2026, month: 1, day: 1, hour: 12))!
+        let n = QuirePrompts.deck.count
+        XCTAssertEqual(QuirePrompts.prompt(on: date, offset: 0), QuirePrompts.deck[1 % n])
+        XCTAssertEqual(QuirePrompts.prompt(on: date, offset: n), QuirePrompts.prompt(on: date, offset: 0))
+        XCTAssertEqual(QuirePrompts.prompt(on: date, offset: -1), QuirePrompts.deck[0])
+    }
+
+    func testOnThisDayExcerptSkipsTitleAndMedia() {
+        let titled = Entry(date: "2023-10-26", ts: "2023-10-26 12:30:00", suffix: " Lunch by the canal",
+                           body: "![](assets/2023/10/heron.jpg)\nSun on the water.\nMore.", raw: "")
+        XCTAssertEqual(JournalStore.excerpt(of: titled), "Sun on the water.")
+        // Untitled: the first line is the preview, so the excerpt is the next.
+        let untitled = Entry(date: "2023-10-26", ts: "2023-10-26 12:30:00", suffix: "",
+                             body: "First line\nSecond line", raw: "")
+        XCTAssertEqual(JournalStore.excerpt(of: untitled), "Second line")
+    }
+}

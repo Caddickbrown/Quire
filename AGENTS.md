@@ -194,7 +194,13 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   refreshes cannot replace them. Desk mode disables auto-lock only while connected,
   active, unlocked and unpaused; this is independent of brightness dimming.
   Native media, backup, bookmarks, watchers, widgets, sharing and reminders
-  remain Swift. `make apple` builds the Rust XCFramework and both unsigned apps;
+  remain Swift. The widgets (`apple/QuireWidget/`) use the iPhone design:
+  `QuireTheme.swift` and `themes.json` are built into the extension, and the
+  app's `QuireSnapshot` (App Group) carries the theme id, the day its figures
+  describe, and On this day; the prompt deck and its reroll offset live in
+  `QuireShared.swift`/the App Group so app and widgets agree. Widget and
+  control links: `quire://write`, `today`, `inbox`, `capture`, `entry`.
+  `make apple` builds the Rust XCFramework and both unsigned apps;
   `make apple-test` runs hostless XCTest. Requires macOS, full Xcode and rustup.
   The Apple workflow covers these commands. Generated bindings/frameworks are
   ignored, never hand-edited. Launch hints for screenshots (no effect when unset):

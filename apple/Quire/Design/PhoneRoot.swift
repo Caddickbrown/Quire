@@ -112,6 +112,9 @@ struct PhoneRoot: View {
         // model; this shell has its own stack, so it takes the request from there.
         .onChange(of: nav.openRequest) { _, _ in takeOpenRequest() }
         .onAppear(perform: takeOpenRequest)
+        // The widgets' Today and Inbox links, and the "Write a line" control.
+        .onChange(of: nav.phoneRequest) { _, _ in takePhoneRequest() }
+        .onAppear(perform: takePhoneRequest)
         // App Lock: the veil is a window of its own (AppLockVeilWindow), above any
         // sheet or the composer, so nothing stays readable while locked.
         .onAppear { AppLockVeilWindow.shared.setVisible(appLock.showsVeil) }
@@ -164,6 +167,19 @@ struct PhoneRoot: View {
                 QRule()
             }
             .accessibilityElement(children: .combine)
+        }
+    }
+
+    /// `.capture` is left for TodayScreen, which focuses its field and clears
+    /// it; with the composer up, the request is dropped rather than closing it.
+    private func takePhoneRequest() {
+        guard let request = nav.phoneRequest else { return }
+        if composing != nil { nav.phoneRequest = nil; return }
+        path.removeAll()
+        switch request {
+        case .today: tab = .today; nav.phoneRequest = nil
+        case .inbox: tab = .inbox; nav.phoneRequest = nil
+        case .capture: tab = .today
         }
     }
 
@@ -222,7 +238,7 @@ struct PhoneRoot: View {
                         ExternalSettingsModel.shared.toggle(store: store)
                     } else { showSettings = true }
                 case "p":
-                    UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "quirePromptOffset") + 1, forKey: "quirePromptOffset")
+                    QuirePrompts.next()
                 case "r":
                     if let r = store.randomEntry() { open(EntryRef(entry: r.entry, source: .archive(date: r.date))) }
                 default: return false

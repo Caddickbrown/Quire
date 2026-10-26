@@ -75,11 +75,14 @@
 		8E024AFEF51D5D2E81FD76F3 /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = F3CE120A62095CDE90288AB5 /* fonts */; };
 		AFB87D64D6AC51959EACF6F6 /* themes.json in Resources */ = {isa = PBXBuildFile; fileRef = CA30FCCEB7E05E759B843C8C /* themes.json */; };
 		8EC192126CE855CFBB8718F2 /* QuireWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14326FEB75CD5E6F9DAC9DC4 /* QuireWidget.swift */; };
+		5D7A88779AD45B0F9B51726A /* QuireWidgetParts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E2C41DC4B845249A70F969B /* QuireWidgetParts.swift */; };
 		78B85277F566565C997241BD /* QuireWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A610BE49A435300A6DD3E64 /* QuireWidgetBundle.swift */; };
 		52D59FA5489C53189643989C /* QuireLockScreenWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 787687FF3A5158D9854060FB /* QuireLockScreenWidget.swift */; };
 		EAED427761BE5074B8B7A96A /* QuireControlWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C423790A4A285B54A25E0A62 /* QuireControlWidget.swift */; };
 		9B5E9E769B4352B1B19A71D5 /* QuireShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73CB28DCB3C5538DBCC5535A /* QuireShared.swift */; };
+		A2C36962CC585C8B8C48BB94 /* QuireTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F57E34422005535A58C10F7 /* QuireTheme.swift */; };
 		C21C6A486A71555D9D8B281E /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = F3CE120A62095CDE90288AB5 /* fonts */; };
+		2C97D4E05F765085945A6F82 /* themes.json in Resources */ = {isa = PBXBuildFile; fileRef = CA30FCCEB7E05E759B843C8C /* themes.json */; };
 		40FBCE3FF65154A6975F8FB8 /* CHANGELOG.md in Resources */ = {isa = PBXBuildFile; fileRef = 5443F5FC029158999BE98658 /* CHANGELOG.md */; };
 		B0B7AE7D02D25514BA9F44CA /* QuireWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5FBB5194791C5966B4F2ADFD /* QuireWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		EB8B67B5C4935705ABD25713 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98B38C917B315A94B55017F8 /* ShareViewController.swift */; };
@@ -207,6 +210,7 @@
 		1B963E24A0DB50B880153E30 /* Quire.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Quire.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5443F5FC029158999BE98658 /* CHANGELOG.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = ../CHANGELOG.md; sourceTree = "<group>"; };
 		14326FEB75CD5E6F9DAC9DC4 /* QuireWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireWidget.swift; sourceTree = "<group>"; };
+		7E2C41DC4B845249A70F969B /* QuireWidgetParts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireWidgetParts.swift; sourceTree = "<group>"; };
 		6A610BE49A435300A6DD3E64 /* QuireWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireWidgetBundle.swift; sourceTree = "<group>"; };
 		787687FF3A5158D9854060FB /* QuireLockScreenWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireLockScreenWidget.swift; sourceTree = "<group>"; };
 		C423790A4A285B54A25E0A62 /* QuireControlWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireControlWidget.swift; sourceTree = "<group>"; };
@@ -404,6 +408,7 @@
 			isa = PBXGroup;
 			children = (
 				14326FEB75CD5E6F9DAC9DC4 /* QuireWidget.swift */,
+				7E2C41DC4B845249A70F969B /* QuireWidgetParts.swift */,
 				6A610BE49A435300A6DD3E64 /* QuireWidgetBundle.swift */,
 				787687FF3A5158D9854060FB /* QuireLockScreenWidget.swift */,
 				C423790A4A285B54A25E0A62 /* QuireControlWidget.swift */,
@@ -569,6 +574,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C21C6A486A71555D9D8B281E /* fonts in Resources */,
+				2C97D4E05F765085945A6F82 /* themes.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -651,10 +657,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				8EC192126CE855CFBB8718F2 /* QuireWidget.swift in Sources */,
+				5D7A88779AD45B0F9B51726A /* QuireWidgetParts.swift in Sources */,
 				78B85277F566565C997241BD /* QuireWidgetBundle.swift in Sources */,
 				52D59FA5489C53189643989C /* QuireLockScreenWidget.swift in Sources */,
 				EAED427761BE5074B8B7A96A /* QuireControlWidget.swift in Sources */,
 				9B5E9E769B4352B1B19A71D5 /* QuireShared.swift in Sources */,
+				A2C36962CC585C8B8C48BB94 /* QuireTheme.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

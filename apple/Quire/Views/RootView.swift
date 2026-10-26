@@ -116,6 +116,25 @@ enum WritingTimer {
     @Published var timerRunning = false
     var backMonitorInstalled = false
     func requestNewEntry() { section = .write; path = NavigationPath(); newEntrySignal += 1 }
+
+    /// A page the iPhone shell should show, asked for by a widget or control:
+    /// PhoneRoot takes it (and TodayScreen, for `.capture`) and clears it.
+    enum PhoneRequest: Equatable { case today, inbox, capture }
+    @Published var phoneRequest: PhoneRequest?
+
+    /// quire://today, quire://inbox, quire://capture. Only the iPhone shell
+    /// has a Today page with a one-line field; elsewhere these fall back to
+    /// the nearest section (the composer, for a line).
+    func request(_ request: PhoneRequest) {
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone { phoneRequest = request; return }
+        #endif
+        switch request {
+        case .today: section = .write
+        case .inbox: section = .inbox
+        case .capture: requestNewEntry()
+        }
+    }
     /// Pop one level (mouse Back button / ⌘[).
     func goBack() { if !path.isEmpty { path.removeLast() } }
 

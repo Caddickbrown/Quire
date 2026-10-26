@@ -12,6 +12,7 @@ import SwiftUI
 
 struct TodayScreen: View {
     @EnvironmentObject private var store: JournalStore
+    @EnvironmentObject private var nav: NavigationModel
     @Environment(\.quire) private var q
     @AppStorage("wordGoalEnabled") private var goalOn = false
     @AppStorage("wordGoal") private var goal = 750
@@ -30,11 +31,9 @@ struct TodayScreen: View {
         (store.archiveEntries.first { $0.date == today }?.entries ?? []).reversed()
     }
     /// `p` asks for another prompt (the offset is bumped by the key handler).
-    @AppStorage("quirePromptOffset") private var promptOffset = 0
-    private var prompt: String {
-        let day = Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 0
-        return PromptDeck.prompts[(day + promptOffset) % PromptDeck.prompts.count]
-    }
+    /// Kept in the App Group, so the widgets show the same prompt.
+    @AppStorage(QuirePrompts.offsetKey, store: QuirePrompts.defaults) private var promptOffset = 0
+    private var prompt: String { QuirePrompts.prompt(offset: promptOffset) }
     private var onThisDay: [(date: String, entries: [Entry])] { store.qOnThisDay() }
 
     var body: some View {
@@ -60,6 +59,9 @@ struct TodayScreen: View {
             .padding(.bottom, 24)
         }
         .scrollDismissesKeyboard(.interactively)
+        // The "Write a line" control (quire://capture) lands on this field.
+        .onAppear(perform: takeCapture)
+        .onChange(of: nav.phoneRequest) { _, _ in takeCapture() }
         .background(alignment: .topTrailing) {
             if q.isMarathon { QDotField(color: q.signalColor).opacity(0.55).frame(width: 170, height: 120).padding(.top, 150).padding(.trailing, 14) }
         }
@@ -229,6 +231,13 @@ struct TodayScreen: View {
             }
         }
         .overlay(alignment: .bottom) { QRule() }
+    }
+
+    private func takeCapture() {
+        guard nav.phoneRequest == .capture else { return }
+        nav.phoneRequest = nil
+        // After the page (and a cold launch) has settled, or focus is lost.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { lineFocused = true }
     }
 
     private func saveLine() {

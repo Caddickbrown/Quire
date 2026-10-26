@@ -26,7 +26,8 @@ enum TimerActivityController {
                                                      wordsToday: wordsToday,
                                                      wordGoal: wordGoal)
         activity = try? Activity.request(
-            attributes: QuireTimerAttributes(accentRaw: accent),
+            attributes: QuireTimerAttributes(accentRaw: accent,
+                                             themeID: UserDefaults.standard.string(forKey: "quireTheme")),
             content: .init(state: state, staleDate: endDate.addingTimeInterval(60)))
     }
 

@@ -2,10 +2,12 @@
 //  QuireControlWidget.swift
 //  QuireWidget
 //
-//  A Control Center control that is just a button: tap it to open Quire's
-//  composer on a new entry — the same job as the Lock Screen accessory in
-//  QuireLockScreenWidget.swift, on the surfaces controls reach (Control Center,
-//  the Lock Screen control slots, and the Action Button).
+//  Control Center controls, on the surfaces controls reach (Control Center,
+//  the Lock Screen control slots, and the Action Button):
+//
+//  New Draft — opens the composer on a new entry (quire://write).
+//  Write a Line — opens Today with its one-line field focused, for a thought
+//  that should go straight to the inbox (quire://capture).
 //
 //  Controls are iOS 18+, and the deployment target is iOS 17, so everything
 //  here is both `#if os(iOS)` and `@available(iOS 18.0, *)`.
@@ -37,7 +39,20 @@ struct QuireNewDraftControlIntent: AppIntent {
     }
 }
 
-// MARK: - Control definition
+/// Opens Quire's Today page with the "Write a line…" field focused.
+@available(iOS 18.0, *)
+struct QuireCaptureControlIntent: AppIntent {
+    static var title: LocalizedStringResource = "Write a Line"
+    static var description = IntentDescription("Opens Quire's Today page ready for one line to the inbox.")
+    static var openAppWhenRun = true
+    static var isDiscoverable = false
+
+    func perform() async throws -> some IntentResult & OpensIntent {
+        .result(opensIntent: OpenURLIntent(URL(string: "quire://capture")!))
+    }
+}
+
+// MARK: - Control definitions
 
 @available(iOS 18.0, *)
 struct QuireNewDraftControl: ControlWidget {
@@ -51,6 +66,21 @@ struct QuireNewDraftControl: ControlWidget {
         }
         .displayName("New Draft")
         .description("A button that opens Quire ready to write.")
+    }
+}
+
+@available(iOS 18.0, *)
+struct QuireCaptureControl: ControlWidget {
+    let kind = "QuireCaptureControl"
+
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: kind) {
+            ControlWidgetButton(action: QuireCaptureControlIntent()) {
+                Label("Write a Line", systemImage: "text.append")
+            }
+        }
+        .displayName("Write a Line")
+        .description("Opens Quire's Today page, ready for one line to the inbox.")
     }
 }
 #endif

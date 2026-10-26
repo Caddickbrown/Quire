@@ -136,6 +136,7 @@ struct QuireThemed<Content: View>: View {
             .foregroundStyle(theme.inkColor)
             .background(theme.pageColor.ignoresSafeArea())
             .preferredColorScheme(id == QuireTheme.auto ? nil : theme.colorScheme)
+            .onChange(of: themeID) { _, id in QuireSnapshot.updateTheme(id) }
     }
 }
 

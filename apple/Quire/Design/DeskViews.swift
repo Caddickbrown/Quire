@@ -200,13 +200,9 @@ private struct DeskToday: View {
     let metrics: ExternalDisplayMetrics
     @EnvironmentObject private var store: JournalStore
     @Environment(\.quire) private var q
-    @AppStorage("quirePromptOffset") private var promptOffset = 0
+    @AppStorage(QuirePrompts.offsetKey, store: QuirePrompts.defaults) private var promptOffset = 0
 
-
-    private var prompt: String {
-        let day = Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 0
-        return PromptDeck.prompts[(day + promptOffset) % PromptDeck.prompts.count]
-    }
+    private var prompt: String { QuirePrompts.prompt(offset: promptOffset) }
 
     private var readouts: [(value: String, label: String, accent: Bool)] {
         let s = store.stats()

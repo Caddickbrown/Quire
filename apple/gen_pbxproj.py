@@ -7,7 +7,8 @@ Two native targets are emitted:
   * Quire                  — the app (iphoneos, iphonesimulator, macosx)
   * QuireWidgetExtension   — the WidgetKit extension, embedded into the app.
 Both are multiplatform so `make build` (macOS + iOS) works and Xcode can build
-either platform. QuireShared.swift + the Lato fonts are compiled/copied into both.
+either platform. QuireShared.swift, QuireTheme.swift, the fonts and themes.json
+are compiled/copied into both.
 
 Usage:  python3 gen_pbxproj.py
 """
@@ -117,10 +118,12 @@ resources = [
 ]
 
 # Widget extension sources (own fileRefs; live in the QuireWidget/ group).
-# QuireShared.swift (shared with the app) + the Lato fonts are also built into
-# the widget, but reuse the app's fileRefs via extra PBXBuildFile entries below.
+# QuireShared.swift and Design/QuireTheme.swift (shared with the app), the fonts
+# and themes.json are also built into the widget, so it is set in the app's own
+# look; they reuse the app's fileRefs via extra PBXBuildFile entries below.
 widget_swift_files = [
     ('WQuireWidget',       'QuireWidget/QuireWidget.swift'),
+    ('WQuireWidgetParts',  'QuireWidget/QuireWidgetParts.swift'),
     ('WQuireWidgetBundle', 'QuireWidget/QuireWidgetBundle.swift'),
     ('WQuireLockScreen',   'QuireWidget/QuireLockScreenWidget.swift'),
     ('WQuireControl',      'QuireWidget/QuireControlWidget.swift'),
@@ -161,7 +164,7 @@ IDs = {k: new_id(k) for k in [
     'widgetTargetConfigList', 'widgetDebugConfig', 'widgetReleaseConfig',
     'widgetDep', 'widgetProxy',
     'widgetInfoPlist', 'widgetIOSEnt', 'widgetMacEnt',
-    'bf_embed_widget', 'wbf_QuireShared', 'wbf_Fonts',
+    'bf_embed_widget', 'wbf_QuireShared', 'wbf_QuireTheme', 'wbf_Fonts', 'wbf_Themes',
     # Share extension
     'shareGroup', 'shareTarget', 'shareProduct',
     'shareSources', 'shareFrameworks',
@@ -226,7 +229,9 @@ def pbxproj():
     for name, path in widget_swift_files:
         a(f'\t\t{IDs["bf_"+name]} /* {base(path)} in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs[name]} /* {base(path)} */; }};')
     a(f'\t\t{IDs["wbf_QuireShared"]} /* QuireShared.swift in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs["QuireShared"]} /* QuireShared.swift */; }};')
+    a(f'\t\t{IDs["wbf_QuireTheme"]} /* QuireTheme.swift in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs["QuireTheme"]} /* QuireTheme.swift */; }};')
     a(f'\t\t{IDs["wbf_Fonts"]} /* fonts in Resources */ = {{isa = PBXBuildFile; fileRef = {IDs["Fonts"]} /* fonts */; }};')
+    a(f'\t\t{IDs["wbf_Themes"]} /* themes.json in Resources */ = {{isa = PBXBuildFile; fileRef = {IDs["SharedThemes"]} /* themes.json */; }};')
     a(f'\t\t{IDs["bf_changelog"]} /* CHANGELOG.md in Resources */ = {{isa = PBXBuildFile; fileRef = {IDs["changelog"]} /* CHANGELOG.md */; }};')
     a(f'\t\t{IDs["bf_embed_widget"]} /* QuireWidgetExtension.appex in Embed Foundation Extensions */ = {{isa = PBXBuildFile; fileRef = {IDs["widgetProduct"]} /* QuireWidgetExtension.appex */; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy, ); }}; }};')
     # Share extension build files
@@ -586,12 +591,13 @@ def pbxproj():
     a('\t\t\t);')
     a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
     a('\t\t};')
-    # Widget resources (fonts only — accent colours are computed, no asset catalog)
+    # Widget resources: the fonts and themes.json (the looks), no asset catalog
     a(f'\t\t{IDs["widgetResources"]} /* Resources */ = {{')
     a('\t\t\tisa = PBXResourcesBuildPhase;')
     a('\t\t\tbuildActionMask = 2147483647;')
     a('\t\t\tfiles = (')
     a(f'\t\t\t\t{IDs["wbf_Fonts"]} /* fonts in Resources */,')
+    a(f'\t\t\t\t{IDs["wbf_Themes"]} /* themes.json in Resources */,')
     a('\t\t\t);')
     a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
     a('\t\t};')
@@ -617,6 +623,7 @@ def pbxproj():
     for name, path in widget_swift_files:
         a(f'\t\t\t\t{IDs["bf_"+name]} /* {base(path)} in Sources */,')
     a(f'\t\t\t\t{IDs["wbf_QuireShared"]} /* QuireShared.swift in Sources */,')
+    a(f'\t\t\t\t{IDs["wbf_QuireTheme"]} /* QuireTheme.swift in Sources */,')
     a('\t\t\t);')
     a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
     a('\t\t};')

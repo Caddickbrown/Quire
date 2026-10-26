@@ -804,11 +804,11 @@ final class JournalStore: ObservableObject {
 
     /// Write a QuireSnapshot to the shared App Group so the widget can
     /// display up-to-date stats without accessing the journal directly.
-    /// Skipped entirely when no number the widget shows has moved.
+    /// Skipped entirely when nothing the widget shows has moved.
     private func writeWidgetSnapshot() {
         #if os(iOS) || os(macOS)
         let heavy = lastHeavyStats
-        let accentRaw = UserDefaults.standard.string(forKey: "accentColor") ?? "blue"
+        let defaults = UserDefaults.standard
         var snap = QuireSnapshot()
         snap.currentStreak = heavy.currentStreak
         snap.bestStreak    = heavy.bestStreak
@@ -816,24 +816,28 @@ final class JournalStore: ObservableObject {
         snap.totalEntries  = heavy.entries
         snap.totalWords    = heavy.words
         snap.inboxDrafts   = inboxDrafts.count
-        snap.accentRaw     = accentRaw
+        snap.accentRaw     = defaults.string(forKey: "accentColor") ?? "blue"
+        // QuireTheme.storageKey; the Design files aren't compiled into the tests.
+        snap.themeID       = defaults.string(forKey: "quireTheme") ?? "auto"
+        snap.day           = QuireSnapshot.dayKey(Date())
         snap.wordsToday    = heavy.wordsToday
-        let goalEnabled = UserDefaults.standard.bool(forKey: "wordGoalEnabled")
-        let goal = UserDefaults.standard.integer(forKey: "wordGoal")
+        snap.filedToday    = heavy.filedToday
+        snap.wroteToday    = heavy.hasEntryToday
+        let goalEnabled = defaults.bool(forKey: "wordGoalEnabled")
+        // `object(forKey:)`: an untouched goal is the app's 750, not 0.
+        let goal = defaults.object(forKey: "wordGoal") as? Int ?? 750
         snap.wordGoal = goalEnabled ? max(goal, 1) : 0
         if heavy.onThisDayCount > 0 {
             snap.onThisDayPreview  = heavy.onThisDayPreview
+            snap.onThisDayExcerpt  = heavy.onThisDayExcerpt.isEmpty ? nil : heavy.onThisDayExcerpt
             snap.onThisDayYearsAgo = heavy.onThisDayYearsAgo
             snap.onThisDayDate     = heavy.onThisDayDate
             snap.onThisDayTS       = heavy.onThisDayTS
         }
-        if let last = lastSnapshotSent,
-           last.currentStreak == snap.currentStreak, last.bestStreak == snap.bestStreak,
-           last.totalDays == snap.totalDays, last.totalEntries == snap.totalEntries,
-           last.totalWords == snap.totalWords, last.inboxDrafts == snap.inboxDrafts,
-           last.accentRaw == snap.accentRaw, last.wordsToday == snap.wordsToday,
-           last.wordGoal == snap.wordGoal, last.onThisDayPreview == snap.onThisDayPreview {
-            return
+        if let last = lastSnapshotSent {
+            var unchanged = last
+            unchanged.updatedAt = snap.updatedAt
+            if unchanged == snap { return }
         }
         snap.updatedAt = Date()
         lastSnapshotSent = snap
@@ -841,6 +845,16 @@ final class JournalStore: ObservableObject {
         // Tell WidgetKit to reload its timelines.
         WidgetCenter.shared.reloadAllTimelines()
         #endif
+    }
+
+    /// The first body line worth showing under an entry's preview: not the
+    /// preview itself, not a media link.
+    nonisolated static func excerpt(of entry: Entry) -> String {
+        let preview = entry.preview.trimmingCharacters(in: .whitespaces)
+        let line = entry.body.split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty && !$0.hasPrefix("![") && $0 != preview } ?? ""
+        return line.count <= 140 ? line : String(line.prefix(140)).trimmingCharacters(in: .whitespaces) + "…"
     }
 
     #if canImport(CoreSpotlight)
@@ -909,6 +923,7 @@ final class JournalStore: ObservableObject {
             if w > idx.heavy.longestDayWords { idx.heavy.longestDayWords = w; idx.heavy.longestDay = day.date }
             if day.date == todayISO {
                 idx.heavy.hasEntryToday = true
+                idx.heavy.filedToday += entries.count
                 idx.heavy.wordsToday += entries.reduce(0) { $0 + $1.wordCount }
             } else if day.date.hasSuffix(monthDay), let y = Int(day.date.prefix(4)), y < currentYear {
                 // Same calendar day, an earlier year — the "On this day" pool.
@@ -916,6 +931,7 @@ final class JournalStore: ObservableObject {
                 if y > latestOnThisDayYear, let first = entries.first {
                     latestOnThisDayYear = y
                     idx.heavy.onThisDayPreview = first.preview
+                    idx.heavy.onThisDayExcerpt = Self.excerpt(of: first)
                     idx.heavy.onThisDayYearsAgo = currentYear - y
                     idx.heavy.onThisDayDate = day.date
                     idx.heavy.onThisDayTS = first.ts
@@ -1878,9 +1894,13 @@ final class JournalStore: ObservableObject {
         /// Words written today (filed + drafts dated today) — drives the word goal.
         var wordsToday = 0
         var hasEntryToday = false
+        /// Entries in today's journal day file — the widget's "two entries filed".
+        var filedToday = 0
         /// "On this day" — entries from this calendar day in past years.
         var onThisDayCount = 0
         var onThisDayPreview = ""
+        /// The body line after the preview, for the widget's second line.
+        var onThisDayExcerpt = ""
         var onThisDayYearsAgo = 0
         /// Where the teased entry lives, so the widget can deep-link to it.
         var onThisDayDate = ""
