@@ -272,6 +272,121 @@ struct QTabBar: View {
     }
 }
 
+// MARK: - Sidebar
+
+/// The tab bar's words stacked down a narrow column, for regular width (iPad,
+/// and an iPhone that opens out). Same words, same states, "+ New entry" under
+/// them; the faces keep their own masthead, so Search and Settings stay there.
+struct QSideBar: View {
+    @Environment(\.quire) private var q
+    @Binding var tab: PhoneTab
+    let inboxCount: Int
+    var onNew: () -> Void
+    /// Folds the sidebar down to `QSideRail`.
+    var onCollapse: () -> Void
+
+    static let width: CGFloat = 180
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    QMark().stroke(q.inkColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .frame(width: 16, height: 18).accessibilityHidden(true)
+                    Text(q.caps("Quire"))
+                        .font(q.isMarathon ? q.display(17) : q.writing(22, italic: true))
+                        .foregroundStyle(q.inkColor)
+                }
+                .accessibilityElement(children: .combine).accessibilityLabel("Quire")
+                Spacer(minLength: 0)
+                QSidebarToggle(label: "Hide sidebar", action: onCollapse)
+            }
+            .padding(.bottom, 16)
+            item("Today", .today)
+            item("Inbox", .inbox, count: inboxCount)
+            item("Journal", .journal)
+            item("Look back", .lookBack)
+            Button(action: onNew) {
+                Text(q.caps("+ New entry"))
+                    .font(q.isMarathon ? q.label(11, weight: .medium) : q.writing(18))
+                    .foregroundStyle(q.accentColor)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 8)
+            .accessibilityLabel("New entry")
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 22).padding(.top, 18)
+        .frame(width: Self.width, alignment: .leading)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(q.chromeColor)
+    }
+
+    private func item(_ title: String, _ target: PhoneTab, count: Int = 0) -> some View {
+        let on = tab == target
+        return Button { tab = target } label: {
+            HStack(spacing: 4) {
+                Text(q.caps(title))
+                if count > 0 { Text("\(count)").foregroundStyle(q.accentColor).fontWeight(.semibold) }
+            }
+            .font(q.ui(14, weight: on ? .semibold : .regular))
+            .foregroundStyle(on ? q.accentColor : q.inkColor)
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
+/// The sidebar folded away: a narrow strip that keeps the way back and "+".
+struct QSideRail: View {
+    @Environment(\.quire) private var q
+    var onNew: () -> Void
+    var onExpand: () -> Void
+
+    static let width: CGFloat = 52
+
+    var body: some View {
+        VStack(spacing: 6) {
+            QSidebarToggle(label: "Show sidebar", action: onExpand)
+            Button(action: onNew) {
+                Text("+").font(q.writing(28)).foregroundStyle(q.accentColor)
+                    .frame(width: 44, height: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("New entry")
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 14)
+        .frame(width: Self.width)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(q.chromeColor)
+    }
+}
+
+/// The system's sidebar glyph, so it reads as the toggle it is everywhere else
+/// on iPad; ⌃⌘S, the standard Toggle Sidebar keys, works from a keyboard.
+struct QSidebarToggle: View {
+    @Environment(\.quire) private var q
+    let label: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(q.mutedColor)
+                .frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut("s", modifiers: [.command, .control])
+        .accessibilityLabel(label)
+    }
+}
+
 // MARK: - Entry row
 
 /// Mono time, serif title, one muted line. The time is only text here: changing

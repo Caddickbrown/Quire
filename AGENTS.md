@@ -13,8 +13,8 @@ and **Wander** (the designed one) — into one repository with **one Rust
 core** and thin native shells. Today: the Linux Tauri app and the terminal
 app. The native Apple shell is in `apple/`, brought over from Nook and wired
 to the Rust core. It builds with Xcode and runs on an iPhone: the iPhone has
-Quire's own design (`apple/Quire/Design/`); iPad and Mac still use the earlier
-shell until their own pass. Android from Wander's
+Quire's own design (`apple/Quire/Design/`), and so does the iPad (a sidebar at
+regular width); the Mac still uses the earlier shell until its own pass. Android from Wander's
 Kotlin is next. `docs/consolidation-plan.md` records every decision.
 
 ## Data model (jnl's, with drafts in day files)
@@ -174,7 +174,7 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   follow is on the canvas linked from the plan's section 8.
 - **Apple** (`apple/`): iOS 17 / macOS 14 SwiftUI. The Media Library reuses
   `Views/AssetsView.swift`: Journal and Settings present a Quire-themed sheet on
-  iPhone; Mac/iPad use the sidebar. It filters/searches, sorts/groups, previews
+  iPhone and iPad; the Mac uses the sidebar. It filters/searches, sorts/groups, previews
   and opens owning entries. Asset identity for dates/usages is the full relative
   path. Media parsing accepts angle targets, URL escapes and optional titles.
   `JournalStore` remains the
