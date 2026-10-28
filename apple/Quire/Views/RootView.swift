@@ -122,12 +122,12 @@ enum WritingTimer {
     enum PhoneRequest: Equatable { case today, inbox, capture }
     @Published var phoneRequest: PhoneRequest?
 
-    /// quire://today, quire://inbox, quire://capture. Only the iPhone shell
-    /// has a Today page with a one-line field; elsewhere these fall back to
-    /// the nearest section (the composer, for a line).
+    /// quire://today, quire://inbox, quire://capture. iPhone and iPad run the
+    /// Quire shell, which has a Today page with a one-line field; on the Mac
+    /// these fall back to the nearest section (the composer, for a line).
     func request(_ request: PhoneRequest) {
         #if os(iOS)
-        if UIDevice.current.userInterfaceIdiom == .phone { phoneRequest = request; return }
+        phoneRequest = request; return
         #endif
         switch request {
         case .today: section = .write

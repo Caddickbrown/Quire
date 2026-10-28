@@ -21,16 +21,21 @@ struct ReaderScreen: View {
     let ref: EntryRef
     var onEdit: (EntryRef) -> Void
     var onRetime: (EntryRef) -> Void
+    /// Set when the page sits beside the list (regular width) rather than pushed
+    /// over it: leaving clears the selection instead of popping the stack.
+    var onClose: (() -> Void)?
 
     @State private var entry: Entry
     @State private var confirmDelete = false
     @State private var routerID = UUID()
     @State private var visible = false
 
-    init(ref: EntryRef, onEdit: @escaping (EntryRef) -> Void, onRetime: @escaping (EntryRef) -> Void) {
+    init(ref: EntryRef, onEdit: @escaping (EntryRef) -> Void, onRetime: @escaping (EntryRef) -> Void,
+         onClose: (() -> Void)? = nil) {
         self.ref = ref
         self.onEdit = onEdit
         self.onRetime = onRetime
+        self.onClose = onClose
         _entry = State(initialValue: ref.entry)
     }
 
@@ -74,15 +79,16 @@ struct ReaderScreen: View {
     private var actionBar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 18) {
-                QLink(title: "‹ Back") { dismiss() }
+                // Beside the list there is nothing to go back to.
+                if onClose == nil { QLink(title: "‹ Back") { close() } }
                 Spacer()
                 action(entry.isStarred ? "★ Starred" : "☆ Star", color: entry.isStarred ? q.accentColor : q.mutedColor) {
                     store.toggleStar(entry, source: ref.source); refresh()
                 }
                 if isDraft {
-                    action("File", color: q.accentColor, bold: true) { store.fileDraft(entry); dismiss() }
+                    action("File", color: q.accentColor, bold: true) { store.fileDraft(entry); close() }
                 } else {
-                    action("Return to inbox", color: q.mutedColor) { _ = store.returnToInbox(entry, source: ref.source); dismiss() }
+                    action("Return to inbox", color: q.mutedColor) { _ = store.returnToInbox(entry, source: ref.source); close() }
                 }
                 action("Delete", color: q.mutedColor) { confirmDelete = true }
                 action("Edit", color: q.inkColor, bold: true) { onEdit(current) }
@@ -120,13 +126,13 @@ struct ReaderScreen: View {
     private func registerKeys() {
         KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
             moveUp: {}, moveDown: {}, open: {},
-            clear: { dismiss() },
+            clear: { close() },
             key: { k in
                 switch k {
                 case "e": onEdit(current); return true
                 case "*": store.toggleStar(entry, source: ref.source); refresh(); return true
-                case "f": if isDraft { store.fileDraft(entry); dismiss() }; return isDraft
-                case "u": if !isDraft { _ = store.returnToInbox(entry, source: ref.source); dismiss() }; return !isDraft
+                case "f": if isDraft { store.fileDraft(entry); close() }; return isDraft
+                case "u": if !isDraft { _ = store.returnToInbox(entry, source: ref.source); close() }; return !isDraft
                 case "t": onRetime(current); return true
                 case "d": confirmDelete = true; return true
                 default: return false
@@ -140,7 +146,11 @@ struct ReaderScreen: View {
         case .archive(let d): _ = store.deleteFiledEntry(date: d, entry: entry)
         case .journal(let n): _ = store.deleteJournalEntry(name: n, entry: entry)
         }
-        dismiss()
+        close()
+    }
+
+    private func close() {
+        if let onClose { onClose() } else { dismiss() }
     }
 
     /// Re-read the entry after an edit, a retime or a star. Matched by timestamp

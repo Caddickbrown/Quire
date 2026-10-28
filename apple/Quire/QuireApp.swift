@@ -154,16 +154,12 @@ extension Notification.Name {
 
 // MARK: - Root
 
-/// iPhone gets the Quire design; iPad and Mac keep the earlier shell until
-/// their own pass.
+/// iPhone and iPad get the Quire design, laid out by size class rather than by
+/// device; the Mac keeps the earlier shell until its own pass.
 struct AppRoot: View {
     var body: some View {
         #if os(iOS)
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            QuireThemed { PhoneRoot() }
-        } else {
-            RootView()
-        }
+        QuireThemed { PhoneRoot() }
         #else
         RootView()
         #endif

@@ -2,9 +2,11 @@
 //  PhoneRoot.swift
 //  Quire
 //
-//  The iPhone shell: four faces (Today, Inbox, Journal, Look back) behind a
-//  text tab bar, with "+" for a new entry. Entries open as pages that push over
-//  the faces; the composer and the retime sheet come up over everything.
+//  The iPhone and iPad shell: four faces (Today, Inbox, Journal, Look back)
+//  behind a text tab bar, with "+" for a new entry. Entries open as pages that
+//  push over the faces; the composer and the retime sheet come up over
+//  everything. At regular width the tab bar becomes a sidebar and, with room,
+//  the page opens beside the list.
 //
 
 #if os(iOS)
@@ -32,6 +34,15 @@ struct PhoneRoot: View {
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var rootKeyID = UUID()
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    /// The page sits beside the list rather than over it.
+    @State private var splitActive = false
+
+    /// The content column (window less the sidebar) needs this much before the
+    /// page goes beside the list: iPad landscape and an opened-out iPhone do,
+    /// iPad portrait doesn't.
+    private static let splitMinWidth: CGFloat = 700
+    private static let listWidth: CGFloat = 360
 
     /// `QUIRE_START_TAB=inbox|journal|lookback` opens that face first (for screenshots).
     private static var startTab: PhoneTab {
@@ -44,22 +55,7 @@ struct PhoneRoot: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            VStack(spacing: 0) {
-                notice
-                face
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                QTabBar(tab: $tab, inboxCount: store.inboxDrafts.count) {
-                    composing = ComposeTarget(ref: nil)
-                }
-            }
-            .background(q.pageColor)
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: EntryRef.self) { ref in
-                ReaderScreen(ref: ref, onEdit: { composing = ComposeTarget(ref: $0) },
-                             onRetime: { retiming = $0 })
-            }
-        }
+        shell
         .background(KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false))
         .qKeyBlocker(active: composing != nil || retiming != nil || showSearch || showSettings || showMedia)
         .fullScreenCover(item: $composing, onDismiss: { restoreMonitorPage() }) { target in
@@ -138,6 +134,100 @@ struct PhoneRoot: View {
         }
     }
 
+    /// Compact width: the phone shell. Regular width (iPad, an opened-out
+    /// iPhone): the tab words become a sidebar, and where there is room the
+    /// page opens beside the list instead of over it.
+    @ViewBuilder private var shell: some View {
+        if sizeClass == .regular {
+            HStack(spacing: 0) {
+                QSideBar(tab: $tab, inboxCount: store.inboxDrafts.count) {
+                    composing = ComposeTarget(ref: nil)
+                }
+                verticalRule
+                VStack(spacing: 0) {
+                    notice
+                    GeometryReader { geo in
+                        let split = geo.size.width >= Self.splitMinWidth
+                        Group {
+                            if split { splitContent } else { stack(withChrome: false) }
+                        }
+                        .onAppear { splitActive = split }
+                        .onChange(of: split) { _, now in
+                            splitActive = now
+                            // Only one page shows beside the list.
+                            if now, path.count > 1 { path = Array(path.suffix(1)) }
+                        }
+                    }
+                }
+            }
+            .background(q.pageColor)
+            // The sidebar stays in reach while a page is open; choosing another
+            // face closes the page, as the phone's tab bar never shows over one.
+            .onChange(of: tab) { _, _ in path.removeAll() }
+        } else {
+            stack(withChrome: true)
+        }
+    }
+
+    /// The list with pages pushed over it; on the phone it carries the notice
+    /// and the tab bar, beside the sidebar it doesn't.
+    private func stack(withChrome: Bool) -> some View {
+        NavigationStack(path: $path) {
+            VStack(spacing: 0) {
+                if withChrome { notice }
+                face
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if withChrome {
+                    QTabBar(tab: $tab, inboxCount: store.inboxDrafts.count) {
+                        composing = ComposeTarget(ref: nil)
+                    }
+                }
+            }
+            .background(q.pageColor)
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: EntryRef.self) { ref in
+                ReaderScreen(ref: ref, onEdit: { composing = ComposeTarget(ref: $0) },
+                             onRetime: { retiming = $0 })
+            }
+        }
+    }
+
+    /// The face at list width, the open entry beside it.
+    private var splitContent: some View {
+        HStack(spacing: 0) {
+            face
+                .frame(width: Self.listWidth)
+                .frame(maxHeight: .infinity)
+            verticalRule
+            Group {
+                if let ref = path.last {
+                    ReaderScreen(ref: ref, onEdit: { composing = ComposeTarget(ref: $0) },
+                                 onRetime: { retiming = $0 }, onClose: { path.removeAll() })
+                } else {
+                    emptyPage
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(q.pageColor)
+    }
+
+    private var emptyPage: some View {
+        VStack(spacing: 8) {
+            Text(q.caps("Nothing open"))
+                .font(q.isMarathon ? q.display(20) : q.writing(24, italic: true))
+                .foregroundStyle(q.mutedColor)
+            Text("Choose an entry, or begin a new one.")
+                .font(q.ui(13)).foregroundStyle(q.mutedColor)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(q.pageColor)
+    }
+
+    private var verticalRule: some View {
+        Rectangle().fill(q.lineColor).frame(width: 1).accessibilityHidden(true)
+    }
+
     @ViewBuilder private var face: some View {
         switch tab {
         case .today:
@@ -194,7 +284,10 @@ struct PhoneRoot: View {
         path = path.map { $0 == old ? updated : $0 }
     }
 
-    private func open(_ ref: EntryRef) { path.append(ref) }
+    /// Beside the list, opening replaces the page; on the phone it pushes.
+    private func open(_ ref: EntryRef) {
+        if splitActive { path = [ref] } else { path.append(ref) }
+    }
 
     /// Open what Spotlight, a notification or the widget asked for: close whatever
     /// is presented, go to the entry's face, and push it.

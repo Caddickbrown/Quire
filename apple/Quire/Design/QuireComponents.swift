@@ -272,6 +272,69 @@ struct QTabBar: View {
     }
 }
 
+// MARK: - Sidebar
+
+/// The tab bar's words stacked down a narrow column, for regular width (iPad,
+/// and an iPhone that opens out). Same words, same states, "+ New entry" under
+/// them; the faces keep their own masthead, so Search and Settings stay there.
+struct QSideBar: View {
+    @Environment(\.quire) private var q
+    @Binding var tab: PhoneTab
+    let inboxCount: Int
+    var onNew: () -> Void
+
+    static let width: CGFloat = 180
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                QMark().stroke(q.inkColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .frame(width: 16, height: 18).accessibilityHidden(true)
+                Text(q.caps("Quire"))
+                    .font(q.isMarathon ? q.display(17) : q.writing(22, italic: true))
+                    .foregroundStyle(q.inkColor)
+            }
+            .padding(.bottom, 16)
+            .accessibilityElement(children: .combine).accessibilityLabel("Quire")
+            item("Today", .today)
+            item("Inbox", .inbox, count: inboxCount)
+            item("Journal", .journal)
+            item("Look back", .lookBack)
+            Button(action: onNew) {
+                Text(q.caps("+ New entry"))
+                    .font(q.isMarathon ? q.label(11, weight: .medium) : q.writing(18))
+                    .foregroundStyle(q.accentColor)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 8)
+            .accessibilityLabel("New entry")
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 22).padding(.top, 18)
+        .frame(width: Self.width, alignment: .leading)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(q.chromeColor)
+    }
+
+    private func item(_ title: String, _ target: PhoneTab, count: Int = 0) -> some View {
+        let on = tab == target
+        return Button { tab = target } label: {
+            HStack(spacing: 4) {
+                Text(q.caps(title))
+                if count > 0 { Text("\(count)").foregroundStyle(q.accentColor).fontWeight(.semibold) }
+            }
+            .font(q.ui(14, weight: on ? .semibold : .regular))
+            .foregroundStyle(on ? q.accentColor : q.inkColor)
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
 // MARK: - Entry row
 
 /// Mono time, serif title, one muted line. The time is only text here: changing
