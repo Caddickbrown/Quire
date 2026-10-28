@@ -282,20 +282,26 @@ struct QSideBar: View {
     @Binding var tab: PhoneTab
     let inboxCount: Int
     var onNew: () -> Void
+    /// Folds the sidebar down to `QSideRail`.
+    var onCollapse: () -> Void
 
     static let width: CGFloat = 180
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 8) {
-                QMark().stroke(q.inkColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                    .frame(width: 16, height: 18).accessibilityHidden(true)
-                Text(q.caps("Quire"))
-                    .font(q.isMarathon ? q.display(17) : q.writing(22, italic: true))
-                    .foregroundStyle(q.inkColor)
+            HStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    QMark().stroke(q.inkColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .frame(width: 16, height: 18).accessibilityHidden(true)
+                    Text(q.caps("Quire"))
+                        .font(q.isMarathon ? q.display(17) : q.writing(22, italic: true))
+                        .foregroundStyle(q.inkColor)
+                }
+                .accessibilityElement(children: .combine).accessibilityLabel("Quire")
+                Spacer(minLength: 0)
+                QSidebarToggle(label: "Hide sidebar", action: onCollapse)
             }
             .padding(.bottom, 16)
-            .accessibilityElement(children: .combine).accessibilityLabel("Quire")
             item("Today", .today)
             item("Inbox", .inbox, count: inboxCount)
             item("Journal", .journal)
@@ -332,6 +338,52 @@ struct QSideBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
+/// The sidebar folded away: a narrow strip that keeps the way back and "+".
+struct QSideRail: View {
+    @Environment(\.quire) private var q
+    var onNew: () -> Void
+    var onExpand: () -> Void
+
+    static let width: CGFloat = 52
+
+    var body: some View {
+        VStack(spacing: 6) {
+            QSidebarToggle(label: "Show sidebar", action: onExpand)
+            Button(action: onNew) {
+                Text("+").font(q.writing(28)).foregroundStyle(q.accentColor)
+                    .frame(width: 44, height: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("New entry")
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 14)
+        .frame(width: Self.width)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(q.chromeColor)
+    }
+}
+
+/// The system's sidebar glyph, so it reads as the toggle it is everywhere else
+/// on iPad; ⌃⌘S, the standard Toggle Sidebar keys, works from a keyboard.
+struct QSidebarToggle: View {
+    @Environment(\.quire) private var q
+    let label: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(q.mutedColor)
+                .frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut("s", modifiers: [.command, .control])
+        .accessibilityLabel(label)
     }
 }
 

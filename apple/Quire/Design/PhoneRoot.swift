@@ -37,6 +37,8 @@ struct PhoneRoot: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     /// The page sits beside the list rather than over it.
     @State private var splitActive = false
+    /// The sidebar folded to a strip; remembered across launches.
+    @AppStorage("sidebarCollapsed") private var sidebarCollapsed = false
 
     /// The content column (window less the sidebar) needs this much before the
     /// page goes beside the list: iPad landscape and an opened-out iPhone do,
@@ -135,13 +137,18 @@ struct PhoneRoot: View {
     }
 
     /// Compact width: the phone shell. Regular width (iPad, an opened-out
-    /// iPhone): the tab words become a sidebar, and where there is room the
-    /// page opens beside the list instead of over it.
+    /// iPhone): the tab words become a sidebar, which folds to a strip, and
+    /// where there is room the page opens beside the list instead of over it.
     @ViewBuilder private var shell: some View {
         if sizeClass == .regular {
             HStack(spacing: 0) {
-                QSideBar(tab: $tab, inboxCount: store.inboxDrafts.count) {
-                    composing = ComposeTarget(ref: nil)
+                if sidebarCollapsed {
+                    QSideRail(onNew: { composing = ComposeTarget(ref: nil) },
+                              onExpand: { withAnimation(.easeInOut(duration: 0.2)) { sidebarCollapsed = false } })
+                } else {
+                    QSideBar(tab: $tab, inboxCount: store.inboxDrafts.count,
+                             onNew: { composing = ComposeTarget(ref: nil) },
+                             onCollapse: { withAnimation(.easeInOut(duration: 0.2)) { sidebarCollapsed = true } })
                 }
                 verticalRule
                 VStack(spacing: 0) {
