@@ -31,6 +31,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 - **Apple**: with the word goal on but never changed, the widget compared today's words against a goal of 1 instead of 750.
+- **Apple**: the Mac camera sheet fits the preview instead of cropping it and keeps it level as a Continuity Camera iPhone turns; recordings and photos are saved the same way up.
 
 ## [0.11.0] — 2026-10-26
 

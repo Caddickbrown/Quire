@@ -115,7 +115,7 @@ struct VideoRecorderView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            CameraPreview(session: cam.session)
+            CameraPreview(session: cam.session, device: cam.camera)
                 .frame(minWidth: 480, minHeight: 360)
                 .background(Color.black)
 
@@ -153,7 +153,7 @@ struct PhotoCaptureView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            CameraPreview(session: cam.session)
+            CameraPreview(session: cam.session, device: cam.camera)
                 .frame(minWidth: 480, minHeight: 360)
                 .background(Color.black)
 
@@ -177,20 +177,65 @@ struct PhotoCaptureView: View {
     }
 }
 
+/// The live preview. Fit, not fill, so a feed whose shape differs from the
+/// sheet (a Continuity Camera iPhone held upright) is letterboxed rather than
+/// cropped; a rotation coordinator keeps it level as that camera turns; the
+/// layer is re-fitted on every layout pass, not only when SwiftUI updates.
 private struct CameraPreview: NSViewRepresentable {
     let session: AVCaptureSession
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.wantsLayer = true
-        let preview = AVCaptureVideoPreviewLayer(session: session)
-        preview.videoGravity = .resizeAspectFill
-        preview.frame = view.bounds
-        preview.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-        view.layer = preview
+    var device: AVCaptureDevice?
+    func makeNSView(context: Context) -> PreviewView {
+        let view = PreviewView()
+        view.preview.session = session
+        view.attach(device)
         return view
     }
-    func updateNSView(_ view: NSView, context: Context) {
-        (view.layer as? AVCaptureVideoPreviewLayer)?.frame = view.bounds
+    func updateNSView(_ view: PreviewView, context: Context) {
+        view.attach(device)
+        view.needsLayout = true
+    }
+
+    final class PreviewView: NSView {
+        let preview = AVCaptureVideoPreviewLayer()
+        private var device: AVCaptureDevice?
+        private var rotation: AVCaptureDevice.RotationCoordinator?
+        private var observation: NSKeyValueObservation?
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            preview.videoGravity = .resizeAspect
+            layer = preview
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+        override func layout() {
+            super.layout()
+            preview.frame = bounds
+        }
+
+        /// Follow `device`'s rotation; a no-op while it is unchanged.
+        func attach(_ device: AVCaptureDevice?) {
+            guard device !== self.device else { return }
+            self.device = device
+            observation = nil
+            rotation = nil
+            guard let device else { return }
+            let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: preview)
+            rotation = coordinator
+            apply(coordinator.videoRotationAngleForHorizonLevelPreview)
+            observation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview,
+                                              options: [.new]) { [weak self] _, change in
+                guard let angle = change.newValue else { return }
+                DispatchQueue.main.async { self?.apply(angle) }
+            }
+        }
+
+        private func apply(_ angle: CGFloat) {
+            guard let connection = preview.connection,
+                  connection.isVideoRotationAngleSupported(angle) else { return }
+            connection.videoRotationAngle = angle
+        }
     }
 }
 
@@ -206,6 +251,8 @@ final class CameraController: NSObject, ObservableObject, AVCaptureFileOutputRec
     private let photoOutput = AVCapturePhotoOutput()
     @Published var isRecording = false
     @Published var ready = false
+    /// The camera in use, once configured — the preview follows its rotation.
+    @Published private(set) var camera: AVCaptureDevice?
     private var onFinish: ((URL) -> Void)?
     private var onCapture: ((URL) -> Void)?
 
@@ -220,6 +267,7 @@ final class CameraController: NSObject, ObservableObject, AVCaptureFileOutputRec
         if let camera,
            let input = try? AVCaptureDeviceInput(device: camera), session.canAddInput(input) {
             session.addInput(input)
+            self.camera = camera
         }
         switch mode {
         case .video:
@@ -242,6 +290,7 @@ final class CameraController: NSObject, ObservableObject, AVCaptureFileOutputRec
         self.onFinish = onFinish
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(UUID().uuidString).mov")
+        level(movieOutput.connection(with: .video))
         movieOutput.startRecording(to: url, recordingDelegate: self)
         isRecording = true
     }
@@ -255,7 +304,16 @@ final class CameraController: NSObject, ObservableObject, AVCaptureFileOutputRec
         let settings = photoOutput.availablePhotoCodecTypes.contains(.jpeg)
             ? AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg.rawValue])
             : AVCapturePhotoSettings()
+        level(photoOutput.connection(with: .video))
         photoOutput.capturePhoto(with: settings, delegate: self)
+    }
+
+    /// Record level with the horizon, as the preview shows it.
+    private func level(_ connection: AVCaptureConnection?) {
+        guard let camera, let connection else { return }
+        let angle = AVCaptureDevice.RotationCoordinator(device: camera, previewLayer: nil)
+            .videoRotationAngleForHorizonLevelCapture
+        if connection.isVideoRotationAngleSupported(angle) { connection.videoRotationAngle = angle }
     }
 
     func teardown() {
