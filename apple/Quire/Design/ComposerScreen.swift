@@ -5,11 +5,13 @@
 //  The page you write on. Nothing but the date, a title, the rule and the
 //  text; saving happens as you type (a new page is a draft in the inbox) and
 //  "File" sends it to its day. Focus quiets everything that isn't the text.
+//  The paperclip, a drop or a pasted image attaches media where the caret is.
 //
 
 #if os(iOS)
 
 import SwiftUI
+import PhotosUI
 
 struct ComposerScreen: View {
     @EnvironmentObject private var store: JournalStore
@@ -49,6 +51,17 @@ struct ComposerScreen: View {
     @State private var pendingTS: String?
     @State private var confirmDiscard = false
     @State private var savedFlash = false
+    /// Where the caret last was in the body: a picker sheet takes focus away,
+    /// and what it brings back still lands there.
+    @State private var lastCaret: Int?
+    @State private var showingPhotoPicker = false
+    @State private var showingFilePicker = false
+    @State private var showingPhotoCapture = false
+    @State private var showingVideoRecorder = false
+    @State private var photoItem: PhotosPickerItem?
+    @StateObject private var recorder = AudioRecorder()
+    /// A brief word in the footer (a refused drop).
+    @State private var notice: String?
 
     /// Today's prompt, when Settings → Writing prompts is on.
     private static var prompt: String {
@@ -118,6 +131,30 @@ struct ComposerScreen: View {
             Button("Discard", role: .destructive) { discard() }
         }
         .onChange(of: scenePhase) { _, phase in if phase != .active { saveNow() } }
+        .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItem,
+                      matching: .any(of: [.images, .videos]))
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            Task { @MainActor in
+                defer { photoItem = nil }
+                if let rel = await Attach.photo(item, into: store) { link(rel) }
+            }
+        }
+        .fileImporter(isPresented: $showingFilePicker, allowedContentTypes: Attach.types,
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first,
+               let rel = Attach.file(url, into: store) { link(rel) }
+        }
+        .sheet(isPresented: $showingPhotoCapture) {
+            PhotoCaptureView { url in if let rel = store.importAsset(from: url) { link(rel) } }
+        }
+        .sheet(isPresented: $showingVideoRecorder) {
+            VideoRecorderView { url in if let rel = store.importAsset(from: url) { link(rel) } }
+        }
+        .onDrop(of: [.image, .movie, .audio, .fileURL], isTargeted: nil) { providers in
+            Attach.drop(providers, into: store, link: link,
+                        refused: { say("Only images, video and audio attach") })
+        }
     }
 
     // MARK: Pieces
@@ -148,7 +185,8 @@ struct ComposerScreen: View {
                               size: fontSize + 2, textColor: q.inkColor, lineSpacing: 8,
                               accent: q.accentColor, sizeToFit: true,
                               tagSuggestions: store.tagCounts.map { String($0.tag.dropFirst()) },
-                              onCaretChange: { caret = $0 },
+                              onCaretChange: { caret = $0; if let c = $0 { lastCaret = c } },
+                              onPasteMedia: { if let rel = Attach.pasted($0, into: store) { link(rel) } },
                               focused: Binding(get: { focus == .body }, set: { if $0 { focus = .body } else if focus == .body { focus = nil } }))
                 .focused($focus, equals: .body)
                 .frame(minHeight: 360, alignment: .top)
@@ -160,9 +198,30 @@ struct ComposerScreen: View {
         VStack(spacing: 0) {
             QRule()
             HStack(spacing: 14) {
-                Text("\(words) words · \(savedFlash ? "saved" : isDraft ? "draft" : "filed")")
-                    .font(q.mono(12)).foregroundStyle(q.mutedColor).opacity(quiet)
+                if recorder.isRecording {
+                    Button(action: toggleRecord) {
+                        HStack(spacing: 8) {
+                            Circle().fill(q.accentColor).frame(width: 8, height: 8)
+                            Text("\(recorder.elapsedString) · Stop").font(q.mono(12)).foregroundStyle(q.accentColor)
+                        }
+                        .frame(minHeight: 44).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Stop recording, \(recorder.elapsedString)")
+                } else {
+                    Text(notice ?? "\(words) words · \(savedFlash ? "saved" : isDraft ? "draft" : "filed")")
+                        .font(q.mono(12)).foregroundStyle(q.mutedColor).opacity(quiet)
+                }
                 Spacer()
+                AttachMenu(photoLibrary: { showingPhotoPicker = true },
+                           file: { showingFilePicker = true },
+                           photo: { showingPhotoCapture = true },
+                           video: { showingVideoRecorder = true },
+                           voice: recorder.isRecording ? nil : { toggleRecord() }) {
+                    Image(systemName: "paperclip").font(.system(size: 17))
+                        .foregroundStyle(q.inkColor)
+                        .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                }
+                .opacity(quiet)
                 Button { focusMode.toggle() } label: {
                     Text("Focus").font(q.ui(14, weight: focusMode ? .semibold : .regular))
                         .foregroundStyle(focusMode ? q.accentColor : q.inkColor)
@@ -180,6 +239,47 @@ struct ComposerScreen: View {
             .padding(.horizontal, 20).padding(.vertical, 4)
         }
         .background(q.pageColor)
+    }
+
+    // MARK: Attachments
+
+    /// Put an attachment's link in the body where the caret was.
+    private func link(_ rel: String) {
+        text = JournalStore.linking(rel, into: text, at: lastCaret)
+    }
+
+    private func say(_ message: String) {
+        notice = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { notice = nil }
+    }
+
+    private func toggleRecord() {
+        if recorder.isRecording {
+            if let data = recorder.stop(), let rel = store.saveAsset(data, ext: "m4a") {
+                link(rel)
+                autoTranscribeIfEnabled(rel)
+            }
+        } else {
+            Task { await recorder.start() }
+        }
+    }
+
+    /// A recording still running when the page closes would die with its
+    /// `@StateObject` — Close and File stop it and attach the memo first.
+    private func finishRecordingIfNeeded() {
+        guard recorder.isRecording else { return }
+        if let data = recorder.stop(), let rel = store.saveAsset(data, ext: "m4a") { link(rel) }
+    }
+
+    /// Settings → auto-transcribe: the words land beneath the memo's link.
+    private func autoTranscribeIfEnabled(_ rel: String) {
+        guard UserDefaults.standard.bool(forKey: JournalStore.autoTranscribeKey),
+              let url = store.assetURL(forRelative: rel) else { return }
+        Task { @MainActor in
+            guard let transcript = try? await Transcriber.transcribe(url: url) else { return }
+            text = Transcriber.insert(transcript: transcript, after: rel, in: text)
+            store.markTranscribed(assetID: ((rel as NSString).lastPathComponent as NSString).deletingPathExtension)
+        }
     }
 
     // MARK: Time
@@ -272,7 +372,10 @@ struct ComposerScreen: View {
         saveError = (store.lastWriteError ?? "The entry could not be saved.") + " Your edits are still open here. Retry, or save a copy to Inbox."
     }
 
-    private func close() { if saveNow() { dismiss() } }
+    private func close() {
+        finishRecordingIfNeeded()
+        if saveNow() { dismiss() }
+    }
 
     private func saveRecoveryCopy() {
         pending?.cancel()
@@ -323,6 +426,7 @@ struct ComposerScreen: View {
     }
 
     private func discard() {
+        if recorder.isRecording { _ = recorder.stop() }
         pending?.cancel()
         saveGeneration += 1
         if let cur = current {
@@ -342,6 +446,7 @@ struct ComposerScreen: View {
 
     /// File the draft, or just close a filed entry.
     private func finish() {
+        finishRecordingIfNeeded()
         guard saveNow() else { return }
         if isDraft, let current {
             guard store.fileDraft(current) != nil else { reportFailure(); return }

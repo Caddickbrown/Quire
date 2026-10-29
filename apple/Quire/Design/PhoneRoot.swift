@@ -117,7 +117,7 @@ struct PhoneRoot: View {
         // sheet or the composer, so nothing stays readable while locked.
         .onAppear { AppLockVeilWindow.shared.setVisible(appLock.showsVeil) }
         .onChange(of: appLock.showsVeil) { _, show in AppLockVeilWindow.shared.setVisible(show) }
-        // `QUIRE_OPEN=settings|search` in the launch environment opens that first (screenshots).
+        // `QUIRE_OPEN=settings|search|media|write` in the launch environment opens that first (screenshots).
         // The external display scene is built by UIKit and can't reach this environment.
         .onAppear {
             ExternalDisplayModel.shared.store = store
@@ -131,6 +131,7 @@ struct PhoneRoot: View {
             case "settings": showSettings = true
             case "search": showSearch = true
             case "media": showMedia = true
+            case "write": composing = ComposeTarget(ref: nil)
             default: break
             }
         }

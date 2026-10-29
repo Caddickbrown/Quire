@@ -1439,6 +1439,20 @@ final class JournalStore: ObservableObject {
     /// markdown-friendly path ("assets/<uuid>.<ext>"), or nil on failure. When
     /// Data Saver is on, raster images are downsampled/re-compressed first (format
     /// and extension preserved, so the markdown link stays valid).
+    /// `text` with a link to `rel` as its own paragraph at `caret` (a UTF-16
+    /// offset), or at the end when there's no caret to go by.
+    nonisolated static func linking(_ rel: String, into text: String, at caret: Int?) -> String {
+        let md = "![](\(rel))"
+        let ns = text as NSString
+        guard let caret, caret >= 0, caret < ns.length else {
+            return text.isEmpty ? md : text + "\n\n" + md
+        }
+        let before = ns.substring(to: caret), after = ns.substring(from: caret)
+        let lead = before.isEmpty || before.hasSuffix("\n\n") ? "" : before.hasSuffix("\n") ? "\n" : "\n\n"
+        let trail = after.hasPrefix("\n\n") ? "" : after.hasPrefix("\n") ? "\n" : "\n\n"
+        return before + lead + md + trail + after
+    }
+
     func saveAsset(_ data: Data, ext: String) -> String? {
         guard let dir = newAssetsDirURL else { return nil }
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)

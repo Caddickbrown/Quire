@@ -86,6 +86,7 @@ swift_files = [
     ('RootView',        'Views/RootView.swift',         'Views'),
     ('WritingView',     'Views/WritingView.swift',      'Views'),
     ('WritingTextEditor','Views/WritingTextEditor.swift','Views'),
+    ('Attachments','Views/Attachments.swift','Views'),
     ('InboxView',       'Views/InboxView.swift',        'Views'),
     ('ArchiveView',     'Views/ArchiveView.swift',      'Views'),
     ('StreamView',      'Views/StreamView.swift',       'Views'),

@@ -43,6 +43,9 @@ struct EntryDetailView: View {
     @State private var text: String
     /// The body editor's caret, for the external display (see WritingView).
     @State private var caret: Int?
+    /// Where the caret last was, so an attachment made after the editor gave
+    /// up focus (a picker sheet, a toolbar menu) still lands there.
+    @State private var lastCaret: Int?
     @State private var baselineRaw: String
     /// What this editor last wrote, and where. The store looks an entry up by
     /// its text, so the lookup key has to follow every save — passing the
@@ -156,7 +159,8 @@ struct EntryDetailView: View {
         .fileImporter(isPresented: $showingImagePicker,
                       allowedContentTypes: [.image, .movie, .audio],
                       allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first { attachFile(url) }
+            if case .success(let urls) = result, let url = urls.first,
+               let rel = Attach.file(url, into: store) { appendLink(rel) }
         }
         #if os(iOS)
         .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItem,
@@ -166,7 +170,8 @@ struct EntryDetailView: View {
         }
         #endif
         .onDrop(of: [.image, .movie, .audio, .fileURL], isTargeted: nil) { providers in
-            handleDrop(providers)
+            Attach.drop(providers, into: store, link: appendLink,
+                        refused: { dropError = "Only images, video and audio can be attached to an entry." })
         }
         .sheet(isPresented: $showingVideoRecorder) {
             VideoRecorderView { url in attachCaptured(url) }
@@ -289,6 +294,11 @@ struct EntryDetailView: View {
         .help(recorder.isRecording ? "Stop recording" : "Record audio")
         .accessibilityLabel(recorder.isRecording ? "Stop recording" : "Record audio")
 
+        AttachMenu(photoLibrary: { showingPhotoPicker = true },
+                   file: { showingImagePicker = true },
+                   photo: { showingPhotoCapture = true },
+                   video: { showingVideoRecorder = true })
+
         Menu {
             #if os(iOS)
             Button { toggleStar() } label: {
@@ -306,13 +316,7 @@ struct EntryDetailView: View {
             }
             #if os(iOS)
             Divider()
-            Button { showingPhotoPicker = true } label: { Label("Photo Library", systemImage: "photo") }
-            Button { showingImagePicker = true } label: { Label("Choose File", systemImage: "folder") }
-            #else
-            Button { showingImagePicker = true } label: { Label("Attach Media", systemImage: "paperclip") }
             #endif
-            Button { showingPhotoCapture = true } label: { Label("Take Photo", systemImage: "camera") }
-            Button { showingVideoRecorder = true } label: { Label("Record Video", systemImage: "video") }
             Button { copyText() } label: { Label("Copy text", systemImage: "doc.on.doc") }
             #if os(macOS)
             Button { printEntry() } label: { Label("Print…", systemImage: "printer") }
@@ -403,7 +407,8 @@ struct EntryDetailView: View {
                               typewriter: typewriterScroll,
                               focusParagraph: focusParagraph,
                               tagSuggestions: store.tagCounts.map { String($0.tag.dropFirst()) },
-                              onCaretChange: { caret = $0 })
+                              onCaretChange: { caret = $0; if let c = $0 { lastCaret = c } },
+                              onPasteMedia: { if let rel = Attach.pasted($0, into: store) { appendLink(rel) } })
                 .focused($bodyFocused)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
@@ -503,107 +508,21 @@ struct EntryDetailView: View {
         text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func attachFile(_ url: URL) {
-        let ok = url.startAccessingSecurityScopedResource()
-        defer { if ok { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url) else { return }
-        let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
-        insertMedia(data, ext: ext)
-    }
-
-    private func insertMedia(_ data: Data, ext: String) {
-        guard let rel = store.saveAsset(data, ext: ext) else { return }
-        appendLink(rel)
-    }
-
     /// Attach a file the camera just wrote (photo or video).
     private func attachCaptured(_ url: URL) {
         if let rel = store.importAsset(from: url) { appendLink(rel) }
     }
 
     private func appendLink(_ rel: String) {
-        let md = "![](\(rel))"
-        text = text.isEmpty ? md : text + "\n\n" + md
+        text = JournalStore.linking(rel, into: text, at: lastCaret)
     }
 
-    /// Load a picked photo/video and attach it (iOS Photos library). Videos
-    /// come across as a file (`PickedMovie`) so they never sit in memory whole.
+    /// Attach a photo or video picked from the iOS Photos library.
     private func loadPhoto(_ item: PhotosPickerItem) {
         Task { @MainActor in
             defer { photoItem = nil }
-            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }),
-               let movie = try? await item.loadTransferable(type: PickedMovie.self) {
-                if let rel = store.importAsset(from: movie.url) { appendLink(rel) }
-                try? FileManager.default.removeItem(at: movie.url)
-                return
-            }
-            guard let data = try? await item.loadTransferable(type: Data.self) else { return }
-            let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
-            insertMedia(data, ext: ext)
+            if let rel = await Attach.photo(item, into: store) { appendLink(rel) }
         }
-    }
-
-    /// Handle dropped items: file URLs (macOS/Files) or raw image/movie/audio
-    /// data (a photo dragged out of the iOS Photos app has no file URL).
-    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        var handled = false
-        for provider in providers {
-            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                handled = true
-                _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                    guard let url else { return }
-                    Task { @MainActor in
-                        // A dropped file only becomes an `![](assets/…)` link, and
-                        // that renders nothing for a .zip or a .docx — so anything
-                        // that isn't image/video/audio is turned away rather than
-                        // copied in behind a link that can never show it.
-                        guard isMediaFile(url) else {
-                            dropError = "Only images, video and audio can be attached to an entry."
-                            return
-                        }
-                        attachFile(url)
-                    }
-                }
-            } else if let id = provider.registeredTypeIdentifiers.first(where: { isMedia($0) }),
-                      let type = UTType(id) {
-                handled = true
-                if type.conforms(to: .movie) {
-                    // A dropped video lands as a temp file, not a Data buffer.
-                    provider.loadFileRepresentation(forTypeIdentifier: id) { url, _ in
-                        guard let url else { return }
-                        // The provider deletes its file when this returns; copy first.
-                        let dest = FileManager.default.temporaryDirectory
-                            .appendingPathComponent("\(UUID().uuidString).\(type.preferredFilenameExtension ?? "mov")")
-                        try? FileManager.default.copyItem(at: url, to: dest)
-                        Task { @MainActor in
-                            if let rel = store.importAsset(from: dest) { appendLink(rel) }
-                            try? FileManager.default.removeItem(at: dest)
-                        }
-                    }
-                } else {
-                    provider.loadDataRepresentation(forTypeIdentifier: id) { data, _ in
-                        guard let data else { return }
-                        let ext = type.preferredFilenameExtension ?? "dat"
-                        Task { @MainActor in insertMedia(data, ext: ext) }
-                    }
-                }
-            }
-        }
-        return handled
-    }
-
-    private func isMedia(_ id: String) -> Bool {
-        guard let t = UTType(id) else { return false }
-        return t.conforms(to: .image) || t.conforms(to: .movie) || t.conforms(to: .audio)
-    }
-
-    /// Same test for a dropped file: its own content type when the file system
-    /// knows one, its extension otherwise.
-    private func isMediaFile(_ url: URL) -> Bool {
-        let type = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType
-            ?? UTType(filenameExtension: url.pathExtension)
-        guard let type else { return false }
-        return type.conforms(to: .image) || type.conforms(to: .movie) || type.conforms(to: .audio)
     }
 
     #if os(macOS)

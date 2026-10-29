@@ -366,3 +366,18 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertEqual(JournalStore.excerpt(of: untitled), "Second line")
     }
 }
+
+// MARK: - Attaching media where the caret is
+
+final class MediaLinkTests: XCTestCase {
+    func testMediaLinkLandsAtTheCaretAsItsOwnParagraph() {
+        XCTAssertEqual(JournalStore.linking("assets/a.jpg", into: "", at: nil), "![](assets/a.jpg)")
+        XCTAssertEqual(JournalStore.linking("assets/a.jpg", into: "Hi", at: nil), "Hi\n\n![](assets/a.jpg)")
+        // At the very end the caret counts as no caret: appended.
+        XCTAssertEqual(JournalStore.linking("assets/a.jpg", into: "Hi", at: 2), "Hi\n\n![](assets/a.jpg)")
+        XCTAssertEqual(JournalStore.linking("assets/a.jpg", into: "One\n\nTwo", at: 5), "One\n\n![](assets/a.jpg)\n\nTwo")
+        XCTAssertEqual(JournalStore.linking("assets/a.jpg", into: "One two", at: 3), "One\n\n![](assets/a.jpg)\n\n two")
+        XCTAssertEqual(JournalStore.linking("assets/a.jpg", into: "One\nTwo", at: 4), "One\n\n![](assets/a.jpg)\n\nTwo")
+        XCTAssertEqual(JournalStore.linking("assets/a.jpg", into: "Top", at: 0), "![](assets/a.jpg)\n\nTop")
+    }
+}

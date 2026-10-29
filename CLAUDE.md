@@ -204,7 +204,7 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   `make apple-test` runs hostless XCTest. Requires macOS, full Xcode and rustup.
   The Apple workflow covers these commands. Generated bindings/frameworks are
   ignored, never hand-edited. Launch hints for screenshots (no effect when unset):
-  `QUIRE_START_TAB`, `QUIRE_THEME`, `QUIRE_OPEN=settings|search|media`,
+  `QUIRE_START_TAB`, `QUIRE_THEME`, `QUIRE_OPEN=settings|search|media|write`,
   `QUIRE_SETTINGS_PAGE`. The iPhone design reads colours from `themes.json`; the
   Marathon themes are a look, not a palette (`QuireTheme.isMarathon`).
   iOS external-display presentation is a desk mode (`Design/DeskViews.swift`, in Quire's

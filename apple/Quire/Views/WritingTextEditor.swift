@@ -117,6 +117,9 @@ struct WritingTextEditor: NSViewRepresentable {
     /// reported on every move; nil once the editor gives up keyboard focus.
     /// The composer forwards it to the external display.
     var onCaretChange: ((Int?) -> Void)? = nil
+    /// A paste that's media (an image, a copied photo or video file) goes here
+    /// to be attached instead of typed; nil pastes everything as text.
+    var onPasteMedia: ((PastedMedia) -> Void)? = nil
     /// Mirror mode (the external display): read-only, no Dynamic Type scaling
     /// (the monitor's type is sized off the panel, not the phone's text
     /// setting), with a caret of its own drawn at `mirrorCaret` and kept in
@@ -127,7 +130,18 @@ struct WritingTextEditor: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSTextView.scrollableTextView()
+        // Built by hand rather than with `scrollableTextView()` so the text
+        // view can be the one that hears a media paste.
+        let scroll = NSScrollView()
+        let tv0 = PastingTextView(frame: .zero)
+        tv0.minSize = .zero
+        tv0.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        tv0.isVerticallyResizable = true
+        tv0.isHorizontallyResizable = false
+        tv0.autoresizingMask = [.width]
+        tv0.textContainer?.widthTracksTextView = true
+        tv0.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        scroll.documentView = tv0
         scroll.hasVerticalScroller = false
         scroll.hasHorizontalScroller = false
         scroll.drawsBackground = false
@@ -187,6 +201,7 @@ struct WritingTextEditor: NSViewRepresentable {
         context.coordinator.focusParagraph = focusParagraph
         context.coordinator.tagSuggestions = tagSuggestions
         context.coordinator.onCaretChange = onCaretChange
+        (tv as? PastingTextView)?.pasteMedia = onPasteMedia
     }
 
     /// Everything that changes how text is styled, so unchanged updates skip
@@ -448,6 +463,17 @@ struct WritingTextEditor: NSViewRepresentable {
     }
 }
 
+/// The editor's text view: a paste of media hands it to `pasteMedia` to be
+/// attached; anything else pastes as usual.
+final class PastingTextView: NSTextView {
+    var pasteMedia: ((PastedMedia) -> Void)?
+
+    override func paste(_ sender: Any?) {
+        if let pasteMedia, let media = Attach.pasteboardMedia() { pasteMedia(media); return }
+        super.paste(sender)
+    }
+}
+
 #elseif os(iOS)
 import UIKit
 
@@ -496,6 +522,9 @@ struct WritingTextEditor: UIViewRepresentable {
     /// reported on every move; nil once the editor gives up keyboard focus.
     /// The composer forwards it to the external display.
     var onCaretChange: ((Int?) -> Void)? = nil
+    /// A paste that's media (an image, a copied photo or video file) goes here
+    /// to be attached instead of typed; nil pastes everything as text.
+    var onPasteMedia: ((PastedMedia) -> Void)? = nil
     /// Mirror mode (the external display): read-only, no Dynamic Type scaling
     /// (the monitor's type is sized off the panel, not the phone's text
     /// setting), with a caret of its own drawn at `mirrorCaret` and kept in
@@ -507,7 +536,7 @@ struct WritingTextEditor: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
     func makeUIView(context: Context) -> UITextView {
-        let tv: UITextView = mirror ? MirrorTextView() : UITextView()
+        let tv: UITextView = mirror ? MirrorTextView() : PastingTextView()
         tv.delegate = context.coordinator
         tv.backgroundColor = .clear
         tv.showsVerticalScrollIndicator = false
@@ -563,6 +592,7 @@ struct WritingTextEditor: UIViewRepresentable {
         context.coordinator.focusParagraph = focusParagraph
         context.coordinator.tagSuggestions = tagSuggestions
         context.coordinator.onCaretChange = onCaretChange
+        (tv as? PastingTextView)?.pasteMedia = onPasteMedia
         // UIKit focus callbacks update SwiftUI state; wait until this update
         // has finished and the text view is attached to its window.
         if focused != nil {
@@ -923,6 +953,22 @@ struct WritingTextEditor: UIViewRepresentable {
             tv.selectedRange = NSRange(location: sel.location + markerLen, length: sel.length)
             textViewDidChange(tv)
         }
+    }
+}
+
+/// The editor's text view: a paste of media hands it to `pasteMedia` to be
+/// attached; anything else pastes as usual.
+final class PastingTextView: UITextView {
+    var pasteMedia: ((PastedMedia) -> Void)?
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), pasteMedia != nil, UIPasteboard.general.hasImages { return true }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        if let pasteMedia, let media = Attach.pasteboardMedia() { pasteMedia(media); return }
+        super.paste(sender)
     }
 }
 

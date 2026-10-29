@@ -102,10 +102,10 @@ struct SettingsView: View {
          """),
         ("Photos, video & audio",
          """
-         Attach media from the ⋯ menu — on iOS pick from your Photo Library or Choose \
-         File; on macOS pick a file — or drag a photo or file onto the editor. Record a voice \
-         memo with the mic button (a Stop banner appears while recording), or "Record \
-         Video" from the ⋯ menu. Files are copied into an assets/ folder and stored as \
+         Attach media with the paperclip — Photo Library, Take Photo, Record Video, Voice \
+         Note or Choose File (on the Mac, voice memos have their own mic button) — or drag \
+         a photo or file onto the page, or paste a copied image. It lands where the cursor \
+         is. Files are copied into an assets/ folder and stored as \
          ![](assets/…) links — switch to Preview to see them inline. Rows show a small \
          photo/mic/film/paperclip badge for what they contain; browse everything under \
          Assets.

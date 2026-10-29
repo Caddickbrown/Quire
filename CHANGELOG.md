@@ -22,12 +22,16 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
+- **Apple**: attach media on iPhone and iPad again. The composer has a paperclip (Photo Library, Take Photo, Record Video, Voice Note, Choose File) and accepts dropped photos, video, audio and files, as the Mac does.
+- **Apple**: paste a copied image (or a copied photo, video or audio file on Mac) into any editor to attach it, as `^v` does in the terminal app.
+- **Apple**: attachments land where the cursor is, as their own paragraph, not at the end of the entry.
 - **Apple**: hidden mode for the monitor. Choose "VS Code (hidden)" as the monitor theme (Settings → External display, `,` on the monitor, or ⌥⌘T) and the monitor looks like VS Code on Windows 11 above a light taskbar of look-alike app icons: the entry you're writing or reading is its day file, with line numbers and a caret; a list is the Explorer, with the selected entry in a preview tab; Today is a README; settings is the Settings tab. Paused or locked, it is an empty editor. The phone is unchanged.
 - **Apple**: iPad runs Quire's design. At regular width the tab words become a narrow sidebar that folds to a strip (the sidebar button or ⌃⌘S; remembered) and, where there is room (iPad landscape, an iPhone that opens out), an entry opens beside the list instead of over it; layout follows the size class, not the device.
 - **Apple**: an On this day widget, a Lock Screen Today accessory (a ring of today's words against the goal, or the streak; figures; an inline line), and a Write a Line control that opens Today with its one-line field ready.
 - **Apple**: the Today widget's "Another prompt" button rerolls the prompt for the app and every widget.
 
 ### Changed
+- **Apple**: on the Mac, attaching has its own paperclip button instead of sitting in the ⋯ menu.
 - **Apple**: the widgets, the Lock Screen New Draft accessory and the writing-timer Live Activity are set in Quire's design instead of Nook's: the app's theme (Marathon included), Newsreader and IBM Plex, and the mark. Small shows today's words, Medium opens on today's prompt, Large is the Today page in miniature; they turn over at midnight on their own and tint on a tinted Home Screen.
 
 ### Fixed
