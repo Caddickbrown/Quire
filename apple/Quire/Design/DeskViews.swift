@@ -74,9 +74,9 @@ struct ExternalDisplayRoot: View {
                 DeskToday(metrics: metrics)
             case .browsing(let listTitle, let rows, let selected, let offset, let total):
                 DeskBrowse(listTitle: listTitle, rows: rows, selected: selected, offset: offset, total: total ?? rows.count, metrics: metrics)
-            case .composing(let title, let date, let text, let caret):
+            case .composing(let title, let date, let text, let caret, _):
                 DeskEntry(title: title, date: date, text: text, isStarred: false, live: true, caret: caret, metrics: metrics)
-            case .editing(let title, let date, let text, let caret, let isStarred, _):
+            case .editing(let title, let date, let text, let caret, let isStarred, _, _):
                 DeskEntry(title: title, date: date, text: text, isStarred: isStarred, live: true, caret: caret, metrics: metrics)
             case .reading(let title, let date, let text, let isStarred):
                 DeskEntry(title: title, date: date, text: text, isStarred: isStarred, live: false, caret: nil, metrics: metrics)
@@ -112,7 +112,7 @@ struct ExternalDisplayRoot: View {
             // No `?` or `,` here: with the editor focused they type.
             return [.init(key: "^J", label: "File"), .init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"),
                     .init(key: "^F", label: "Focus"), .init(key: "^P", label: "Prompt"), .init(key: "^D", label: "Discard"), .init(key: "⎋", label: "Done")]
-        case .editing(_, _, _, _, _, let isDraft):
+        case .editing(_, _, _, _, _, let isDraft, _):
             return (isDraft ? [.init(key: "^J", label: "File")] : []) +
                 [.init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"), .init(key: "^F", label: "Focus"),
                  .init(key: "^P", label: "Prompt")] +

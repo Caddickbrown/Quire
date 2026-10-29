@@ -106,17 +106,22 @@ private enum VSFiles {
     }
 
     /// An entry as its day file: `top/YYYY/MM/DD.md`, opened in the tree.
-    static func entry(top: String, date: Date, title: String, text: String, starred: Bool, caret: Int?) -> VSFile {
+    /// `inTitle` puts the caret on the header line, after the title.
+    static func entry(top: String, date: Date, title: String, text: String, starred: Bool, caret: Int?,
+                      inTitle: Bool = false) -> VSFile {
         let parts = Calendar.current.dateComponents([.year, .month, .day], from: date)
         let year = String(format: "%04d", parts.year ?? 2000)
         let month = String(format: "%02d", parts.month ?? 1)
         let name = String(format: "%02d.md", parts.day ?? 1)
         var header = "[" + stamp.string(from: date) + "]"
         if !title.isEmpty { header += " " + title }
+        let titleEnd = header.count
         if starred && !Entry.hasStarMarker(title) { header += " *" }
         let body = text.components(separatedBy: "\n")
         var caretAt: (Int, Int)?
-        if let caret {
+        if inTitle {
+            caretAt = (0, titleEnd)
+        } else if let caret {
             let utf16 = text.utf16
             let offset = min(max(0, caret), utf16.count)
             let before = String(utf16.prefix(offset)) ?? ""
@@ -222,10 +227,12 @@ private struct VSLive: View {
             return .file(readme)
         case .browsing(let listTitle, let rows, let selected, _, _):
             return .file(VSFiles.browse(listTitle: listTitle, rows: rows, selected: selected))
-        case .composing(let title, let date, let text, let caret):
-            return .file(VSFiles.entry(top: "inbox", date: date, title: title, text: text, starred: false, caret: caret ?? text.utf16.count))
-        case .editing(let title, let date, let text, let caret, let isStarred, let isDraft):
-            return .file(VSFiles.entry(top: isDraft ? "inbox" : "journal", date: date, title: title, text: text, starred: isStarred, caret: caret ?? text.utf16.count))
+        case .composing(let title, let date, let text, let caret, let inTitle):
+            return .file(VSFiles.entry(top: "inbox", date: date, title: title, text: text, starred: false,
+                                       caret: caret ?? text.utf16.count, inTitle: inTitle))
+        case .editing(let title, let date, let text, let caret, let isStarred, let isDraft, let inTitle):
+            return .file(VSFiles.entry(top: isDraft ? "inbox" : "journal", date: date, title: title, text: text, starred: isStarred,
+                                       caret: caret ?? text.utf16.count, inTitle: inTitle))
         case .reading(let title, let date, let text, let isStarred):
             return .file(VSFiles.entry(top: "journal", date: date, title: title, text: text, starred: isStarred, caret: nil))
         }
@@ -793,6 +800,11 @@ private enum VSIcon {
 private struct VSEditor: View {
     let file: VSFile
     let s: VSScale
+    /// When the caret last moved: like VS Code, it holds solid while you type
+    /// and only blinks once you stop.
+    @State private var moved = Date()
+
+    private var caretKey: String { file.caret.map { "\($0.line):\($0.col)" } ?? "" }
 
     private var gutter: CGFloat { CGFloat(max(3, String(file.lines.count).count)) * s.code * 0.62 + 30 * s.z }
 
@@ -808,6 +820,7 @@ private struct VSEditor: View {
                     .padding(.bottom, 200 * s.z)
                 }
                 .onChange(of: file.caret?.line) { _, line in if let line { proxy.scrollTo(line) } }
+                .onChange(of: caretKey) { _, _ in moved = Date() }
                 .onAppear { if let line = file.caret?.line { proxy.scrollTo(line, anchor: .center) } }
             }
             VSMinimap(lines: file.lines, s: s)
@@ -823,9 +836,16 @@ private struct VSEditor: View {
                 .padding(.trailing, 26 * s.z)
             Group {
                 if current, let col = file.caret?.col {
-                    TimelineView(.periodic(from: .now, by: 0.53)) { t in
-                        let on = Int(t.date.timeIntervalSinceReferenceDate / 0.53) % 2 == 0
+                    TimelineView(.periodic(from: moved, by: 0.53)) { t in
+                        let on = Int(max(0, t.date.timeIntervalSince(moved)) / 0.53) % 2 == 0
                         Text(VSMarkdown.styled(line, s: s, caret: col, caretOn: on))
+                            .overlay(alignment: .topLeading) {
+                                if col == 0 {
+                                    Rectangle().fill(on ? VS.caret : .clear)
+                                        .frame(width: max(1, 1.5 * s.z), height: s.code * 1.25)
+                                        .offset(x: -max(1, 1.5 * s.z) / 2)
+                                }
+                            }
                     }
                 } else {
                     Text(VSMarkdown.styled(line, s: s, caret: nil, caretOn: false))
@@ -910,15 +930,23 @@ private enum VSMarkdown {
             }
         }
         if let caret {
-            // A thin bar, pulled back so the text after it barely moves.
-            var bar = AttributedString("|")
-            bar.font = .system(size: s.code, weight: .ultraLight, design: .monospaced)
+            // A full-height bar that takes no room: half its width comes off the
+            // character before it and half off itself, so it sits on the
+            // boundary and nothing after it moves. Box-drawing, not "|", which
+            // is a line-break opportunity and would rewrap the line as it moved.
+            let advance = ("│" as NSString).size(withAttributes: [.font: UIFont.monospacedSystemFont(ofSize: s.code, weight: .regular)]).width
+            var bar = AttributedString("│")
+            bar.font = mono
             bar.foregroundColor = caretOn ? VS.caret : .clear
-            bar.kern = -s.code * 0.36
-            let chars = out.characters
+            bar.kern = -advance / 2
+            // At the line's start there is nothing to borrow from; the editor
+            // draws that caret itself (see VSEditor.lineView).
             let at = min(max(0, caret), line.count)
-            if line.isEmpty { out = bar } else {
-                out.insert(bar, at: chars.index(chars.startIndex, offsetBy: at))
+            if at > 0 {
+                let chars = out.characters
+                let index = chars.index(chars.startIndex, offsetBy: at)
+                out[chars.index(before: index)..<index].kern = -advance / 2
+                out.insert(bar, at: index)
             }
         }
         return out

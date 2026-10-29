@@ -40,11 +40,12 @@ enum ExternalDisplayContent: Equatable {
     /// A list being arrowed through. Stats give way to this on the first ↑/↓.
     case browsing(listTitle: String, rows: [ExternalRow], selected: Int, offset: Int = 0, total: Int? = nil)
     /// The composer's live text, republished as you type. `caret` is the
-    /// editor's caret (a UTF-16 offset), nil while the body isn't focused.
-    case composing(title: String, date: Date, text: String, caret: Int?)
+    /// editor's caret (a UTF-16 offset), nil while the body isn't focused;
+    /// `inTitle` is set while the title field has the cursor instead.
+    case composing(title: String, date: Date, text: String, caret: Int?, inTitle: Bool = false)
     /// An existing entry open in its editor — the same live mirror as the
     /// composer, with the entry editor's own key hints.
-    case editing(title: String, date: Date, text: String, caret: Int?, isStarred: Bool, isDraft: Bool = false)
+    case editing(title: String, date: Date, text: String, caret: Int?, isStarred: Bool, isDraft: Bool = false, inTitle: Bool = false)
     /// An entry being read, rendered with its media inline.
     case reading(title: String, date: Date, text: String, isStarred: Bool)
 }

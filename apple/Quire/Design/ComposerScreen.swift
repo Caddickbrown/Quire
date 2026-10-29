@@ -119,6 +119,7 @@ struct ComposerScreen: View {
         }
         .interactiveDismissDisabled()
         .onChange(of: caret) { _, _ in mirror() }
+        .onChange(of: focus) { _, _ in mirror() }
         .onChange(of: starred) { _, _ in scheduleSave(); mirror() }
         .alert("Save a recovery copy?", isPresented: $recoverCopy) {
             Button("Save copy") { saveRecoveryCopy() }
@@ -331,8 +332,9 @@ struct ComposerScreen: View {
     private func mirror() {
         guard loaded else { return }
         let content: ExternalDisplayContent = editing == nil
-            ? .composing(title: title, date: stampDate, text: text, caret: caret)
-            : .editing(title: title, date: stampDate, text: text, caret: caret, isStarred: starred, isDraft: isDraft)
+            ? .composing(title: title, date: stampDate, text: text, caret: caret, inTitle: focus == .title)
+            : .editing(title: title, date: stampDate, text: text, caret: caret, isStarred: starred, isDraft: isDraft,
+                       inTitle: focus == .title)
         ExternalDisplayModel.shared.present(content, owner: routerID)
     }
 

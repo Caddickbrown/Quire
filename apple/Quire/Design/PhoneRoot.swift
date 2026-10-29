@@ -166,7 +166,8 @@ struct PhoneRoot: View {
         case "entry":
             guard let e = entries.first(where: { $0.body.count > 400 }) ?? entries.first else { return }
             model.present(.editing(title: e.suffix, date: stamp.date(from: e.ts) ?? .now, text: e.body,
-                                   caret: e.body.utf16.count, isStarred: e.isStarred), owner: UUID())
+                                   caret: Int(ProcessInfo.processInfo.environment["QUIRE_DESK_CARET"] ?? "") ?? e.body.utf16.count,
+                                   isStarred: e.isStarred), owner: UUID())
         case "browse":
             model.present(.browsing(listTitle: "Journal", rows: ExternalRow.rows(from: entries), selected: 3), owner: UUID())
         default: break
