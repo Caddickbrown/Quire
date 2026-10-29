@@ -961,6 +961,24 @@ struct WritingTextEditor: UIViewRepresentable {
 final class PastingTextView: UITextView {
     var pasteMedia: ((PastedMedia) -> Void)?
 
+    /// The composer's control chords, declared here because the text view is
+    /// the first responder while you type: the key catcher sits beside the
+    /// page, not above it, so nothing it declares is in this responder chain.
+    /// Priority over the text system, which reads ^f ^p ^d ^t as cursor edits.
+    override var keyCommands: [UIKeyCommand]? {
+        let own = super.keyCommands ?? []
+        guard KeyCommandRouter.shared.wantsChords else { return own }
+        return own + KeyCommandRouter.chords.map {
+            let c = UIKeyCommand(input: $0, modifierFlags: .control, action: #selector(quireChord(_:)))
+            c.wantsPriorityOverSystemBehavior = true
+            return c
+        }
+    }
+
+    @objc private func quireChord(_ command: UIKeyCommand) {
+        if let input = command.input { KeyCommandRouter.shared.chord(input) }
+    }
+
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         if action == #selector(paste(_:)), pasteMedia != nil, UIPasteboard.general.hasImages { return true }
         return super.canPerformAction(action, withSender: sender)

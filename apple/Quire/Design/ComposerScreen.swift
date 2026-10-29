@@ -30,7 +30,8 @@ struct ComposerScreen: View {
     @State private var starred = false
     /// The entry being edited, kept current as saves land.
     @State private var current: Entry?
-    /// A new page's draft timestamp: fixed on the first save, then the key it keeps.
+    /// A new page's draft timestamp: fixed at the first keystroke (as `jnl new`
+    /// stamps when you start writing), then the key it keeps.
     @State private var startedAt: String?
     @State private var focusMode = false
     @State private var loaded = false
@@ -107,9 +108,10 @@ struct ComposerScreen: View {
             footer
         }
         .background(q.pageColor.ignoresSafeArea())
+        .background(chordKeys)
         .onAppear { load(); registerKeys() }
-        .onChange(of: title) { _, _ in scheduleSave(); mirror() }
-        .onChange(of: text) { _, _ in scheduleSave(); mirror() }
+        .onChange(of: title) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror() }
+        .onChange(of: text) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror() }
         .onDisappear {
             pending?.cancel()
             ExternalDisplayModel.shared.releasePage(owner: routerID)
@@ -173,6 +175,18 @@ struct ComposerScreen: View {
                 .frame(minWidth: 44)
         }
         .padding(.horizontal, 16).padding(.top, 8)
+    }
+
+    /// The chords again for the title field, which is a SwiftUI field and so
+    /// can't declare them itself; the body's text view declares its own.
+    private var chordKeys: some View {
+        ZStack {
+            ForEach(KeyCommandRouter.chords, id: \.self) { k in
+                Button(k) { KeyCommandRouter.shared.chord(k) }
+                    .keyboardShortcut(KeyEquivalent(Character(k)), modifiers: .control)
+            }
+        }
+        .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
     }
 
     private var editor: some View {
@@ -320,6 +334,14 @@ struct ComposerScreen: View {
             ? .composing(title: title, date: stampDate, text: text, caret: caret)
             : .editing(title: title, date: stampDate, text: text, caret: caret, isStarred: starred, isDraft: isDraft)
         ExternalDisplayModel.shared.present(content, owner: routerID)
+    }
+
+    /// Until now the header showed the time of each redraw, so typing and
+    /// deleting a letter before the first save moved it on every keystroke.
+    private func stampOnFirstKeystroke() {
+        guard loaded, editing == nil, current == nil, startedAt == nil,
+              !title.isEmpty || !text.isEmpty else { return }
+        startedAt = JournalStore.nowTS()
     }
 
     private func scheduleSave() {

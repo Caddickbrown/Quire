@@ -132,6 +132,9 @@ struct QuireKeyHandlers {
     /// Whether the visible page wants the control chords declared.
     var wantsChords: Bool { top?.wantsChords ?? false }
 
+    /// The composer's control chords: file, save, time, focus, prompt, discard.
+    static let chords = ["j", "s", "t", "f", "p", "d"]
+
     @discardableResult func chord(_ k: String) -> Bool {
         guard let top, top.wantsChords else { return false }
         return top.chord(k)
@@ -418,3 +421,4 @@ private struct EntryListNavigation: ViewModifier {
         )
     }
 }
+
