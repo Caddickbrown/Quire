@@ -25,6 +25,15 @@ struct ExternalDisplayRoot: View {
     @AppStorage(ExternalTextSize.key) private var textSizeRaw = ExternalTextSize.regular.rawValue
 
     var body: some View {
+        if monitorTheme == ExternalTheme.vsCode {
+            DeskCode(store: model.store, hints: hints,
+                     scale: (ExternalTextSize(rawValue: textSizeRaw) ?? .regular).scale)
+        } else {
+            desk
+        }
+    }
+
+    @ViewBuilder private var desk: some View {
         // The phone's theme unless the monitor was given its own.
         let id = monitorTheme == ExternalTheme.followPhone ? themeID : monitorTheme
         let q = QuireTheme.resolve(id, scheme: model.colorScheme)

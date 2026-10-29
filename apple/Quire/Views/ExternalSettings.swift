@@ -108,7 +108,7 @@ import SwiftUI
             defaults.set(id, forKey: QuireTheme.storageKey)
             defaults.set(ExternalTheme.followPhone, forKey: ExternalTheme.key)
         }
-        let monitorIDs = [ExternalTheme.followPhone] + ExternalTheme.all.map(\.id)
+        let monitorIDs = ExternalTheme.monitorIDs
         let size = ExternalTextSize(rawValue: defaults.string(forKey: ExternalTextSize.key) ?? "") ?? .regular
         let sizes = ExternalTextSize.allCases
         let hints = flag(ShortcutHints.key, default: true)
@@ -131,7 +131,7 @@ import SwiftUI
             Item(id: "theme", title: "Theme", value: name(self.appThemeID)) {
                 setBoth(next(self.appThemeID, in: ids))
             },
-            Item(id: "monitor", title: "Monitor theme", value: self.monitorThemeID == ExternalTheme.followPhone ? "Same as phone" : (ExternalTheme.selected(self.monitorThemeID)?.name ?? "—")) {
+            Item(id: "monitor", title: "Monitor theme", value: ExternalTheme.monitorName(self.monitorThemeID)) {
                 guard !monitorIDs.isEmpty else { return }
                 self.defaults.set(next(self.monitorThemeID, in: monitorIDs), forKey: ExternalTheme.key)
             },

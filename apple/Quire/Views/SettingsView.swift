@@ -391,6 +391,7 @@ struct SettingsView: View {
                 Picker("Theme", selection: $externalThemeRaw) {
                     Text("Same as phone").tag(ExternalTheme.followPhone)
                     ForEach(ExternalTheme.all) { Text($0.name).tag($0.id) }
+                    Text(ExternalTheme.vsCodeName).tag(ExternalTheme.vsCode)
                 }
                 Toggle("Pause external display", isOn: Binding(get: { externalDisplay.isPaused }, set: { value in
                     if externalDisplay.isPaused != value { externalDisplay.togglePause() }

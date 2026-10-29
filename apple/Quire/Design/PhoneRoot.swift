@@ -134,6 +134,42 @@ struct PhoneRoot: View {
             default: break
             }
         }
+        // `QUIRE_DESK=idle|entry|browse` draws the monitor over the app, as if one
+        // were plugged in (screenshots; simulators have no second screen to hand).
+        // Drawn at 1920×1080 and scaled to fit, as a monitor would show it.
+        .overlay {
+            if Self.deskPreview != nil {
+                GeometryReader { geo in
+                    let k = min(geo.size.width / 1920, geo.size.height / 1080)
+                    ExternalDisplayRoot().frame(width: 1920, height: 1080).scaleEffect(k)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                }
+                .background(Color.black).ignoresSafeArea()
+            }
+        }
+        .task { if let mode = Self.deskPreview { await previewDesk(mode) } }
+    }
+
+    private static var deskPreview: String? { ProcessInfo.processInfo.environment["QUIRE_DESK"] }
+
+    private func previewDesk(_ mode: String) async {
+        let model = ExternalDisplayModel.shared
+        model.previewConnected()
+        var entries: [Entry] = []
+        for _ in 0..<20 where entries.isEmpty {
+            try? await Task.sleep(for: .seconds(0.5))
+            entries = store.allEntriesByDay().flatMap(\.entries)
+        }
+        let stamp = DateFormatter(); stamp.locale = Locale(identifier: "en_US_POSIX"); stamp.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        switch mode {
+        case "entry":
+            guard let e = entries.first(where: { $0.body.count > 400 }) ?? entries.first else { return }
+            model.present(.editing(title: e.suffix, date: stamp.date(from: e.ts) ?? .now, text: e.body,
+                                   caret: e.body.utf16.count, isStarred: e.isStarred), owner: UUID())
+        case "browse":
+            model.present(.browsing(listTitle: "Journal", rows: ExternalRow.rows(from: entries), selected: 3), owner: UUID())
+        default: break
+        }
     }
 
     /// Compact width: the phone shell. Regular width (iPad, an opened-out

@@ -5,6 +5,17 @@ struct ExternalTheme: Decodable, Identifiable {
     static let key = "deskMonitorTheme"
     /// The monitor takes the phone's theme, unless it was given its own.
     static let followPhone = "phone"
+    /// Hidden mode: the monitor dresses as VS Code on Windows (`DeskCode.swift`).
+    /// Monitor only, so it lives here rather than in themes.json.
+    static let vsCode = "vscode"
+    static let vsCodeName = "VS Code (hidden)"
+    /// Every monitor choice in cycle order.
+    static var monitorIDs: [String] { [followPhone] + all.map(\.id) + [vsCode] }
+    static func monitorName(_ id: String) -> String {
+        if id == followPhone { return "Same as phone" }
+        if id == vsCode { return vsCodeName }
+        return selected(id)?.name ?? "—"
+    }
     let id: String
     let name: String
     let dark: Bool

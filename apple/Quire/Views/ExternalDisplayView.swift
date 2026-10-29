@@ -182,8 +182,8 @@ struct ExternalRow: Equatable, Identifiable {
         UserDefaults.standard.set(all[min(all.count - 1, max(0, index + delta))].rawValue, forKey: ExternalTextSize.key)
     }
     func cycleTheme() {
-        guard isConnected, !ExternalTheme.all.isEmpty else { return }
-        let ids = [ExternalTheme.followPhone] + ExternalTheme.all.map(\.id)
+        guard isConnected else { return }
+        let ids = ExternalTheme.monitorIDs
         let current = UserDefaults.standard.string(forKey: ExternalTheme.key) ?? ExternalTheme.followPhone
         let index = ids.firstIndex(of: current) ?? 0
         UserDefaults.standard.set(ids[(index + 1) % ids.count], forKey: ExternalTheme.key)
@@ -223,6 +223,12 @@ struct ExternalRow: Equatable, Identifiable {
         // up on the monitor. `applyLockState` restores it on unlock.
         content = AppLockManager.shared.showsVeil || isPaused ? .idle : latest
         applyAutoDim()
+    }
+
+    /// `QUIRE_DESK` screenshots: behave as if a display were attached.
+    func previewConnected() {
+        isConnected = true
+        content = latest
     }
 
     func displayDidDisconnect() {

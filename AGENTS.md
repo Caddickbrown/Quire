@@ -219,6 +219,9 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   bar (`ExternalDisplayView.hints`) must list exactly the keys that work;
   `ExternalTheme` loads the bundled root `themes.json`. Option-Command +/- changes
   size, T theme, P pause, H hints. Locked/paused displays never render journal text.
+  The monitor theme `vscode` (hidden mode, `Design/DeskCode.swift`, monitor only) draws
+  the same pages as VS Code on Windows 11; `QUIRE_DESK=idle|entry|browse` draws the
+  monitor over the app at 1920×1080 for simulator screenshots.
 - **Android**: not in the repo yet; Wander's Compose shell over a SAF `Vault`.
 
 ## Releases
