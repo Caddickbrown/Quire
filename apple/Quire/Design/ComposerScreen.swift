@@ -316,7 +316,9 @@ struct ComposerScreen: View {
             opened = (title, text, starred)
         }
         // The page opens ready to type into.
-        DispatchQueue.main.async { if editing == nil { focus = .title } }
+        // A new page starts on its title; an entry opens ready to carry on,
+        // with the cursor at the end of its text.
+        DispatchQueue.main.async { focus = editing == nil ? .title : .body }
         mirror()
         // The edits above would otherwise schedule a save of unchanged text.
         pending?.cancel()
@@ -398,7 +400,7 @@ struct ComposerScreen: View {
 
     private func close() {
         finishRecordingIfNeeded()
-        if saveNow() { dismiss() }
+        if saveNow() { leave() }
     }
 
     private func saveRecoveryCopy() {
@@ -457,7 +459,7 @@ struct ComposerScreen: View {
             guard store.deleteEditorDraft(cur) else { reportFailure(); return }
         }
         onRemove()
-        dismiss()
+        leave()
     }
 
     /// Retiming adopts the returned reference and leaves the editor open.
@@ -468,6 +470,17 @@ struct ComposerScreen: View {
         mirror()
     }
 
+    /// Close the page. The cursor is let go first and the page closes on the
+    /// next turn of the run loop: closing it with a hardware key still being
+    /// handled (^j, Esc) set SwiftUI dropping the text view's focus against
+    /// UIKit and the key catcher taking it back, each swap rebuilding the
+    /// keyboard's input views, until the watchdog killed the app.
+    private func leave() {
+        focus = nil
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        DispatchQueue.main.async { dismiss() }
+    }
+
     /// File the draft, or just close a filed entry.
     private func finish() {
         finishRecordingIfNeeded()
@@ -476,7 +489,7 @@ struct ComposerScreen: View {
             guard store.fileDraft(current) != nil else { reportFailure(); return }
             onRemove()
         }
-        dismiss()
+        leave()
     }
 }
 

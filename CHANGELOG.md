@@ -31,10 +31,12 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: the Today widget's "Another prompt" button rerolls the prompt for the app and every widget.
 
 ### Changed
+- **Apple**: an entry opens with the cursor at the end of its text, ready to carry on writing.
 - **Apple**: on the Mac, attaching has its own paperclip button instead of sitting in the ⋯ menu.
 - **Apple**: the widgets, the Lock Screen New Draft accessory and the writing-timer Live Activity are set in Quire's design instead of Nook's: the app's theme (Marathon included), Newsreader and IBM Plex, and the mark. Small shows today's words, Medium opens on today's prompt, Large is the Today page in miniature; they turn over at midnight on their own and tint on a tinted Home Screen.
 
 ### Fixed
+- **Apple**: filing or closing a page from a hardware keyboard (`^j`, Esc) no longer freezes the app until iOS kills it.
 - **Apple**: hidden mode's caret behaves like VS Code's: the text no longer shifts or rewraps around it, it holds solid while you type and blinks when you stop, and it sits in the title while you type the title.
 - **Apple**: the composer's control keys (`^j` file, `^s` save, `^t`, `^f`, `^p`, `^d`) work while you type; they only reached the app when no field had the cursor, and the text field read some of them as cursor moves.
 - **Apple**: a new page's time is fixed at the first keystroke, so typing and deleting before the first save no longer moves it.
