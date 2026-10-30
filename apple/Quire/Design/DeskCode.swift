@@ -803,6 +803,8 @@ private struct VSEditor: View {
     /// When the caret last moved: like VS Code, it holds solid while you type
     /// and only blinks once you stop.
     @State private var moved = Date()
+    /// Lays the body out at the editor's width for the phone's ↑/↓.
+    @State private var layout = VSBodyLayout()
 
     private var caretKey: String { file.caret.map { "\($0.line):\($0.col)" } ?? "" }
 
@@ -821,6 +823,11 @@ private struct VSEditor: View {
                 }
                 .onChange(of: file.caret?.line) { _, line in if let line { proxy.scrollTo(line) } }
                 .onChange(of: caretKey) { _, _ in moved = Date() }
+                .background(GeometryReader { g in
+                    Color.clear
+                        .onAppear { layout.attach(width: g.size.width - gutter, size: s.code) }
+                        .onChange(of: g.size.width - gutter) { _, w in layout.attach(width: w, size: s.code) }
+                })
                 .onAppear { if let line = file.caret?.line { proxy.scrollTo(line, anchor: .center) } }
             }
             VSMinimap(lines: file.lines, s: s)
@@ -857,6 +864,32 @@ private struct VSEditor: View {
         .padding(.vertical, (s.lineHeight - s.code * 1.2) / 2)
         .frame(minHeight: s.lineHeight)
         .overlay { if current { Rectangle().stroke(VS.currentLine, lineWidth: 2 * s.z) } }
+    }
+}
+
+/// The body broken into lines as the editor breaks it, for ↑/↓ on the phone
+/// (`ExternalDisplayModel.bodyLayout`): an off-screen text view at the text
+/// column's width in the editor's font. It answers only while the editor that
+/// made it is alive.
+@MainActor private final class VSBodyLayout {
+    private let view: UITextView = {
+        let tv = UITextView(frame: .zero)
+        tv.textContainerInset = .zero
+        tv.textContainer.lineFragmentPadding = 0
+        tv.isScrollEnabled = false
+        return tv
+    }()
+
+    func attach(width: CGFloat, size: CGFloat) {
+        guard width > 0 else { return }
+        view.font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        view.frame = CGRect(x: 0, y: 0, width: width, height: 100_000)
+        view.textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        ExternalDisplayModel.shared.bodyLayout = { [weak self] text in
+            guard let view = self?.view else { return nil }
+            if view.text != text { view.text = text }
+            return view
+        }
     }
 }
 

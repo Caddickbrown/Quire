@@ -105,6 +105,14 @@ struct ExternalRow: Equatable, Identifiable {
     /// it, which also makes the Auto theme track the system on both screens.
     @Published var colorScheme: ColorScheme = .light
 
+    #if os(iOS)
+    /// How the monitor lays out the live entry's body, so ↑/↓ on the phone
+    /// move by the monitor's lines rather than the phone's (`PastingTextView`).
+    /// Set by whichever monitor page shows the body: given the body text, it
+    /// returns a text view holding it, broken into lines as the monitor breaks it.
+    var bodyLayout: ((String) -> UITextView?)?
+    #endif
+
     /// The latest content regardless of whether anything is plugged in.
     /// `content` only tracks it while a display is attached — otherwise every
     /// keystroke in the composer would publish to nobody.

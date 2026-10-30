@@ -545,6 +545,11 @@ struct WritingTextEditor: UIViewRepresentable {
         tv.textContainer.lineFragmentPadding = 0
         tv.isScrollEnabled = !sizeToFit
         if mirror {
+            // The phone's ↑/↓ follow this view's lines (see PastingTextView).
+            ExternalDisplayModel.shared.bodyLayout = { [weak tv] text in
+                guard let tv, tv.text == text else { return nil }
+                return tv
+            }
             // Nobody can touch the monitor; the view scrolls itself to the
             // caret instead. Selectable stays on — the caret geometry comes
             // from the text-input machinery, which a non-selectable view
@@ -966,13 +971,41 @@ final class PastingTextView: UITextView {
     /// page, not above it, so nothing it declares is in this responder chain.
     /// Priority over the text system, which reads ^f ^p ^d ^t as cursor edits.
     override var keyCommands: [UIKeyCommand]? {
-        let own = super.keyCommands ?? []
+        var own = super.keyCommands ?? []
+        // With a monitor showing this text, ↑/↓ move by the monitor's lines;
+        // the phone keeps its own wrapping for how the text looks.
+        if ExternalDisplayModel.shared.isConnected, ExternalDisplayModel.shared.bodyLayout != nil {
+            own += [UIKeyCommand.inputUpArrow, UIKeyCommand.inputDownArrow].map {
+                let c = UIKeyCommand(input: $0, modifierFlags: [], action: #selector(quireLine(_:)))
+                c.wantsPriorityOverSystemBehavior = true
+                return c
+            }
+        }
         guard KeyCommandRouter.shared.wantsChords else { return own }
         return own + KeyCommandRouter.chords.map {
             let c = UIKeyCommand(input: $0, modifierFlags: .control, action: #selector(quireChord(_:)))
             c.wantsPriorityOverSystemBehavior = true
             return c
         }
+    }
+
+    /// The column a run of ↑/↓ keeps to, as in any editor: a short line
+    /// passed on the way doesn't pull the caret left for good.
+    private var goalX: CGFloat?
+    private var lastLineMove: Int?
+
+    @objc private func quireLine(_ command: UIKeyCommand) {
+        let up = command.input == UIKeyCommand.inputUpArrow
+        let range = selectedRange
+        let caret = up ? range.location : range.location + range.length
+        if caret != lastLineMove { goalX = nil }
+        let layout = ExternalDisplayModel.shared.bodyLayout?(text) ?? self
+        guard let (to, x) = layout.verticalMove(from: caret, up: up, goalX: goalX) else { return }
+        goalX = x
+        lastLineMove = to
+        selectedRange = NSRange(location: to, length: 0)
+        scrollRangeToVisible(selectedRange)
+        delegate?.textViewDidChangeSelection?(self)
     }
 
     @objc private func quireChord(_ command: UIKeyCommand) {
@@ -987,6 +1020,26 @@ final class PastingTextView: UITextView {
     override func paste(_ sender: Any?) {
         if let pasteMedia, let media = Attach.pasteboardMedia() { pasteMedia(media); return }
         super.paste(sender)
+    }
+}
+
+extension UITextView {
+    /// Where ↑ or ↓ from `caret` (a UTF-16 offset) lands in this view's own
+    /// line breaks, keeping to `goalX` when given; returns the new offset and
+    /// the column's x. Past the first or last line it goes to the start or end.
+    func verticalMove(from caret: Int, up: Bool, goalX: CGFloat?) -> (Int, CGFloat)? {
+        let length = (text as NSString).length
+        guard let from = position(from: beginningOfDocument, offset: min(max(0, caret), length)) else { return nil }
+        let rect = caretRect(for: from)
+        guard rect.height > 0, rect.origin.x.isFinite else { return nil }
+        let x = goalX ?? rect.midX
+        let y = up ? rect.minY - rect.height / 2 : rect.maxY + rect.height / 2
+        let top = caretRect(for: beginningOfDocument).minY
+        let bottom = caretRect(for: endOfDocument).maxY
+        if y < top { return (0, x) }
+        if y > bottom { return (length, x) }
+        guard let to = closestPosition(to: CGPoint(x: x, y: y)) else { return nil }
+        return (offset(from: beginningOfDocument, to: to), x)
     }
 }
 
