@@ -476,6 +476,7 @@ final class PastingTextView: NSTextView {
 
 #elseif os(iOS)
 import UIKit
+import Combine
 
 private func platformFont(_ raw: String, _ size: CGFloat, scaled: Bool = true) -> UIFont {
     let base: UIFont
@@ -824,14 +825,25 @@ struct WritingTextEditor: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) { focused?.wrappedValue = true; reportCaret(textView) }
-        func textViewDidEndEditing(_ textView: UITextView) { focused?.wrappedValue = false; onCaretChange?(nil) }
+        func textViewDidEndEditing(_ textView: UITextView) {
+            focused?.wrappedValue = false
+            guard let onCaretChange else { return }
+            onCaretChange(nil)
+            select(nil)
+        }
 
         /// The end of the selection, or nil while the keyboard is elsewhere
         /// (the title field, say) — the monitor shouldn't blink a caret the
-        /// phone isn't showing.
+        /// phone isn't showing. The selection itself goes too, to be shaded.
         private func reportCaret(_ tv: UITextView) {
             guard let onCaretChange else { return }
             onCaretChange(tv.isFirstResponder ? NSMaxRange(tv.selectedRange) : nil)
+            select(tv.isFirstResponder && tv.selectedRange.length > 0 ? tv.selectedRange : nil)
+        }
+
+        private func select(_ range: NSRange?) {
+            let model = ExternalDisplayModel.shared
+            if model.selection != range { model.selection = range }
         }
 
         // MARK: @-completion bar (keyboard accessory)
@@ -1054,8 +1066,19 @@ final class MirrorTextView: UITextView {
         didSet { if caretIndex != oldValue { caretMoved = true; setNeedsLayout() } }
     }
     var caretColor: UIColor = .tintColor {
-        didSet { caretView.backgroundColor = caretColor }
+        didSet {
+            caretView.backgroundColor = caretColor
+            for v in selectionViews { v.backgroundColor = caretColor.withAlphaComponent(0.25) }
+        }
     }
+    /// The phone's selection, shaded like a highlighter over the words.
+    /// Read from the display model directly: selecting backwards moves only
+    /// the start, which changes nothing SwiftUI would redraw this view for.
+    private var selection: NSRange? {
+        didSet { if selection != oldValue { setNeedsLayout() } }
+    }
+    private var selectionViews: [UIView] = []
+    private var watching: AnyCancellable?
 
     private let caretView = UIView()
     /// Set when the caret or the text changed, so the next layout scrolls;
@@ -1087,6 +1110,7 @@ final class MirrorTextView: UITextView {
         // `.common`, so the blink carries on through the scroll animation.
         RunLoop.main.add(timer, forMode: .common)
         blink = timer
+        watching = ExternalDisplayModel.shared.$selection.sink { [weak self] range in self?.selection = range }
     }
 
     /// The text was replaced underneath the caret: its rect has moved even if
@@ -1098,7 +1122,31 @@ final class MirrorTextView: UITextView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        shadeSelection()
         positionCaret()
+    }
+
+    private func shadeSelection() {
+        var rects: [CGRect] = []
+        let length = (text as NSString).length
+        if let s = selection, s.length > 0, NSMaxRange(s) <= length,
+           let start = position(from: beginningOfDocument, offset: s.location),
+           let end = position(from: start, offset: s.length),
+           let range = textRange(from: start, to: end) {
+            rects = selectionRects(for: range).map(\.rect).filter { $0.width > 0 && $0.height > 0 && $0.origin.y.isFinite }
+        }
+        while selectionViews.count < rects.count {
+            let v = UIView()
+            v.isUserInteractionEnabled = false
+            v.layer.cornerRadius = 2
+            v.backgroundColor = caretColor.withAlphaComponent(0.25)
+            addSubview(v)
+            selectionViews.append(v)
+        }
+        for (i, v) in selectionViews.enumerated() {
+            v.isHidden = i >= rects.count
+            if i < rects.count { v.frame = rects[i] }
+        }
     }
 
     private func positionCaret() {

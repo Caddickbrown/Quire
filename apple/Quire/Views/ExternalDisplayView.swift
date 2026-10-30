@@ -111,6 +111,9 @@ struct ExternalRow: Equatable, Identifiable {
     /// Set by whichever monitor page shows the body: given the body text, it
     /// returns a text view holding it, broken into lines as the monitor breaks it.
     var bodyLayout: ((String) -> UITextView?)?
+    /// The words selected in the composer's body (UTF-16), so the monitor can
+    /// shade them too; nil when nothing is selected or the body isn't focused.
+    @Published var selection: NSRange?
     #endif
 
     /// The latest content regardless of whether anything is plugged in.

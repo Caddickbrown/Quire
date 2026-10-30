@@ -171,6 +171,9 @@ struct PhoneRoot: View {
             model.present(.editing(title: e.suffix, date: stamp.date(from: e.ts) ?? .now, text: e.body,
                                    caret: Int(ProcessInfo.processInfo.environment["QUIRE_DESK_CARET"] ?? "") ?? e.body.utf16.count,
                                    isStarred: e.isStarred), owner: UUID())
+            // "location,length": shade a selection as the composer would.
+            let sel = (ProcessInfo.processInfo.environment["QUIRE_DESK_SELECT"] ?? "").split(separator: ",").compactMap { Int($0) }
+            if sel.count == 2 { model.selection = NSRange(location: sel[0], length: sel[1]) }
         case "browse":
             model.present(.browsing(listTitle: "Journal", rows: ExternalRow.rows(from: entries), selected: 3), owner: UUID())
         default: break

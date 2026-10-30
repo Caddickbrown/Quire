@@ -224,7 +224,7 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   The monitor theme `vscode` (hidden mode, `Design/DeskCode.swift`, monitor only) draws
   the same pages as VS Code on Windows 11; `QUIRE_DESK=idle|entry|browse` draws the
   monitor over the app at 1920×1080 for simulator screenshots (`QUIRE_DESK_CARET=<offset>`
-  places the entry's caret).
+  places the entry's caret, `QUIRE_DESK_SELECT=<location>,<length>` shades a selection).
 - **Android**: not in the repo yet; Wander's Compose shell over a SAF `Vault`.
 
 ## Releases

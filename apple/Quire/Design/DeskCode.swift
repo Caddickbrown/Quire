@@ -32,6 +32,8 @@ private enum VS {
     static let lineNumber = hex(0x6E7681)
     static let blue = hex(0x0078D4)
     static let selection = hex(0x37373D)
+    /// The editor's selected text (Dark+ `editor.selectionBackground`).
+    static let textSelection = hex(0x264F78)
     static let hover = hex(0x2A2D2E)
     static let currentLine = hex(0x282828)
     static let input = hex(0x313131)
@@ -79,6 +81,8 @@ private struct VSFile {
     var lines: [String]
     /// Line and column of the caret, both from 0.
     var caret: (line: Int, col: Int)?
+    /// The selected text, from and to (line, column), both from 0.
+    var selection: (from: (line: Int, col: Int), to: (line: Int, col: Int))?
     var preview = false
     var tree: [VSTreeRow]
     var selectedRow: String?
@@ -108,7 +112,7 @@ private enum VSFiles {
     /// An entry as its day file: `top/YYYY/MM/DD.md`, opened in the tree.
     /// `inTitle` puts the caret on the header line, after the title.
     static func entry(top: String, date: Date, title: String, text: String, starred: Bool, caret: Int?,
-                      inTitle: Bool = false) -> VSFile {
+                      inTitle: Bool = false, selection: NSRange? = nil) -> VSFile {
         let parts = Calendar.current.dateComponents([.year, .month, .day], from: date)
         let year = String(format: "%04d", parts.year ?? 2000)
         let month = String(format: "%02d", parts.month ?? 1)
@@ -118,23 +122,27 @@ private enum VSFiles {
         let titleEnd = header.count
         if starred && !Entry.hasStarMarker(title) { header += " *" }
         let body = text.components(separatedBy: "\n")
-        var caretAt: (Int, Int)?
+        // A UTF-16 offset in the body as a line and column in the file.
+        func at(_ offset: Int) -> (line: Int, col: Int) {
+            let utf16 = text.utf16
+            let before = String(utf16.prefix(min(max(0, offset), utf16.count))) ?? ""
+            let lines = before.components(separatedBy: "\n")
+            return (lines.count, lines.last?.count ?? 0)   // +1 for the header line, so count not count-1
+        }
+        var caretAt: (line: Int, col: Int)?
         if inTitle {
             caretAt = (0, titleEnd)
         } else if let caret {
-            let utf16 = text.utf16
-            let offset = min(max(0, caret), utf16.count)
-            let before = String(utf16.prefix(offset)) ?? ""
-            let lines = before.components(separatedBy: "\n")
-            caretAt = (lines.count, lines.last?.count ?? 0)   // +1 for the header line, so count not count-1
+            caretAt = at(caret)
         }
+        let selected = inTitle ? nil : selection.flatMap { $0.length > 0 ? (from: at($0.location), to: at(NSMaxRange($0))) : nil }
         let children = [
             VSTreeRow(id: "\(top)/\(year)", depth: 1, name: year, kind: .open),
             VSTreeRow(id: "\(top)/\(year)/\(month)", depth: 2, name: month, kind: .open),
             VSTreeRow(id: "\(top)/\(year)/\(month)/\(name)", depth: 3, name: name, kind: .file),
         ]
         return VSFile(path: [top, year, month], name: name, lines: [header] + body, caret: caretAt,
-                      tree: tree(open: top, children: children), selectedRow: "\(top)/\(year)/\(month)/\(name)")
+                      selection: selected, tree: tree(open: top, children: children), selectedRow: "\(top)/\(year)/\(month)/\(name)")
     }
 
     /// A list as folders of files, the selected entry open in a preview tab.
@@ -193,7 +201,7 @@ struct DeskCode: View {
             Group {
                 // Journal text never reaches the monitor while paused or locked.
                 if let store, !model.isPaused, !appLock.showsVeil {
-                    VSLive(content: model.content, settingsOpen: settings.isOpen, hints: hints, s: s)
+                    VSLive(content: model.content, selection: model.selection, settingsOpen: settings.isOpen, hints: hints, s: s)
                         .environmentObject(store)
                 } else {
                     VSWindow(page: .empty, hints: [], s: s)
@@ -210,6 +218,7 @@ struct DeskCode: View {
 /// Turns what the desk would show into a file in the editor.
 private struct VSLive: View {
     let content: ExternalDisplayContent
+    let selection: NSRange?
     let settingsOpen: Bool
     let hints: [ShortcutHint]
     let s: VSScale
@@ -229,10 +238,10 @@ private struct VSLive: View {
             return .file(VSFiles.browse(listTitle: listTitle, rows: rows, selected: selected))
         case .composing(let title, let date, let text, let caret, let inTitle):
             return .file(VSFiles.entry(top: "inbox", date: date, title: title, text: text, starred: false,
-                                       caret: caret ?? text.utf16.count, inTitle: inTitle))
+                                       caret: caret ?? text.utf16.count, inTitle: inTitle, selection: selection))
         case .editing(let title, let date, let text, let caret, let isStarred, let isDraft, let inTitle):
             return .file(VSFiles.entry(top: isDraft ? "inbox" : "journal", date: date, title: title, text: text, starred: isStarred,
-                                       caret: caret ?? text.utf16.count, inTitle: inTitle))
+                                       caret: caret ?? text.utf16.count, inTitle: inTitle, selection: selection))
         case .reading(let title, let date, let text, let isStarred):
             return .file(VSFiles.entry(top: "journal", date: date, title: title, text: text, starred: isStarred, caret: nil))
         }
@@ -835,8 +844,18 @@ private struct VSEditor: View {
         .background(VS.editor)
     }
 
+    /// The columns of line `i` inside the selection; an empty line in the
+    /// middle of one shows a sliver, as VS Code does.
+    private func selected(_ i: Int, _ line: String) -> Range<Int>? {
+        guard let sel = file.selection, i >= sel.from.line, i <= sel.to.line else { return nil }
+        let lo = i == sel.from.line ? sel.from.col : 0
+        let hi = i == sel.to.line ? sel.to.col : max(line.count, 1)
+        return lo < hi ? lo..<hi : nil
+    }
+
     private func lineView(_ i: Int, _ line: String) -> some View {
         let current = file.caret?.line == i
+        let shade = selected(i, line)
         return HStack(alignment: .firstTextBaseline, spacing: 0) {
             Text("\(i + 1)").font(s.mono).foregroundStyle(current ? VS.text : VS.lineNumber)
                 .frame(width: gutter - 26 * s.z, alignment: .trailing)
@@ -845,7 +864,7 @@ private struct VSEditor: View {
                 if current, let col = file.caret?.col {
                     TimelineView(.periodic(from: moved, by: 0.53)) { t in
                         let on = Int(max(0, t.date.timeIntervalSince(moved)) / 0.53) % 2 == 0
-                        Text(VSMarkdown.styled(line, s: s, caret: col, caretOn: on))
+                        Text(VSMarkdown.styled(line, s: s, caret: col, caretOn: on, selected: shade))
                             .overlay(alignment: .topLeading) {
                                 if col == 0 {
                                     Rectangle().fill(on ? VS.caret : .clear)
@@ -855,7 +874,7 @@ private struct VSEditor: View {
                             }
                     }
                 } else {
-                    Text(VSMarkdown.styled(line, s: s, caret: nil, caretOn: false))
+                    Text(VSMarkdown.styled(line, s: s, caret: nil, caretOn: false, selected: shade))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -927,7 +946,7 @@ private enum VSMarkdown {
     private static let inline = try! NSRegularExpression(pattern: #"(!?\[[^\]]*\]\([^)]*\))|(\*\*[^*]+\*\*)|(`[^`]+`)|((?<![\w#])#[A-Za-z][\w-]*)"#)
 
     /// One line coloured the way Dark+ colours markdown, with the caret drawn in.
-    static func styled(_ line: String, s: VSScale, caret: Int?, caretOn: Bool) -> AttributedString {
+    static func styled(_ line: String, s: VSScale, caret: Int?, caretOn: Bool, selected: Range<Int>? = nil) -> AttributedString {
         let mono = s.mono
         var out = AttributedString(line.isEmpty ? " " : line)
         out.font = mono
@@ -961,6 +980,13 @@ private enum VSMarkdown {
                 else if m.range(at: 4).location != NSNotFound { paint(m.range, VS.listMark) }
                 else { paint(m.range, VS.string) }
             }
+        }
+        if let selected {
+            // Before the caret goes in, so the columns still line up.
+            let chars = out.characters
+            let lo = chars.index(chars.startIndex, offsetBy: min(selected.lowerBound, chars.count))
+            let hi = chars.index(chars.startIndex, offsetBy: min(selected.upperBound, chars.count))
+            if lo < hi { out[lo..<hi].backgroundColor = VS.textSelection }
         }
         if let caret {
             // A full-height bar that takes no room: half its width comes off the

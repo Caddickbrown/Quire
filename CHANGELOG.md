@@ -22,6 +22,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
+- **Apple**: words selected in the composer are shaded on the monitor too: a highlighter in the accent colour on Quire's page, VS Code's selection blue in hidden mode.
 - **Apple**: the composer's footer says how many drafts are left in the inbox (or that this is the last one), for working through them one by one.
 - **Apple**: with a monitor connected, ↑ and ↓ in the composer move the cursor by the monitor's lines, not the phone's, so it goes where you see it go; the phone keeps its own wrapping.
 - **Apple**: a whimsy pass, in Quire's calm, bookish manner: pages arrive (titles, labels and rows settle in top to bottom within about 150 ms when a tab or entry opens), the accent rule under a title draws in like a pen stroke, filing an entry turns the page over before it closes, a just-filed entry is set down in Today's list, another prompt (`p`) rolls up into place, On this day cards are dealt onto the page, Look back's figures count up and its weekday bars grow, the current streak breathes a few times, a "Goal met" stamp lands the first time the day's word goal is reached, Today's kicker says the part of the day, and an empty page's placeholder breathes until the first word. Haptics follow one vocabulary: success on filing and the goal, a light land on saving and a new prompt, a warning when a write fails. Reduce Motion keeps everything still; nothing animates per keystroke.
