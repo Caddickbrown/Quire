@@ -81,6 +81,12 @@ struct ComposerScreen: View {
     private var source: EntrySource { savedSource ?? editing?.source ?? .inbox }
     private var isDraft: Bool { source == .inbox }
     private var words: Int { text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count }
+    /// The other drafts still waiting, for working through the inbox one by one.
+    private var draftsLeft: Int { store.inboxDrafts.filter { $0.id != current?.id }.count }
+    private var draftsNote: String {
+        if draftsLeft > 0 { return " · \(draftsLeft) \(draftsLeft == 1 ? "draft" : "drafts") left" }
+        return isDraft && current != nil ? " · last draft" : ""
+    }
     private var quiet: Double { focusMode && focus == .body ? 0.25 : 1 }
 
     var body: some View {
@@ -237,8 +243,9 @@ struct ComposerScreen: View {
                     }
                     .buttonStyle(.plain).accessibilityLabel("Stop recording, \(recorder.elapsedString)")
                 } else {
-                    Text(notice ?? "\(words) words · \(savedFlash ? "saved" : isDraft ? "draft" : "filed")")
+                    Text(notice ?? "\(words) words · \(savedFlash ? "saved" : isDraft ? "draft" : "filed")\(draftsNote)")
                         .font(q.mono(12)).foregroundStyle(q.mutedColor).opacity(quiet)
+                        .lineLimit(1).minimumScaleFactor(0.8)
                 }
                 Spacer()
                 AttachMenu(photoLibrary: { showingPhotoPicker = true },
