@@ -83,6 +83,7 @@ swift_files = [
     ('QuireKeys',      'Design/QuireKeys.swift',       'Design'),
     ('DeskViews',      'Design/DeskViews.swift',       'Design'),
     ('DeskCode',       'Design/DeskCode.swift',        'Design'),
+    ('QuireMotion',    'Design/QuireMotion.swift',     'Design'),
     ('RootView',        'Views/RootView.swift',         'Views'),
     ('WritingView',     'Views/WritingView.swift',      'Views'),
     ('WritingTextEditor','Views/WritingTextEditor.swift','Views'),

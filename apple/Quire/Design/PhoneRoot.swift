@@ -66,6 +66,9 @@ struct PhoneRoot: View {
             }, onRemove: {
                 if target.ref != nil, !path.isEmpty { path.removeLast() }
             })
+            // The composer paints its own page; clear behind it, so a page
+            // turning over as it is filed shows the day it lands on.
+            .presentationBackground(.clear)
         }
         .sheet(item: $retiming) { ref in
             RetimeSheet(ref: ref, onUpdate: { replaceReference(ref, with: $0) })
@@ -222,6 +225,7 @@ struct PhoneRoot: View {
                 if withChrome { notice }
                 face
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .qArrivalRoot(key: tab)
                 if withChrome {
                     QTabBar(tab: $tab, inboxCount: store.inboxDrafts.count) {
                         composing = ComposeTarget(ref: nil)
@@ -233,6 +237,7 @@ struct PhoneRoot: View {
             .navigationDestination(for: EntryRef.self) { ref in
                 ReaderScreen(ref: ref, onEdit: { composing = ComposeTarget(ref: $0) },
                              onRetime: { retiming = $0 })
+                    .qArrivalRoot(key: ref.id)
             }
         }
     }
@@ -243,11 +248,13 @@ struct PhoneRoot: View {
             face
                 .frame(width: Self.listWidth)
                 .frame(maxHeight: .infinity)
+                .qArrivalRoot(key: tab)
             verticalRule
             Group {
                 if let ref = path.last {
                     ReaderScreen(ref: ref, onEdit: { composing = ComposeTarget(ref: $0) },
                                  onRetime: { retiming = $0 }, onClose: { path.removeAll() })
+                        .qArrivalRoot(key: ref.id)
                 } else {
                     emptyPage
                 }

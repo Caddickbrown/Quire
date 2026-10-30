@@ -52,6 +52,13 @@ struct ComposerScreen: View {
     @State private var pendingTS: String?
     @State private var confirmDiscard = false
     @State private var savedFlash = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Filing turns the page over, away from you, before it closes.
+    @State private var turning = false
+    /// Felt moments: filed (success), saved (land), a write that failed (warning).
+    @State private var filedBeat = 0
+    @State private var savedBeat = 0
+    @State private var failedBeat = 0
     /// Where the caret last was in the body: a picker sheet takes focus away,
     /// and what it brings back still lands there.
     @State private var lastCaret: Int?
@@ -99,7 +106,7 @@ struct ComposerScreen: View {
                         .font(q.isMarathon ? q.display(30) : q.writing(32, weight: .medium)).foregroundStyle(q.inkColor)
                         .textCase(q.isMarathon ? .uppercase : nil)
                         .opacity(quiet)
-                    QTitleRule().opacity(quiet)
+                    QTitleRule().qDrawIn().opacity(quiet)
                     editor
                 }
                 .padding(.horizontal, 28).padding(.top, 16).padding(.bottom, 24)
@@ -108,6 +115,12 @@ struct ComposerScreen: View {
             footer
         }
         .background(q.pageColor.ignoresSafeArea())
+        .rotation3DEffect(.degrees(turning ? -80 : 0), axis: (x: 0, y: 1, z: 0),
+                          anchor: .leading, perspective: 0.45)
+        .opacity(turning ? 0 : 1)
+        .qHaptic(.success, trigger: filedBeat)
+        .qHaptic(.land, trigger: savedBeat)
+        .qHaptic(.warning, trigger: failedBeat)
         .background(chordKeys)
         .onAppear { load(); registerKeys() }
         .onChange(of: title) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror() }
@@ -195,6 +208,7 @@ struct ComposerScreen: View {
             if text.isEmpty {
                 Text(editing == nil ? (promptsOn ? Self.prompt : "Begin writing") : "").font(q.writing(fontSize + 2, italic: true))
                     .foregroundStyle(q.faintColor).padding(.top, 8).allowsHitTesting(false)
+                    .qHover()
             }
             WritingTextEditor(text: $text, fontRaw: q.editorFontName,
                               size: fontSize + 2, textColor: q.inkColor, lineSpacing: 8,
@@ -395,6 +409,7 @@ struct ComposerScreen: View {
 
     private func reportFailure() {
         savedFlash = false
+        failedBeat += 1
         saveError = (store.lastWriteError ?? "The entry could not be saved.") + " Your edits are still open here. Retry, or save a copy to Inbox."
     }
 
@@ -443,6 +458,7 @@ struct ComposerScreen: View {
 
     private func flashSaved() {
         savedFlash = true
+        savedBeat += 1
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { savedFlash = false }
     }
 
@@ -488,6 +504,14 @@ struct ComposerScreen: View {
         if isDraft, let current {
             guard store.fileDraft(current) != nil else { reportFailure(); return }
             onRemove()
+            filedBeat += 1
+            // The page turns over to its day before it closes.
+            if !reduceMotion {
+                focus = nil
+                withAnimation(QMotion.move) { turning = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { leave() }
+                return
+            }
         }
         leave()
     }

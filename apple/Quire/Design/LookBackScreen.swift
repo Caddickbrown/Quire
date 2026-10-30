@@ -50,25 +50,31 @@ struct LookBackScreen: View {
         let perDay = s.days > 0 ? s.words / s.days : 0
         return VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
-                figure("\(s.currentStreak)", "day streak", accent: true)
-                figure("\(s.bestStreak)", "longest")
-                figure("\(s.days)", "days written")
+                figure(s.currentStreak, "day streak", accent: true, breathe: s.currentStreak > 0)
+                figure(s.bestStreak, "longest")
+                figure(s.days, "days written")
             }
             HStack(alignment: .top, spacing: 0) {
-                figure(Self.short(s.words), "words")
-                figure("\(perDay)", "words a day")
-                figure("\(s.entries)", "entries")
+                figure(s.words, "words", format: Self.short)
+                figure(perDay, "words a day")
+                figure(s.entries, "entries")
             }
             .padding(.top, 18)
         }
         .padding(.bottom, 20)
         .overlay(alignment: .bottom) { QRule() }
+        .qArrive()
     }
 
-    private func figure(_ value: String, _ label: String, accent: Bool = false) -> some View {
+    /// A figure that counts up from nothing as the page arrives; the current
+    /// streak, when there is one, breathes a few times after.
+    private func figure(_ value: Int, _ label: String, accent: Bool = false, breathe: Bool = false,
+                        format: @escaping (Int) -> String = { "\($0)" }) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(value).font(q.display(q.isMarathon ? 32 : 38)).foregroundStyle(accent ? q.accentColor : q.inkColor)
+            QCountUp(target: value, format: format)
+                .font(q.display(q.isMarathon ? 32 : 38)).foregroundStyle(accent ? q.accentColor : q.inkColor)
                 .minimumScaleFactor(0.6).lineLimit(1)
+                .qBreathe(breathe)
             Text(q.caps(label)).tracking(q.isMarathon ? 1 : 0).font(q.isMarathon ? q.label(10) : q.ui(12)).foregroundStyle(q.mutedColor)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -83,7 +89,7 @@ struct LookBackScreen: View {
         let past = store.qOnThisDay()
         if !past.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
-                QLabel("On this day")
+                QLabel("On this day").qArrive()
                 ForEach(past, id: \.date) { day in
                     ForEach(day.entries.prefix(2)) { entry in
                         let ref = EntryRef(entry: entry, source: .archive(date: day.date))
@@ -105,6 +111,8 @@ struct LookBackScreen: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        // Old pages dealt onto the desk, one after another.
+                        .qFanIn(min(6, pastRefs.firstIndex { $0.entry.id == entry.id } ?? 0))
                     }
                 }
             }
@@ -124,11 +132,12 @@ struct LookBackScreen: View {
         let top = max(counts.max() ?? 1, 1)
         let best = counts.firstIndex(of: top) ?? 0
         return VStack(alignment: .leading, spacing: 12) {
-            QLabel("When you write", trailing: "entries by weekday")
+            QLabel("When you write", trailing: "entries by weekday").qArrive()
             HStack(alignment: .bottom, spacing: 10) {
                 ForEach(0..<7, id: \.self) { i in
                     Rectangle().fill(i == best ? q.accentColor : q.accentColor.opacity(0.35))
                         .frame(height: max(4, 84 * CGFloat(counts[i]) / CGFloat(top)))
+                        .qGrowUp(delay: 0.15 + Double(i) * 0.04)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -158,6 +167,7 @@ struct LookBackScreen: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 14)
                 .overlay(alignment: .top) { QRule() }.contentShape(Rectangle())
+                .qArrive()
             }
             .buttonStyle(.plain)
         }

@@ -51,7 +51,7 @@ struct ReaderScreen: View {
                         .font(q.isMarathon ? q.display(30) : q.writing(34, weight: .medium, italic: !entry.qHasTitle))
                         .foregroundStyle(entry.qHasTitle ? q.inkColor : q.mutedColor)
                         .fixedSize(horizontal: false, vertical: true)
-                    QTitleRule()
+                    QTitleRule().qDrawIn()
                     ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in blockView(block) }
                     footer
                 }

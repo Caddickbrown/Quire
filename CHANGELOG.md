@@ -22,6 +22,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
+- **Apple**: a whimsy pass, in Quire's calm, bookish manner: pages arrive (titles, labels and rows settle in top to bottom within about 150 ms when a tab or entry opens), the accent rule under a title draws in like a pen stroke, filing an entry turns the page over before it closes, a just-filed entry is set down in Today's list, another prompt (`p`) rolls up into place, On this day cards are dealt onto the page, Look back's figures count up and its weekday bars grow, the current streak breathes a few times, a "Goal met" stamp lands the first time the day's word goal is reached, Today's kicker says the part of the day, and an empty page's placeholder breathes until the first word. Haptics follow one vocabulary: success on filing and the goal, a light land on saving and a new prompt, a warning when a write fails. Reduce Motion keeps everything still; nothing animates per keystroke.
 - **Apple**: attach media on iPhone and iPad again. The composer has a paperclip (Photo Library, Take Photo, Record Video, Voice Note, Choose File) and accepts dropped photos, video, audio and files, as the Mac does.
 - **Apple**: paste a copied image (or a copied photo, video or audio file on Mac) into any editor to attach it, as `^v` does in the terminal app.
 - **Apple**: attachments land where the cursor is, as their own paragraph, not at the end of the entry.

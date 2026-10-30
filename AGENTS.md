@@ -205,7 +205,9 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   The Apple workflow covers these commands. Generated bindings/frameworks are
   ignored, never hand-edited. Launch hints for screenshots (no effect when unset):
   `QUIRE_START_TAB`, `QUIRE_THEME`, `QUIRE_OPEN=settings|search|media|write`,
-  `QUIRE_SETTINGS_PAGE`. The iPhone design reads colours from `themes.json`; the
+  `QUIRE_SETTINGS_PAGE`. Motion lives in `Design/QuireMotion.swift` (QMotion timings,
+  QHaptic, arrival via `qArrivalRoot`/`qArrive`, and the small moments); it is app-only,
+  so `QuireTheme.swift` (shared with the widget) never references it. The iPhone design reads colours from `themes.json`; the
   Marathon themes are a look, not a palette (`QuireTheme.isMarathon`).
   iOS external-display presentation is a desk mode (`Design/DeskViews.swift`, in Quire's
   design, following the phone's theme) that follows the active entry/editor (the iPhone

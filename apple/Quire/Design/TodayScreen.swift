@@ -25,6 +25,11 @@ struct TodayScreen: View {
 
     @State private var line = ""
     @FocusState private var lineFocused: Bool
+    /// Bumped when a line is saved to the inbox: a light land.
+    @State private var savedLines = 0
+    /// The day the goal stamp last landed, so it lands once a day.
+    @AppStorage("goalStampedOn") private var goalStampedOn = ""
+    @State private var stampBeat = 0
 
     private var today: String { JournalStore.nowDate() }
     private var filedToday: [Entry] {
@@ -44,7 +49,9 @@ struct TodayScreen: View {
                     marathonHeader
                     readouts
                 } else {
-                    QTitle(kicker: QDate.longDay(), title: "Today")
+                    TimelineView(.everyMinute) { t in
+                        QTitle(kicker: QDate.longDay(t.date) + " · " + QTimeOfDay.phrase(t.date), title: "Today")
+                    }
                     summary
                 }
                 begin
@@ -80,6 +87,29 @@ struct TodayScreen: View {
             .lineSpacing(5)
             .onTapGesture { if drafts > 0 { showInbox() } }
             .accessibilityElement(children: .combine)
+            .overlay(alignment: .bottomTrailing) { goalStamp(words: words) }
+            .qArrive()
+    }
+
+    /// The day's goal met: a small stamp lands in the margin -- once a day
+    /// with a flourish and a buzz, quietly in place after that.
+    @ViewBuilder private func goalStamp(words: Int) -> some View {
+        if goalOn, words >= max(goal, 1) {
+            Text("Goal met")
+                .font(q.writing(13, italic: true))
+                .foregroundStyle(q.accentColor)
+                .padding(.horizontal, 8).padding(.vertical, 2)
+                .overlay(RoundedRectangle(cornerRadius: 3).stroke(q.accentColor, lineWidth: 1.2))
+                .qStamp(trigger: stampBeat)
+                .offset(y: 26)
+                .accessibilityLabel("Word goal met")
+                .qHaptic(.success, trigger: stampBeat)
+                .onAppear {
+                    guard goalStampedOn != today else { return }
+                    goalStampedOn = today
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { stampBeat += 1 }
+                }
+        }
     }
 
     private var entriesPhrase: String {
@@ -116,6 +146,9 @@ struct TodayScreen: View {
                     }
                     Text(prompt).font(q.writing(16, italic: true)).foregroundStyle(q.mutedColor)
                         .multilineTextAlignment(.leading)
+                        // Another prompt (`p`) rolls up into place.
+                        .id(promptOffset)
+                        .transition(.push(from: .bottom).combined(with: .opacity))
                 }
                 .foregroundStyle(q.inkColor)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -123,9 +156,13 @@ struct TodayScreen: View {
                 .overlay(alignment: .top) { QRule() }
                 .overlay(alignment: .bottom) { QRule() }
                 .contentShape(Rectangle())
+                .clipped()
             }
         }
         .buttonStyle(.plain)
+        .animation(QMotion.settle, value: promptOffset)
+        .qHaptic(.land, trigger: promptOffset)
+        .qArrive()
     }
 
     // MARK: Marathon
@@ -162,6 +199,8 @@ struct TodayScreen: View {
             cell("Words" + (goalOn ? " / goal" : ""), spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
                     Text(String(format: "%03d", words)).foregroundStyle(q.accentColor)
+                        .contentTransition(.numericText(value: Double(words)))
+                        .animation(QMotion.standard, value: words)
                     if goalOn { Text("/\(goal)").foregroundStyle(q.faintColor) }
                 }
                 .font(q.display(24)).lineLimit(1).minimumScaleFactor(0.5)
@@ -177,6 +216,7 @@ struct TodayScreen: View {
                 Text("DAYS").font(q.label(10)).foregroundStyle(q.mutedColor)
                 if stats.currentStreak > 0 && stats.currentStreak >= stats.bestStreak {
                     Text("▲ RECORD").font(q.label(9.5)).tracking(1).foregroundStyle(q.accentColor)
+                        .qBreathe(true)
                 }
             }
             cell("Inbox", leading: true) {
@@ -187,6 +227,7 @@ struct TodayScreen: View {
         .overlay(alignment: .top) { QRule() }
         .overlay(alignment: .bottom) { QRule() }
         .onTapGesture { if drafts > 0 { showInbox() } }
+        .qArrive()
     }
 
     private func cell<Content: View>(_ label: String, leading: Bool = false, spacing: CGFloat = 6,
@@ -228,9 +269,13 @@ struct TodayScreen: View {
                 .frame(minHeight: 44)
             if !line.trimmingCharacters(in: .whitespaces).isEmpty {
                 QLink(title: "Save to inbox", emphasised: true, action: saveLine)
+                    .transition(.opacity.combined(with: .offset(x: 8)))
             }
         }
+        .animation(QMotion.micro, value: line.trimmingCharacters(in: .whitespaces).isEmpty)
         .overlay(alignment: .bottom) { QRule() }
+        .qHaptic(.land, trigger: savedLines)
+        .qArrive()
     }
 
     private func takeCapture() {
@@ -246,6 +291,7 @@ struct TodayScreen: View {
         store.upsertDraft(previous: nil, timestamp: JournalStore.nowTS(), title: "", body: text)
         line = ""
         lineFocused = false
+        savedLines += 1
     }
 
     private var entries: some View {
@@ -254,14 +300,18 @@ struct TodayScreen: View {
             ForEach(filedToday) { entry in
                 let ref = EntryRef(entry: entry, source: .archive(date: today))
                 QEntryRow(entry: entry, onOpen: { open(ref) })
+                    // A just-filed entry is set down on the page.
+                    .transition(.asymmetric(insertion: .scale(scale: 0.96, anchor: .topLeading).combined(with: .opacity),
+                                            removal: .opacity))
             }
         }
+        .animation(QMotion.settle, value: filedToday.map(\.id))
     }
 
     private func onThisDaySection(_ past: (date: String, entries: [Entry])) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             QLabel("On this day")
-            ForEach(past.entries.prefix(2)) { entry in
+            ForEach(Array(past.entries.prefix(2).enumerated()), id: \.element.id) { i, entry in
                 let ref = EntryRef(entry: entry, source: .archive(date: past.date))
                 Button { open(ref) } label: {
                     HStack(alignment: .top, spacing: 12) {
@@ -276,6 +326,7 @@ struct TodayScreen: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .qFanIn(i)
             }
         }
     }

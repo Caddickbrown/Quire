@@ -158,6 +158,7 @@ struct QTitle: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
+        .qArrive()
     }
 }
 
@@ -202,6 +203,7 @@ struct QTabBar: View {
         }
         .padding(.horizontal, 24)
         .padding(.top, 4)
+        .animation(QMotion.micro, value: tab)
     }
 
     private func item(_ title: String, _ target: PhoneTab) -> some View {
@@ -438,6 +440,7 @@ struct QEntryRow: View {
         }
         .id(entry.id)
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .qArrive()
     }
 }
 
