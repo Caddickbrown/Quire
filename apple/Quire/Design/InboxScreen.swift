@@ -3,8 +3,9 @@
 //  Quire
 //
 //  The drafts, set like the journal: by month and day, one row each. A row only
-//  opens the draft; filing, editing and deleting happen inside it, where they
-//  can't be hit by accident while scrolling. Nothing here changes a time.
+//  opens the draft; filing and editing happen inside it, where they can't be
+//  hit by accident while scrolling, and deleting is there or a press and hold
+//  away (it asks first). Nothing here changes a time.
 //
 
 #if os(iOS)
@@ -81,7 +82,7 @@ struct InboxScreen: View {
                                     .font(q.label(11)).foregroundStyle(q.mutedColor)
                                 ForEach(day.entries) { entry in
                                     QEntryRow(entry: entry, selected: entry.id == selectedID,
-                                              onOpen: { openDraft(entry) })
+                                              onOpen: { openDraft(entry) }, onDelete: { deleting = entry })
                                 }
                             }
                         }

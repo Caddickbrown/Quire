@@ -562,7 +562,8 @@ struct VideoView: View {
     }
 }
 
-/// A compact inline audio player (play/pause + filename).
+/// A compact inline audio player (play/pause + filename). It stops when its
+/// page goes, and comes back to play once the memo has run to its end.
 struct AudioPlayerView: View {
     let url: URL
     @State private var player: AVPlayer?
@@ -587,5 +588,11 @@ struct AudioPlayerView: View {
         .padding(10)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
         .onAppear { if player == nil { player = AVPlayer(url: url) } }
+        .onDisappear { player?.pause(); playing = false }
+        .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { note in
+            guard let item = player?.currentItem, (note.object as? AVPlayerItem) === item else { return }
+            playing = false
+            player?.seek(to: .zero)
+        }
     }
 }

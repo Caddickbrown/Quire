@@ -77,6 +77,10 @@ extension Entry {
         if !qHasTitle, !lines.isEmpty { lines.removeFirst() }
         return (lines.first ?? "").qClamped(300)
     }
+    /// "@work  @walk": the entry's tags, for a line under its title.
+    var qTagLine: String {
+        tags.map { $0.hasPrefix("@") ? $0 : "@" + $0 }.joined(separator: "  ")
+    }
 }
 
 /// An entry together with where it lives, so every edit can route.
@@ -88,10 +92,12 @@ struct EntryRef: Hashable, Identifiable {
 
 // MARK: - Masthead
 
-/// "Quire" in italic, with Search and Settings as plain words. In Marathon the
-/// mark sits in a signal block, and the actions are cells ruled off from it.
+/// "Quire" in italic, with Search and Settings (and, where given, the Media
+/// Library) as quiet icons. In Marathon the mark sits in a signal block, and the
+/// actions are cells ruled off from it.
 struct QMasthead: View {
     @Environment(\.quire) private var q
+    var onMedia: (() -> Void)? = nil
     var onSearch: () -> Void
     var onSettings: () -> Void
 
@@ -107,32 +113,46 @@ struct QMasthead: View {
                 .background(q.signalColor, ignoresSafeAreaEdges: []).foregroundStyle(q.onSignalColor)
                 .accessibilityElement(children: .combine).accessibilityLabel("Quire")
                 Spacer(minLength: 0)
-                cell("Search", onSearch)
-                cell("Settings", onSettings)
+                if let onMedia { cell("Media Library", "photo.on.rectangle", onMedia) }
+                cell("Search", "magnifyingglass", onSearch)
+                cell("Settings", "gearshape", onSettings)
             }
             .overlay(alignment: .bottom) { QRule() }
         } else {
-            HStack(alignment: .firstTextBaseline, spacing: 18) {
+            HStack(alignment: .center, spacing: 18) {
                 HStack(spacing: 8) {
                     QMark().stroke(q.inkColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                         .frame(width: 16, height: 18).accessibilityHidden(true)
                     Text("Quire").font(q.writing(22, italic: true)).foregroundStyle(q.inkColor)
                 }
                 Spacer()
-                QLink(title: "Search", action: onSearch)
-                QLink(title: "Settings", action: onSettings)
+                HStack(spacing: 4) {
+                    if let onMedia { icon("Media Library", "photo.on.rectangle", onMedia) }
+                    icon("Search", "magnifyingglass", onSearch)
+                    icon("Settings", "gearshape", onSettings)
+                }
             }
             .foregroundStyle(q.mutedColor)
         }
     }
 
-    private func cell(_ title: String, _ run: @escaping () -> Void) -> some View {
+    private func icon(_ label: String, _ symbol: String, _ run: @escaping () -> Void) -> some View {
         Button(action: run) {
-            Text(title.uppercased()).tracking(1.3).font(q.label(11, weight: .medium)).foregroundStyle(q.inkColor)
-                .padding(.horizontal, 14).frame(height: 48).contentShape(Rectangle())
+            Image(systemName: symbol).font(.system(size: 18, weight: .regular)).foregroundStyle(q.inkColor)
+                .frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private func cell(_ label: String, _ symbol: String, _ run: @escaping () -> Void) -> some View {
+        Button(action: run) {
+            Image(systemName: symbol).font(.system(size: 16, weight: .medium)).foregroundStyle(q.inkColor)
+                .frame(width: 48, height: 48).contentShape(Rectangle())
                 .overlay(alignment: .leading) { Rectangle().fill(q.lineColor).frame(width: 1) }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 }
 
@@ -393,6 +413,8 @@ struct QSidebarToggle: View {
 
 /// Mono time, serif title, one muted line. The time is only text here: changing
 /// an entry's time is a deliberate act inside the entry, never a tap in a list.
+/// Press and hold offers Delete where the list gives `onDelete` (which asks
+/// before anything goes).
 struct QEntryRow: View {
     @Environment(\.quire) private var q
     let entry: Entry
@@ -400,6 +422,7 @@ struct QEntryRow: View {
     /// The row the keyboard is on.
     var selected = false
     var onOpen: () -> Void
+    var onDelete: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -431,6 +454,7 @@ struct QEntryRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .qDeleteMenu(onDelete)
         }
         .padding(.leading, 8)
         .padding(.vertical, 4)
@@ -441,6 +465,19 @@ struct QEntryRow: View {
         .id(entry.id)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .qArrive()
+    }
+}
+
+extension View {
+    /// Press and hold for Delete, only where there is something to delete.
+    @ViewBuilder func qDeleteMenu(_ onDelete: (() -> Void)?) -> some View {
+        if let onDelete {
+            contextMenu {
+                Button(role: .destructive, action: onDelete) { Label("Delete…", systemImage: "trash") }
+            }
+        } else {
+            self
+        }
     }
 }
 

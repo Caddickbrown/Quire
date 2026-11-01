@@ -287,7 +287,8 @@ struct PhoneRoot: View {
         switch tab {
         case .today:
             TodayScreen(open: open, compose: { composing = ComposeTarget(ref: nil) },
-                        showInbox: { tab = .inbox }, search: { showSearch = true }, settings: { showSettings = true })
+                        showInbox: { tab = .inbox }, search: { showSearch = true }, settings: { showSettings = true },
+                        media: { showMedia = true })
                 .onAppear { ExternalDisplayModel.shared.present(.idle) }
         case .inbox:
             InboxScreen(open: open, edit: { composing = ComposeTarget(ref: $0) }, retime: { retiming = $0 },
@@ -388,7 +389,12 @@ struct PhoneRoot: View {
                 case "p":
                     QuirePrompts.next()
                 case "r":
-                    if let r = store.randomEntry() { open(EntryRef(entry: r.entry, source: .archive(date: r.date))) }
+                    // Another random entry takes the open page's place rather than
+                    // stacking up, so Esc still goes straight back to the list.
+                    if let r = store.randomEntry() {
+                        let ref = EntryRef(entry: r.entry, source: .archive(date: r.date))
+                        if !path.isEmpty, !splitActive { path[path.count - 1] = ref } else { open(ref) }
+                    }
                 default: return false
                 }
                 return true

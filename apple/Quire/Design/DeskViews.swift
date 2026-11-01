@@ -74,10 +74,12 @@ struct ExternalDisplayRoot: View {
                 DeskToday(metrics: metrics)
             case .browsing(let listTitle, let rows, let selected, let offset, let total):
                 DeskBrowse(listTitle: listTitle, rows: rows, selected: selected, offset: offset, total: total ?? rows.count, metrics: metrics)
-            case .composing(let title, let date, let text, let caret, _):
-                DeskEntry(title: title, date: date, text: text, isStarred: false, live: true, caret: caret, metrics: metrics)
-            case .editing(let title, let date, let text, let caret, let isStarred, _, _):
-                DeskEntry(title: title, date: date, text: text, isStarred: isStarred, live: true, caret: caret, metrics: metrics)
+            case .composing(let title, let date, let text, let caret, let inTitle):
+                DeskEntry(title: title, date: date, text: text, isStarred: false, live: true, caret: caret,
+                          inTitle: inTitle, metrics: metrics)
+            case .editing(let title, let date, let text, let caret, let isStarred, _, let inTitle):
+                DeskEntry(title: title, date: date, text: text, isStarred: isStarred, live: true, caret: caret,
+                          inTitle: inTitle, metrics: metrics)
             case .reading(let title, let date, let text, let isStarred):
                 DeskEntry(title: title, date: date, text: text, isStarred: isStarred, live: false, caret: nil, metrics: metrics)
             }
@@ -97,7 +99,8 @@ struct ExternalDisplayRoot: View {
                     .init(key: "l", label: "Look back"), .init(key: "/", label: "Search"), .init(key: "r", label: "Random"),
                     .init(key: ",", label: "Settings"), .init(key: "?", label: "Hints")]
         case .browsing(let listTitle, _, _, _, _):
-            let base: [ShortcutHint] = [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Open"), .init(key: "⎋", label: "Back")]
+            let base: [ShortcutHint] = [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Open"), .init(key: "⎋", label: "Back"),
+                                        .init(key: "r", label: "Random")]
             switch listTitle {
             case "Inbox":
                 return base + [.init(key: "f", label: "File"), .init(key: "e", label: "Edit"), .init(key: "*", label: "Star"),
@@ -119,7 +122,8 @@ struct ExternalDisplayRoot: View {
                 (isDraft ? [.init(key: "^D", label: "Discard")] : []) + [.init(key: "⎋", label: "Back")]
         case .reading:
             return [.init(key: "e", label: "Edit"), .init(key: "*", label: "Star"), .init(key: "t", label: "Time"),
-                    .init(key: "d", label: "Delete"), .init(key: "⎋", label: "Back"), .init(key: ",", label: "Settings")] + common
+                    .init(key: "d", label: "Delete"), .init(key: "r", label: "Random"), .init(key: "⎋", label: "Back"),
+                    .init(key: ",", label: "Settings")] + common
         }
     }
 }
@@ -264,6 +268,9 @@ private struct DeskToday: View {
                     ForEach(past.entries.prefix(2)) { entry in
                         Text(entry.qTitle.isEmpty ? "Untitled" : entry.qTitle)
                             .font(q.writing(metrics.text * 0.85)).lineLimit(2)
+                        if !entry.tags.isEmpty {
+                            Text(entry.qTagLine).font(q.mono(metrics.caption)).foregroundStyle(q.accentColor).lineLimit(1)
+                        }
                     }
                 }
             }
@@ -370,6 +377,8 @@ private struct DeskEntry: View {
     /// rendered entry, media inline.
     let live: Bool
     let caret: Int?
+    /// The phone's cursor is in the title field: the caret is drawn there.
+    var inTitle = false
     let metrics: ExternalDisplayMetrics
     @Environment(\.quire) private var q
 
@@ -384,8 +393,12 @@ private struct DeskEntry: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: metrics.gap) {
-            DeskHeader(kicker: Self.stamp.string(from: date) + (starred ? "  ★" : ""),
-                       title: displayTitle.isEmpty ? "" : displayTitle, metrics: metrics)
+            if live && inTitle {
+                titleBeingWritten
+            } else {
+                DeskHeader(kicker: Self.stamp.string(from: date) + (starred ? "  ★" : ""),
+                           title: displayTitle.isEmpty ? "" : displayTitle, metrics: metrics)
+            }
             bodyText.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             HStack(alignment: .firstTextBaseline) {
                 Text(tags.joined(separator: "  ")).foregroundStyle(q.accentColor).lineLimit(1)
@@ -398,12 +411,43 @@ private struct DeskEntry: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    /// The header while the title is being typed: the title as it stands (or
+    /// the field's "Title" placeholder) with a blinking caret after it, as the
+    /// body has its own.
+    private var titleBeingWritten: some View {
+        VStack(alignment: .leading, spacing: metrics.caption * 0.6) {
+            Text(q.caps(Self.stamp.string(from: date) + (starred ? "  ★" : "")))
+                .font(q.label(metrics.caption, weight: .medium))
+                .tracking(metrics.caption * 0.16).foregroundStyle(q.mutedColor).lineLimit(1)
+            TimelineView(.periodic(from: .now, by: 0.55)) { context in
+                let on = Int(context.date.timeIntervalSinceReferenceDate / 0.55) % 2 == 0
+                if displayTitle.isEmpty {
+                    // Before the placeholder, where the phone's cursor sits.
+                    HStack(spacing: metrics.caption * 0.3) {
+                        Rectangle().fill(q.accentColor)
+                            .frame(width: max(2, metrics.title * 0.08), height: metrics.title * 1.25)
+                            .opacity(on ? 1 : 0)
+                        Text("Title").font(q.display(metrics.title * 1.25)).foregroundStyle(q.faintColor)
+                    }
+                } else {
+                    // After the words, wrapping with them.
+                    (Text(q.caps(displayTitle)).foregroundColor(q.inkColor)
+                        + Text("|").foregroundColor(q.accentColor.opacity(on ? 1 : 0)))
+                        .font(q.display(metrics.title * 1.25))
+                }
+            }
+            .lineLimit(2).minimumScaleFactor(0.6)
+            Rectangle().fill(q.accentColor).frame(width: metrics.text * 2.4, height: max(2, q.ruleH))
+                .padding(.top, metrics.caption * 0.3)
+        }
+    }
+
     @ViewBuilder private var bodyText: some View {
         if live {
             WritingTextEditor(text: .constant(text), fontRaw: q.editorFontName,
                               size: metrics.text, textColor: q.inkColor,
                               lineSpacing: metrics.text * 0.3, accent: q.accentColor,
-                              mirror: true, mirrorCaret: caret)
+                              mirror: true, mirrorCaret: inTitle ? nil : caret)
         } else {
             MediaPreview(text: text, font: q.writing(metrics.text), textColor: q.inkColor, contentPadding: 0)
         }

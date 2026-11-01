@@ -4,8 +4,9 @@
 //
 //  One query over the inbox, the journal and the split journals, with the shared
 //  search grammar (tag:, before:, after:, has:, is:starred, "phrases"). Saved
-//  searches are the start page. Results read like the journal: by day, one row
-//  each, opening on the entry's page.
+//  searches are the start page, and Tags lists every tag with its count, each
+//  one a query. Results read like the journal: by day, one row each, opening on
+//  the entry's page.
 //
 
 #if os(iOS)
@@ -28,6 +29,7 @@ struct SearchScreen: View {
     @State private var pinName = ""
     @FocusState private var focused: Bool
     @State private var selected: Int?
+    @State private var showTags = false
 
     /// More than this is a reason to narrow the query, not to scroll.
     private let shown = 200
@@ -87,6 +89,10 @@ struct SearchScreen: View {
         HStack {
             QLink(title: "Close") { dismiss() }
             Spacer()
+            QLink(title: showTags ? "Hide tags" : "Tags", emphasised: showTags) {
+                withAnimation(QMotion.micro) { showTags.toggle() }
+                if showTags { focused = false }
+            }
             if !SearchQuery.parse(query).isEmpty {
                 QLink(title: "Pin", emphasised: true) {
                     pinName = query.count <= 30 ? query : String(query.prefix(30))
@@ -122,6 +128,16 @@ struct SearchScreen: View {
     }
 
     @ViewBuilder private var idle: some View {
+        if showTags, !store.tagCounts.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                QLabel("Tags", trailing: "\(store.tagCounts.count)")
+                // "@work 75 · @walk 49 · …"; a tag searches for itself.
+                FlowText(items: store.tagCounts.map { ($0.tag, $0.count) }, selected: nil) { tag in
+                    query = tag
+                    showTags = false
+                }
+            }
+        }
         if searched {
             Text("Nothing matches that.").font(q.writing(18)).foregroundStyle(q.mutedColor)
         } else if !saved.isEmpty {
@@ -201,6 +217,35 @@ struct SearchScreen: View {
         guard !Task.isCancelled else { return }
         results = hits
         searched = !SearchQuery.parse(text).isEmpty
+    }
+}
+
+/// Tags with counts, flowing and wrapping like a sentence.
+private struct FlowText: View {
+    @Environment(\.quire) private var q
+    let items: [(String, Int)]
+    let selected: String?
+    let pick: (String) -> Void
+
+    var body: some View {
+        Text(items.enumerated().reduce(into: AttributedString()) { out, pair in
+            let (i, item) = pair
+            let name = item.0.hasPrefix("@") ? item.0 : "@" + item.0
+            var tag = AttributedString(name)
+            tag.foregroundColor = item.0 == selected ? q.accentColor : q.inkColor
+            tag.link = URL(string: "quire-tag://\(item.0.replacingOccurrences(of: "@", with: ""))")
+            var count = AttributedString(" \(item.1)")
+            count.foregroundColor = q.mutedColor
+            out += tag; out += count
+            if i < items.count - 1 {
+                var dot = AttributedString("  ·  "); dot.foregroundColor = q.mutedColor; out += dot
+            }
+        })
+        .font(q.isMarathon ? q.label(11) : q.ui(13)).lineSpacing(8)
+        .environment(\.openURL, OpenURLAction { url in
+            if url.scheme == "quire-tag", let host = url.host { pick("@" + host) }
+            return .handled
+        })
     }
 }
 

@@ -2,8 +2,8 @@
 //  JournalScreen.swift
 //  Quire
 //
-//  Everything that has been filed, by month and day. Tags run across the top as
-//  words with counts; picking one narrows the list, and so does Starred.
+//  Everything that has been filed, by month and day. Starred narrows the list;
+//  tags are browsed from Search, where each one is a query.
 //
 
 #if os(iOS)
@@ -21,9 +21,7 @@ struct JournalScreen: View {
     var settings: () -> Void
     var media: () -> Void
 
-    @State private var tag: String?
     @State private var starredOnly = false
-    @State private var allTags = false
     @State private var selected: Int?
     @State private var deleting: Entry?
 
@@ -33,16 +31,9 @@ struct JournalScreen: View {
         var count: Int { days.reduce(0) { $0 + $1.entries.count } }
     }
 
-    /// Days, newest first, narrowed by the chosen tag or the star filter.
+    /// Days, newest first, narrowed by the star filter.
     private var days: [(date: String, entries: [Entry])] {
         var days = store.archiveEntries
-        if let tag {
-            let wanted = tag.hasPrefix("@") ? tag : "@" + tag
-            days = days.compactMap { day in
-                let kept = day.entries.filter { $0.tags.contains { $0.caseInsensitiveCompare(wanted) == .orderedSame } }
-                return kept.isEmpty ? nil : (day.date, kept)
-            }
-        }
         if starredOnly {
             days = days.compactMap { day in
                 let kept = day.entries.filter(\.isStarred)
@@ -69,13 +60,12 @@ struct JournalScreen: View {
         return ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22, pinnedViews: []) {
-                QMasthead(onSearch: search, onSettings: settings)
+                QMasthead(onMedia: media, onSearch: search, onSettings: settings)
                 QTitle(kicker: "\(store.archiveEntries.reduce(0) { $0 + $1.entries.count }) filed", title: "Journal")
-                QLink(title: "Media Library", action: media)
                 filters
                 if months.isEmpty {
                     Text(!store.indexed ? "Loading your journal…"
-                         : tag != nil || starredOnly ? "Nothing matches."
+                         : starredOnly ? "Nothing matches."
                          : "Nothing is filed yet. File a draft from the inbox and it lands here.")
                         .font(q.writing(18)).foregroundStyle(q.mutedColor)
                 }
@@ -89,7 +79,8 @@ struct JournalScreen: View {
                                     .font(q.label(11)).foregroundStyle(q.mutedColor)
                                 ForEach(day.entries.reversed()) { entry in
                                     let ref = EntryRef(entry: entry, source: .archive(date: day.date))
-                                    QEntryRow(entry: entry, selected: entry.id == selectedID, onOpen: { open(ref) })
+                                    QEntryRow(entry: entry, selected: entry.id == selectedID, onOpen: { open(ref) },
+                                              onDelete: { deleting = entry })
                                 }
                             }
                         }
@@ -126,23 +117,12 @@ struct JournalScreen: View {
     }
 
     private var filters: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 18) {
-                filterLink("All", on: tag == nil && !starredOnly) { tag = nil; starredOnly = false }
-                filterLink("Starred", on: starredOnly) { starredOnly.toggle() }
-                if let tag { filterLink("\(tag) ✕", on: true) { self.tag = nil } }
-                Spacer()
-                filterLink("Random", on: false) {
-                    if let r = store.randomEntry() { open(EntryRef(entry: r.entry, source: .archive(date: r.date))) }
-                }
-            }
-            let tags = store.tagCounts.prefix(allTags ? 40 : 6)
-            if !tags.isEmpty {
-                // "@work 75 · @walk 49 · …"
-                FlowText(items: tags.map { ($0.tag, $0.count) }, selected: tag) { tag = $0 == tag ? nil : $0 }
-                if store.tagCounts.count > 6 {
-                    QLink(title: allTags ? "Fewer" : "\(store.tagCounts.count - 6) more") { allTags.toggle() }
-                }
+        HStack(spacing: 18) {
+            filterLink("All", on: !starredOnly) { starredOnly = false }
+            filterLink("Starred", on: starredOnly) { starredOnly.toggle() }
+            Spacer()
+            filterLink("Random", on: false) {
+                if let r = store.randomEntry() { open(EntryRef(entry: r.entry, source: .archive(date: r.date))) }
             }
         }
     }
@@ -157,35 +137,6 @@ struct JournalScreen: View {
                 .frame(minHeight: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-}
-
-/// Tags with counts, flowing and wrapping like a sentence.
-private struct FlowText: View {
-    @Environment(\.quire) private var q
-    let items: [(String, Int)]
-    let selected: String?
-    let pick: (String) -> Void
-
-    var body: some View {
-        Text(items.enumerated().reduce(into: AttributedString()) { out, pair in
-            let (i, item) = pair
-            let name = item.0.hasPrefix("@") ? item.0 : "@" + item.0
-            var tag = AttributedString(name)
-            tag.foregroundColor = item.0 == selected ? q.accentColor : q.inkColor
-            tag.link = URL(string: "quire-tag://\(item.0.replacingOccurrences(of: "@", with: ""))")
-            var count = AttributedString(" \(item.1)")
-            count.foregroundColor = q.mutedColor
-            out += tag; out += count
-            if i < items.count - 1 {
-                var dot = AttributedString("  ·  "); dot.foregroundColor = q.mutedColor; out += dot
-            }
-        })
-        .font(q.isMarathon ? q.label(11) : q.ui(13)).lineSpacing(8)
-        .environment(\.openURL, OpenURLAction { url in
-            if url.scheme == "quire-tag", let host = url.host { pick("@" + host) }
-            return .handled
-        })
     }
 }
 

@@ -173,8 +173,16 @@ struct ReaderScreen: View {
         entry.body.components(separatedBy: "\n\n").flatMap { raw -> [Block] in
             let part = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !part.isEmpty else { return [] }
-            if part.hasPrefix("![") , let open = part.firstIndex(of: "("), let close = part.lastIndex(of: ")"), open < close {
-                return [.media(String(part[part.index(after: open)..<close]))]
+            // A link on its own line is the media; anything under it (a voice
+            // memo's transcript) reads as text.
+            if part.hasPrefix("![") {
+                let lines = part.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+                let link = lines[0]
+                if let open = link.firstIndex(of: "("), let close = link.lastIndex(of: ")"), open < close {
+                    let rest = lines.count > 1 ? lines[1].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+                    return [.media(String(link[link.index(after: open)..<close]))]
+                        + (rest.isEmpty ? [] : rest.qChunks(1500).map { Block.text($0) })
+                }
             }
             let hashes = part.prefix { $0 == "#" }.count
             if hashes > 0, hashes <= 3, part.dropFirst(hashes).first == " " {
@@ -199,11 +207,21 @@ struct ReaderScreen: View {
                 .font(q.writing(19, italic: true)).foregroundStyle(q.mutedColor).lineSpacing(6)
                 .padding(.leading, 16)
         case .media(let path):
-            if let url = store.assetURL(forRelative: path), let image = UIImage(contentsOfFile: url.path) {
-                Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity)
-                    .accessibilityLabel("Attached photo")
-            } else {
-                Text(path).font(q.mono(12)).foregroundStyle(q.mutedColor)
+            let url = store.assetURL(forRelative: path)
+            switch MediaKind(path: path) {
+            case .video where url != nil:
+                VideoView(url: url!)
+                    .aspectRatio(16 / 9, contentMode: .fit).frame(maxWidth: .infinity)
+                    .accessibilityLabel("Attached video")
+            case .audio where url != nil:
+                AudioPlayerView(url: url!)
+            default:
+                if let url, let image = UIImage(contentsOfFile: url.path) {
+                    Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity)
+                        .accessibilityLabel("Attached photo")
+                } else {
+                    Text(path).font(q.mono(12)).foregroundStyle(q.mutedColor)
+                }
             }
         case .text(let text):
             Text(QMarkdown.inline(text, accent: q.accentColor))

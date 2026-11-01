@@ -22,8 +22,10 @@ struct TodayScreen: View {
     var showInbox: () -> Void
     var search: () -> Void
     var settings: () -> Void
+    var media: () -> Void
 
     @State private var line = ""
+    @State private var deleting: Entry?
     @FocusState private var lineFocused: Bool
     /// Bumped when a line is saved to the inbox: a light land.
     @State private var savedLines = 0
@@ -44,7 +46,7 @@ struct TodayScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                QMasthead(onSearch: search, onSettings: settings)
+                QMasthead(onMedia: media, onSearch: search, onSettings: settings)
                 if q.isMarathon {
                     marathonHeader
                     readouts
@@ -71,6 +73,13 @@ struct TodayScreen: View {
         .onChange(of: nav.phoneRequest) { _, _ in takeCapture() }
         .background(alignment: .topTrailing) {
             if q.isMarathon { QDotField(color: q.signalColor).opacity(0.55).frame(width: 170, height: 120).padding(.top, 150).padding(.trailing, 14) }
+        }
+        .confirmationDialog("Delete this entry?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                            titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                if let d = deleting { _ = store.deleteFiledEntry(date: d.date, entry: d) }
+                deleting = nil
+            }
         }
     }
 
@@ -299,7 +308,7 @@ struct TodayScreen: View {
             QLabel("Filed today", trailing: "\(filedToday.count)")
             ForEach(filedToday) { entry in
                 let ref = EntryRef(entry: entry, source: .archive(date: today))
-                QEntryRow(entry: entry, onOpen: { open(ref) })
+                QEntryRow(entry: entry, onOpen: { open(ref) }, onDelete: { deleting = entry })
                     // A just-filed entry is set down on the page.
                     .transition(.asymmetric(insertion: .scale(scale: 0.96, anchor: .topLeading).combined(with: .opacity),
                                             removal: .opacity))
@@ -318,9 +327,15 @@ struct TodayScreen: View {
                         Text(String(past.date.prefix(4))).font(q.mono(12)).foregroundStyle(q.accentColor)
                             .fixedSize().rotationEffect(.degrees(-90)).frame(width: 14, height: 34)
                             .padding(.top, 4)
-                        Text(entry.qTitle.isEmpty ? "Untitled" : entry.qTitle)
-                            .font(q.writing(18)).foregroundStyle(q.inkColor)
-                            .multilineTextAlignment(.leading)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(entry.qTitle.isEmpty ? "Untitled" : entry.qTitle)
+                                .font(q.writing(18)).foregroundStyle(q.inkColor)
+                                .multilineTextAlignment(.leading)
+                            if !entry.tags.isEmpty {
+                                Text(entry.qTagLine).font(q.ui(13)).foregroundStyle(q.accentColor)
+                                    .lineLimit(2).multilineTextAlignment(.leading)
+                            }
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 44)
                     .contentShape(Rectangle())

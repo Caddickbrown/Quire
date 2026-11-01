@@ -22,6 +22,12 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
+- **Apple**: entries open on the iPhone play their video and voice memos in place (a memo's transcript reads beneath it), instead of showing the file's path.
+- **Apple**: press and hold an entry in Today, the Inbox or the Journal to delete it (it asks first).
+- **Apple**: On this day shows each entry's tags, on the phone and on the monitor.
+- **Apple**: Search has a Tags button listing every tag with its count; a tag searches for itself. The Journal's tag list is gone from the top of the page.
+- **Apple**: the mastheads use icons for Search and Settings, and Today and the Journal have a Media Library icon beside them (the Journal's "Media Library" link is gone).
+- **Apple**: `r` (a random entry) is listed on the monitor in lists and open entries too, and another `r` replaces the open entry rather than stacking up.
 - **Apple**: words selected in the composer are shaded on the monitor too: a highlighter in the accent colour on Quire's page, VS Code's selection blue in hidden mode.
 - **Apple**: the composer's footer says how many drafts are left in the inbox (or that this is the last one), for working through them one by one.
 - **Apple**: with a monitor connected, ↑ and ↓ in the composer move the cursor by the monitor's lines, not the phone's, so it goes where you see it go; the phone keeps its own wrapping.
@@ -40,6 +46,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: the widgets, the Lock Screen New Draft accessory and the writing-timer Live Activity are set in Quire's design instead of Nook's: the app's theme (Marathon included), Newsreader and IBM Plex, and the mark. Small shows today's words, Medium opens on today's prompt, Large is the Today page in miniature; they turn over at midnight on their own and tint on a tinted Home Screen.
 
 ### Fixed
+- **Apple**: italics show in the editor and on the monitor: `_text_` now sets the font's italic face (TextKit 2 drew the old slant upright), and `*text*` italicises too.
+- **Apple**: Esc leaves a new page from the keyboard; the title field kept Esc for itself, so a page opened on its title couldn't be closed.
+- **Apple**: the monitor draws a caret in the title while the title is being written.
 - **Apple**: filing or closing a page from a hardware keyboard (`^j`, Esc) no longer freezes the app until iOS kills it.
 - **Apple**: hidden mode's caret behaves like VS Code's: the text no longer shifts or rewraps around it, it holds solid while you type and blinks when you stop, and it sits in the title while you type the title.
 - **Apple**: the composer's control keys (`^j` file, `^s` save, `^t`, `^f`, `^p`, `^d`) work while you type; they only reached the app when no field had the cursor, and the text field read some of them as cursor moves.
