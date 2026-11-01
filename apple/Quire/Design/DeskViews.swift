@@ -449,7 +449,8 @@ private struct DeskEntry: View {
                               lineSpacing: metrics.text * 0.3, accent: q.accentColor,
                               mirror: true, mirrorCaret: inTitle ? nil : caret)
         } else {
-            MediaPreview(text: text, font: q.writing(metrics.text), textColor: q.inkColor, contentPadding: 0)
+            MediaPreview(text: text, font: q.writing(metrics.text), textColor: q.inkColor, contentPadding: 0,
+                         mediaScale: max(1, metrics.text / 20))
         }
     }
 

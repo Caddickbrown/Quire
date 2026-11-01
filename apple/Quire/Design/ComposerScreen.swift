@@ -199,9 +199,13 @@ struct ComposerScreen: View {
                     .frame(minHeight: 44)
             }.buttonStyle(.plain).accessibilityLabel("Change date and time")
             Spacer()
-            QLink(title: starred ? "★" : "☆") { starred.toggle() }
-                .accessibilityLabel(starred ? "Starred" : "Star")
-                .frame(minWidth: 44)
+            Button { starred.toggle() } label: {
+                Image(systemName: starred ? "star.fill" : "star").font(.system(size: 18))
+                    .foregroundStyle(starred ? q.accentColor : q.mutedColor)
+                    .frame(width: 44, height: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(starred ? "Starred" : "Star")
         }
         .padding(.horizontal, 16).padding(.top, 8)
     }

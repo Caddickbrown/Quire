@@ -90,6 +90,8 @@ struct MediaBody: View {
     /// this pixel size rather than loaded at full resolution — what the Stream
     /// uses so scrolling the whole corpus doesn't decode every photo in full.
     var thumbnailSide: Int? = nil
+    /// Sizes inline players up for the monitor.
+    var mediaScale: CGFloat = 1
 
     @State private var editingIndex: Int?
     @State private var draftCaption = ""
@@ -371,7 +373,7 @@ struct MediaBody: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10))
             } else { missing(path) }
         case .audio:
-            if let url { AudioPlayerView(url: url) } else { missing(path) }
+            if let url { AudioPlayerView(url: url, scale: mediaScale) } else { missing(path) }
         case .image:
             if let image = inlineImage(url) {
                 image.resizable().scaledToFit()
@@ -416,6 +418,7 @@ struct MediaPreview: View {
     let font: Font
     let textColor: Color
     var contentPadding: CGFloat = 16
+    var mediaScale: CGFloat = 1
     var onUpdateText: ((String) -> Void)? = nil
 
     var body: some View {
@@ -424,7 +427,8 @@ struct MediaPreview: View {
                       font: font,
                       textColor: textColor,
                       contentPadding: contentPadding,
-                      onUpdateText: onUpdateText)
+                      onUpdateText: onUpdateText,
+                      mediaScale: mediaScale)
         }
     }
 }
@@ -562,37 +566,150 @@ struct VideoView: View {
     }
 }
 
-/// A compact inline audio player (play/pause + filename). It stops when its
-/// page goes, and comes back to play once the memo has run to its end.
+/// An inline audio player in the Quire theme's own terms: a play/pause button
+/// in the accent (Marathon's square signal block), the memo's name, and a
+/// timeline you can drag or tap to seek, with elapsed and remaining time under
+/// it. Colours and type come from `\.quire`, so it follows every theme on the
+/// phone and on the monitor; `scale` sizes it up for the monitor. It stops when
+/// its page goes, and comes back to the start once the memo has run out.
 struct AudioPlayerView: View {
     let url: URL
+    var scale: CGFloat = 1
+    @Environment(\.quire) private var q
     @State private var player: AVPlayer?
+    @State private var observer: Any?
     @State private var playing = false
+    @State private var elapsed: Double = 0
+    @State private var duration: Double = 0
+    /// Where the finger is on the track (0–1) while dragging; the time shown
+    /// follows it, and the player seeks once on release.
+    @State private var scrub: Double?
+
+    private var shown: Double { scrub.map { $0 * duration } ?? elapsed }
+    private var fraction: Double { duration > 0 ? min(1, max(0, shown / duration)) : 0 }
+    private var fill: Color { q.isMarathon ? q.signalColor : q.accentColor }
+    private var onFill: Color { q.isMarathon ? q.onSignalColor : q.onAccentColor }
+
+    /// A voice note is saved under a UUID; that isn't a name worth showing.
+    private var name: String {
+        let base = url.deletingPathExtension().lastPathComponent
+        return UUID(uuidString: base) != nil ? "Voice memo" : base
+    }
 
     var body: some View {
-        HStack(spacing: 10) {
-            Button {
-                if playing { player?.pause() } else { player?.play() }
-                playing.toggle()
-            } label: {
-                Image(systemName: playing ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.title)
+        HStack(alignment: .center, spacing: 14 * scale) {
+            Button(action: toggle) {
+                Image(systemName: playing ? "pause.fill" : "play.fill")
+                    .font(.system(size: 15 * scale, weight: .semibold))
+                    .foregroundStyle(onFill)
+                    .frame(width: 40 * scale, height: 40 * scale)
+                    .background(fill, in: q.isMarathon ? AnyShape(Rectangle()) : AnyShape(Circle()))
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Label(url.lastPathComponent, systemImage: "waveform")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer()
+            .accessibilityLabel(playing ? "Pause" : "Play")
+            VStack(alignment: .leading, spacing: 4 * scale) {
+                Text(q.caps(name)).font(q.label(11 * scale, weight: .medium)).tracking(q.isMarathon ? 1.2 : 0.4)
+                    .foregroundStyle(q.mutedColor).lineLimit(1)
+                track
+                HStack {
+                    Text(Self.clock(shown))
+                    Spacer(minLength: 8)
+                    Text("−" + Self.clock(max(0, duration - shown)))
+                }
+                .font(q.mono(11 * scale)).monospacedDigit().foregroundStyle(q.mutedColor)
+            }
         }
-        .padding(10)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-        .onAppear { if player == nil { player = AVPlayer(url: url) } }
-        .onDisappear { player?.pause(); playing = false }
+        .padding(.horizontal, 14 * scale).padding(.vertical, 10 * scale)
+        .background(Color(hex: q.card), in: q.isMarathon ? AnyShape(Rectangle()) : AnyShape(RoundedRectangle(cornerRadius: 4 * scale)))
+        .overlay {
+            (q.isMarathon ? AnyShape(Rectangle()) : AnyShape(RoundedRectangle(cornerRadius: 4 * scale)))
+                .stroke(q.lineColor, lineWidth: 1)
+        }
+        .onAppear(perform: start)
+        .onDisappear(perform: stop)
+        .task(id: url) {
+            if let d = try? await AVURLAsset(url: url).load(.duration), d.seconds.isFinite { duration = d.seconds }
+        }
         .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { note in
             guard let item = player?.currentItem, (note.object as? AVPlayerItem) === item else { return }
             playing = false
+            elapsed = 0
             player?.seek(to: .zero)
         }
+    }
+
+    /// The rule in a faint ink, played part in the accent, and a
+    /// knob that grows while held. Touching anywhere on it seeks there.
+    private var track: some View {
+        GeometryReader { geo in
+            let width = max(geo.size.width, 1)
+            let knob = (scrub == nil ? 12 : 16) * scale
+            ZStack(alignment: .leading) {
+                Rectangle().fill(q.faintColor.opacity(0.45)).frame(height: 3 * scale)
+                Rectangle().fill(fill).frame(width: width * fraction, height: 3 * scale)
+                (q.isMarathon ? AnyShape(Rectangle()) : AnyShape(Circle()))
+                    .fill(fill)
+                    .frame(width: knob, height: knob)
+                    .offset(x: min(max(0, width * fraction - knob / 2), width - knob))
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { scrub = min(1, max(0, $0.location.x / width)) }
+                .onEnded { value in
+                    seek(to: min(1, max(0, value.location.x / width)) * duration)
+                    scrub = nil
+                })
+            .animation(.easeOut(duration: 0.12), value: scrub == nil)
+        }
+        .frame(height: 22 * scale)
+        .accessibilityElement()
+        .accessibilityLabel("Position")
+        .accessibilityValue("\(Self.clock(shown)) of \(Self.clock(duration))")
+        .accessibilityAdjustableAction { direction in
+            let step = max(5, duration / 20)
+            seek(to: min(duration, max(0, elapsed + (direction == .increment ? step : -step))))
+        }
+    }
+
+    private func start() {
+        guard player == nil else { return }
+        let p = AVPlayer(url: url)
+        player = p
+        observer = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { t in
+            MainActor.assumeIsolated {
+                if scrub == nil, t.seconds.isFinite { elapsed = t.seconds }
+            }
+        }
+    }
+
+    private func stop() {
+        player?.pause()
+        playing = false
+        if let observer { player?.removeTimeObserver(observer) }
+        observer = nil
+        player = nil
+    }
+
+    private func toggle() {
+        if player == nil { start() }
+        if playing { player?.pause() } else {
+            if duration > 0, elapsed >= duration - 0.05 { seek(to: 0) }
+            player?.play()
+        }
+        playing.toggle()
+    }
+
+    private func seek(to seconds: Double) {
+        elapsed = seconds
+        player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    /// "1:05", or "1:02:05" past an hour.
+    static func clock(_ seconds: Double) -> String {
+        let s = Int(seconds.isFinite ? seconds.rounded(.down) : 0)
+        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                         : String(format: "%d:%02d", s / 60, s % 60)
     }
 }

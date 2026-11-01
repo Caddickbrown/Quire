@@ -120,7 +120,7 @@ struct PhoneRoot: View {
         // sheet or the composer, so nothing stays readable while locked.
         .onAppear { AppLockVeilWindow.shared.setVisible(appLock.showsVeil) }
         .onChange(of: appLock.showsVeil) { _, show in AppLockVeilWindow.shared.setVisible(show) }
-        // `QUIRE_OPEN=settings|search|media|write` in the launch environment opens that first (screenshots).
+        // `QUIRE_OPEN=settings|search|media|write|entry` in the launch environment opens that first (screenshots).
         // The external display scene is built by UIKit and can't reach this environment.
         .onAppear {
             ExternalDisplayModel.shared.store = store
@@ -135,6 +135,16 @@ struct PhoneRoot: View {
             case "search": showSearch = true
             case "media": showMedia = true
             case "write": composing = ComposeTarget(ref: nil)
+            case "entry":
+                // The newest filed entry, once the journal has loaded.
+                Task { @MainActor in
+                    for _ in 0..<20 {
+                        if let day = store.archiveEntries.first, let e = day.entries.last {
+                            open(EntryRef(entry: e, source: .archive(date: day.date))); return
+                        }
+                        try? await Task.sleep(for: .seconds(0.5))
+                    }
+                }
             default: break
             }
         }

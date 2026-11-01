@@ -2,7 +2,7 @@
 //  ReaderScreen.swift
 //  Quire
 //
-//  One entry, set as a page. Actions are words along the top; the text gets the
+//  One entry, set as a page. Actions are icons along the top; the text gets the
 //  measure and the leading it deserves.
 //
 
@@ -78,20 +78,23 @@ struct ReaderScreen: View {
 
     private var actionBar: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 18) {
+            HStack(spacing: 6) {
                 // Beside the list there is nothing to go back to.
                 if onClose == nil { QLink(title: "‹ Back") { close() } }
                 Spacer()
-                action(entry.isStarred ? "★ Starred" : "☆ Star", color: entry.isStarred ? q.accentColor : q.mutedColor) {
+                action(entry.isStarred ? "star.fill" : "star", entry.isStarred ? "Starred" : "Star",
+                       color: entry.isStarred ? q.accentColor : q.mutedColor) {
                     store.toggleStar(entry, source: ref.source); refresh()
                 }
                 if isDraft {
-                    action("File", color: q.accentColor, bold: true) { store.fileDraft(entry); close() }
+                    action("archivebox", "File", color: q.accentColor, bold: true) { store.fileDraft(entry); close() }
                 } else {
-                    action("Return to inbox", color: q.mutedColor) { _ = store.returnToInbox(entry, source: ref.source); close() }
+                    action("tray.and.arrow.up", "Return to inbox", color: q.mutedColor) {
+                        _ = store.returnToInbox(entry, source: ref.source); close()
+                    }
                 }
-                action("Delete", color: q.mutedColor) { confirmDelete = true }
-                action("Edit", color: q.inkColor, bold: true) { onEdit(current) }
+                action("trash", "Delete", color: q.mutedColor) { confirmDelete = true }
+                action("pencil", "Edit", color: q.inkColor, bold: true) { onEdit(current) }
             }
             .padding(.horizontal, 20)
             Button { onRetime(current) } label: {
@@ -106,12 +109,17 @@ struct ReaderScreen: View {
         }
     }
 
-    private func action(_ title: String, color: Color, bold: Bool = false, _ run: @escaping () -> Void) -> some View {
+    /// A plain icon, as in the masthead: no bubble, a 44pt target, the word as
+    /// its accessibility label. Accent still marks File; Edit is the heavier one.
+    private func action(_ symbol: String, _ label: String, color: Color, bold: Bool = false,
+                        _ run: @escaping () -> Void) -> some View {
         Button(action: run) {
-            Text(title).font(q.ui(13, weight: bold ? .semibold : .regular)).foregroundStyle(color)
-                .frame(minHeight: 44).contentShape(Rectangle())
+            Image(systemName: symbol).font(.system(size: 18, weight: bold ? .semibold : .regular))
+                .foregroundStyle(color)
+                .frame(width: 44, height: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
     /// Show the entry on a connected monitor while it is open.

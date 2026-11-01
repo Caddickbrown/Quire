@@ -22,7 +22,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
-- **Apple**: entries open on the iPhone play their video and voice memos in place (a memo's transcript reads beneath it), instead of showing the file's path.
+- **Apple**: entries open on the iPhone play their video and voice memos in place (a memo's transcript reads beneath it), instead of showing the file's path. Voice memos get a player in the theme's own colours and type: play/pause, a timeline to drag or tap to seek, elapsed and remaining time; it is sized up on the monitor.
+- **Apple**: an open entry's actions (star, file or return to inbox, delete, edit) and the composer's star are icons, as the masthead's are.
 - **Apple**: press and hold an entry in Today, the Inbox or the Journal to delete it (it asks first).
 - **Apple**: On this day shows each entry's tags, on the phone and on the monitor.
 - **Apple**: Search has a Tags button listing every tag with its count; a tag searches for itself. The Journal's tag list is gone from the top of the page.
