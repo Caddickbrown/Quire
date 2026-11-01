@@ -70,6 +70,7 @@ struct ComposerScreen: View {
     @StateObject private var recorder = AudioRecorder()
     /// A brief word in the footer (a refused drop).
     @State private var notice: String?
+    @State private var leaving = false
 
     /// Today's prompt, when Settings → Writing prompts is on.
     private static var prompt: String {
@@ -105,12 +106,13 @@ struct ComposerScreen: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("\(themeLabel) · \(QDate.longDay(stampDate))".uppercased()).tracking(1.6)
                         .font(q.ui(11)).foregroundStyle(q.mutedColor).opacity(quiet)
-                    TextField("", text: $title, prompt: Text("Title").foregroundColor(q.faintColor))
+                    ComposerTitleField(text: $title, font: titleFont, color: UIColor(q.inkColor),
+                                       placeholderColor: UIColor(q.faintColor), tint: UIColor(q.accentColor),
+                                       focused: Binding(get: { focus == .title },
+                                                        set: { if $0 { focus = .title } else if focus == .title { focus = nil } }),
+                                       onSubmit: { focus = .body })
                         .focused($focus, equals: .title)
-                        .submitLabel(.next)
-                        .onSubmit { focus = .body }
-                        .font(q.isMarathon ? q.display(30) : q.writing(32, weight: .medium)).foregroundStyle(q.inkColor)
-                        .textCase(q.isMarathon ? .uppercase : nil)
+                        .fixedSize(horizontal: false, vertical: true)
                         .opacity(quiet)
                     QTitleRule().qDrawIn().opacity(quiet)
                     editor
@@ -177,6 +179,13 @@ struct ComposerScreen: View {
             Attach.drop(providers, into: store, link: link,
                         refused: { say("Only images, video and audio attach") })
         }
+    }
+
+    /// The title's face: Newsreader Medium, or Marathon's wide display Archivo.
+    private var titleFont: UIFont {
+        if q.isMarathon { return QuireFont.uiArchivo(30, weight: 800, width: 125) }
+        let base = UIFont(name: "NewsreaderRoman-Medium", size: 32) ?? .systemFont(ofSize: 32, weight: .medium)
+        return UIFontMetrics(forTextStyle: .body).scaledFont(for: base)
     }
 
     // MARK: Pieces
@@ -499,6 +508,9 @@ struct ComposerScreen: View {
     /// UIKit and the key catcher taking it back, each swap rebuilding the
     /// keyboard's input views, until the watchdog killed the app.
     private func leave() {
+        // Esc can arrive from more than one place; the page closes once.
+        guard !leaving else { return }
+        leaving = true
         focus = nil
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         DispatchQueue.main.async { dismiss() }
@@ -522,6 +534,70 @@ struct ComposerScreen: View {
         }
         leave()
     }
+}
+
+/// The title, as a UIKit field so it can claim Esc: a SwiftUI TextField's
+/// UITextField keeps Esc for itself, so from a new page (which opens on its
+/// title) Esc never reached the composer and the page couldn't be left from
+/// the keyboard. Focus follows the composer's own, as the body's editor does.
+private struct ComposerTitleField: UIViewRepresentable {
+    @Binding var text: String
+    let font: UIFont
+    let color: UIColor
+    let placeholderColor: UIColor
+    let tint: UIColor
+    var focused: Binding<Bool>
+    var onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> EscapingTextField {
+        let field = EscapingTextField()
+        field.delegate = context.coordinator
+        field.returnKeyType = .next
+        field.borderStyle = .none
+        field.adjustsFontForContentSizeCategory = false
+        field.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+        return field
+    }
+
+    func updateUIView(_ field: EscapingTextField, context: Context) {
+        context.coordinator.parent = self
+        if field.text != text { field.text = text }
+        field.font = font
+        field.textColor = color
+        field.tintColor = tint
+        field.attributedPlaceholder = NSAttributedString(string: "Title",
+            attributes: [.font: font, .foregroundColor: placeholderColor])
+        DispatchQueue.main.async { [weak field] in
+            guard let field, field.window != nil else { return }
+            if focused.wrappedValue, !field.isFirstResponder { field.becomeFirstResponder() }
+            else if !focused.wrappedValue, field.isFirstResponder { field.resignFirstResponder() }
+        }
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: ComposerTitleField
+        init(_ parent: ComposerTitleField) { self.parent = parent }
+
+        @objc func changed(_ field: UITextField) { parent.text = field.text ?? "" }
+        func textFieldDidBeginEditing(_ field: UITextField) { parent.focused.wrappedValue = true }
+        func textFieldDidEndEditing(_ field: UITextField) { parent.focused.wrappedValue = false }
+        func textFieldShouldReturn(_ field: UITextField) -> Bool { parent.onSubmit(); return false }
+    }
+}
+
+/// Declares Esc ahead of the text system and hands it to the composer.
+final class EscapingTextField: UITextField {
+    override var keyCommands: [UIKeyCommand]? {
+        let esc = UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(quireEscape))
+        esc.wantsPriorityOverSystemBehavior = true
+        return (super.keyCommands ?? []) + [esc]
+    }
+
+    @objc private func quireEscape() { KeyCommandRouter.shared.clear() }
 }
 
 /// ^t: the date and time of the page.

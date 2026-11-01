@@ -15,7 +15,7 @@
 //  Writing-surface extras (all optional, chosen in Settings):
 //  * `typewriter`      — keeps the caret's line vertically centred as you type.
 //  * `focusParagraph`  — dims everything but the paragraph you're in.
-//  * live styling      — `_italic_`, `**bold**` and `` `code` `` render in
+//  * live styling      — `_italic_`, `*italic*`, `**bold**` and `` `code` `` render in
 //                        place while editing; the markers stay in the text.
 //  * list continuation — ↩ inside a `- `, `1. ` or `- [ ] ` line continues the
 //                        list; ↩ on an empty item ends it.
@@ -34,10 +34,16 @@
 import SwiftUI
 
 private let tagRegex = try! NSRegularExpression(pattern: #"@[a-zA-Z][a-zA-Z0-9_-]*"#)
-/// `_text_` or `__text__` → italicised while editing (slant applied via
-/// .obliqueness so it works for fonts like Lato with no separate italic face).
-/// The backreference makes the closing run of underscores match the opening.
+/// `_text_` or `__text__` → italicised while editing. The backreference makes
+/// the closing run of underscores match the opening.
 private let emphasisRegex = try! NSRegularExpression(pattern: #"(_{1,2})(.+?)\1"#)
+/// `*text*` → italicised too, as markdown (and the reader) has it. Not `**`,
+/// which is bold, and not a `* ` list bullet or a lone `a * b`.
+private let starEmphasisRegex = try! NSRegularExpression(pattern: #"(?<![*\w])\*(?![\s*])(.+?)(?<![\s*])\*(?![*\w])"#)
+/// Both kinds of emphasis, in `text`'s own ranges.
+private func emphasisMatches(in text: String, range: NSRange) -> [NSTextCheckingResult] {
+    emphasisRegex.matches(in: text, range: range) + starEmphasisRegex.matches(in: text, range: range)
+}
 /// `**text**` → bold while editing.
 private let boldRegex = try! NSRegularExpression(pattern: #"\*\*(.+?)\*\*"#)
 /// `` `text` `` → monospaced while editing.
@@ -90,6 +96,12 @@ private func platformFont(_ raw: String, _ size: CGFloat) -> NSFont {
     case .serif:  return designed(size, .serif)
     case .mono:   return .monospacedSystemFont(ofSize: size, weight: .regular)
     }
+}
+/// The font's italic face, or a slant where it has none.
+private func macItalic(_ font: NSFont) -> [NSAttributedString.Key: Any] {
+    let italic = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
+    if NSFontManager.shared.traits(of: italic).contains(.italicFontMask) { return [.font: italic] }
+    return [.obliqueness: 0.2]
 }
 private func designed(_ size: CGFloat, _ design: NSFontDescriptor.SystemDesign) -> NSFont {
     let base = NSFont.systemFont(ofSize: size)
@@ -231,8 +243,9 @@ struct WritingTextEditor: NSViewRepresentable {
                 tv.textStorage?.addAttribute(.foregroundColor, value: tagColor, range: shifted(m.range))
             }
         }
-        for m in emphasisRegex.matches(in: sub, range: subRange) {
-            tv.textStorage?.addAttribute(.obliqueness, value: 0.2, range: shifted(m.range))
+        let italic = macItalic(font)
+        for m in emphasisMatches(in: sub, range: subRange) {
+            tv.textStorage?.addAttributes(italic, range: shifted(m.range))
         }
         let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
         for m in boldRegex.matches(in: sub, range: subRange) {
@@ -260,8 +273,9 @@ struct WritingTextEditor: NSViewRepresentable {
                 tv.textStorage?.addAttribute(.foregroundColor, value: tagColor, range: m.range)
             }
         }
-        for m in emphasisRegex.matches(in: tv.string, range: full) {
-            tv.textStorage?.addAttribute(.obliqueness, value: 0.2, range: m.range)
+        let italic = macItalic(font)
+        for m in emphasisMatches(in: tv.string, range: full) {
+            tv.textStorage?.addAttributes(italic, range: m.range)
         }
         let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
         for m in boldRegex.matches(in: tv.string, range: full) {
@@ -497,6 +511,19 @@ private func platformFont(_ raw: String, _ size: CGFloat, scaled: Bool = true) -
     guard scaled else { return base }
     return UIFontMetrics(forTextStyle: .body).scaledFont(for: base)
 }
+/// The font's italic face (Newsreader and Lato have one), or the same face
+/// slanted by its matrix where there is none (Archivo). Not `.obliqueness`:
+/// the TextKit 2 text views iOS builds draw that attribute upright, which is
+/// why italics never showed in the editor or on the monitor.
+private func italicFont(_ font: UIFont) -> UIFont {
+    let traits = font.fontDescriptor.symbolicTraits.union(.traitItalic)
+    if let d = font.fontDescriptor.withSymbolicTraits(traits) {
+        let italic = UIFont(descriptor: d, size: font.pointSize)
+        if italic.fontDescriptor.symbolicTraits.contains(.traitItalic) { return italic }
+    }
+    let slant = CGAffineTransform(a: 1, b: 0, c: 0.2, d: 1, tx: 0, ty: 0)
+    return UIFont(descriptor: font.fontDescriptor.withMatrix(slant), size: font.pointSize)
+}
 private func designed(_ size: CGFloat, _ design: UIFontDescriptor.SystemDesign) -> UIFont {
     let base = UIFont.systemFont(ofSize: size)
     if let d = base.fontDescriptor.withDesign(design) { return UIFont(descriptor: d, size: size) }
@@ -680,8 +707,9 @@ struct WritingTextEditor: UIViewRepresentable {
                 tv.textStorage.addAttribute(.foregroundColor, value: UIColor(accent), range: shifted(m.range))
             }
         }
-        for m in emphasisRegex.matches(in: sub, range: subRange) {
-            tv.textStorage.addAttribute(.obliqueness, value: 0.2, range: shifted(m.range))
+        let italic = italicFont(font)
+        for m in emphasisMatches(in: sub, range: subRange) {
+            tv.textStorage.addAttribute(.font, value: italic, range: shifted(m.range))
         }
         let boldDescriptor = font.fontDescriptor.withSymbolicTraits(.traitBold)
         let bold = boldDescriptor.map { UIFont(descriptor: $0, size: font.pointSize) } ?? font
@@ -709,8 +737,9 @@ struct WritingTextEditor: UIViewRepresentable {
                 tv.textStorage.addAttribute(.foregroundColor, value: UIColor(accent), range: m.range)
             }
         }
-        for m in emphasisRegex.matches(in: tv.text, range: full) {
-            tv.textStorage.addAttribute(.obliqueness, value: 0.2, range: m.range)
+        let italic = italicFont(font)
+        for m in emphasisMatches(in: tv.text, range: full) {
+            tv.textStorage.addAttribute(.font, value: italic, range: m.range)
         }
         // Derive from the (Dynamic Type-scaled) body font, not the raw px size.
         let boldDescriptor = font.fontDescriptor.withSymbolicTraits(.traitBold)
@@ -994,12 +1023,17 @@ final class PastingTextView: UITextView {
             }
         }
         guard KeyCommandRouter.shared.wantsChords else { return own }
-        return own + KeyCommandRouter.chords.map {
+        // Esc leaves the page; ahead of the text system, which may keep it.
+        let esc = UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(quireEscape))
+        esc.wantsPriorityOverSystemBehavior = true
+        return own + [esc] + KeyCommandRouter.chords.map {
             let c = UIKeyCommand(input: $0, modifierFlags: .control, action: #selector(quireChord(_:)))
             c.wantsPriorityOverSystemBehavior = true
             return c
         }
     }
+
+    @objc private func quireEscape() { KeyCommandRouter.shared.clear() }
 
     /// The column a run of ↑/↓ keeps to, as in any editor: a short line
     /// passed on the way doesn't pull the caret left for good.

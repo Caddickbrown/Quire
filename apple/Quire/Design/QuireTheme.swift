@@ -182,17 +182,22 @@ extension QuireFont {
     /// face is its 125% width at weight 800.
     static func archivo(_ size: CGFloat, weight: CGFloat = 400, width: CGFloat = 100) -> Font {
         #if canImport(UIKit)
+        return Font(uiArchivo(size, weight: weight, width: width))
+        #else
+        return .system(size: size, weight: weight >= 700 ? .heavy : weight >= 500 ? .medium : .regular)
+        #endif
+    }
+    #if canImport(UIKit)
+    /// The same Archivo instance as a UIFont, scaled with Dynamic Type.
+    static func uiArchivo(_ size: CGFloat, weight: CGFloat = 400, width: CGFloat = 100) -> UIFont {
         let wght = NSNumber(value: 2003265652), wdth = NSNumber(value: 2003072104)   // 'wght', 'wdth'
         let descriptor = UIFontDescriptor(fontAttributes: [
             .name: "ArchivoRoman-Regular",
             UIFontDescriptor.AttributeName(rawValue: kCTFontVariationAttribute as String): [wght: weight, wdth: width],
         ])
-        let font = UIFontMetrics.default.scaledFont(for: UIFont(descriptor: descriptor, size: size))
-        return Font(font)
-        #else
-        return .system(size: size, weight: weight >= 700 ? .heavy : weight >= 500 ? .medium : .regular)
-        #endif
+        return UIFontMetrics.default.scaledFont(for: UIFont(descriptor: descriptor, size: size))
     }
+    #endif
     static func dmMono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         .custom(weight == .regular || weight == .light ? "DMMono-Regular" : "DMMono-Medium", size: size)
     }
