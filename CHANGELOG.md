@@ -28,7 +28,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: On this day shows each entry's tags, on the phone and on the monitor.
 - **Apple**: Search has a Tags button listing every tag with its count; a tag searches for itself. The Journal's tag list is gone from the top of the page.
 - **Apple**: the mastheads use icons for Search and Settings, and Today and the Journal have a Media Library icon beside them (the Journal's "Media Library" link is gone).
-- **Apple**: `r` (a random entry) is listed on the monitor in lists and open entries too, and another `r` replaces the open entry rather than stacking up.
+- **Apple**: `r` (a random entry) works and is listed on the monitor in the Journal, On this day and open entries, and gives a random draft in the Inbox; another `r` replaces the open entry rather than stacking up. The monitor's key hints step down in size rather than running off the edge, and Search no longer lists keys its sheet doesn't take.
 - **Apple**: words selected in the composer are shaded on the monitor too: a highlighter in the accent colour on Quire's page, VS Code's selection blue in hidden mode.
 - **Apple**: the composer's footer says how many drafts are left in the inbox (or that this is the last one), for working through them one by one.
 - **Apple**: with a monitor connected, ↑ and ↓ in the composer move the cursor by the monitor's lines, not the phone's, so it goes where you see it go; the phone keeps its own wrapping.

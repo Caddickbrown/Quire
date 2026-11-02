@@ -99,17 +99,21 @@ struct ExternalDisplayRoot: View {
                     .init(key: "l", label: "Look back"), .init(key: "/", label: "Search"), .init(key: "r", label: "Random"),
                     .init(key: ",", label: "Settings"), .init(key: "?", label: "Hints")]
         case .browsing(let listTitle, _, _, _, _):
-            let base: [ShortcutHint] = [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Open"), .init(key: "⎋", label: "Back"),
-                                        .init(key: "r", label: "Random")]
+            let base: [ShortcutHint] = [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Open"), .init(key: "⎋", label: "Back")]
+            let random = ShortcutHint(key: "r", label: "Random")
             switch listTitle {
             case "Inbox":
-                return base + [.init(key: "f", label: "File"), .init(key: "e", label: "Edit"), .init(key: "*", label: "Star"),
+                // A random draft, as the Inbox's own Random does.
+                return base + [random, .init(key: "f", label: "File"), .init(key: "e", label: "Edit"), .init(key: "*", label: "Star"),
                                .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), .init(key: ",", label: "Settings")]
             case "Journal":
-                return base + [.init(key: "e", label: "Edit"), .init(key: "u", label: "Inbox"), .init(key: "*", label: "Star"),
+                return base + [random, .init(key: "e", label: "Edit"), .init(key: "u", label: "Inbox"), .init(key: "*", label: "Star"),
                                .init(key: "d", label: "Delete"), .init(key: ",", label: "Settings")]
+            case "Search":
+                // The search sheet keeps the app's letters away (they type).
+                return base
             default:
-                return base + [.init(key: "n", label: "New"), .init(key: ",", label: "Settings")]
+                return base + [random, .init(key: "n", label: "New"), .init(key: ",", label: "Settings")]
             }
         case .composing:
             // No `?` or `,` here: with the editor focused they type.
@@ -121,8 +125,8 @@ struct ExternalDisplayRoot: View {
                  .init(key: "^P", label: "Prompt")] +
                 (isDraft ? [.init(key: "^D", label: "Discard")] : []) + [.init(key: "⎋", label: "Back")]
         case .reading:
-            return [.init(key: "e", label: "Edit"), .init(key: "*", label: "Star"), .init(key: "t", label: "Time"),
-                    .init(key: "d", label: "Delete"), .init(key: "r", label: "Random"), .init(key: "⎋", label: "Back"),
+            return [.init(key: "e", label: "Edit"), .init(key: "r", label: "Random"), .init(key: "*", label: "Star"),
+                    .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), .init(key: "⎋", label: "Back"),
                     .init(key: ",", label: "Settings")] + common
         }
     }
@@ -141,21 +145,34 @@ private struct DeskHintBar: View {
         if showHints && !hints.isEmpty {
             VStack(spacing: 0) {
                 Rectangle().fill(q.lineColor).frame(height: 1)
-                HStack(spacing: metrics.caption * 1.7) {
-                    ForEach(hints) { hint in
-                        HStack(spacing: metrics.caption * 0.45) {
-                            Text(hint.key).font(q.mono(metrics.caption, weight: .medium)).foregroundStyle(q.accentColor)
-                            Text(q.caps(hint.label)).font(q.label(metrics.caption * 0.9)).tracking(q.isMarathon ? 1.2 : 0)
-                                .foregroundStyle(q.mutedColor)
-                        }
-                    }
-                    Spacer(minLength: 0)
+                // Every key must show: a long list at a large size steps down
+                // rather than running off the edge.
+                ViewThatFits(in: .horizontal) {
+                    row(size: metrics.caption, gap: 1.7)
+                    row(size: metrics.caption * 0.85, gap: 1.1)
+                    row(size: metrics.caption * 0.72, gap: 0.8)
                 }
-                .lineLimit(1)
                 .padding(.horizontal, metrics.padding)
                 .padding(.vertical, metrics.caption * 0.9)
             }
         }
+    }
+}
+
+extension DeskHintBar {
+    fileprivate func row(size: CGFloat, gap: CGFloat) -> some View {
+        HStack(spacing: size * gap) {
+            ForEach(hints) { hint in
+                HStack(spacing: size * 0.45) {
+                    Text(hint.key).font(q.mono(size, weight: .medium)).foregroundStyle(q.accentColor)
+                    Text(q.caps(hint.label)).font(q.label(size * 0.9)).tracking(q.isMarathon ? 1.2 : 0)
+                        .foregroundStyle(q.mutedColor)
+                }
+                .fixedSize()
+            }
+            Spacer(minLength: 0)
+        }
+        .lineLimit(1)
     }
 }
 

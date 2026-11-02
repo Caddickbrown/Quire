@@ -104,6 +104,10 @@ struct InboxScreen: View {
                       case "*": store.toggleStar(entry, source: .inbox); return true
                       case "t": retime(EntryRef(entry: entry, source: .inbox)); return true
                       case "d": deleting = entry; return true
+                      // A random draft (the Journal and Today give a filed one).
+                      case "r":
+                          if let draft = store.inboxDrafts.randomElement() { openDraft(draft) }
+                          return true
                       default: return false
                       }
                   })
