@@ -656,7 +656,7 @@ private struct DeskBrowse: View {
             Text(QDate.shortDay(row.date).uppercased()).font(q.label(metrics.caption * 0.85)).tracking(metrics.caption * 0.1)
                 .foregroundStyle(on ? q.accentColor : q.mutedColor)
                 .frame(width: metrics.text * 4.6, alignment: .leading)
-            Text(row.title.isEmpty ? "Untitled" : row.title)
+            Text(row.title.isEmpty ? AttributedString("Untitled") : QMarkdown.emphasis(row.title))
                 .font(q.writing(metrics.text * 0.78, italic: row.title.isEmpty))
                 .foregroundStyle(row.title.isEmpty ? q.mutedColor : q.inkColor).lineLimit(1)
             Spacer(minLength: 0)
@@ -671,7 +671,8 @@ private struct DeskBrowse: View {
         VStack(alignment: .leading, spacing: metrics.caption) {
             Text(q.caps(QDate.fullDay(row.date) + (row.time.isEmpty ? "" : " · " + row.time)))
                 .font(q.label(metrics.caption, weight: .medium)).tracking(metrics.caption * 0.16).foregroundStyle(q.mutedColor)
-            Text(row.title.isEmpty ? "Untitled" : row.title).font(q.display(metrics.title * 0.9)).lineLimit(3)
+            Text(row.title.isEmpty ? AttributedString("Untitled") : QMarkdown.emphasis(row.title))
+                .font(q.display(metrics.title * 0.9)).lineLimit(3)
             Rectangle().fill(q.accentColor).frame(width: metrics.text * 2, height: max(2, q.ruleH))
             Text(row.body).font(q.writing(metrics.text * 0.8)).foregroundStyle(q.inkColor.opacity(0.9))
                 .lineSpacing(metrics.text * 0.25).lineLimit(14)

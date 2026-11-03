@@ -439,14 +439,14 @@ struct QEntryRow: View {
             Button(action: onOpen) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text(entry.qTitle.isEmpty ? "Untitled" : entry.qTitle)
+                        Text(entry.qTitle.isEmpty ? AttributedString("Untitled") : QMarkdown.emphasis(entry.qTitle))
                             .font(q.writing(19, weight: q.isMarathon ? .medium : .regular, italic: entry.qTitle.isEmpty))
                             .foregroundStyle(entry.qTitle.isEmpty ? q.mutedColor : q.inkColor)
                             .lineLimit(2).multilineTextAlignment(.leading)
                         if entry.isStarred { Text("★").font(q.ui(13)).foregroundStyle(q.accentColor) }
                     }
                     if !entry.qExcerpt.isEmpty {
-                        Text(entry.qExcerpt).font(q.ui(13)).foregroundStyle(q.mutedColor)
+                        Text(QMarkdown.emphasis(entry.qExcerpt)).font(q.ui(13)).foregroundStyle(q.mutedColor)
                             .lineLimit(2).multilineTextAlignment(.leading)
                     }
                 }
@@ -499,6 +499,21 @@ extension JournalStore {
 
 /// Inline markdown, with @tags in the accent.
 enum QMarkdown {
+    /// A title or a list's line with its emphasis set (`_x_`/`*x*` italic,
+    /// `**x**`/`__x__` bold, `` `x` `` code) and the markers gone, in whatever
+    /// font the Text has. CommonMark's rules, as the reader's: an underscore
+    /// inside a word (snake_case) and a lone `*` stay as typed; links lose their
+    /// link, so a row still opens its entry. Callers pass titles with the star
+    /// marker already off (`displayTitle`, `qTitle`).
+    static func emphasis(_ text: String) -> AttributedString {
+        guard text.contains(where: { $0 == "_" || $0 == "*" || $0 == "`" }),
+              var out = try? AttributedString(markdown: text,
+                                              options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+        else { return AttributedString(text) }
+        for run in out.runs where run.link != nil { out[run.range].link = nil }
+        return out
+    }
+
     static func inline(_ text: String, accent: Color) -> AttributedString {
         var out = (try? AttributedString(
             markdown: text,

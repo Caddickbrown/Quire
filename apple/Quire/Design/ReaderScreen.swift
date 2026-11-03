@@ -50,7 +50,7 @@ struct ReaderScreen: View {
             actionBar
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text(q.caps(entry.qHasTitle ? entry.displayTitle : "Untitled"))
+                    Text(QMarkdown.emphasis(q.caps(entry.qHasTitle ? entry.displayTitle : "Untitled")))
                         .font(q.isMarathon ? q.display(30) : q.writing(34, weight: .medium, italic: !entry.qHasTitle))
                         .foregroundStyle(entry.qHasTitle ? q.inkColor : q.mutedColor)
                         .fixedSize(horizontal: false, vertical: true)
