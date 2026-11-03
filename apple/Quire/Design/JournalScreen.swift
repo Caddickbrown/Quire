@@ -80,7 +80,7 @@ struct JournalScreen: View {
                                 ForEach(day.entries.reversed()) { entry in
                                     let ref = EntryRef(entry: entry, source: .archive(date: day.date))
                                     QEntryRow(entry: entry, selected: entry.id == selectedID, onOpen: { open(ref) },
-                                              onDelete: { deleting = entry })
+                                              onDelete: { askDelete(entry) })
                                 }
                             }
                         }
@@ -102,7 +102,7 @@ struct JournalScreen: View {
                       case "*": store.toggleStar(entry, source: source); return true
                       case "u": _ = store.returnToInbox(entry, source: source); return true
                       case "t": retime(EntryRef(entry: entry, source: source)); return true
-                      case "d": deleting = entry; return true
+                      case "d": askDelete(entry); return true
                       default: return false
                       }
                   })
@@ -114,6 +114,19 @@ struct JournalScreen: View {
             }
         }
         }
+    }
+
+    /// On the monitor in desk mode, where the keyboard can answer; the phone's
+    /// dialog otherwise. The list keeps its place, so the selection lands on the
+    /// next entry (or the one before, if this was the last).
+    private func askDelete(_ entry: Entry) {
+        let asked = DeskConfirm.shared.ask(.init(kicker: "Journal", question: "Delete this entry?",
+                                                 detail: DeskConfirm.describe(entry), when: DeskConfirm.when(entry),
+                                                 action: "Delete")) {
+            store.deleteFiledEntry(date: entry.date, entry: entry)
+                ? nil : (store.lastWriteError ?? "The entry could not be deleted.")
+        }
+        if !asked { deleting = entry }
     }
 
     private var filters: some View {

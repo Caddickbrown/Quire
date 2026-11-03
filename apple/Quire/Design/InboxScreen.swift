@@ -23,7 +23,6 @@ struct InboxScreen: View {
     var search: () -> Void
     var settings: () -> Void
 
-    @State private var confirmFileAll = false
     @State private var selected: Int?
     @State private var deleting: Entry?
 
@@ -54,16 +53,20 @@ struct InboxScreen: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
                 QMasthead(onSearch: search, onSettings: settings)
-                HStack(alignment: .lastTextBaseline) {
+                HStack(alignment: .bottom) {
                     QTitle(kicker: kicker, title: "Inbox")
                     Spacer()
-                    if let _ = store.inboxDrafts.first {
-                        QLink(title: "Random") {
+                    if !store.inboxDrafts.isEmpty {
+                        // The masthead's icon buttons: themed ink, a 44pt target.
+                        Button {
                             if let draft = store.inboxDrafts.randomElement() { openDraft(draft) }
+                        } label: {
+                            Image(systemName: "dice").font(.system(size: 18, weight: .regular))
+                                .foregroundStyle(q.inkColor)
+                                .frame(width: 44, height: 44).contentShape(Rectangle())
                         }
-                    }
-                    if store.inboxDrafts.count > 1 {
-                        QLink(title: "File all", emphasised: true) { confirmFileAll = true }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Random draft")
                     }
                 }
                 if store.inboxDrafts.isEmpty {
@@ -82,7 +85,7 @@ struct InboxScreen: View {
                                     .font(q.label(11)).foregroundStyle(q.mutedColor)
                                 ForEach(day.entries) { entry in
                                     QEntryRow(entry: entry, selected: entry.id == selectedID,
-                                              onOpen: { openDraft(entry) }, onDelete: { deleting = entry })
+                                              onOpen: { openDraft(entry) }, onDelete: { askDelete(entry) })
                                 }
                             }
                         }
@@ -103,7 +106,7 @@ struct InboxScreen: View {
                       case "e": edit(EntryRef(entry: entry, source: .inbox)); return true
                       case "*": store.toggleStar(entry, source: .inbox); return true
                       case "t": retime(EntryRef(entry: entry, source: .inbox)); return true
-                      case "d": deleting = entry; return true
+                      case "d": askDelete(entry); return true
                       // A random draft (the Journal and Today give a filed one).
                       case "r":
                           if let draft = store.inboxDrafts.randomElement() { openDraft(draft) }
@@ -111,15 +114,26 @@ struct InboxScreen: View {
                       default: return false
                       }
                   })
+        }
+        // On the outer view: inside the ScrollViewReader the dialog never
+        // presented (the binding went true and nothing came up), so neither `d`
+        // nor press and hold → Delete… could delete a draft.
         .confirmationDialog("Delete this draft?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                             titleVisibility: .visible) {
             Button("Delete", role: .destructive) { if let d = deleting { store.deleteDraft(d) }; deleting = nil }
         }
-        .confirmationDialog("File all \(store.inboxDrafts.count) drafts?", isPresented: $confirmFileAll,
-                            titleVisibility: .visible) {
-            Button("File all") { _ = store.fileAllDrafts() }
-        } message: { Text("Each goes to the day in its own timestamp.") }
+    }
+
+    /// On the monitor in desk mode, where the keyboard can answer; the phone's
+    /// dialog otherwise. The list keeps its place, so the selection lands on the
+    /// next draft (or the one before, if this was the last).
+    private func askDelete(_ entry: Entry) {
+        let asked = DeskConfirm.shared.ask(.init(kicker: "Inbox", question: "Delete this draft?",
+                                                 detail: DeskConfirm.describe(entry), when: DeskConfirm.when(entry),
+                                                 action: "Delete")) {
+            store.deleteEditorDraft(entry) ? nil : (store.lastWriteError ?? "The draft could not be deleted.")
         }
+        if !asked { deleting = entry }
     }
 
     private func openDraft(_ entry: Entry) {

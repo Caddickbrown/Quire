@@ -49,6 +49,7 @@ struct ComposerScreen: View {
     @State private var routerID = UUID()
     @State private var showStamp = false
     @ObservedObject private var datePicker = DeskDatePicker.shared
+    @ObservedObject private var deskConfirm = DeskConfirm.shared
     /// A date and time chosen (^t) before the first save of a new page.
     @State private var pendingTS: String?
     @State private var confirmDiscard = false
@@ -131,15 +132,20 @@ struct ComposerScreen: View {
         .qHaptic(.land, trigger: savedBeat)
         .qHaptic(.warning, trigger: failedBeat)
         .background(chordKeys)
-        // The monitor's date picker takes the keys while it is up: the text is let
-        // go, and this catcher holds first responder in its place.
-        .background { if datePicker.isOpen { KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false) } }
+        // The monitor's date picker or question takes the keys while it is up: the
+        // text is let go, and this catcher holds first responder in its place.
+        .background {
+            if datePicker.isOpen || deskConfirm.isOpen {
+                KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false)
+            }
+        }
         .onAppear { load(); registerKeys() }
         .onChange(of: title) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror() }
         .onChange(of: text) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror() }
         .onDisappear {
             pending?.cancel()
             DeskDatePicker.shared.cancel()
+            DeskConfirm.shared.cancel(owner: routerID)
             ExternalDisplayModel.shared.releasePage(owner: routerID)
             KeyCommandRouter.shared.unregister(routerID)
         }
@@ -479,7 +485,7 @@ struct ComposerScreen: View {
                 case "t": changeDate(); return true
                 case "f": focusMode.toggle(); return true
                 case "p": insertPrompt(); return true
-                case "d": if isDraft { confirmDiscard = true; return true }; return false
+                case "d": if isDraft { askDiscard(); return true }; return false
                 default: return false
                 }
             }))
@@ -505,6 +511,31 @@ struct ComposerScreen: View {
         }
         onRemove()
         leave()
+    }
+
+    /// ^d: on the monitor in desk mode, where the keyboard can answer it; the
+    /// phone's dialog otherwise. The text is let go while it is up, as for ^t.
+    private func askDiscard() {
+        guard DeskConfirm.shared.isAvailable else { confirmDiscard = true; return }
+        let was = focus
+        let firstLine = text.split(separator: "\n").lazy
+            .map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
+        let name = title.trimmingCharacters(in: .whitespaces).isEmpty ? firstLine : title
+        // On the next turn, not inside the key's own handling (see `leave`).
+        DispatchQueue.main.async {
+            focus = nil
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            DeskConfirm.shared.open(.init(kicker: "Writing", question: "Discard this draft?",
+                                          detail: name.isEmpty ? "Untitled" : String(name.prefix(200)),
+                                          when: "\(QDate.shortDay(String(stampText.prefix(10)))) · \(QDate.time(stampText))",
+                                          action: "Discard"),
+                                    owner: routerID,
+                                    onConfirm: {
+                                        discard()
+                                        return leaving ? nil : (saveError ?? "The draft could not be discarded.")
+                                    },
+                                    onClose: { DispatchQueue.main.async { if !leaving { focus = was ?? .body } } })
+        }
     }
 
     /// ^t: on the monitor in desk mode, where the keyboard can work it; the

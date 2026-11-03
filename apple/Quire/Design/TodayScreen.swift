@@ -294,6 +294,20 @@ struct TodayScreen: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { lineFocused = true }
     }
 
+    /// On the monitor in desk mode, where the keyboard can answer; the phone's
+    /// dialog otherwise.
+    private func askDelete(_ entry: Entry) {
+        guard DeskConfirm.shared.isAvailable else { deleting = entry; return }
+        // Return answers the question, not the line field.
+        lineFocused = false
+        DeskConfirm.shared.open(.init(kicker: "Today", question: "Delete this entry?",
+                                      detail: DeskConfirm.describe(entry), when: DeskConfirm.when(entry),
+                                      action: "Delete")) {
+            store.deleteFiledEntry(date: entry.date, entry: entry)
+                ? nil : (store.lastWriteError ?? "The entry could not be deleted.")
+        }
+    }
+
     private func saveLine() {
         let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -308,7 +322,7 @@ struct TodayScreen: View {
             QLabel("Filed today", trailing: "\(filedToday.count)")
             ForEach(filedToday) { entry in
                 let ref = EntryRef(entry: entry, source: .archive(date: today))
-                QEntryRow(entry: entry, onOpen: { open(ref) }, onDelete: { deleting = entry })
+                QEntryRow(entry: entry, onOpen: { open(ref) }, onDelete: { askDelete(entry) })
                     // A just-filed entry is set down on the page.
                     .transition(.asymmetric(insertion: .scale(scale: 0.96, anchor: .topLeading).combined(with: .opacity),
                                             removal: .opacity))

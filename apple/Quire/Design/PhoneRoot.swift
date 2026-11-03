@@ -148,7 +148,7 @@ struct PhoneRoot: View {
             default: break
             }
         }
-        // `QUIRE_DESK=idle|entry|browse|date` draws the monitor over the app, as if one
+        // `QUIRE_DESK=idle|entry|browse|date|confirm|live` draws the monitor over the app, as if one
         // were plugged in (screenshots; simulators have no second screen to hand).
         // Drawn at 1920×1080 and scaled to fit, as a monitor would show it.
         .overlay {
@@ -195,17 +195,34 @@ struct PhoneRoot: View {
                 model.present(.reading(title: e.displayTitle, date: when, text: e.body, isStarred: e.isStarred), owner: UUID())
             }
             DeskDatePicker.shared.open(date: when, title: e?.qTitle ?? "") { _ in nil }
-            let router = KeyCommandRouter.shared
-            for k in ProcessInfo.processInfo.environment["QUIRE_DESK_KEYS"] ?? "" {
-                switch k {
-                case "<": router.sideways(-1)
-                case ">": router.sideways(1)
-                case "^": router.moveUp()
-                case "v": router.moveDown()
-                default: router.key(String(k))
-                }
+        case "confirm":
+            // The question over an entry; ↵ writes nothing here.
+            guard let e = entries.first else { return }
+            model.present(.reading(title: e.displayTitle, date: stamp.date(from: e.ts) ?? .now, text: e.body,
+                                   isStarred: e.isStarred), owner: UUID())
+            DeskConfirm.shared.open(.init(kicker: "Journal", question: "Delete this entry?",
+                                          detail: DeskConfirm.describe(e), when: DeskConfirm.when(e),
+                                          action: "Delete")) { nil }
+        default:
+            // `live`: the app's own pages publish, and the keys below drive them
+            // (`QUIRE_START_TAB=inbox QUIRE_DESK=live QUIRE_DESK_KEYS=d↩` really
+            // deletes the first draft).
+            try? await Task.sleep(for: .seconds(1))
+        }
+        // `QUIRE_DESK_KEYS` presses keys: < > ← →, ^ v ↑ ↓, ↩ Return, ⎋ Esc,
+        // anything else as typed, a beat apart.
+        let router = KeyCommandRouter.shared
+        for k in ProcessInfo.processInfo.environment["QUIRE_DESK_KEYS"] ?? "" {
+            switch k {
+            case "<": router.sideways(-1)
+            case ">": router.sideways(1)
+            case "^": router.moveUp()
+            case "v": router.moveDown()
+            case "↩": router.open()
+            case "⎋": router.clear()
+            default: router.key(String(k))
             }
-        default: break
+            try? await Task.sleep(for: .seconds(0.4))
         }
     }
 

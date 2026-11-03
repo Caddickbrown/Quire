@@ -213,7 +213,10 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   design, following the phone's theme) that follows the active entry/editor (the iPhone
   composer and reader publish to it) or browse list; `,` opens `ExternalSettings.swift`
   on the monitor, and `t`/^T change a date there with `DeskDatePicker` (`Design/RetimeSheet.swift`: a
-  keyboard calendar over the page; handlers may claim ← → and extra keys while on top). Keys come from `KeyCommandCatcher` at the app root (the app delegate is
+  keyboard calendar over the page; handlers may claim ← → and extra keys while on top).
+  Confirmations (delete, discard) ask on the monitor with `DeskConfirm` (`Design/DeskViews.swift`;
+  `VSConfirmDialog` in the VS Code theme) whenever it is available: ↵ confirms, Esc cancels, it takes
+  every other key, and unplugging, pausing or locking cancels it; the phone's dialogs are used otherwise. Keys come from `KeyCommandCatcher` at the app root (the app delegate is
   not in the responder chain under SwiftUI). The iPhone lists select with
   `qKeyList` (Design/QuireKeys.swift) and the TUI's letters route through
   `KeyCommandRouter.key`, declared on the app delegate so typing is never touched;
@@ -223,9 +226,10 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   `ExternalTheme` loads the bundled root `themes.json`. Option-Command +/- changes
   size, T theme, P pause, H hints. Locked/paused displays never render journal text.
   The monitor theme `vscode` (hidden mode, `Design/DeskCode.swift`, monitor only) draws
-  the same pages as VS Code on Windows 11; `QUIRE_DESK=idle|entry|browse|date` draws the
+  the same pages as VS Code on Windows 11; `QUIRE_DESK=idle|entry|browse|date|confirm|live` draws the
   monitor over the app at 1920×1080 for simulator screenshots (`QUIRE_DESK_CARET=<offset>`
-  places the entry's caret, `QUIRE_DESK_SELECT=<location>,<length>` shades a selection).
+  places the entry's caret, `QUIRE_DESK_SELECT=<location>,<length>` shades a selection;
+  `live` draws the app's own pages and `QUIRE_DESK_KEYS` presses keys, ↩ and ⎋ included).
 - **Android**: not in the repo yet; Wander's Compose shell over a SAF `Vault`.
 
 ## Releases

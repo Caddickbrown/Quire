@@ -21,6 +21,7 @@ struct ExternalDisplayRoot: View {
     @ObservedObject private var appLock = AppLockManager.shared
     @ObservedObject private var settings = ExternalSettingsModel.shared
     @ObservedObject private var datePicker = DeskDatePicker.shared
+    @ObservedObject private var confirm = DeskConfirm.shared
     @AppStorage(QuireTheme.storageKey) private var themeID = QuireTheme.auto
     @AppStorage(ExternalTheme.key) private var monitorTheme = ExternalTheme.followPhone
     @AppStorage(ExternalTextSize.key) private var textSizeRaw = ExternalTextSize.regular.rawValue
@@ -59,6 +60,7 @@ struct ExternalDisplayRoot: View {
                     VStack(spacing: 0) {
                         page(metrics: metrics).frame(maxWidth: .infinity, maxHeight: .infinity)
                             .overlay { DeskDateOverlay(metrics: metrics) }
+                            .overlay { DeskConfirmOverlay(metrics: metrics) }
                         DeskHintBar(hints: hints, metrics: metrics)
                     }
                     .environmentObject(store)
@@ -100,6 +102,10 @@ struct ExternalDisplayRoot: View {
     /// Which keys are live right now. Shown on the monitor because the phone is
     /// dimmed; the same keys as the terminal app.
     private var hints: [ShortcutHint] {
+        // A question on the monitor takes every key but these two.
+        if let question = confirm.request {
+            return [.init(key: "↩", label: question.action), .init(key: "⎋", label: "Cancel")]
+        }
         if datePicker.isOpen {
             return [.init(key: "←→", label: "Day"), .init(key: "↑↓", label: "Week"), .init(key: "[ ]", label: "Month"),
                     .init(key: "t", label: "Today"), .init(key: "- =", label: "Time"), .init(key: "↩", label: "Set"),
@@ -145,6 +151,168 @@ struct ExternalDisplayRoot: View {
                     .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), .init(key: "⎋", label: "Back"),
                     .init(key: ",", label: "Settings")] + common
         }
+    }
+}
+
+// MARK: - Confirmations
+
+/// A question the keyboard answers on the monitor: "Delete this draft?" over the
+/// page, ↵ to go ahead, Esc to cancel. The phone's confirmation dialogs sit on the
+/// dimmed phone in desk mode, where the hardware keyboard can't answer them, so
+/// while the monitor is available (`isAvailable`, as the date picker) every
+/// confirmation asks here instead; without one the phone's dialogs are untouched.
+/// While it is up it takes every key, so nothing beneath acts behind it.
+/// Unplugging, pausing or locking cancels it. A singleton, like `DeskDatePicker`,
+/// because the monitor's window can't reach the app scene's views.
+@MainActor final class DeskConfirm: ObservableObject {
+    static let shared = DeskConfirm()
+
+    struct Request: Equatable {
+        /// The page it was asked from ("Inbox"), over the question.
+        var kicker: String
+        var question: String
+        /// What it is about: the entry's title or first line.
+        var detail: String = ""
+        /// When that entry is, beside the kicker.
+        var when: String = ""
+        /// What happens, when the question doesn't say.
+        var note: String = ""
+        /// ↵'s word: "Delete", "Discard".
+        var action: String
+    }
+
+    @Published private(set) var request: Request?
+    /// A write that failed: said on the panel, which stays up.
+    @Published private(set) var error: String?
+    var isOpen: Bool { request != nil }
+
+    private var onConfirm: (() -> String?)?
+    private var onClose: (() -> Void)?
+    private var owner: UUID?
+    private let routerID = UUID()
+
+    /// The monitor is showing things: connected, not paused, not behind App Lock.
+    var isAvailable: Bool { DeskDatePicker.shared.isAvailable }
+
+    /// Ask on the monitor if it is available, and say whether it did: false
+    /// leaves the caller to ask on the phone as before. `onConfirm` does the
+    /// thing and returns an error to show, or nil to close; `onClose` runs
+    /// however it closes. `owner` lets a page cancel only its own question.
+    @discardableResult
+    func ask(_ request: Request, owner: UUID? = nil, onConfirm: @escaping () -> String?,
+             onClose: (() -> Void)? = nil) -> Bool {
+        guard isAvailable else { return false }
+        open(request, owner: owner, onConfirm: onConfirm, onClose: onClose)
+        return true
+    }
+
+    func open(_ request: Request, owner: UUID? = nil, onConfirm: @escaping () -> String?,
+              onClose: (() -> Void)? = nil) {
+        DeskDatePicker.shared.cancel()
+        ExternalSettingsModel.shared.close()
+        close()
+        self.request = request
+        error = nil
+        self.owner = owner
+        self.onConfirm = onConfirm
+        self.onClose = onClose
+        KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
+            moveUp: {}, moveDown: {},
+            open: { [weak self] in self?.confirm() },
+            clear: { [weak self] in self?.cancel() },
+            // Every letter is the panel's while it is up: a second `d`, `f` or
+            // `n` beneath it never fires.
+            key: { _ in true }))
+    }
+
+    func cancel() { close() }
+
+    /// Cancel only if `owner` asked it (a page going away).
+    func cancel(owner: UUID) { if self.owner == owner { close() } }
+
+    private func confirm() {
+        guard isOpen, let run = onConfirm else { return }
+        if let failed = run() { error = failed; return }
+        close()
+    }
+
+    private func close() {
+        guard isOpen else { return }
+        request = nil
+        error = nil
+        owner = nil
+        KeyCommandRouter.shared.unregister(routerID)
+        onConfirm = nil
+        let done = onClose
+        onClose = nil
+        done?()
+    }
+
+    /// An entry as the panel names it: its title, else its first line.
+    static func describe(_ entry: Entry) -> String {
+        entry.qTitle.isEmpty ? "Untitled" : entry.qTitle
+    }
+
+    static func when(_ entry: Entry) -> String {
+        "\(QDate.shortDay(entry.date)) · \(QDate.time(entry.ts))"
+    }
+}
+
+/// `DeskConfirm`'s question over the page, in Quire's design: the question, the
+/// entry it is about, and the two keys that answer it.
+private struct DeskConfirmOverlay: View {
+    let metrics: ExternalDisplayMetrics
+    @ObservedObject private var confirm = DeskConfirm.shared
+    @ObservedObject private var model = ExternalDisplayModel.shared
+    @ObservedObject private var appLock = AppLockManager.shared
+    @Environment(\.quire) private var q
+
+    var body: some View {
+        if let request = confirm.request, !model.isPaused, !appLock.showsVeil {
+            ZStack {
+                q.pageColor.opacity(0.82)
+                card(request)
+            }
+            .transition(.opacity)
+        }
+    }
+
+    private func card(_ r: DeskConfirm.Request) -> some View {
+        VStack(alignment: .leading, spacing: metrics.gap * 0.7) {
+            DeskHeader(kicker: r.kicker, title: r.question, trailing: r.when, metrics: metrics)
+            if !r.detail.isEmpty {
+                Text(r.detail).font(q.writing(metrics.text * 0.9, italic: true)).foregroundStyle(q.inkColor)
+                    .lineLimit(2)
+            }
+            if !r.note.isEmpty {
+                Text(r.note).font(q.ui(metrics.caption)).foregroundStyle(q.mutedColor).lineLimit(2)
+            }
+            if let error = confirm.error {
+                Text(error).font(q.ui(metrics.caption)).foregroundStyle(q.accentColor).lineLimit(3)
+            }
+            Rectangle().fill(q.lineColor).frame(height: 1)
+            HStack(spacing: metrics.gap) {
+                key("↩", r.action, emphasised: true)
+                key("⎋", "Cancel", emphasised: false)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(metrics.padding * 0.6)
+        .frame(width: min(metrics.text * 20, 900))
+        .background(q.pageColor)
+        .overlay(Rectangle().strokeBorder(q.lineColor, lineWidth: 1))
+        .shadow(color: .black.opacity(0.16), radius: metrics.gap, y: metrics.gap * 0.3)
+    }
+
+    private func key(_ glyph: String, _ label: String, emphasised: Bool) -> some View {
+        HStack(spacing: metrics.caption * 0.5) {
+            Text(glyph).font(q.mono(metrics.caption, weight: .medium))
+            Text(q.caps(label)).font(q.ui(metrics.text * 0.7, weight: emphasised ? .semibold : .regular))
+        }
+        .foregroundStyle(emphasised ? q.onSignalColor : q.inkColor)
+        .padding(.horizontal, metrics.caption * 0.9).padding(.vertical, metrics.caption * 0.45)
+        .background(emphasised ? q.signalColor : Color.clear)
+        .overlay(Rectangle().strokeBorder(emphasised ? Color.clear : q.lineColor, lineWidth: 1))
     }
 }
 

@@ -194,6 +194,7 @@ struct DeskCode: View {
     @ObservedObject private var model = ExternalDisplayModel.shared
     @ObservedObject private var appLock = AppLockManager.shared
     @ObservedObject private var settings = ExternalSettingsModel.shared
+    @ObservedObject private var confirm = DeskConfirm.shared
 
     var body: some View {
         GeometryReader { geo in
@@ -203,6 +204,11 @@ struct DeskCode: View {
                 if let store, !model.isPaused, !appLock.showsVeil {
                     VSLive(content: model.content, selection: model.selection, settingsOpen: settings.isOpen, hints: hints, s: s)
                         .environmentObject(store)
+                        .overlay {
+                            if let request = confirm.request {
+                                VSConfirmDialog(request: request, error: confirm.error, s: s)
+                            }
+                        }
                 } else {
                     VSWindow(page: .empty, hints: [], s: s)
                 }
@@ -1076,6 +1082,73 @@ private struct VSSettings: View {
         .background(on ? VS.hover : Color.clear)
         .overlay(alignment: .leading) { if on { Rectangle().fill(VS.blue).frame(width: 2 * s.z) } }
         .lineLimit(1)
+    }
+}
+
+/// `DeskConfirm`'s question as VS Code's own modal dialog: the window dimmed, a
+/// warning glyph, the question in bold with the entry beneath, and the buttons
+/// right-aligned, the default one blue and ringed as focused.
+private struct VSConfirmDialog: View {
+    let request: DeskConfirm.Request
+    let error: String?
+    let s: VSScale
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            // VS Code's window, not Windows' taskbar beneath it.
+            Color.black.opacity(0.3).padding(.bottom, s.taskbar)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Spacer()
+                    Image(systemName: "xmark").font(.system(size: s.ui * 0.95)).foregroundStyle(VS.icon)
+                }
+                .padding(.top, 8 * s.z).padding(.trailing, 10 * s.z)
+                HStack(alignment: .top, spacing: 14 * s.z) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 30 * s.z)).foregroundStyle(VS.hex(0xCCA700))
+                    VStack(alignment: .leading, spacing: 8 * s.z) {
+                        Text(request.question).font(.system(size: s.ui * 1.05, weight: .semibold))
+                            .foregroundStyle(VS.bright)
+                        if !request.detail.isEmpty {
+                            Text("'\(request.detail)'" + (request.when.isEmpty ? "" : "  ·  " + request.when))
+                                .lineLimit(2)
+                        }
+                        if !request.note.isEmpty { Text(request.note).lineLimit(2) }
+                        if let error { Text(error).foregroundStyle(VS.hex(0xF85149)).lineLimit(3) }
+                    }
+                    .font(.system(size: s.ui)).foregroundStyle(VS.text)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 20 * s.z).padding(.top, 4 * s.z)
+                HStack(spacing: 8 * s.z) {
+                    Spacer()
+                    button(request.action, primary: true)
+                    button("Cancel", primary: false)
+                }
+                .padding(.horizontal, 20 * s.z).padding(.top, 20 * s.z).padding(.bottom, 16 * s.z)
+            }
+            .frame(width: 520 * s.z)
+            .background(VS.hex(0x202020))
+            .overlay(RoundedRectangle(cornerRadius: 4 * s.z).stroke(VS.hex(0x454545), lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 4 * s.z))
+            .shadow(color: .black.opacity(0.6), radius: 16 * s.z)
+            .padding(.top, s.titleBar + 120 * s.z)
+        }
+    }
+
+    private func button(_ label: String, primary: Bool) -> some View {
+        Text(label).font(.system(size: s.ui))
+            .foregroundStyle(primary ? VS.bright : VS.text)
+            .padding(.horizontal, 14 * s.z).frame(minWidth: 72 * s.z, minHeight: 26 * s.z)
+            .background(primary ? VS.blue : VS.input, in: RoundedRectangle(cornerRadius: 2 * s.z))
+            .overlay {
+                if primary {
+                    // The keyboard's focus, VS Code's focusBorder, just outside.
+                    RoundedRectangle(cornerRadius: 3 * s.z).stroke(VS.blue, lineWidth: 1).padding(-2 * s.z)
+                } else {
+                    RoundedRectangle(cornerRadius: 2 * s.z).stroke(VS.inputBorder, lineWidth: 1)
+                }
+            }
     }
 }
 

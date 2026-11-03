@@ -42,11 +42,14 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: the Today widget's "Another prompt" button rerolls the prompt for the app and every widget.
 
 ### Changed
+- **Apple**: the Inbox's Random is a dice icon, and its File all button is gone (filing every draft is still in Settings → Maintenance).
 - **Apple**: an entry opens with the cursor at the end of its text, ready to carry on writing.
 - **Apple**: on the Mac, attaching has its own paperclip button instead of sitting in the ⋯ menu.
 - **Apple**: the widgets, the Lock Screen New Draft accessory and the writing-timer Live Activity are set in Quire's design instead of Nook's: the app's theme (Marathon included), Newsreader and IBM Plex, and the mark. Small shows today's words, Medium opens on today's prompt, Large is the Today page in miniature; they turn over at midnight on their own and tint on a tinted Home Screen.
 
 ### Fixed
+- **Apple**: deleting a draft from the Inbox works on the phone again. `d` and press and hold → Delete… asked for nothing: the Inbox's "Delete this draft?" never came up.
+- **Apple**: confirmations work in Monitor Mode. Deleting from the Inbox, the Journal, Today or an open entry, and ^D (discard) while writing, ask on the monitor, worked from the keyboard: ↩ goes ahead, Esc cancels, and nothing else acts while it is up. The selection moves on to the next entry (or the one before). Unplugging, pausing or locking cancels it; without a monitor the phone asks as before. It is drawn as VS Code's dialog in the VS Code theme.
 - **Apple**: a date changed while writing (^T or the date at the top) is saved even when the words haven't changed since the last save. It was dropped once a new page had autosaved, and closing the page lost it.
 - **Apple**: changing an entry's date works in Monitor Mode. `t` (on a list or an open entry) and ^T (writing) open a calendar on the monitor, worked from the keyboard: ← → a day, ↑ ↓ a week, [ ] a month, t today, - = the time by 15 minutes, ↩ sets, Esc cancels. The time of day is kept otherwise. Tapping the date on the phone still opens the phone's picker.
 - **Apple**: italics show in the editor and on the monitor: `_text_` now sets the font's italic face (TextKit 2 drew the old slant upright), and `*text*` italicises too.

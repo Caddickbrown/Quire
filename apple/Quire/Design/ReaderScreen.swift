@@ -69,6 +69,7 @@ struct ReaderScreen: View {
         .onAppear { visible = true; mirror(); registerKeys() }
         .onDisappear {
             visible = false
+            DeskConfirm.shared.cancel(owner: routerID)
             ExternalDisplayModel.shared.releasePage(owner: routerID)
             KeyCommandRouter.shared.unregister(routerID)
         }
@@ -96,7 +97,7 @@ struct ReaderScreen: View {
                         _ = store.returnToInbox(entry, source: ref.source); close()
                     }
                 }
-                action("trash", "Delete", color: q.mutedColor) { confirmDelete = true }
+                action("trash", "Delete", color: q.mutedColor) { askDelete() }
                 action("pencil", "Edit", color: q.inkColor, bold: true) { onEdit(current) }
             }
             .padding(.horizontal, 20)
@@ -145,10 +146,22 @@ struct ReaderScreen: View {
                 case "f": if isDraft { store.fileDraft(entry); close() }; return isDraft
                 case "u": if !isDraft { _ = store.returnToInbox(entry, source: ref.source); close() }; return !isDraft
                 case "t": (onRetimeKey ?? onRetime)(current); return true
-                case "d": confirmDelete = true; return true
+                case "d": askDelete(); return true
                 default: return false
                 }
             }))
+    }
+
+    /// On the monitor in desk mode, where the keyboard can answer; the phone's
+    /// dialog otherwise.
+    private func askDelete() {
+        let asked = DeskConfirm.shared.ask(.init(kicker: isDraft ? "Draft" : "Entry",
+                                                 question: isDraft ? "Delete this draft?" : "Delete this entry?",
+                                                 detail: DeskConfirm.describe(entry), when: DeskConfirm.when(entry),
+                                                 action: "Delete"), owner: routerID) {
+            delete(); return nil
+        }
+        if !asked { confirmDelete = true }
     }
 
     private func delete() {
