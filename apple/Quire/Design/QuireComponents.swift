@@ -115,8 +115,10 @@ struct QMasthead: View {
                 .background(q.signalColor, ignoresSafeAreaEdges: []).foregroundStyle(q.onSignalColor)
                 .accessibilityElement(children: .combine).accessibilityLabel("Quire")
                 Spacer(minLength: 0)
-                if let onRandom { cell(randomLabel, "dice", onRandom) }
+                // Random beside Search, so the Media Library coming and going
+                // never moves it.
                 if let onMedia { cell("Media Library", "photo.on.rectangle", onMedia) }
+                if let onRandom { cell(randomLabel, "dice", onRandom) }
                 cell("Search", "magnifyingglass", onSearch)
                 cell("Settings", "gearshape", onSettings)
             }
@@ -130,8 +132,8 @@ struct QMasthead: View {
                 }
                 Spacer()
                 HStack(spacing: 4) {
-                    if let onRandom { icon(randomLabel, "dice", onRandom) }
                     if let onMedia { icon("Media Library", "photo.on.rectangle", onMedia) }
+                    if let onRandom { icon(randomLabel, "dice", onRandom) }
                     icon("Search", "magnifyingglass", onSearch)
                     icon("Settings", "gearshape", onSettings)
                 }
