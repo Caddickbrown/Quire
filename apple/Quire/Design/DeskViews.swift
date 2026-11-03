@@ -5,8 +5,8 @@
 //  The monitor, in Quire's own design. A plugged-in display is a desk mode: it
 //  follows the phone's theme, sets everything in the same type and rules, and is
 //  driven from the keyboard alone: Today when nothing is open, the list and a
-//  preview while browsing, the page itself when reading or writing, and a
-//  settings list on `,`. Sizes come from `ExternalDisplayMetrics`, so a desk
+//  preview while browsing, the page itself when reading or writing, a
+//  settings list on `,`, and a calendar over the page while a date is changed. Sizes come from `ExternalDisplayMetrics`, so a desk
 //  monitor and a TV across the room both read.
 //
 
@@ -20,6 +20,7 @@ struct ExternalDisplayRoot: View {
     @ObservedObject private var model = ExternalDisplayModel.shared
     @ObservedObject private var appLock = AppLockManager.shared
     @ObservedObject private var settings = ExternalSettingsModel.shared
+    @ObservedObject private var datePicker = DeskDatePicker.shared
     @AppStorage(QuireTheme.storageKey) private var themeID = QuireTheme.auto
     @AppStorage(ExternalTheme.key) private var monitorTheme = ExternalTheme.followPhone
     @AppStorage(ExternalTextSize.key) private var textSizeRaw = ExternalTextSize.regular.rawValue
@@ -28,6 +29,15 @@ struct ExternalDisplayRoot: View {
         if monitorTheme == ExternalTheme.vsCode {
             DeskCode(store: model.store, hints: hints,
                      scale: (ExternalTextSize(rawValue: textSizeRaw) ?? .regular).scale)
+                // The calendar in the phone's theme over the editor's window.
+                .overlay {
+                    let q = QuireTheme.resolve(themeID, scheme: model.colorScheme)
+                    GeometryReader { geo in
+                        DeskDateOverlay(metrics: ExternalDisplayMetrics(size: geo.size,
+                            scale: (ExternalTextSize(rawValue: textSizeRaw) ?? .regular).scale))
+                    }
+                    .environment(\.quire, q).foregroundStyle(q.inkColor)
+                }
         } else {
             desk
         }
@@ -48,6 +58,7 @@ struct ExternalDisplayRoot: View {
                 } else if let store = model.store {
                     VStack(spacing: 0) {
                         page(metrics: metrics).frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .overlay { DeskDateOverlay(metrics: metrics) }
                         DeskHintBar(hints: hints, metrics: metrics)
                     }
                     .environmentObject(store)
@@ -89,6 +100,11 @@ struct ExternalDisplayRoot: View {
     /// Which keys are live right now. Shown on the monitor because the phone is
     /// dimmed; the same keys as the terminal app.
     private var hints: [ShortcutHint] {
+        if datePicker.isOpen {
+            return [.init(key: "←→", label: "Day"), .init(key: "↑↓", label: "Week"), .init(key: "[ ]", label: "Month"),
+                    .init(key: "t", label: "Today"), .init(key: "- =", label: "Time"), .init(key: "↩", label: "Set"),
+                    .init(key: "⎋", label: "Cancel")]
+        }
         if settings.isOpen {
             return [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Change"), .init(key: ",", label: "Close"), .init(key: "⎋", label: "Close")]
         }
@@ -133,6 +149,122 @@ struct ExternalDisplayRoot: View {
 }
 
 // MARK: - Pieces
+
+/// The date picker of desk mode (`DeskDatePicker`), over whatever page is up:
+/// a month on the day ↵ would set, today ringed, the entry's day dotted, and
+/// the time beneath. Drawn only here; the phone shows nothing of it.
+private struct DeskDateOverlay: View {
+    let metrics: ExternalDisplayMetrics
+    @ObservedObject private var picker = DeskDatePicker.shared
+    @ObservedObject private var model = ExternalDisplayModel.shared
+    @ObservedObject private var appLock = AppLockManager.shared
+    @Environment(\.quire) private var q
+
+    private static func formatter(_ format: String) -> DateFormatter {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_GB"); f.dateFormat = format; return f
+    }
+    private static let day = formatter("EEEE d MMMM yyyy")
+    private static let month = formatter("MMMM yyyy")
+    private static let time = formatter("HH:mm")
+
+    var body: some View {
+        if picker.isOpen, !model.isPaused, !appLock.showsVeil {
+            ZStack {
+                q.pageColor.opacity(0.82)
+                card
+            }
+            .transition(.opacity)
+        }
+    }
+
+    private var card: some View {
+        let calendar = Calendar.current
+        let chosen = picker.date
+        let days = Self.grid(for: chosen, calendar: calendar)
+        let month = calendar.component(.month, from: chosen)
+        let cell = metrics.text * 1.9
+        return VStack(alignment: .leading, spacing: metrics.gap * 0.7) {
+            DeskHeader(kicker: "Change date and time", title: "When", metrics: metrics)
+            Text(picker.title.isEmpty ? "Untitled" : picker.title)
+                .font(q.writing(metrics.text * 0.8, italic: true)).foregroundStyle(q.mutedColor).lineLimit(1)
+            HStack(alignment: .firstTextBaseline) {
+                Text(q.caps(Self.month.string(from: chosen))).font(q.display(metrics.text * 1.05))
+                Spacer(minLength: metrics.caption)
+                Text(Self.time.string(from: chosen)).font(q.mono(metrics.text * 1.05, weight: .medium))
+                    .foregroundStyle(q.accentColor)
+            }
+            VStack(spacing: metrics.caption * 0.2) {
+                HStack(spacing: 0) {
+                    ForEach(Array(Self.weekdayInitials(calendar).enumerated()), id: \.offset) { _, initial in
+                        Text(initial).frame(width: cell)
+                    }
+                }
+                .font(q.label(metrics.caption, weight: .medium)).foregroundStyle(q.mutedColor)
+                ForEach(0..<6, id: \.self) { week in
+                    HStack(spacing: 0) {
+                        ForEach(days[(week * 7)..<(week * 7 + 7)], id: \.self) { date in
+                            dayCell(date, size: cell,
+                                    selected: calendar.isDate(date, inSameDayAs: chosen),
+                                    isToday: calendar.isDateInToday(date),
+                                    isOriginal: calendar.isDate(date, inSameDayAs: picker.original),
+                                    inMonth: calendar.component(.month, from: date) == month)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            Rectangle().fill(q.lineColor).frame(height: 1)
+            Text(Self.day.string(from: chosen) + " · " + Self.time.string(from: chosen))
+                .font(q.writing(metrics.text * 0.8))
+            Text("Now \(JournalStore.ts(from: picker.original))  →  \(JournalStore.ts(from: chosen))")
+                .font(q.mono(metrics.caption)).foregroundStyle(q.mutedColor).lineLimit(1).minimumScaleFactor(0.7)
+            if let error = picker.error {
+                Text(error).font(q.ui(metrics.caption)).foregroundStyle(q.accentColor).lineLimit(2)
+            }
+        }
+        .padding(metrics.padding * 0.6)
+        .frame(width: cell * 7 + metrics.padding * 1.2)
+        .background(q.pageColor)
+        .overlay(Rectangle().strokeBorder(q.lineColor, lineWidth: 1))
+        .shadow(color: .black.opacity(0.16), radius: metrics.gap, y: metrics.gap * 0.3)
+    }
+
+    private func dayCell(_ date: Date, size: CGFloat, selected: Bool, isToday: Bool,
+                         isOriginal: Bool, inMonth: Bool) -> some View {
+        ZStack {
+            if selected {
+                Circle().fill(q.accentColor)
+            } else if isToday {
+                Circle().strokeBorder(q.accentColor, lineWidth: max(2, metrics.caption * 0.12))
+            }
+            Text("\(Calendar.current.component(.day, from: date))")
+                .font(q.mono(metrics.text * 0.75, weight: selected || isToday ? .medium : .regular))
+                .foregroundStyle(selected ? q.onAccentColor : inMonth ? q.inkColor : q.faintColor)
+            if isOriginal && !selected {
+                Circle().fill(q.accentColor).frame(width: size * 0.12, height: size * 0.12).offset(y: size * 0.3)
+            }
+        }
+        .frame(width: size * 0.9, height: size * 0.9)
+        .frame(width: size, height: size)
+    }
+
+    /// Six weeks from the start of the week the month starts in.
+    static func grid(for date: Date, calendar: Calendar) -> [Date] {
+        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
+        let lead = (calendar.component(.weekday, from: start) - calendar.firstWeekday + 7) % 7
+        // Noon, so a daylight-saving change never lands a cell on the wrong day.
+        let first = calendar.date(byAdding: .day, value: -lead, to: start).flatMap {
+            calendar.date(bySettingHour: 12, minute: 0, second: 0, of: $0)
+        } ?? start
+        return (0..<42).map { calendar.date(byAdding: .day, value: $0, to: first) ?? first }
+    }
+
+    static func weekdayInitials(_ calendar: Calendar) -> [String] {
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        let shift = calendar.firstWeekday - 1
+        return Array(symbols[shift...] + symbols[..<shift])
+    }
+}
 
 /// The keys along the bottom, over a hairline. Hidden with `?`.
 private struct DeskHintBar: View {

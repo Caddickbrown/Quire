@@ -48,6 +48,7 @@ struct ComposerScreen: View {
     @State private var recoverCopy = false
     @State private var routerID = UUID()
     @State private var showStamp = false
+    @ObservedObject private var datePicker = DeskDatePicker.shared
     /// A date and time chosen (^t) before the first save of a new page.
     @State private var pendingTS: String?
     @State private var confirmDiscard = false
@@ -130,11 +131,15 @@ struct ComposerScreen: View {
         .qHaptic(.land, trigger: savedBeat)
         .qHaptic(.warning, trigger: failedBeat)
         .background(chordKeys)
+        // The monitor's date picker takes the keys while it is up: the text is let
+        // go, and this catcher holds first responder in its place.
+        .background { if datePicker.isOpen { KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false) } }
         .onAppear { load(); registerKeys() }
         .onChange(of: title) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror() }
         .onChange(of: text) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror() }
         .onDisappear {
             pending?.cancel()
+            DeskDatePicker.shared.cancel()
             ExternalDisplayModel.shared.releasePage(owner: routerID)
             KeyCommandRouter.shared.unregister(routerID)
         }
@@ -467,7 +472,7 @@ struct ComposerScreen: View {
                 switch k {
                 case "j": if isDraft { finish(); return true }; return false
                 case "s": if saveNow() { flashSaved() }; return true
-                case "t": showStamp = true; return true
+                case "t": changeDate(); return true
                 case "f": focusMode.toggle(); return true
                 case "p": insertPrompt(); return true
                 case "d": if isDraft { confirmDiscard = true; return true }; return false
@@ -496,6 +501,21 @@ struct ComposerScreen: View {
         }
         onRemove()
         leave()
+    }
+
+    /// ^t: on the monitor in desk mode, where the keyboard can work it; the
+    /// phone's sheet otherwise (and always from a tap on the date).
+    private func changeDate() {
+        guard DeskDatePicker.shared.isAvailable else { showStamp = true; return }
+        let was = focus
+        // On the next turn, not inside the key's own handling (see `leave`).
+        DispatchQueue.main.async {
+            focus = nil
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            DeskDatePicker.shared.open(date: stampDate, title: title,
+                                       onSet: { applyStamp($0); return nil },
+                                       onClose: { DispatchQueue.main.async { if !leaving { focus = was ?? .body } } })
+        }
     }
 
     /// Retiming adopts the returned reference and leaves the editor open.

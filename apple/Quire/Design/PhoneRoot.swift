@@ -148,7 +148,7 @@ struct PhoneRoot: View {
             default: break
             }
         }
-        // `QUIRE_DESK=idle|entry|browse` draws the monitor over the app, as if one
+        // `QUIRE_DESK=idle|entry|browse|date` draws the monitor over the app, as if one
         // were plugged in (screenshots; simulators have no second screen to hand).
         // Drawn at 1920×1080 and scaled to fit, as a monitor would show it.
         .overlay {
@@ -186,6 +186,25 @@ struct PhoneRoot: View {
             if sel.count == 2 { model.selection = NSRange(location: sel[0], length: sel[1]) }
         case "browse":
             model.present(.browsing(listTitle: "Journal", rows: ExternalRow.rows(from: entries), selected: 3), owner: UUID())
+        case "date":
+            // The date picker over an entry; nothing is written. `QUIRE_DESK_KEYS`
+            // presses keys first: < > ← →, ^ v ↑ ↓, anything else as typed.
+            let e = entries.first
+            let when = e.flatMap { stamp.date(from: $0.ts) } ?? .now
+            if let e {
+                model.present(.reading(title: e.displayTitle, date: when, text: e.body, isStarred: e.isStarred), owner: UUID())
+            }
+            DeskDatePicker.shared.open(date: when, title: e?.qTitle ?? "") { _ in nil }
+            let router = KeyCommandRouter.shared
+            for k in ProcessInfo.processInfo.environment["QUIRE_DESK_KEYS"] ?? "" {
+                switch k {
+                case "<": router.sideways(-1)
+                case ">": router.sideways(1)
+                case "^": router.moveUp()
+                case "v": router.moveDown()
+                default: router.key(String(k))
+                }
+            }
         default: break
         }
     }
@@ -249,7 +268,7 @@ struct PhoneRoot: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: EntryRef.self) { ref in
                 ReaderScreen(ref: ref, onEdit: { composing = ComposeTarget(ref: $0) },
-                             onRetime: { retiming = $0 })
+                             onRetime: { retiming = $0 }, onRetimeKey: retimeFromKeys)
                     .qArrivalRoot(key: ref.id)
             }
         }
@@ -266,7 +285,8 @@ struct PhoneRoot: View {
             Group {
                 if let ref = path.last {
                     ReaderScreen(ref: ref, onEdit: { composing = ComposeTarget(ref: $0) },
-                                 onRetime: { retiming = $0 }, onClose: { path.removeAll() })
+                                 onRetime: { retiming = $0 }, onRetimeKey: retimeFromKeys,
+                                 onClose: { path.removeAll() })
                         .qArrivalRoot(key: ref.id)
                 } else {
                     emptyPage
@@ -301,10 +321,10 @@ struct PhoneRoot: View {
                         media: { showMedia = true })
                 .onAppear { ExternalDisplayModel.shared.present(.idle) }
         case .inbox:
-            InboxScreen(open: open, edit: { composing = ComposeTarget(ref: $0) }, retime: { retiming = $0 },
+            InboxScreen(open: open, edit: { composing = ComposeTarget(ref: $0) }, retime: retimeFromKeys,
                         search: { showSearch = true }, settings: { showSettings = true })
         case .journal:
-            JournalScreen(open: open, edit: { composing = ComposeTarget(ref: $0) }, retime: { retiming = $0 },
+            JournalScreen(open: open, edit: { composing = ComposeTarget(ref: $0) }, retime: retimeFromKeys,
                           search: { showSearch = true }, settings: { showSettings = true }, media: { showMedia = true })
         case .lookBack:
             LookBackScreen(open: open, search: { showSearch = true }, settings: { showSettings = true })
@@ -344,6 +364,17 @@ struct PhoneRoot: View {
             ExternalDisplayModel.shared.present(.reading(title: ref.entry.displayTitle,
                 date: QDate.date(ref.entry.ts) ?? Date(), text: ref.entry.body, isStarred: ref.entry.isStarred))
         } else if tab == .today { ExternalDisplayModel.shared.present(.idle) }
+    }
+
+    /// `t` on a list or an open entry. With the monitor in desk mode the date is
+    /// changed there, from the keyboard (the phone's sheet is out of sight and its
+    /// graphical picker takes no keys); otherwise the sheet, as a tap opens.
+    private func retimeFromKeys(_ ref: EntryRef) {
+        let picker = DeskDatePicker.shared
+        guard picker.isAvailable else { retiming = ref; return }
+        picker.open(date: JournalStore.date(from: ref.entry.ts) ?? Date(), title: ref.entry.qTitle) { date in
+            RetimeSheet.retime(ref, to: date, in: store) { replaceReference(ref, with: $0) }
+        }
     }
 
     private func replaceReference(_ old: EntryRef, with updated: EntryRef) {

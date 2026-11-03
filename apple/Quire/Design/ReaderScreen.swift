@@ -21,6 +21,8 @@ struct ReaderScreen: View {
     let ref: EntryRef
     var onEdit: (EntryRef) -> Void
     var onRetime: (EntryRef) -> Void
+    /// `t` from the keyboard, which may change the date on the monitor instead.
+    var onRetimeKey: ((EntryRef) -> Void)?
     /// Set when the page sits beside the list (regular width) rather than pushed
     /// over it: leaving clears the selection instead of popping the stack.
     var onClose: (() -> Void)?
@@ -31,10 +33,11 @@ struct ReaderScreen: View {
     @State private var visible = false
 
     init(ref: EntryRef, onEdit: @escaping (EntryRef) -> Void, onRetime: @escaping (EntryRef) -> Void,
-         onClose: (() -> Void)? = nil) {
+         onRetimeKey: ((EntryRef) -> Void)? = nil, onClose: (() -> Void)? = nil) {
         self.ref = ref
         self.onEdit = onEdit
         self.onRetime = onRetime
+        self.onRetimeKey = onRetimeKey
         self.onClose = onClose
         _entry = State(initialValue: ref.entry)
     }
@@ -141,7 +144,7 @@ struct ReaderScreen: View {
                 case "*": store.toggleStar(entry, source: ref.source); refresh(); return true
                 case "f": if isDraft { store.fileDraft(entry); close() }; return isDraft
                 case "u": if !isDraft { _ = store.returnToInbox(entry, source: ref.source); close() }; return !isDraft
-                case "t": onRetime(current); return true
+                case "t": (onRetimeKey ?? onRetime)(current); return true
                 case "d": confirmDelete = true; return true
                 default: return false
                 }

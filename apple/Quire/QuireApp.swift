@@ -70,7 +70,11 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
         let arrows = [
             UIKeyCommand(input: UIKeyCommand.inputUpArrow,   modifierFlags: [], action: #selector(quireMoveUp)),
             UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(quireMoveDown)),
-        ]
+        ] + (KeyCommandRouter.shared.wantsSideways ? [
+            // ← → only while the monitor's date picker is up.
+            UIKeyCommand(input: UIKeyCommand.inputLeftArrow,  modifierFlags: [], action: #selector(quireMoveLeft)),
+            UIKeyCommand(input: UIKeyCommand.inputRightArrow, modifierFlags: [], action: #selector(quireMoveRight)),
+        ] : [])
         // Arrows would otherwise be eaten by a scroll view's own key handling.
         // Deliberately not applied to Return or "?", which have no competing
         // system behaviour and are better left to ordinary chain order.
@@ -86,7 +90,7 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
         // The terminal app's keys. The letters live here, at the end of the responder
         // chain, so a text field that has focus takes them for itself and typing is
         // never touched. `j`/`k` are move-down/up in a list and Journal on Today.
-        let letters = ["n", "i", "j", "k", "l", "/", "r", "f", "e", "t", "d", "u", "p", ",", "*"]
+        let letters = (["n", "i", "j", "k", "l", "/", "r", "f", "e", "t", "d", "u", "p", ",", "*"] + KeyCommandRouter.shared.extraLetters)
             .map { UIKeyCommand(input: $0, modifierFlags: [], action: #selector(quireLetter(_:))) }
         // Control chords while writing, declared only then, and ahead of the text
         // system (which would otherwise read ^f, ^p, ^d, ^t as cursor edits).
@@ -107,6 +111,8 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
     @objc private func displaySmaller() { ExternalDisplayModel.shared.adjustTextSize(-1) }
     @objc private func displayTheme() { ExternalDisplayModel.shared.cycleTheme() }
     @objc private func displayPause() { ExternalDisplayModel.shared.togglePause() }
+    @objc private func quireMoveLeft() { KeyCommandRouter.shared.sideways(-1) }
+    @objc private func quireMoveRight() { KeyCommandRouter.shared.sideways(1) }
     @objc private func quireLetter(_ command: UIKeyCommand) {
         if let input = command.input { KeyCommandRouter.shared.key(input) }
     }

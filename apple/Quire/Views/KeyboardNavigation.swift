@@ -75,6 +75,12 @@ struct QuireKeyHandlers {
     /// text system's own Emacs-style bindings are untouched everywhere else.
     var wantsChords = false
     var chord: (String) -> Bool = { _ in false }
+    /// ← and → (-1, 1), declared only while a handler takes them (the monitor's
+    /// date picker), so they never reach past a page that doesn't.
+    var sideways: ((Int) -> Void)? = nil
+    /// Keys beyond the usual letters, declared while this handler is on top and
+    /// delivered through `key` (the date picker's `[ ] - =`).
+    var letters: [String] = []
 }
 
 /// Routes the app-wide key commands to whichever list is on screen. A stack
@@ -135,6 +141,17 @@ struct QuireKeyHandlers {
     /// The composer's control chords: file, save, time, focus, prompt, discard.
     static let chords = ["j", "s", "t", "f", "p", "d"]
 
+    /// Whether the visible page takes ← and →.
+    var wantsSideways: Bool { top?.sideways != nil }
+    /// The visible page's extra keys, declared while it is up.
+    var extraLetters: [String] { top?.letters ?? [] }
+
+    @discardableResult func sideways(_ delta: Int) -> Bool {
+        guard let move = top?.sideways else { return false }
+        move(delta)
+        return true
+    }
+
     @discardableResult func chord(_ k: String) -> Bool {
         guard let top, top.wantsChords else { return false }
         return top.chord(k)
@@ -180,16 +197,20 @@ final class KeyCommandController: UIViewController {
     override var canBecomeFirstResponder: Bool { true }
 
     override var keyCommands: [UIKeyCommand]? {
+        let router = KeyCommandRouter.shared
         let arrows = [
             UIKeyCommand(input: UIKeyCommand.inputUpArrow,   modifierFlags: [], action: #selector(moveUp)),
             UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(moveDown)),
-        ]
+        ] + (router.wantsSideways ? [
+            UIKeyCommand(input: UIKeyCommand.inputLeftArrow,  modifierFlags: [], action: #selector(moveLeft)),
+            UIKeyCommand(input: UIKeyCommand.inputRightArrow, modifierFlags: [], action: #selector(moveRight)),
+        ] : [])
         // Otherwise the enclosing scroll view scrolls instead of moving the row.
         for command in arrows { command.wantsPriorityOverSystemBehavior = true }
         // The terminal app's letters, and the composer's control chords while it is
         // open. Declared here as well as on the app delegate: the delegate is not
         // reliably in the responder chain under SwiftUI's lifecycle, this is.
-        let letters = ["n", "i", "j", "k", "l", "/", "r", "f", "e", "t", "d", "u", "p", ",", "*"]
+        let letters = (["n", "i", "j", "k", "l", "/", "r", "f", "e", "t", "d", "u", "p", ",", "*"] + router.extraLetters)
             .map { UIKeyCommand(input: $0, modifierFlags: [], action: #selector(letter(_:))) }
         let chords: [UIKeyCommand] = KeyCommandRouter.shared.wantsChords
             ? ["j", "s", "t", "f", "p", "d"].map {
@@ -257,6 +278,8 @@ final class KeyCommandController: UIViewController {
 
     @objc private func moveUp()   { KeyCommandRouter.shared.moveUp() }
     @objc private func moveDown() { KeyCommandRouter.shared.moveDown() }
+    @objc private func moveLeft()  { KeyCommandRouter.shared.sideways(-1) }
+    @objc private func moveRight() { KeyCommandRouter.shared.sideways(1) }
     @objc private func openSelection()  { KeyCommandRouter.shared.open() }
     @objc private func clearSelection() { KeyCommandRouter.shared.clear() }
     @objc private func toggleHints()    { ShortcutHints.toggle() }

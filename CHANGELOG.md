@@ -47,6 +47,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: the widgets, the Lock Screen New Draft accessory and the writing-timer Live Activity are set in Quire's design instead of Nook's: the app's theme (Marathon included), Newsreader and IBM Plex, and the mark. Small shows today's words, Medium opens on today's prompt, Large is the Today page in miniature; they turn over at midnight on their own and tint on a tinted Home Screen.
 
 ### Fixed
+- **Apple**: changing an entry's date works in Monitor Mode. `t` (on a list or an open entry) and ^T (writing) open a calendar on the monitor, worked from the keyboard: ← → a day, ↑ ↓ a week, [ ] a month, t today, - = the time by 15 minutes, ↩ sets, Esc cancels. The time of day is kept otherwise. Tapping the date on the phone still opens the phone's picker.
 - **Apple**: italics show in the editor and on the monitor: `_text_` now sets the font's italic face (TextKit 2 drew the old slant upright), and `*text*` italicises too.
 - **Apple**: Esc leaves a new page from the keyboard; the title field kept Esc for itself, so a page opened on its title couldn't be closed.
 - **Apple**: the monitor draws a caret in the title while the title is being written.

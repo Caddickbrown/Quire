@@ -183,6 +183,10 @@ struct ExternalRow: Equatable, Identifiable {
     func togglePause() {
         guard isConnected else { return }
         isPaused.toggle()
+        #if os(iOS)
+        // The monitor no longer shows the date picker, so it lets go of the keys.
+        if isPaused { DeskDatePicker.shared.cancel() }
+        #endif
         updateIdleTimer()
         content = isPaused || AppLockManager.shared.showsVeil ? .idle : latest
     }
@@ -245,6 +249,7 @@ struct ExternalRow: Equatable, Identifiable {
 
     func displayDidDisconnect() {
         ExternalSettingsModel.shared.close()
+        DeskDatePicker.shared.cancel()
         isConnected = false
         updateIdleTimer()
         content = .idle
