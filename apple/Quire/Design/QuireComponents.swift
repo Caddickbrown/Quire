@@ -92,11 +92,13 @@ struct EntryRef: Hashable, Identifiable {
 
 // MARK: - Masthead
 
-/// "Quire" in italic, with Search and Settings (and, where given, the Media
-/// Library) as quiet icons. In Marathon the mark sits in a signal block, and the
-/// actions are cells ruled off from it.
+/// "Quire" in italic, with Search and Settings (and, where given, Random and
+/// the Media Library) as quiet icons. In Marathon the mark sits in a signal
+/// block, and the actions are cells ruled off from it.
 struct QMasthead: View {
     @Environment(\.quire) private var q
+    var onRandom: (() -> Void)? = nil
+    var randomLabel = "Random entry"
     var onMedia: (() -> Void)? = nil
     var onSearch: () -> Void
     var onSettings: () -> Void
@@ -113,6 +115,7 @@ struct QMasthead: View {
                 .background(q.signalColor, ignoresSafeAreaEdges: []).foregroundStyle(q.onSignalColor)
                 .accessibilityElement(children: .combine).accessibilityLabel("Quire")
                 Spacer(minLength: 0)
+                if let onRandom { cell(randomLabel, "dice", onRandom) }
                 if let onMedia { cell("Media Library", "photo.on.rectangle", onMedia) }
                 cell("Search", "magnifyingglass", onSearch)
                 cell("Settings", "gearshape", onSettings)
@@ -127,6 +130,7 @@ struct QMasthead: View {
                 }
                 Spacer()
                 HStack(spacing: 4) {
+                    if let onRandom { icon(randomLabel, "dice", onRandom) }
                     if let onMedia { icon("Media Library", "photo.on.rectangle", onMedia) }
                     icon("Search", "magnifyingglass", onSearch)
                     icon("Settings", "gearshape", onSettings)

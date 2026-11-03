@@ -42,7 +42,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: the Today widget's "Another prompt" button rerolls the prompt for the app and every widget.
 
 ### Changed
-- **Apple**: the Inbox's Random is a dice icon, and its File all button is gone (filing every draft is still in Settings → Maintenance).
+- **Apple**: Random is a dice icon in the masthead, beside Search and Settings, on the Inbox and the Journal; the Inbox's File all button is gone (filing every draft is still in Settings → Maintenance).
 - **Apple**: an entry opens with the cursor at the end of its text, ready to carry on writing.
 - **Apple**: on the Mac, attaching has its own paperclip button instead of sitting in the ⋯ menu.
 - **Apple**: the widgets, the Lock Screen New Draft accessory and the writing-timer Live Activity are set in Quire's design instead of Nook's: the app's theme (Marathon included), Newsreader and IBM Plex, and the mark. Small shows today's words, Medium opens on today's prompt, Large is the Today page in miniature; they turn over at midnight on their own and tint on a tinted Home Screen.

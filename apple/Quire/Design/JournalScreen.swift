@@ -60,7 +60,10 @@ struct JournalScreen: View {
         return ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22, pinnedViews: []) {
-                QMasthead(onMedia: media, onSearch: search, onSettings: settings)
+                QMasthead(onRandom: store.archiveEntries.isEmpty ? nil : {
+                              if let r = store.randomEntry() { open(EntryRef(entry: r.entry, source: .archive(date: r.date))) }
+                          },
+                          onMedia: media, onSearch: search, onSettings: settings)
                 QTitle(kicker: "\(store.archiveEntries.reduce(0) { $0 + $1.entries.count }) filed", title: "Journal")
                 filters
                 if months.isEmpty {
@@ -134,9 +137,6 @@ struct JournalScreen: View {
             filterLink("All", on: !starredOnly) { starredOnly = false }
             filterLink("Starred", on: starredOnly) { starredOnly.toggle() }
             Spacer()
-            filterLink("Random", on: false) {
-                if let r = store.randomEntry() { open(EntryRef(entry: r.entry, source: .archive(date: r.date))) }
-            }
         }
     }
 

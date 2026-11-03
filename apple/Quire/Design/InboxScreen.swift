@@ -52,23 +52,11 @@ struct InboxScreen: View {
         return ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
-                QMasthead(onSearch: search, onSettings: settings)
-                HStack(alignment: .bottom) {
-                    QTitle(kicker: kicker, title: "Inbox")
-                    Spacer()
-                    if !store.inboxDrafts.isEmpty {
-                        // The masthead's icon buttons: themed ink, a 44pt target.
-                        Button {
-                            if let draft = store.inboxDrafts.randomElement() { openDraft(draft) }
-                        } label: {
-                            Image(systemName: "dice").font(.system(size: 18, weight: .regular))
-                                .foregroundStyle(q.inkColor)
-                                .frame(width: 44, height: 44).contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Random draft")
-                    }
-                }
+                QMasthead(onRandom: store.inboxDrafts.isEmpty ? nil : {
+                              if let draft = store.inboxDrafts.randomElement() { openDraft(draft) }
+                          },
+                          randomLabel: "Random draft", onSearch: search, onSettings: settings)
+                QTitle(kicker: kicker, title: "Inbox")
                 if store.inboxDrafts.isEmpty {
                     Text(store.indexed
                          ? "Everything is filed. Captures from the widget, the share sheet and the reminder land here first."
