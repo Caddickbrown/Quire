@@ -408,8 +408,12 @@ struct ComposerScreen: View {
         let raw = JournalStore.makeEntry(timestamp: stamp, title: headerTitle, body: body).raw
         if let current {
             if raw == current.raw { saveError = nil; return true }
-            // Opened and untouched: never re-normalise it on disk.
-            if let o = opened, o.title == title, o.text == text, o.starred == starred { saveError = nil; return true }
+            // Opened and untouched: never re-normalise it on disk. A new date
+            // (^t, the stamp) is a change too: without the check it was dropped
+            // whenever the words hadn't moved since the last save.
+            if let o = opened, o.title == title, o.text == text, o.starred == starred, stamp == current.ts {
+                saveError = nil; return true
+            }
             guard let result = store.saveEditorEntry(current, source: source, text: raw) else {
                 reportFailure(); return false
             }
