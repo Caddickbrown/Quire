@@ -132,7 +132,8 @@ struct QuireKeyHandlers {
     @discardableResult func open()      -> Bool { run { $0.open() } }
     @discardableResult func clear()     -> Bool { run { $0.clear() } }
 
-    /// What Esc does when nothing is selected: back to Today (set by the root).
+    /// What Esc does when nothing is selected: closes the open sheet, otherwise
+    /// back to Today (set by the root).
     var onBack: (() -> Void)?
 
     /// Whether the visible page wants the control chords declared.

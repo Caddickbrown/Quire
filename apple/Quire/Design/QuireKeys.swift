@@ -27,8 +27,11 @@ extension View {
     }
 
     /// While a sheet or full-screen page is up, keep every key away from the list
-    /// beneath it.
-    func qKeyBlocker(active: Bool) -> some View { modifier(QKeyBlocker(active: active)) }
+    /// beneath it. `onEscape` closes it: a page with no Esc of its own must never
+    /// be a dead end on the monitor, where it may be the only way out.
+    func qKeyBlocker(active: Bool, onEscape: @escaping () -> Void = {}) -> some View {
+        modifier(QKeyBlocker(active: active, onEscape: onEscape))
+    }
 }
 
 private struct QKeyList: ViewModifier {
@@ -61,6 +64,7 @@ private struct QKeyList: ViewModifier {
                 adopt(); register(); publish()
             }
             .onChange(of: index) { _, _ in register(); publish() }
+            .onChange(of: monitor.relistSignal) { _, _ in publish() }
             .onChange(of: entries) { _, _ in
                 adopt()
                 if let i = index, i >= entries.count { index = entries.isEmpty ? nil : entries.count - 1 }
@@ -135,6 +139,7 @@ private struct QKeyList: ViewModifier {
 
 private struct QKeyBlocker: ViewModifier {
     let active: Bool
+    let onEscape: () -> Void
     @State private var id = UUID()
 
     func body(content: Content) -> some View {
@@ -147,7 +152,7 @@ private struct QKeyBlocker: ViewModifier {
     private func apply(_ on: Bool) {
         if on {
             KeyCommandRouter.shared.register(id, QuireKeyHandlers(
-                moveUp: {}, moveDown: {}, open: {}, clear: {}, key: { _ in true }))
+                moveUp: {}, moveDown: {}, open: {}, clear: onEscape, key: { _ in true }))
         } else {
             KeyCommandRouter.shared.unregister(id)
         }

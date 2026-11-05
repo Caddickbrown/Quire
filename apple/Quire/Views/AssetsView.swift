@@ -55,6 +55,7 @@ struct AssetsView: View {
     @Environment(\.quire) private var q
     @State private var loading = true
     @State private var query = ""
+    @State private var findFocused = false
     @State private var kindFilter = "all"
 
     @EnvironmentObject private var store: JournalStore
@@ -202,16 +203,37 @@ struct AssetsView: View {
             }
     }
 
+    /// In the phone's sheet it passes Esc on, so the library can close with the
+    /// cursor still in it.
+    @ViewBuilder private var findField: some View {
+        #if os(iOS)
+        if onClose != nil {
+            QEscapingField(text: $query, placeholder: "Find a file…",
+                           font: q.isMarathon ? QuireFont.uiArchivo(14) : UIFontMetrics(forTextStyle: .body).scaledFont(
+                               for: UIFont(name: "IBMPlexSans-Regular", size: 14) ?? .systemFont(ofSize: 14)),
+                           color: UIColor(q.inkColor), placeholderColor: UIColor(q.faintColor),
+                           tint: UIColor(q.accentColor), focused: $findFocused,
+                           returnKey: .search, plain: true, onSubmit: { findFocused = false })
+        } else { plainFindField }
+        #else
+        plainFindField
+        #endif
+    }
+
+    private var plainFindField: some View {
+        TextField("Find a file…", text: $query)
+            .textFieldStyle(.plain)
+            .font(onClose == nil ? .body : q.ui(14))
+            .foregroundStyle(onClose == nil ? Color.primary : q.inkColor)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             #if os(iOS)
             if onClose != nil { phoneHeader }
             #endif
             HStack {
-                TextField("Find a file…", text: $query)
-                    .textFieldStyle(.plain)
-                    .font(onClose == nil ? .body : q.ui(14))
-                    .foregroundStyle(onClose == nil ? Color.primary : q.inkColor)
+                findField
                     .accessibilityLabel("Search media filenames")
                 Picker("Media type", selection: $kindFilter) {
                     Text("All").tag("all")
@@ -306,6 +328,12 @@ struct AssetsView: View {
         } message: { pending in
             Text(deleteMessage(for: pending))
         }
+        #if os(iOS)
+        // Esc closes these first, then the root's closes the library.
+        .qKeyBlocker(active: viewing != nil || usagePicker != nil || pendingDelete != nil, onEscape: {
+            viewing = nil; usagePicker = nil; pendingDelete = nil
+        })
+        #endif
         .task { reload() }
         .onChange(of: store.revision) { _, _ in reload() }
     }

@@ -27,7 +27,7 @@ struct SearchScreen: View {
     @State private var saved: [SavedSearch] = []
     @State private var naming = false
     @State private var pinName = ""
-    @FocusState private var focused: Bool
+    @State private var focused = false
     @State private var selected: Int?
     @State private var showTags = false
 
@@ -103,15 +103,22 @@ struct SearchScreen: View {
         .padding(.horizontal, 22).padding(.top, 8)
     }
 
+    /// `q.writing(20)` as a UIFont, for the field.
+    private func fieldFont(italic: Bool) -> UIFont {
+        if q.isMarathon { return QuireFont.uiArchivo(20) }
+        let base = UIFont(name: italic ? "Newsreader16pt-Italic" : "Newsreader16pt-Regular", size: 20) ?? .systemFont(ofSize: 20)
+        return UIFontMetrics(forTextStyle: .body).scaledFont(for: base)
+    }
+
     private var field: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                TextField("", text: $query,
-                          prompt: Text("title, text or @tag").font(q.writing(20, italic: true)).foregroundColor(q.faintColor))
-                    .font(q.writing(20)).foregroundStyle(q.inkColor)
-                    .focused($focused)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .submitLabel(.search)
+                QEscapingField(text: $query, placeholder: "title, text or @tag",
+                               placeholderFont: fieldFont(italic: true), font: fieldFont(italic: false),
+                               color: UIColor(q.inkColor), placeholderColor: UIColor(q.faintColor),
+                               tint: UIColor(q.accentColor), focused: $focused,
+                               returnKey: .search, plain: true,
+                               onSubmit: { focused = false })
                     .frame(minHeight: 44)
                 if !query.isEmpty {
                     Button { query = "" } label: {

@@ -116,6 +116,7 @@ struct JournalScreen: View {
                 deleting = nil
             }
         }
+        .qKeyBlocker(active: deleting != nil, onEscape: { deleting = nil })
         }
     }
 

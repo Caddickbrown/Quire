@@ -76,6 +76,7 @@ struct ReaderScreen: View {
         .confirmationDialog("Delete this entry?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { delete() }
         }
+        .qKeyBlocker(active: confirmDelete, onEscape: { confirmDelete = false })
     }
 
     // MARK: Actions
@@ -134,11 +135,15 @@ struct ReaderScreen: View {
     }
 
     /// The terminal app's keys for an open entry: e edit, * star, f file, u return
-    /// to the inbox, t date and time, d delete, Esc back.
+    /// to the inbox, t date and time, d delete, Esc back. With a monitor Esc goes
+    /// all the way to Today, from any depth, as it does from a list there.
     private func registerKeys() {
         KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
             moveUp: {}, moveDown: {}, open: {},
-            clear: { close() },
+            clear: {
+                if ExternalDisplayModel.shared.isConnected, let home = KeyCommandRouter.shared.onBack { home() }
+                else { close() }
+            },
             key: { k in
                 switch k {
                 case "e": onEdit(current); return true

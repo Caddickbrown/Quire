@@ -121,7 +121,9 @@ struct ExternalDisplayRoot: View {
                     .init(key: "l", label: "Look back"), .init(key: "/", label: "Search"), .init(key: "r", label: "Random"),
                     .init(key: ",", label: "Settings"), .init(key: "?", label: "Hints")]
         case .browsing(let listTitle, _, _, _, _):
-            let base: [ShortcutHint] = [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Open"), .init(key: "⎋", label: "Back")]
+            // Esc goes home from any list; Search is a sheet, so it closes that first.
+            let base: [ShortcutHint] = [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Open"),
+                                        .init(key: "⎋", label: listTitle == "Search" ? "Close" : "Today")]
             let random = ShortcutHint(key: "r", label: "Random")
             switch listTitle {
             case "Inbox":
@@ -148,7 +150,7 @@ struct ExternalDisplayRoot: View {
                 (isDraft ? [.init(key: "^D", label: "Discard")] : []) + [.init(key: "⎋", label: "Back")]
         case .reading:
             return [.init(key: "e", label: "Edit"), .init(key: "r", label: "Random"), .init(key: "*", label: "Star"),
-                    .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), .init(key: "⎋", label: "Back"),
+                    .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), .init(key: "⎋", label: "Today"),
                     .init(key: ",", label: "Settings")] + common
         }
     }

@@ -110,6 +110,7 @@ struct InboxScreen: View {
                             titleVisibility: .visible) {
             Button("Delete", role: .destructive) { if let d = deleting { store.deleteDraft(d) }; deleting = nil }
         }
+        .qKeyBlocker(active: deleting != nil, onEscape: { deleting = nil })
     }
 
     /// On the monitor in desk mode, where the keyboard can answer; the phone's

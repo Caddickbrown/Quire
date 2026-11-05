@@ -425,7 +425,7 @@ struct SettingsView: View {
             } header: {
                 QLabel("External display")
             } footer: {
-                Text("Connected to a monitor, Quire shows your writing on it instead of mirroring, and the keys are the terminal app's, printed along the bottom of the monitor. ↑↓ or j/k browse, Return opens, Esc goes back; n writes, / searches, i inbox, j journal, l look back, r a random entry. In a list: f files, e edits, * stars, t sets the date and time, d deletes. While writing: ^J files, ^S saves, ^T date and time, ^F focus, ^P a prompt, ^D discards, Esc is done. ⌥⌘± changes text size, ⌥⌘T the theme, ⌥⌘P pauses. These controls leave the device's appearance alone. Dimming this screen never affects what's up there, and turning it down saves power; it's restored when you unplug.")
+                Text("Connected to a monitor, Quire shows your writing on it instead of mirroring, and the keys are the terminal app's, printed along the bottom of the monitor. ↑↓ or j/k browse, Return opens, Esc closes what's open and then goes to Today; n writes, / searches, i inbox, j journal, l look back, r a random entry. In a list: f files, e edits, * stars, t sets the date and time, d deletes. While writing: ^J files, ^S saves, ^T date and time, ^F focus, ^P a prompt, ^D discards, Esc is done. ⌥⌘± changes text size, ⌥⌘T the theme, ⌥⌘P pauses. These controls leave the device's appearance alone. Dimming this screen never affects what's up there, and turning it down saves power; it's restored when you unplug.")
             }
             .qRowBackground()
             }

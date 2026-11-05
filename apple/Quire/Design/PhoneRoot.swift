@@ -59,7 +59,8 @@ struct PhoneRoot: View {
     var body: some View {
         shell
         .background(KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false))
-        .qKeyBlocker(active: composing != nil || retiming != nil || showSearch || showSettings || showMedia)
+        .qKeyBlocker(active: composing != nil || retiming != nil || showSearch || showSettings || showMedia,
+                     onEscape: { closeSheet() })
         .fullScreenCover(item: $composing, onDismiss: { restoreMonitorPage() }) { target in
             ComposerScreen(target: target, onUpdate: { updated in
                 if target.ref != nil, !path.isEmpty { path[path.count - 1] = updated }
@@ -74,7 +75,7 @@ struct PhoneRoot: View {
             RetimeSheet(ref: ref, onUpdate: { replaceReference(ref, with: $0) })
                 .environment(\.quire, q)
         }
-        .sheet(isPresented: $showSearch) {
+        .sheet(isPresented: $showSearch, onDismiss: { restoreMonitorPage() }) {
             SearchScreen(onOpen: { ref in
                 showSearch = false
                 // Let the sheet finish leaving before the page is pushed.
@@ -210,7 +211,8 @@ struct PhoneRoot: View {
             try? await Task.sleep(for: .seconds(1))
         }
         // `QUIRE_DESK_KEYS` presses keys: < > ← →, ^ v ↑ ↓, ↩ Return, ⎋ Esc,
-        // anything else as typed, a beat apart.
+        // … waits three seconds (for a sheet to settle), anything else as typed,
+        // a beat apart.
         let router = KeyCommandRouter.shared
         for k in ProcessInfo.processInfo.environment["QUIRE_DESK_KEYS"] ?? "" {
             switch k {
@@ -220,6 +222,7 @@ struct PhoneRoot: View {
             case "v": router.moveDown()
             case "↩": router.open()
             case "⎋": router.clear()
+            case "…": try? await Task.sleep(for: .seconds(3))
             default: router.key(String(k))
             }
             try? await Task.sleep(for: .seconds(0.4))
@@ -381,6 +384,7 @@ struct PhoneRoot: View {
             ExternalDisplayModel.shared.present(.reading(title: ref.entry.displayTitle,
                 date: QDate.date(ref.entry.ts) ?? Date(), text: ref.entry.body, isStarred: ref.entry.isStarred))
         } else if tab == .today { ExternalDisplayModel.shared.present(.idle) }
+        else { ExternalDisplayModel.shared.relist() }
     }
 
     /// `t` on a list or an open entry. With the monitor in desk mode the date is
@@ -424,7 +428,7 @@ struct PhoneRoot: View {
     /// ↵ write from the prompt, Esc back to Today. Lists and open entries get
     /// first refusal; the first ↑/↓ from Today jumps to the Journal's top or bottom.
     private func registerRootKeys() {
-        KeyCommandRouter.shared.onBack = { path.removeAll(); tab = .today }
+        KeyCommandRouter.shared.onBack = { if !closeSheet() { path.removeAll(); tab = .today } }
         KeyCommandRouter.shared.register(rootKeyID, QuireKeyHandlers(
             moveUp: { jumpToJournal(up: true) },
             moveDown: { jumpToJournal(up: false) },
@@ -448,7 +452,7 @@ struct PhoneRoot: View {
                     QuirePrompts.next()
                 case "r":
                     // Another random entry takes the open page's place rather than
-                    // stacking up, so Esc still goes straight back to the list.
+                    // stacking up, so Esc on the phone still goes straight back to the list.
                     if let r = store.randomEntry() {
                         let ref = EntryRef(entry: r.entry, source: .archive(date: r.date))
                         if !path.isEmpty, !splitActive { path[path.count - 1] = ref } else { open(ref) }
@@ -457,6 +461,17 @@ struct PhoneRoot: View {
                 }
                 return true
             }))
+    }
+
+    /// Esc over a sheet closes it and goes no further, whatever is beneath. Not the
+    /// composer: it closes itself, through its own save.
+    @discardableResult private func closeSheet() -> Bool {
+        if retiming != nil { retiming = nil }
+        else if showSearch { showSearch = false }
+        else if showMedia { showMedia = false }
+        else if showSettings { showSettings = false }
+        else { return false }
+        return true
     }
 
     /// From Today there is no list to move through, so the first arrow opens the

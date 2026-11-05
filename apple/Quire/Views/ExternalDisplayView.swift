@@ -124,12 +124,19 @@ struct ExternalRow: Equatable, Identifiable {
     private var pageOwner: UUID?
     private var pendingUnderlay: ExternalDisplayContent?
 
+    /// Bumped when a sheet with a list of its own closes: its list took the
+    /// monitor, so the one beneath, which never left the screen, publishes again.
+    @Published private(set) var relistSignal = 0
+    func relist() { relistSignal += 1 }
+
     /// Lists can refresh beneath a presented page; they must not replace it.
     func present(_ new: ExternalDisplayContent, owner: UUID? = nil) {
         if let owner { pageOwner = owner }
         else if pageOwner != nil {
             switch new {
-            case .browsing, .idle: pendingUnderlay = new; return
+            // `.reading` too: the page coming back as the composer closes, which
+            // may say so before the composer has let go.
+            case .browsing, .idle, .reading: pendingUnderlay = new; return
             default: break
             }
         }

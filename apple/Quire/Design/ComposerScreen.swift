@@ -108,7 +108,7 @@ struct ComposerScreen: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("\(themeLabel) · \(QDate.longDay(stampDate))".uppercased()).tracking(1.6)
                         .font(q.ui(11)).foregroundStyle(q.mutedColor).opacity(quiet)
-                    ComposerTitleField(text: $title, font: titleFont, color: UIColor(q.inkColor),
+                    QEscapingField(text: $title, placeholder: "Title", font: titleFont, color: UIColor(q.inkColor),
                                        placeholderColor: UIColor(q.faintColor), tint: UIColor(q.accentColor),
                                        focused: Binding(get: { focus == .title },
                                                         set: { if $0 { focus = .title } else if focus == .title { focus = nil } }),
@@ -471,11 +471,12 @@ struct ComposerScreen: View {
     // MARK: The terminal app's keys while writing
 
     /// ^j file to its day · ^s save now (it autosaves) · ^t date and time ·
-    /// ^f focus · ^p insert a prompt · ^d discard the draft · Esc back (saved).
+    /// ^f focus · ^p insert a prompt · ^d discard the draft · Esc back (saved),
+    /// or out of whatever the page has open first.
     private func registerKeys() {
         KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
             moveUp: {}, moveDown: {}, open: {},
-            clear: { close() },
+            clear: { if !closeOverlay() { close() } },
             key: { _ in false },
             wantsChords: true,
             chord: { k in
@@ -489,6 +490,17 @@ struct ComposerScreen: View {
                 default: return false
                 }
             }))
+    }
+
+    /// Esc with something up over the page closes that, and the page stays. A
+    /// question is cancelled, never answered. The camera has its own Cancel, and a
+    /// recording mustn't go on one key: Esc waits for it.
+    private func closeOverlay() -> Bool {
+        if showingPhotoCapture || showingVideoRecorder { return true }
+        guard showStamp || confirmDiscard || recoverCopy || showingPhotoPicker || showingFilePicker else { return false }
+        showStamp = false; confirmDiscard = false; recoverCopy = false
+        showingPhotoPicker = false; showingFilePicker = false
+        return true
     }
 
     private func flashSaved() {
@@ -595,17 +607,23 @@ struct ComposerScreen: View {
     }
 }
 
-/// The title, as a UIKit field so it can claim Esc: a SwiftUI TextField's
+/// A one-line field in UIKit so it can claim Esc: a SwiftUI TextField's
 /// UITextField keeps Esc for itself, so from a new page (which opens on its
 /// title) Esc never reached the composer and the page couldn't be left from
-/// the keyboard. Focus follows the composer's own, as the body's editor does.
-private struct ComposerTitleField: UIViewRepresentable {
+/// the keyboard, and Search, which opens on its field, was the same. Focus
+/// follows the host's own, as the body's editor does.
+struct QEscapingField: UIViewRepresentable {
     @Binding var text: String
+    let placeholder: String
+    var placeholderFont: UIFont? = nil
     let font: UIFont
     let color: UIColor
     let placeholderColor: UIColor
     let tint: UIColor
     var focused: Binding<Bool>
+    var returnKey: UIReturnKeyType = .next
+    /// Off for a search: what's typed is a query, not prose.
+    var plain = false
     var onSubmit: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -613,7 +631,11 @@ private struct ComposerTitleField: UIViewRepresentable {
     func makeUIView(context: Context) -> EscapingTextField {
         let field = EscapingTextField()
         field.delegate = context.coordinator
-        field.returnKeyType = .next
+        field.returnKeyType = returnKey
+        if plain {
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
         field.borderStyle = .none
         field.adjustsFontForContentSizeCategory = false
         field.setContentHuggingPriority(.defaultHigh, for: .vertical)
@@ -628,8 +650,8 @@ private struct ComposerTitleField: UIViewRepresentable {
         field.font = font
         field.textColor = color
         field.tintColor = tint
-        field.attributedPlaceholder = NSAttributedString(string: "Title",
-            attributes: [.font: font, .foregroundColor: placeholderColor])
+        field.attributedPlaceholder = NSAttributedString(string: placeholder,
+            attributes: [.font: placeholderFont ?? font, .foregroundColor: placeholderColor])
         DispatchQueue.main.async { [weak field] in
             guard let field, field.window != nil else { return }
             if focused.wrappedValue, !field.isFirstResponder { field.becomeFirstResponder() }
@@ -638,8 +660,8 @@ private struct ComposerTitleField: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UITextFieldDelegate {
-        var parent: ComposerTitleField
-        init(_ parent: ComposerTitleField) { self.parent = parent }
+        var parent: QEscapingField
+        init(_ parent: QEscapingField) { self.parent = parent }
 
         @objc func changed(_ field: UITextField) { parent.text = field.text ?? "" }
         func textFieldDidBeginEditing(_ field: UITextField) { parent.focused.wrappedValue = true }
@@ -648,7 +670,7 @@ private struct ComposerTitleField: UIViewRepresentable {
     }
 }
 
-/// Declares Esc ahead of the text system and hands it to the composer.
+/// Declares Esc ahead of the text system and hands it to the router.
 final class EscapingTextField: UITextField {
     override var keyCommands: [UIKeyCommand]? {
         let esc = UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(quireEscape))

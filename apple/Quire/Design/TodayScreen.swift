@@ -81,6 +81,7 @@ struct TodayScreen: View {
                 deleting = nil
             }
         }
+        .qKeyBlocker(active: deleting != nil, onEscape: { deleting = nil })
     }
 
     // "Three entries filed, 145 of 250 words so far. Three drafts are waiting."

@@ -221,7 +221,10 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   `qKeyList` (Design/QuireKeys.swift) and the TUI's letters route through
   `KeyCommandRouter.key`, declared on the app delegate so typing is never touched;
   the composer's control chords (^J file, ^S, ^T, ^F, ^P, ^D) are declared only while
-  it is open (`wantsChords`), at priority over the text system. The monitor's hint
+  it is open (`wantsChords`), at priority over the text system. Esc on the monitor always
+  reaches Today: what's on top closes first (`qKeyBlocker`'s `onEscape`, the composer through its
+  save), then a list or open entry goes home in one press; a one-line field that must pass Esc on
+  is a `QEscapingField`. The monitor's hint
   bar (`ExternalDisplayView.hints`) must list exactly the keys that work;
   `ExternalTheme` loads the bundled root `themes.json`. Option-Command +/- changes
   size, T theme, P pause, H hints. Locked/paused displays never render journal text.
@@ -229,7 +232,7 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   the same pages as VS Code on Windows 11; `QUIRE_DESK=idle|entry|browse|date|confirm|live` draws the
   monitor over the app at 1920×1080 for simulator screenshots (`QUIRE_DESK_CARET=<offset>`
   places the entry's caret, `QUIRE_DESK_SELECT=<location>,<length>` shades a selection;
-  `live` draws the app's own pages and `QUIRE_DESK_KEYS` presses keys, ↩ and ⎋ included).
+  `live` draws the app's own pages and `QUIRE_DESK_KEYS` presses keys, ↩ and ⎋ included, … waiting three seconds).
 - **Android**: not in the repo yet; Wander's Compose shell over a SAF `Vault`.
 
 ## Releases

@@ -97,6 +97,8 @@ struct PhoneSettings: View {
             }
         }
         .tint(q.accentColor)
+        // Esc pops a page, then the root's closes the sheet.
+        .qKeyBlocker(active: !path.isEmpty, onEscape: { if !path.isEmpty { path.removeLast() } })
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {

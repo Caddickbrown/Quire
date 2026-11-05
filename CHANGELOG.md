@@ -42,6 +42,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: the Today widget's "Another prompt" button rerolls the prompt for the app and every widget.
 
 ### Changed
+- **Apple**: on the monitor, Esc always gets you home to Today: from a list or an open entry one press, from anything over the page (a question, the date picker, settings, Search, the Media Library, a sheet) it closes that first, and from the composer it saves and closes as before. A question is cancelled, never answered. The hint bar says Today. Search and the Media Library's filter take Esc too, where a typing field used to keep it.
 - **Apple**: Random is a dice icon in the masthead, beside Search and Settings, on the Inbox and the Journal; the Inbox's File all button is gone (filing every draft is still in Settings → Maintenance).
 - **Apple**: an entry opens with the cursor at the end of its text, ready to carry on writing.
 - **Apple**: on the Mac, attaching has its own paperclip button instead of sitting in the ⋯ menu.
