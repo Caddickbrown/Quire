@@ -9,11 +9,44 @@ final class AppleVault: NativeVault, @unchecked Sendable {
     /// The folder's real path, with symlinks resolved — worked out once: every
     /// call checks its path against it, and resolving it each time was a
     /// noticeable share of the cost of reading a journal.
-    private let rootPath: String
+    /// Normalised (see `normalised`), and worked out again if a path doesn't
+    /// match it, because a folder that didn't exist yet resolves differently.
+    private var rootPath: String
+    /// Whether the folder was itself a symlink when opened. A link appearing
+    /// there later is a swap, and the root isn't re-resolved through it.
+    private let baseWasLink: Bool
     init(base: URL) {
         self.base = base.standardizedFileURL
-        let root = self.base.resolvingSymlinksInPath().path
-        rootPath = root
+        rootPath = Self.normalised(self.base.resolvingSymlinksInPath().path)
+        baseWasLink = (try? FileManager.default.destinationOfSymbolicLink(atPath: self.base.path)) != nil
+    }
+
+    /// /var, /tmp and /etc are links to /private/…, and Foundation gives either
+    /// spelling depending on whether the path exists yet. They name the same
+    /// place, so paths are compared with the prefix taken off.
+    private static func normalised(_ path: String) -> String {
+        for top in ["/private/var", "/private/tmp", "/private/etc"] where path == top || path.hasPrefix(top + "/") {
+            return String(path.dropFirst("/private".count))
+        }
+        return path
+    }
+
+    private static func isInside(_ path: String, _ root: String) -> Bool {
+        path == root || path.hasPrefix(root + "/")
+    }
+
+    /// Whether a resolved path is in the journal folder. On a mismatch the root
+    /// is resolved again, in case it was worked out before the folder existed.
+    private func isInsideRoot(_ resolved: String) -> Bool {
+        let path = Self.normalised(resolved)
+        verifiedLock.lock(); defer { verifiedLock.unlock() }
+        if Self.isInside(path, rootPath) { return true }
+        if !baseWasLink, (try? fm.destinationOfSymbolicLink(atPath: base.path)) != nil { return false }
+        let fresh = Self.normalised(base.resolvingSymlinksInPath().path)
+        guard fresh != rootPath else { return false }
+        rootPath = fresh
+        verifiedDirectories.removeAll()
+        return Self.isInside(path, fresh)
     }
 
     /// Directories already checked to be real (no symlink anywhere in their
@@ -25,6 +58,12 @@ final class AppleVault: NativeVault, @unchecked Sendable {
     private func url(_ rel: String) throws -> URL {
         guard !rel.hasPrefix("/"), !rel.contains("\\"), !rel.contains("\0"),
               !rel.split(separator: "/").contains("..") else { throw failure("Invalid journal path") }
+        // Checked on every call, cached folders included: a folder that has gone
+        // (a drive removed, a folder moved) must never read as an empty journal,
+        // or be made again by a write.
+        guard fm.fileExists(atPath: base.path) else {
+            throw failure("The journal folder can't be reached. Check that its drive or iCloud is available.")
+        }
         let url = rel.isEmpty ? base : base.appendingPathComponent(rel).standardizedFileURL
         let parent = url.deletingLastPathComponent()
         verifiedLock.lock(); let known = verifiedDirectories.contains(parent.path); verifiedLock.unlock()
@@ -32,11 +71,10 @@ final class AppleVault: NativeVault, @unchecked Sendable {
         // replace a folder with a link after it was cached), could still be links.
         if known, (try? fm.destinationOfSymbolicLink(atPath: url.path)) == nil,
            (try? fm.destinationOfSymbolicLink(atPath: parent.path)) == nil { return url }
-        let root = rootPath
         let resolved = try resolvedPath(url)
-        guard resolved == root || resolved.hasPrefix(root + "/") else { throw failure("Path leaves the journal folder") }
-        if let resolvedParent = try? resolvedPath(parent), resolvedParent == parent.path,
-           resolvedParent == root || resolvedParent.hasPrefix(root + "/") {
+        guard isInsideRoot(resolved) else { throw failure("Path leaves the journal folder") }
+        if let resolvedParent = try? resolvedPath(parent),
+           Self.normalised(resolvedParent) == Self.normalised(parent.path), isInsideRoot(resolvedParent) {
             verifiedLock.lock(); verifiedDirectories.insert(parent.path); verifiedLock.unlock()
         }
         return url

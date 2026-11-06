@@ -294,6 +294,69 @@ final class JournalStoreTests: XCTestCase {
         XCTAssertFalse(vault.isFile(rel: rel))
     }
 
+    /// iOS reports a journal folder as /private/var/… or /var/…, and the two
+    /// resolve differently while the folder doesn't exist. A missing folder must
+    /// say so, not claim the path left the journal, and must not be created by
+    /// a write; once the folder is there the same vault must work.
+    func testAppleVaultBaseUnderPrivateThatDoesNotExistYet() throws {
+        let fm = FileManager.default
+        var tmp = fm.temporaryDirectory.standardizedFileURL.path
+        if !tmp.hasPrefix("/private/") { tmp = "/private" + tmp }
+        let base = URL(fileURLWithPath: tmp).appendingPathComponent("quire-private-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: base) }
+        XCTAssertTrue(base.path.hasPrefix("/private/"))
+        XCTAssertFalse(fm.fileExists(atPath: base.path))
+        let vault = AppleVault(base: base)
+        let rel = "journal/2026/05/10.md"
+
+        func message(_ error: Error) -> String {
+            guard case let BridgeError.Failure(message) = error else { return "not a bridge failure: \(error)" }
+            return message
+        }
+        func assertUnreachable(_ body: () throws -> Void) {
+            XCTAssertThrowsError(try body()) { error in
+                let text = message(error)
+                XCTAssertTrue(text.contains("can't be reached"), text)
+                XCTAssertFalse(text.contains("Path leaves"), text)
+            }
+        }
+        assertUnreachable { _ = try vault.read(rel: rel) }
+        assertUnreachable { try vault.write(rel: rel, bytes: Data("no".utf8)) }
+        assertUnreachable { _ = try vault.replaceIfUnchanged(rel: rel, expected: nil, bytes: Data("no".utf8)) }
+        XCTAssertFalse(fm.fileExists(atPath: base.path), "a write must not make a missing folder")
+
+        try fm.createDirectory(at: base, withIntermediateDirectories: true)
+        try vault.write(rel: rel, bytes: Data("yes".utf8))
+        XCTAssertEqual(try vault.read(rel: rel), Data("yes".utf8))
+
+        // The guard still holds under the same base.
+        let outside = fm.temporaryDirectory.appendingPathComponent("quire-outside-\(UUID().uuidString)")
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: outside) }
+        try Data("secret".utf8).write(to: outside.appendingPathComponent("secret.md"))
+        try fm.createSymbolicLink(at: base.appendingPathComponent("escape"), withDestinationURL: outside)
+        XCTAssertThrowsError(try vault.read(rel: "escape/secret.md")) { error in
+            XCTAssertTrue(message(error).contains("Path leaves"), message(error))
+        }
+    }
+
+    /// Re-resolving the root must not let a real folder be swapped for a link.
+    func testAppleVaultRefusesABaseSwappedForASymlink() throws {
+        let fm = FileManager.default
+        let (store, base) = makeStore()
+        _ = store
+        defer { try? fm.removeItem(at: base) }
+        let outside = fm.temporaryDirectory.appendingPathComponent("quire-outside-\(UUID().uuidString)")
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: outside) }
+        try Data("secret".utf8).write(to: outside.appendingPathComponent("secret.md"))
+        let vault = AppleVault(base: base)
+        XCTAssertNil(try vault.read(rel: "secret.md"))
+        try fm.removeItem(at: base)
+        try fm.createSymbolicLink(at: base, withDestinationURL: outside)
+        XCTAssertThrowsError(try vault.read(rel: "secret.md"))
+    }
+
     func testAppleVaultRefusesSymlinksOutsideJournal() throws {
         let (store, base) = makeStore()
         _ = store
