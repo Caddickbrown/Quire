@@ -5,8 +5,9 @@
 //! Mac, for now), and rebuilds itself from the release's tag with cargo, or is
 //! pointed at install.sh when it can't. The AppImage is found from its launcher
 //! entry and replaced when its SHA-256 isn't the release's; a .deb or .rpm is
-//! left to the package manager. Runs only when asked: Quire never checks in
-//! the background.
+//! left to the package manager. `--main` skips releases and builds the terminal
+//! app from the main branch with cargo. Runs only when asked: Quire never checks
+//! in the background.
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -164,10 +165,19 @@ fn notes_preview(body: &str) -> String {
     s
 }
 
-/// `quire update [--check] [--terminal | --desktop]`. Both apps by default.
-/// Returns the exit code.
+/// `quire update [--check] [--terminal | --desktop | --main]`. Both apps by
+/// default. Returns the exit code.
 pub fn run(args: &[String]) -> i32 {
     let has = |f: &str| args.iter().any(|a| a == f);
+    if has("--main") {
+        return match update_from_main(has("--desktop"), has("--check")) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("  {e}");
+                1
+            }
+        };
+    }
     let (terminal, desktop) = match (has("--terminal"), has("--desktop")) {
         (true, false) => (true, false),
         (false, true) => (false, true),
@@ -245,11 +255,22 @@ pub fn cargo_root(dir: &Path) -> Option<&Path> {
     (dir.file_name()? == "bin").then(|| dir.parent()).flatten()
 }
 
-/// The `cargo install` arguments that rebuild both binaries from a release tag.
-pub fn cargo_args(tag: &str, root: &Path) -> Vec<String> {
+/// What cargo builds: a release's tag, or the latest code on main.
+#[derive(Clone, Copy)]
+pub enum Revision<'a> {
+    Tag(&'a str),
+    Main,
+}
+
+/// The `cargo install` arguments that rebuild both binaries.
+pub fn cargo_args(revision: Revision, root: &Path) -> Vec<String> {
     let mut args: Vec<String> = ["install", "--locked", "--force", "--git"].map(String::from).to_vec();
     args.push(format!("https://github.com/{REPO}"));
-    args.extend(["--tag".to_string(), tag.to_string(), "--root".to_string()]);
+    match revision {
+        Revision::Tag(tag) => args.extend(["--tag".to_string(), tag.to_string()]),
+        Revision::Main => args.extend(["--branch".to_string(), "main".to_string()]),
+    }
+    args.push("--root".to_string());
     args.push(root.display().to_string());
     args.push("quire-tui".to_string());
     args
@@ -276,12 +297,40 @@ fn rebuild_from_source(tag: &str, version: &str) -> Result<(), String> {
         return Ok(());
     };
     println!("  This copy was built from source, so it's being rebuilt. That takes a few minutes…");
-    let status = std::process::Command::new(cargo).args(cargo_args(tag, root)).status()
+    let status = std::process::Command::new(cargo).args(cargo_args(Revision::Tag(tag), root)).status()
         .map_err(|e| format!("Couldn't run cargo: {e}"))?;
     if !status.success() {
         return Err("The build failed; nothing was changed.".into());
     }
     println!("  ✓ Quire {version} installed in {}.", dir.display());
+    Ok(())
+}
+
+/// `--main`: the terminal app from the latest code on main, for trying a fix
+/// before it's in a release. Only the terminal app: the desktop app needs its
+/// own toolchain, and comes from releases.
+fn update_from_main(desktop: bool, check_only: bool) -> Result<(), String> {
+    if desktop {
+        return Err("--main builds the terminal app only. The desktop app comes from releases.".into());
+    }
+    if check_only {
+        println!("  `quire update --main` would build the terminal app from the latest code on main.");
+        return Ok(());
+    }
+    let dir = install_dir()?;
+    let Some(cargo) = find_cargo() else {
+        return Err("--main needs cargo, which isn't installed. Get it from https://rustup.rs".into());
+    };
+    let Some(root) = cargo_root(&dir) else {
+        return Err(format!("--main can't install into {}: cargo needs a folder called bin.", dir.display()));
+    };
+    println!("  Building from main, which isn't a release. That takes a few minutes…");
+    let status = std::process::Command::new(cargo).args(cargo_args(Revision::Main, root)).status()
+        .map_err(|e| format!("Couldn't run cargo: {e}"))?;
+    if !status.success() {
+        return Err("The build failed; nothing was changed.".into());
+    }
+    println!("  ✓ Quire from main installed in {}.", dir.display());
     Ok(())
 }
 
@@ -488,8 +537,21 @@ mod tests {
         assert_eq!(cargo_root(Path::new("/home/d/.cargo/bin")), Some(Path::new("/home/d/.cargo")));
         assert_eq!(cargo_root(Path::new("/home/d/.local/bin")), Some(Path::new("/home/d/.local")));
         assert_eq!(cargo_root(Path::new("/home/d/Quire/target/release")), None);
-        let args = cargo_args("v1.2.3", Path::new("/home/d/.cargo")).join(" ");
+        let args = cargo_args(Revision::Tag("v1.2.3"), Path::new("/home/d/.cargo")).join(" ");
         assert_eq!(args, "install --locked --force --git https://github.com/Caddickbrown/Quire --tag v1.2.3 --root /home/d/.cargo quire-tui");
+    }
+
+    #[test]
+    fn main_builds_the_branch_into_the_same_folder() {
+        let args = cargo_args(Revision::Main, Path::new("/home/d/.cargo")).join(" ");
+        assert_eq!(args, "install --locked --force --git https://github.com/Caddickbrown/Quire --branch main --root /home/d/.cargo quire-tui");
+    }
+
+    #[test]
+    fn main_refuses_the_desktop_app_and_only_reports_with_check() {
+        assert!(update_from_main(true, false).unwrap_err().contains("terminal app only"));
+        // Runs no build: asking is all --check does.
+        assert_eq!(update_from_main(false, true), Ok(()));
     }
 
     #[test]

@@ -351,6 +351,7 @@ pub fn help(name: &str) {
   {n} migrate            fold a legacy inbox.md into inbox/ and .nook/ into .quire/
   {n} update [--check]   install the latest release: the terminal app and the desktop
                          AppImage (--terminal / --desktop for one; --check: only say)
+  {n} update --main      build the terminal app from the latest code on main, with cargo
 
   Options:  --folder PATH   --theme NAME   --help
 

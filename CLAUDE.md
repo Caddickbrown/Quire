@@ -287,8 +287,10 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   desktop app as `Quire_<v>_<arch>.AppImage`, `.deb` and `.rpm` (+
   `SHA256SUMS-desktop-<arch>`). Asset names for the terminal app carry no
   version, so `releases/latest/download/quire-<target>.tar.gz` is stable.
-- **Terminal updates**: `quire update` (also `jnl update`; `--check` only
-  reports) reads the latest release from the GitHub API, compares its tag
+- **Terminal updates**: `quire update --main` (also `jnl update --main`) runs
+  `cargo install --git … --branch main` into the folder it runs from, for a fix
+  that isn't in a release yet; terminal app only, needs cargo. Otherwise
+  `quire update` (also `jnl update`; `--check` only reports) reads the latest release from the GitHub API, compares its tag
   with `CARGO_PKG_VERSION`, downloads the tarball for the target baked in as
   `QUIRE_RELEASE_TARGET`, checks the SHA-256 and renames the new binaries over
   the old ones (`tui/src/update.rs`). A build without `QUIRE_RELEASE_TARGET`
