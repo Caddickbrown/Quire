@@ -2,15 +2,7 @@ name: CI
 # The checks CLAUDE.md asks for before a push, on every push to main, and for
 # release.yml, which runs them on the tag and publishes nothing if they fail.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
-  workflow_call:
-    inputs:
-      ref:
-        description: 'What to check out; empty for the commit that triggered the run'
-        type: string
-        default: ''
 permissions:
   contents: read
 jobs:
