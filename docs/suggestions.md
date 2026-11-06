@@ -306,11 +306,11 @@ Beyond items 1, 2, 5, 6, 7 and 8 above:
 
 ## 11. Code health
 
-- **`nook/` and `wander/` are 35 MB and 500-odd tracked files that nothing builds.**
+- **`legacy/nook/` and `legacy/wander/` are 35 MB and 500-odd tracked files that nothing builds.**
   The Makefile, the Cargo workspace, `gen_pbxproj.py` and CI don't reference them.
   Their histories were merged in, so a tag preserves them. Agents' greps hit them,
-  so does your own, and `nook/Nook/Models/JournalStore.swift` looks exactly like the
-  live file. Tag `archive/nook-wander` and delete both, keeping `wander/android` only
+  so does your own, and `legacy/nook/Nook/Models/JournalStore.swift` looks exactly like the
+  live file. Tag `archive/nook-wander` and delete both, keeping `legacy/wander/android` only
   if Android is truly next.
 - **`JournalStore.swift` at 2,646 lines** is still the façade plus backup, media, Data
   Saver, sync and stats. Split out `BackupService` and `MediaStore` first. They are
@@ -357,7 +357,7 @@ Bigger bets:
 - **A memory-surfacing layer**, all on device: "you often write about X in November".
 - **Voice journal.** Dictate a walk, get a transcript and an audio asset, filed as one
   entry. Transcription already exists, so this is mostly flow.
-- **Android.** Be honest about it: it has been "next" since October, and `wander/android`
+- **Android.** Be honest about it: it has been "next" since October, and `legacy/wander/android`
   costs attention. If nobody is waiting, take it off the plan.
 
 ## 13. Platform features worth using
