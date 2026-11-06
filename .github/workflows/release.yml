@@ -20,6 +20,13 @@ permissions:
 env:
   TAG: ${{ inputs.tag || github.ref_name }}
 jobs:
+  # make test, make check and make smoke on the tag: nothing is built or
+  # published if they fail.
+  check:
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+
   verify:
     runs-on: ubuntu-latest
     outputs:
@@ -53,7 +60,7 @@ jobs:
           path: notes.md
 
   terminal:
-    needs: verify
+    needs: [verify, check]
     strategy:
       matrix:
         include:
@@ -83,7 +90,7 @@ jobs:
           path: quire-${{ matrix.target }}.tar.gz*
 
   desktop:
-    needs: verify
+    needs: [verify, check]
     strategy:
       matrix:
         include:

@@ -5,6 +5,14 @@ A full review from reading the README, CLAUDE.md, the docs and the code on
 for a real device, not a confirmed fault. File references are to `main` at
 `05f99fb`.
 
+**Status, 2026-11-06.** Done since this was written: item 1 (restore is staged and
+swapped), item 3 (`ci.yml`, and `release.yml` runs it first), item 9
+(`ParserChecks.swift` is gone), items 11 and 13, and the `legacy/` move. Item 2 has its
+own piece of work. Not done, and each needs a decision or a careful change of its own:
+items 4 to 8, 10 and 12, and everything from section 3 on. `legacy/` stays where it is
+and the hidden mode's Windows logo stays: both are Dan's call, so sections 11, 14 and 15
+are out of date on those points.
+
 The short version: the architecture is the best thing here and the Apple app has
 caught up with its ambition. The biggest risks are no longer in the format. They
 are in the seams around it: restore, unguarded read-modify-write, a release

@@ -7,6 +7,7 @@ test:
 # The desktop app too when this machine can build it (libwebkit2gtk-4.1-dev).
 check:
 	python3 tools/validate_apple.py
+	python3 tools/test_migrate_journal.py
 	@if command -v node >/dev/null 2>&1; then node --check linux/src/app.js && node tools/check_media_library.js && node tools/check_linux_editor.js; else echo "skipping frontend checks: node is not installed"; fi
 	cargo clippy -p quire-core -p quire-tui -- -D warnings
 	cargo clippy -p quire-bindings --all-targets --all-features -- -D warnings
@@ -22,6 +23,7 @@ smoke: tui-debug
 	@rm -rf target/smoke-a target/smoke-b target/smoke-a-scratch target/smoke-b-scratch && cp -r sample target/smoke-a && cp -r sample target/smoke-b
 	python3 -I tools/drive_tui.py target/debug/quire target/smoke-a 100 30 cinema
 	python3 -I tools/drive_tui.py target/debug/quire target/smoke-b 80 24 marathon
+	python3 -I tools/check_tui_settings.py target/debug/quire
 
 tui-debug:
 	cargo build -p quire-tui

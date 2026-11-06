@@ -48,7 +48,7 @@
       "appimage"
     ],
     "category": "Productivity",
-    "shortDescription": "Quire prototype",
+    "shortDescription": "One journal over a folder of markdown",
     "longDescription": "Quire: one journalling app (jnl + Nook + Wander) over a plain jnl markdown folder.",
     "resources": {
       "../../sample/": "sample/"

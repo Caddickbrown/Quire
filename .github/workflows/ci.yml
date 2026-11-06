@@ -1,0 +1,32 @@
+name: CI
+# The checks CLAUDE.md asks for before a push, on every push to main, and for
+# release.yml, which runs them on the tag and publishes nothing if they fail.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'What to check out; empty for the commit that triggered the run'
+        type: string
+        default: ''
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      # A shared runner is a busy host; see the note on make smoke in CLAUDE.md.
+      QUIRE_SMOKE_WAIT_SCALE: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: make test
+      - run: make check
+      - run: make smoke

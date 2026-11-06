@@ -1,9 +1,9 @@
 # Quire for iOS and macOS
 
 The native SwiftUI shell, with journal storage in Quire's Rust core. The iPhone
-has Quire's own design (`Quire/Design/`, from the "Quire prototype" and "Quire
-without boxes" canvases); iPad and Mac still run the shell brought over from
-`../nook` until their own pass. Minimum iOS 17 / macOS 14.
+and iPad have Quire's own design (`Quire/Design/`, from the "Quire prototype" and
+"Quire without boxes" canvases); the Mac still runs the shell brought over from
+Nook (`../legacy/nook`) until its own pass. Minimum iOS 17 / macOS 14.
 Use current Xcode with Swift 5.10 or newer (`nonisolated(unsafe)` is used by
 the inherited AVFoundation implementation).
 
@@ -34,9 +34,8 @@ The Apple GitHub Actions workflow builds both apps and runs macOS XCTest.
 For signed builds, choose your team for the app, widget and share extension.
 Provision `iCloud.com.caddickbrown.quire` and `group.com.caddickbrown.quire`
 on that account. These are Quire's own containers; existing Nook documents
-are opened by choosing their folder in Settings. The shell retains Nook's
-fonts and initial visual design; adopting Quire's shared theme system is a
-separate visual pass.
+are opened by choosing their folder in Settings. The Mac shell retains Nook's
+fonts and initial visual design until its own pass.
 
 ## Data flow
 

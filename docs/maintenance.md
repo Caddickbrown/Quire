@@ -25,10 +25,10 @@ Native Apple speech permissions and Apple PDF generation remain in Swift.
 Connect an iPhone or iPad to a monitor to show the current writing, reading or
 browse view. External-display Settings choose a shared Quire theme and text
 size, pause the display, or dim the device independently. Arrow keys move through
-the focused list, Return opens, Escape returns, and Command-N starts writing.
-Option-Command +/- changes monitor text size, T cycles themes, P pauses, and H
-toggles shortcut hints. Locking the journal replaces all monitor content with a
-neutral screen; unlocking restores the latest view unless paused.
+the focused list or scroll an open entry, Return opens, Escape returns, `n` starts
+writing, and Command-K finds Today, the Inbox, the Journal, Search, a new draft, a
+date or Settings. Option-Command +/- changes monitor text size, T cycles themes, P
+pauses, and H toggles shortcut hints. Locking the journal replaces all monitor
+content with a neutral screen; unlocking restores the latest view unless paused.
 
-Apple SDK builds and physical external-monitor testing require a Mac/device;
-they cannot be verified on the Linux development host.
+Apple builds and physical external-monitor testing need a Mac and a device.

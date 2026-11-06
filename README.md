@@ -2,8 +2,8 @@
 
 One journalling app over a plain folder of markdown. jnl's format, Nook's
 features, Wander's care — Linux and terminal apps, plus a native iOS/macOS
-SwiftUI shell over the Rust core (awaiting its first Apple SDK build). Android
-comes next.
+SwiftUI shell over the Rust core, running on an iPhone and iPad in Quire's own
+design. Android comes later.
 
 Everything that is not a window lives in one Rust core. Every shell is a
 thin native face over it.
@@ -14,11 +14,15 @@ Quire/
                maintenance — behind a Vault so no shell opens a file itself
   tui/         quire in the terminal; installed as `quire` and as `jnl`
   linux/       the Tauri 2 desktop app (Rust glue + HTML/CSS/JS, no build step)
+  apple/       the SwiftUI app, widgets and share extension, over the Rust core
+  bindings/    UniFFI bindings to the core, for the Apple shell
   themes.json  the looks, one source for every shell
   tools/       migrate_journal.py (inbox.md → inbox/, .nook/ → .quire/), the
                pseudo-terminal smoke test, the icon generator
   sample/      a sample journal the Linux app opens on first launch
   docs/        the consolidation plan: what came from where, and what is next
+  legacy/      Nook and Wander, the apps Quire replaced, kept for reference;
+               nothing here is built or shipped
 ```
 
 ## The folder
@@ -56,8 +60,10 @@ by default.
 
 The SwiftUI app is in [`apple/`](apple/README.md), brought over from Nook and
 connected to Quire's Rust core. On a Mac with Xcode and rustup, run `make apple`
-and `make apple-test`. Apple SDK compilation and device testing are still
-pending; the Linux checks verify the Rust bridge and project wiring.
+and `make apple-test`. It builds with Xcode and runs on an iPhone and iPad, in
+Quire's own design; the Mac still uses the earlier shell. With a monitor and a
+hardware keyboard the phone becomes a desk: the page is on the monitor, the keys
+work as in the terminal app, and ⌘K goes anywhere.
 
 ## Installing
 
@@ -142,8 +148,9 @@ interactive terminal asks whether to clear orphan media: Enter keeps it; yes
 moves it out of `assets/` with verified recovery copies in the same recovery
 area. Piped or unattended runs always keep orphan media.
 
-The **Media Library** is a primary tab on Linux (`Ctrl+6`). On iPhone, open
-**Journal → Media Library** or the link in Settings; on Mac/iPad, use the sidebar.
+The **Media Library** is a primary tab on Linux (`Ctrl+6`). On iPhone and iPad, use
+the icon in the Today or Journal masthead, or the link in Settings; on the Mac, the
+sidebar.
 Search filenames, filter photos/video/audio (and files or orphans on Linux), sort
 or group by date, preview a file, and use its menu to go to the entry that uses it.
 
@@ -164,8 +171,9 @@ cd linux && npm install && npx tauri build      # → linux/src-tauri/target/rel
 
 ```sh
 make test        # Rust core, terminal app and native bindings tests
-make check       # clippy
+make check       # clippy, the frontend checks, the Apple project wiring
 make smoke       # drive the terminal app through every screen in a pseudo-terminal
+make apple-test  # hostless XCTest against the Rust core (macOS with Xcode)
 make tui         # a release build of quire and jnl into target/release/
 make linux       # the Tauri bundle (needs libwebkit2gtk-4.1-dev; see linux/README.md)
 ```

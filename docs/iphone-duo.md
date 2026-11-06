@@ -22,8 +22,8 @@ system status area sits on the right edge; Quire adds no right-hand rail.
 - Shell chosen by size class, not `userInterfaceIdiom` (`AppRoot`, `PhoneRoot`).
 - List + reader side by side at regular width; the sidebar in place of tabs.
 - Camera: on iOS the recorder and photo capture are the system camera
-  (`UIImagePickerController`), which rotates and fits itself; they are not yet
-  reachable from the iPhone design. The hand-built `AVCaptureVideoPreviewLayer`
+  (`UIImagePickerController`), which rotates and fits itself; both are on the
+  composer's paperclip. The hand-built `AVCaptureVideoPreviewLayer`
   is the Mac sheet's, and it now fits (`.resizeAspect`) rather than fills,
   follows an `AVCaptureDevice.RotationCoordinator`, and re-fits on every layout;
   recordings and photos take the coordinator's capture angle.
@@ -34,5 +34,4 @@ system status area sits on the right edge; Quire adds no right-hand rail.
   the 27.1 SDK; at regular width the sidebar replaces it, so check only that the
   closed screen still shows it.
 - Hinge: check the list/reader split does not put a line of text across it.
-- When a camera is added to the iPhone composer, present it full screen and
-  check that a recording survives fold/unfold.
+- Check that a recording from the composer's camera survives fold/unfold.

@@ -303,12 +303,12 @@ Done on branch `quire-core`:
 | `themes.json` as the single theme source | done for the terminal; the Linux CSS still carries a copy |
 | Docs: README, linux/README, CLAUDE.md = AGENTS.md, CHANGELOG, Makefile | done |
 
-Not done, in order:
+Not done, in order (brought up to date 2026-11-06; the Apple shell, once item 2,
+is built and on a phone):
 
 1. Generate the Linux `style.css` theme blocks from `themes.json` (a small
    script) so there is truly one source.
-2. The Apple shell (section 4, steps 4–6): UniFFI bindings for the core,
-   Nook's targets into `apple/`, the Swift `Vault`.
+2. The Mac in Quire's design (the iPhone and iPad have theirs).
 3. A jnl patch to read `inbox/` when `inbox.md` is absent, for jnl's other
    users.
 4. Android (section 4, step 7).
