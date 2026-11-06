@@ -65,6 +65,18 @@ pub fn check_ts(ts: &str) -> Result<(), String> {
     }
 }
 
+/// How long `Journal::edit_file` keeps redoing an edit before giving up. Every
+/// lost compare-and-swap means another writer won, so this only runs out under
+/// a storm of writes to one file.
+const EDIT_PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
+/// A random wait that grows with each lost attempt, so writers that collided
+/// don't collide again in step.
+fn backoff(attempt: u64) -> std::time::Duration {
+    use std::hash::{BuildHasher, Hasher};
+    let random = std::collections::hash_map::RandomState::new().build_hasher().finish();
+    std::time::Duration::from_millis(1 + random % (5 * attempt).min(100))
+}
+
 /// Root file stems that are never split journals (compared case-insensitively).
 pub const RESERVED_STEMS: &[&str] = &["inbox", "transfer", "export", "readme", "nook-export"];
 
@@ -591,9 +603,13 @@ impl Journal {
 
     /// Strict read: missing is Ok(""), unreadable is Err.
     pub fn try_read(&self, rel: &str) -> Result<String, String> {
-        match self.vault.read(rel)? {
+        Self::decoded(rel, self.vault.read(rel)?.as_deref())
+    }
+
+    fn decoded(rel: &str, bytes: Option<&[u8]>) -> Result<String, String> {
+        match bytes {
             None => Ok(String::new()),
-            Some(b) => String::from_utf8(b).map(|s| normalised(&s)).map_err(|e| format!("Can't read {}: {}", rel, e)),
+            Some(b) => std::str::from_utf8(b).map(normalised).map_err(|e| format!("Can't read {}: {}", rel, e)),
         }
     }
 
@@ -799,9 +815,12 @@ impl Journal {
     /// Locate an entry in a file by its raw text, preferring the expected index.
     /// Returns the file's preamble, all raws, and the matching position.
     pub fn locate(&self, file: &str, index: usize, expected_raw: &str) -> Result<(String, Vec<String>, usize), String> {
-        let content = self.try_read(file)?;
-        let pre = leading_preamble(&content);
-        let raws: Vec<String> = parse_entries(&content).into_iter().map(|r| r.raw).collect();
+        Self::locate_in(&self.try_read(file)?, index, expected_raw)
+    }
+
+    fn locate_in(content: &str, index: usize, expected_raw: &str) -> Result<(String, Vec<String>, usize), String> {
+        let pre = leading_preamble(content);
+        let raws: Vec<String> = parse_entries(content).into_iter().map(|r| r.raw).collect();
         let norm = |s: &str| s.trim_end().to_string();
         let want = norm(expected_raw);
         if raws.get(index).map(|r| norm(r) == want).unwrap_or(false) {
@@ -813,35 +832,88 @@ impl Journal {
         Err("That entry changed on disk since Quire last read it. Reloaded — try again.".into())
     }
 
-    /// Write a file's preamble and entries. A day file (`inbox/…`,
-    /// `journal/…`, `split/<tag>/…`) that would come out empty is deleted
-    /// instead, as a day with no entries has no file; `inbox.md` and a legacy
-    /// root `<tag>.md` are written empty, as jnl does.
-    pub fn write_file_entries(&self, file: &str, pre: &str, raws: &[String]) -> Result<(), String> {
-        let text = render(pre, raws);
-        if text.is_empty() && is_day_file(file) {
-            self.remove(file)?;
+    /// Every read-modify-write of a journal file goes through here. `edit`
+    /// gets the file's text and returns what to write (`None` to leave it
+    /// alone) and a result. The write is a compare-and-swap against the bytes
+    /// that were read, so a sync, a Shortcut or the terminal app landing in
+    /// between is never overwritten: the edit runs again on the new text, and
+    /// `edit` must expect to run more than once. A day file that comes out
+    /// empty is deleted, guarded the same way. If the file won't hold still
+    /// this gives up with an error, having written nothing.
+    pub fn edit_file<T>(&self, file: &str, mut edit: impl FnMut(&str) -> Result<(Option<String>, T), String>) -> Result<T, String> {
+        let started = std::time::Instant::now();
+        let mut attempt = 0u64;
+        while attempt == 0 || started.elapsed() < EDIT_PATIENCE {
+            if attempt > 0 {
+                std::thread::sleep(backoff(attempt));
+            }
+            attempt += 1;
+            let before = self.vault.read(file)?;
+            let content = Self::decoded(file, before.as_deref())?;
+            let (text, result) = edit(&content)?;
+            let Some(text) = text else { return Ok(result) };
+            let bytes = (!(text.is_empty() && is_day_file(file))).then_some(text.as_bytes());
+            if before.is_none() && bytes.is_none() {
+                return Ok(result);
+            }
+            if self.vault.replace_if_unchanged(file, before.as_deref(), bytes)? {
+                return Ok(result);
+            }
+        }
+        Err(format!("{} kept changing while Quire was saving, so nothing was written. Try again.", file))
+    }
+
+    /// Replace a file's text, but only if it still reads as `expected`: for a
+    /// long job that worked out `text` from an earlier read and can't redo it.
+    pub fn replace_text(&self, file: &str, expected: &str, text: &str) -> Result<(), String> {
+        self.edit_file(file, |content| {
+            if content != expected {
+                return Err(format!("{} changed on disk while Quire was working. Left as it is.", file));
+            }
+            Ok((Some(text.to_string()), ()))
+        })
+    }
+
+    /// Delete a file, but only if it still reads as `expected`.
+    pub fn remove_text(&self, file: &str, expected: &str) -> Result<(), String> {
+        let before = self.vault.read(file)?;
+        if before.is_none() {
             return Ok(());
         }
-        self.write(file, &text)
+        if Self::decoded(file, before.as_deref())? != expected || !self.vault.replace_if_unchanged(file, before.as_deref(), None)? {
+            return Err(format!("{} changed on disk while Quire was working. Left as it is.", file));
+        }
+        Ok(())
+    }
+
+    /// Add a preamble to a preamble file unless it is already in there.
+    fn keep_preamble(&self, file: &str, pre: &str) -> Result<(), String> {
+        self.edit_file(file, |existing| {
+            if existing.contains(pre.trim()) {
+                return Ok((None, ()));
+            }
+            let text = if existing.trim().is_empty() { format!("{}\n", pre) } else { format!("{}\n\n{}\n", existing.trim_end(), pre) };
+            Ok((Some(text), ()))
+        })
     }
 
     /// Append `raw` to a file the way jnl's fileDraft does (blank-line
     /// separated). Returns the index of the (first) appended entry.
     pub fn append_raw(&self, file: &str, raw: &str) -> Result<usize, String> {
-        let mut s = self.try_read(file)?;
-        let before = parse_entries(&s).len();
-        if !s.trim().is_empty() {
-            if !s.ends_with("\n\n") {
-                s.push_str(if s.ends_with('\n') { "\n" } else { "\n\n" });
+        self.edit_file(file, |content| {
+            let mut s = content.to_string();
+            let before = parse_entries(&s).len();
+            if !s.trim().is_empty() {
+                if !s.ends_with("\n\n") {
+                    s.push_str(if s.ends_with('\n') { "\n" } else { "\n\n" });
+                }
+            } else {
+                s.clear();
             }
-        } else {
-            s.clear();
-        }
-        s.push_str(raw.trim_end_matches('\n'));
-        s.push('\n');
-        self.write(file, &s)?;
-        Ok(before)
+            s.push_str(raw.trim_end_matches('\n'));
+            s.push('\n');
+            Ok((Some(s), before))
+        })
     }
 
     /// Insert every entry parsed from each of `raws` into `file`, each after
@@ -853,9 +925,15 @@ impl Journal {
     /// Returns the final indices of the inserted entries, in input order
     /// (`None` for skipped ones). Errors if any raw parses to zero entries.
     pub fn insert_entries(&self, file: &str, raws: &[String], skip_existing: bool) -> Result<Vec<Option<usize>>, String> {
-        let content = self.try_read(file)?;
-        let pre = leading_preamble(&content);
-        let mut entries: Vec<(RawEntry, Option<usize>)> = parse_entries(&content).into_iter().map(|e| (e, None)).collect();
+        self.edit_file(file, |content| Self::with_entries(content, raws, skip_existing))
+    }
+
+    /// `content` with `raws` inserted, for `insert_entries`: the text to write
+    /// (`None` when every entry was skipped) and the final indices.
+    #[allow(clippy::type_complexity)]
+    fn with_entries(content: &str, raws: &[String], skip_existing: bool) -> Result<(Option<String>, Vec<Option<usize>>), String> {
+        let pre = leading_preamble(content);
+        let mut entries: Vec<(RawEntry, Option<usize>)> = parse_entries(content).into_iter().map(|e| (e, None)).collect();
         let mut have: HashMap<String, usize> = HashMap::new();
         for (e, _) in &entries {
             *have.entry(e.raw.trim_end().to_string()).or_default() += 1;
@@ -887,17 +965,17 @@ impl Journal {
             }
             out_slots.push(slots);
         }
-        if n_new > 0 {
+        let text = (n_new > 0).then(|| {
             let rendered: Vec<String> = entries.iter().map(|(e, _)| e.raw.clone()).collect();
-            self.write_file_entries(file, &pre, &rendered)?;
-        }
+            render(&pre, &rendered)
+        });
         let mut pos_of: HashMap<usize, usize> = HashMap::new();
         for (i, (_, t)) in entries.iter().enumerate() {
             if let Some(t) = t {
                 pos_of.insert(*t, i);
             }
         }
-        Ok(out_slots.iter().map(|s| s.first().and_then(|t| pos_of.get(t).copied())).collect())
+        Ok((text, out_slots.iter().map(|s| s.first().and_then(|t| pos_of.get(t).copied())).collect()))
     }
 
     /// Insert into a file keeping it in timestamp order (stable). Inserts
@@ -930,7 +1008,6 @@ impl Journal {
     pub fn update_entry(&self, file: &str, index: usize, expected_raw: &str, ts: &str, title: &str, starred: bool, body: &str) -> Result<Written, String> {
         let file = check_entry_rel(file)?;
         check_ts(ts)?;
-        let (pre, mut raws, i) = self.locate(&file, index, expected_raw)?;
         let new_raw = make_raw(ts, title, starred, body);
         let new_date = &ts[..10];
         let day_file = is_day_file(&file);
@@ -942,33 +1019,42 @@ impl Journal {
             journal_rel(new_date)
         };
         if day_file && dest != file {
+            self.locate(&file, index, expected_raw)?;
             let new_raw = rebase_links(&new_raw, &file, &dest);
             // Write the destination first: a failure leaves a duplicate, never a loss.
             let idx = self.insert_sorted(&dest, &new_raw)?;
-            raws.remove(i);
-            self.write_file_entries(&file, &pre, &raws)?;
+            self.remove_entry(&file, index, expected_raw)?;
             return Ok(Written { file: dest, index: idx, raw: new_raw });
         }
-        let old_ts = parse_entries(&raws[i]).first().map(|e| e.ts.clone()).unwrap_or_default();
-        raws[i] = new_raw.clone();
-        let mut idx = i;
-        if day_file && old_ts != ts {
-            // Re-sort the day so a retimed entry lands in order (stable).
-            let mut es: Vec<(usize, RawEntry)> =
-                raws.iter().enumerate().flat_map(|(k, x)| parse_entries(x).into_iter().map(move |e| (k, e))).collect();
-            es.sort_by(|a, b| a.1.ts.cmp(&b.1.ts));
-            idx = es.iter().position(|(k, _)| *k == i).unwrap_or(i);
-            raws = es.into_iter().map(|(_, e)| e.raw).collect();
-        }
-        self.write_file_entries(&file, &pre, &raws)?;
+        let idx = self.edit_file(&file, |content| {
+            let (pre, mut raws, i) = Self::locate_in(content, index, expected_raw)?;
+            let old_ts = parse_entries(&raws[i]).first().map(|e| e.ts.clone()).unwrap_or_default();
+            raws[i] = new_raw.clone();
+            let mut idx = i;
+            if day_file && old_ts != ts {
+                // Re-sort the day so a retimed entry lands in order (stable).
+                let mut es: Vec<(usize, RawEntry)> =
+                    raws.iter().enumerate().flat_map(|(k, x)| parse_entries(x).into_iter().map(move |e| (k, e))).collect();
+                es.sort_by(|a, b| a.1.ts.cmp(&b.1.ts));
+                idx = es.iter().position(|(k, _)| *k == i).unwrap_or(i);
+                raws = es.into_iter().map(|(_, e)| e.raw).collect();
+            }
+            Ok((Some(render(&pre, &raws)), idx))
+        })?;
         Ok(Written { file, index: idx, raw: new_raw })
     }
 
     pub fn delete_entry(&self, file: &str, index: usize, expected_raw: &str) -> Result<(), String> {
-        let file = check_entry_rel(file)?;
-        let (pre, mut raws, i) = self.locate(&file, index, expected_raw)?;
-        raws.remove(i);
-        self.write_file_entries(&file, &pre, &raws)
+        self.remove_entry(&check_entry_rel(file)?, index, expected_raw)
+    }
+
+    /// Take one entry out of a file, found again by its text on every attempt.
+    fn remove_entry(&self, file: &str, index: usize, expected_raw: &str) -> Result<(), String> {
+        self.edit_file(file, |content| {
+            let (pre, mut raws, i) = Self::locate_in(content, index, expected_raw)?;
+            raws.remove(i);
+            Ok((Some(render(&pre, &raws)), ()))
+        })
     }
 
     /// File a draft: jnl's fileDraft (split tags first, else the day file,
@@ -978,7 +1064,7 @@ impl Journal {
         if !is_inbox_rel(&file) {
             return Err("Only a draft in the inbox can be filed".into());
         }
-        let (pre, mut raws, i) = self.locate(&file, index, expected_raw)?;
+        let (_, raws, i) = self.locate(&file, index, expected_raw)?;
         let e = parse_entries(&raws[i]).into_iter().next().ok_or("bad draft")?;
         if e.body.is_empty() && e.suffix.is_empty() {
             return Err("Nothing to file".into());
@@ -986,8 +1072,7 @@ impl Journal {
         let target = split_target(&e.raw, split_tags).unwrap_or_else(|| journal_rel(&e.date));
         let raw = rebase_links(&rebuild(&e), &file, &target);
         self.append_raw(&target, &raw)?;
-        raws.remove(i);
-        self.write_file_entries(&file, &pre, &raws)?;
+        self.remove_entry(&file, i, expected_raw)?;
         Ok(target)
     }
 
@@ -998,13 +1083,13 @@ impl Journal {
         if is_inbox_rel(&file) {
             return Err("That entry is already in the inbox".into());
         }
-        let (pre, mut raws, i) = self.locate(&file, index, expected_raw)?;
+        let (_, raws, i) = self.locate(&file, index, expected_raw)?;
         let e = parse_entries(&raws[i]).into_iter().next().ok_or("bad entry")?;
         let dest = inbox_rel(&e.date);
-        let raw = rebase_links(raws.remove(i).trim_end(), &file, &dest);
+        let raw = rebase_links(raws[i].trim_end(), &file, &dest);
         // Inbox first, then remove: a failure leaves a duplicate, never a loss.
         let index = self.insert_sorted(&dest, &raw)?;
-        self.write_file_entries(&file, &pre, &raws)?;
+        self.remove_entry(&file, i, expected_raw)?;
         Ok(Written { file: dest, index, raw })
     }
 
@@ -1053,11 +1138,7 @@ impl Journal {
             rep.skipped += res.iter().filter(|r| r.is_none()).count();
         }
         if !pre.is_empty() {
-            let existing = self.read(INBOX_PREAMBLE);
-            if !existing.contains(pre.trim()) {
-                let text = if existing.trim().is_empty() { format!("{}\n", pre) } else { format!("{}\n\n{}\n", existing.trim_end(), pre) };
-                self.write(INBOX_PREAMBLE, &text)?;
-            }
+            self.keep_preamble(INBOX_PREAMBLE, &pre)?;
         }
         // Verify before touching the original.
         let mut have: HashMap<String, usize> = HashMap::new();
@@ -1120,12 +1201,7 @@ impl Journal {
             }
             let pre = leading_preamble(&content);
             if !pre.trim().is_empty() {
-                let at = format!("{}/{}/preamble.md", SPLIT_DIR, tag);
-                let existing = self.read(&at);
-                if !existing.contains(pre.trim()) {
-                    let text = if existing.trim().is_empty() { format!("{}\n", pre) } else { format!("{}\n\n{}\n", existing.trim_end(), pre) };
-                    self.write(&at, &text)?;
-                }
+                self.keep_preamble(&format!("{}/{}/preamble.md", SPLIT_DIR, tag), &pre)?;
             }
             // Verify before touching the original.
             let mut have: HashMap<String, usize> = HashMap::new();
@@ -1454,6 +1530,253 @@ mod tests {
     }
 
     // #2: a file with invalid UTF-8 must not be mistaken for empty and overwritten.
+    /// A vault where another writer (iCloud, a second device, a Shortcut, the
+    /// terminal app) lands one change on `rel` right after the core has read
+    /// it: the race read-modify-write has to survive.
+    struct RacingVault {
+        fs: crate::vault::FsVault,
+        rel: String,
+        landing: std::sync::Mutex<Option<String>>,
+    }
+
+    impl RacingVault {
+        fn journal(d: &tempfile::TempDir, rel: &str, landing: &str) -> Journal {
+            let vault = RacingVault {
+                fs: crate::vault::FsVault::new(d.path()),
+                rel: rel.into(),
+                landing: std::sync::Mutex::new(Some(landing.into())),
+            };
+            Journal::with_vault(d.path(), Arc::new(vault))
+        }
+    }
+
+    impl Vault for RacingVault {
+        fn read(&self, rel: &str) -> Result<Option<Vec<u8>>, String> {
+            let bytes = self.fs.read(rel);
+            if rel == self.rel {
+                if let Some(text) = self.landing.lock().unwrap().take() {
+                    self.fs.write(rel, text.as_bytes())?;
+                }
+            }
+            bytes
+        }
+        fn write(&self, rel: &str, bytes: &[u8]) -> Result<(), String> {
+            self.fs.write(rel, bytes)
+        }
+        fn replace_if_unchanged(&self, rel: &str, expected: Option<&[u8]>, bytes: Option<&[u8]>) -> Result<bool, String> {
+            self.fs.replace_if_unchanged(rel, expected, bytes)
+        }
+        fn remove(&self, rel: &str) -> Result<bool, String> {
+            self.fs.remove(rel)
+        }
+        fn rename(&self, from: &str, to: &str) -> Result<(), String> {
+            self.fs.rename(from, to)
+        }
+        fn list(&self, rel: &str) -> Result<Vec<Item>, String> {
+            self.fs.list(rel)
+        }
+        fn is_dir(&self, rel: &str) -> bool {
+            self.fs.is_dir(rel)
+        }
+        fn is_file(&self, rel: &str) -> bool {
+            self.fs.is_file(rel)
+        }
+        fn len(&self, rel: &str) -> u64 {
+            self.fs.len(rel)
+        }
+        fn modified(&self, rel: &str) -> Option<u64> {
+            self.fs.modified(rel)
+        }
+        fn local_path(&self, rel: &str) -> Option<PathBuf> {
+            self.fs.local_path(rel)
+        }
+    }
+
+    const DAY: &str = "journal/2026/10/01.md";
+    const MINE: &str = "[2026-10-01 08:00:00] mine\nbody\n";
+    const THEIRS: &str = "[2026-10-01 09:00:00] from another device\nkeep me\n";
+
+    fn landed() -> String {
+        format!("{MINE}\n{THEIRS}")
+    }
+
+    fn journal_with_landing(d: &tempfile::TempDir) -> Journal {
+        std::fs::create_dir_all(d.path().join("journal/2026/10")).unwrap();
+        std::fs::write(d.path().join(DAY), MINE).unwrap();
+        RacingVault::journal(d, DAY, &landed())
+    }
+
+    fn on_disk(d: &tempfile::TempDir) -> String {
+        std::fs::read_to_string(d.path().join(DAY)).unwrap_or_default()
+    }
+
+    #[test]
+    fn append_raw_keeps_an_entry_that_lands_mid_write() {
+        let d = tempfile::tempdir().unwrap();
+        let j = journal_with_landing(&d);
+        j.append_raw(DAY, "[2026-10-01 10:00:00] appended\nnew\n").unwrap();
+        let text = on_disk(&d);
+        assert!(text.contains("keep me"), "lost the landed entry: {text}");
+        assert!(text.contains("appended") && text.contains("mine"), "{text}");
+    }
+
+    #[test]
+    fn insert_entries_keeps_an_entry_that_lands_mid_write() {
+        let d = tempfile::tempdir().unwrap();
+        let j = journal_with_landing(&d);
+        j.insert_sorted(DAY, "[2026-10-01 08:30:00] inserted\nnew\n").unwrap();
+        let text = on_disk(&d);
+        assert!(text.contains("keep me"), "lost the landed entry: {text}");
+        let order: Vec<String> = parse_entries(&text).into_iter().map(|e| e.ts).collect();
+        assert_eq!(order, ["2026-10-01 08:00:00", "2026-10-01 08:30:00", "2026-10-01 09:00:00"]);
+    }
+
+    #[test]
+    fn update_entry_keeps_an_entry_that_lands_mid_write() {
+        let d = tempfile::tempdir().unwrap();
+        let j = journal_with_landing(&d);
+        let w = j.update_entry(DAY, 0, MINE, "2026-10-01 08:00:00", "mine", false, "edited").unwrap();
+        let text = on_disk(&d);
+        assert!(text.contains("keep me"), "lost the landed entry: {text}");
+        assert!(text.contains("edited") && !text.contains("\nbody\n"), "{text}");
+        assert_eq!(w.index, 0);
+    }
+
+    #[test]
+    fn moving_a_day_keeps_an_entry_that_lands_on_the_source_mid_write() {
+        let d = tempfile::tempdir().unwrap();
+        let j = journal_with_landing(&d);
+        let w = j.update_entry(DAY, 0, MINE, "2026-10-02 08:00:00", "mine", false, "body").unwrap();
+        assert_eq!(w.file, "journal/2026/10/02.md");
+        let text = on_disk(&d);
+        assert!(text.contains("keep me") && !text.contains("mine"), "{text}");
+    }
+
+    #[test]
+    fn delete_entry_keeps_an_entry_that_lands_mid_write() {
+        let d = tempfile::tempdir().unwrap();
+        let j = journal_with_landing(&d);
+        j.delete_entry(DAY, 0, MINE).unwrap();
+        let text = on_disk(&d);
+        assert!(text.contains("keep me") && !text.contains("mine"), "{text}");
+    }
+
+    #[test]
+    fn deleting_the_last_entry_keeps_an_entry_that_lands_mid_write() {
+        // The day file would come out empty and be deleted: that delete has to
+        // be guarded too, or it takes the landed entry with it.
+        let d = tempfile::tempdir().unwrap();
+        let j = journal_with_landing(&d);
+        j.delete_entry(DAY, 0, MINE).unwrap();
+        assert!(on_disk(&d).contains("keep me"));
+    }
+
+    #[test]
+    fn a_new_day_file_keeps_an_entry_that_lands_mid_write() {
+        // The file didn't exist when read: another writer creates it.
+        let d = tempfile::tempdir().unwrap();
+        let j = RacingVault::journal(&d, DAY, THEIRS);
+        j.insert_sorted(DAY, "[2026-10-01 10:00:00] first here\nnew\n").unwrap();
+        let text = on_disk(&d);
+        assert!(text.contains("keep me") && text.contains("first here"), "{text}");
+    }
+
+    #[test]
+    fn editing_an_entry_someone_else_changed_is_still_refused() {
+        // The landed change is to the entry being edited: a retry must find
+        // it gone and stop, leaving their text alone.
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("journal/2026/10")).unwrap();
+        std::fs::write(d.path().join(DAY), MINE).unwrap();
+        let theirs = "[2026-10-01 08:00:00] mine\nedited on the phone\n";
+        let j = RacingVault::journal(&d, DAY, theirs);
+        assert!(j.update_entry(DAY, 0, MINE, "2026-10-01 08:00:00", "mine", false, "edited here").is_err());
+        assert_eq!(on_disk(&d), theirs);
+    }
+
+    #[test]
+    fn merging_a_conflict_keeps_an_entry_that_lands_mid_write() {
+        let d = tempfile::tempdir().unwrap();
+        let j = journal_with_landing(&d);
+        let copy = "journal/2026/10/01.sync-conflict-1-2-X.md";
+        std::fs::write(d.path().join(copy), "[2026-10-01 07:00:00] the copy\nx\n").unwrap();
+        assert_eq!(crate::merge_conflict(&j, copy).unwrap(), 1);
+        let text = on_disk(&d);
+        assert!(text.contains("keep me") && text.contains("the copy"), "{text}");
+        assert!(!d.path().join(copy).exists());
+    }
+
+    #[test]
+    fn renaming_a_tag_keeps_an_entry_that_lands_mid_write() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("journal/2026/10")).unwrap();
+        std::fs::write(d.path().join(DAY), "[2026-10-01 08:00:00] a\n@old\n").unwrap();
+        let theirs = "[2026-10-01 08:00:00] a\n@old\n\n[2026-10-01 09:00:00] b\nkeep me @old\n";
+        // The tag pass reads each file twice; land the change on the first.
+        let j = RacingVault::journal(&d, DAY, theirs);
+        crate::rename_tags(&j, &["old".to_string()], "new").unwrap();
+        let text = on_disk(&d);
+        assert!(text.contains("keep me @new") && !text.contains("@old"), "{text}");
+    }
+
+    #[test]
+    fn a_long_job_leaves_a_file_that_changed_alone() {
+        // sort_inbox worked out its text from what it read, so it stops rather
+        // than writing that over the change.
+        let d = tempfile::tempdir().unwrap();
+        let day = "inbox/2026/10/01.md";
+        std::fs::create_dir_all(d.path().join("inbox/2026/10")).unwrap();
+        std::fs::write(d.path().join(day), "[2026-10-01 09:00:00] b\nx\n\n[2026-10-01 08:00:00] a\ny\n").unwrap();
+        let theirs = "[2026-10-01 09:00:00] b\nx\n\n[2026-10-01 08:00:00] a\ny\n\n[2026-10-01 10:00:00] c\nkeep me\n";
+        let j = RacingVault::journal(&d, day, theirs);
+        assert!(crate::sort_inbox(&j).is_err());
+        assert_eq!(std::fs::read_to_string(d.path().join(day)).unwrap(), theirs);
+    }
+
+    #[test]
+    fn a_file_that_never_holds_still_gives_up_without_writing() {
+        struct Restless(crate::vault::FsVault);
+        impl Vault for Restless {
+            fn read(&self, r: &str) -> Result<Option<Vec<u8>>, String> { self.0.read(r) }
+            fn write(&self, r: &str, b: &[u8]) -> Result<(), String> { self.0.write(r, b) }
+            fn replace_if_unchanged(&self, _: &str, _: Option<&[u8]>, _: Option<&[u8]>) -> Result<bool, String> { Ok(false) }
+            fn remove(&self, r: &str) -> Result<bool, String> { self.0.remove(r) }
+            fn rename(&self, a: &str, b: &str) -> Result<(), String> { self.0.rename(a, b) }
+            fn list(&self, r: &str) -> Result<Vec<Item>, String> { self.0.list(r) }
+            fn is_dir(&self, r: &str) -> bool { self.0.is_dir(r) }
+            fn is_file(&self, r: &str) -> bool { self.0.is_file(r) }
+            fn len(&self, r: &str) -> u64 { self.0.len(r) }
+            fn modified(&self, r: &str) -> Option<u64> { self.0.modified(r) }
+            fn local_path(&self, r: &str) -> Option<PathBuf> { self.0.local_path(r) }
+        }
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::with_vault(d.path(), Arc::new(Restless(crate::vault::FsVault::new(d.path()))));
+        let e = j.append_raw(DAY, "[2026-10-01 10:00:00] x\ny\n").unwrap_err();
+        assert!(e.contains("nothing was written"), "{e}");
+        assert_eq!(on_disk(&d), "");
+    }
+
+    #[test]
+    fn writers_in_parallel_keep_every_entry() {
+        // Separate Journals over one folder, like the app and a Shortcut, or
+        // two processes: every append must survive.
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().to_path_buf();
+        let threads: Vec<_> = (0..6)
+            .map(|t| {
+                let root = root.clone();
+                std::thread::spawn(move || {
+                    let j = Journal::open(root);
+                    for n in 0..20 {
+                        j.append_raw(DAY, &format!("[2026-10-01 08:{t:02}:{n:02}] t{t} n{n}\nbody\n")).unwrap();
+                    }
+                })
+            })
+            .collect();
+        threads.into_iter().for_each(|t| t.join().unwrap());
+        assert_eq!(parse_entries(&on_disk(&d)).len(), 120);
+    }
+
     #[test]
     fn append_raw_refuses_unreadable_file() {
         let (d, j) = tmp();

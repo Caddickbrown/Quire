@@ -456,11 +456,7 @@ fn rehome(j: &Journal, rep: &mut CleanupReport) {
         if gone.is_empty() {
             continue;
         }
-        let res = j.try_read(&rel).and_then(|fresh| match remove_raws(&fresh, &mut gone) {
-            Some(text) => write_removed(j, &rel, &text),
-            None => Ok(()),
-        });
-        if let Err(e) = res {
+        if let Err(e) = remove_gone(j, &rel, &mut gone) {
             rep.errors.push(format!("{}: {}", rel, e));
         }
     }
@@ -545,7 +541,7 @@ pub fn cleanup(j: &Journal, split_tags: &[String]) -> Result<CleanupReport, Stri
             // Leave this file's entries in place (any that did land are
             // skipped as duplicates on the next run).
             if formatted {
-                if let Err(e) = j.write(&rel, &fixed) {
+                if let Err(e) = j.replace_text(&rel, &orig, &fixed) {
                     rep.errors.push(e);
                 } else {
                     rep.formatted += 1;
@@ -557,9 +553,9 @@ pub fn cleanup(j: &Journal, split_tags: &[String]) -> Result<CleanupReport, Stri
         let structural = extracted > 0 || reordered || removed > 0;
         let res = if structural {
             let raws: Vec<String> = kept.into_iter().map(|e| e.raw).collect();
-            j.write_file_entries(&rel, &pre, &raws)
+            j.replace_text(&rel, &orig, &render(&pre, &raws))
         } else if formatted {
-            j.write(&rel, &fixed)
+            j.replace_text(&rel, &orig, &fixed)
         } else {
             Ok(())
         };
@@ -581,7 +577,7 @@ pub fn cleanup(j: &Journal, split_tags: &[String]) -> Result<CleanupReport, Stri
                 let (kept, reordered, removed) = sort_dedupe(parse_entries(&content));
                 if reordered || removed > 0 {
                     let raws: Vec<String> = kept.into_iter().map(|e| e.raw).collect();
-                    match j.write_file_entries(&rel, &pre, &raws) {
+                    match j.replace_text(&rel, &content, &render(&pre, &raws)) {
                         Ok(()) => {
                             rep.reordered += reordered as usize;
                             rep.deduped += removed;
@@ -612,7 +608,7 @@ pub fn sort_inbox(j: &Journal) -> Result<bool, String> {
             continue;
         }
         let raws: Vec<String> = sorted.into_iter().map(|e| e.raw).collect();
-        j.write_file_entries(&rel, &pre, &raws)?;
+        j.replace_text(&rel, &content, &render(&pre, &raws))?;
         changed = true;
     }
     Ok(changed)
@@ -681,23 +677,28 @@ pub fn file_all(j: &Journal, split_tags: &[String]) -> Result<FileAllReport, Str
     }
     if rep.filed > 0 {
         for file in &inbox {
-            let fresh = j.try_read(file)?;
-            if let Some(text) = remove_raws(&fresh, &mut gone) {
-                write_removed(j, file, &text)?;
-            }
+            remove_gone(j, file, &mut gone)?;
         }
     }
     Ok(rep)
 }
 
-/// Write a file `remove_raws` thinned; a day file left with no entries is
-/// deleted (its preamble, if any, is kept in place).
-fn write_removed(j: &Journal, file: &str, text: &str) -> Result<(), String> {
-    if is_day_file(file) && parse_entries(text).is_empty() && leading_preamble(text).is_empty() {
-        j.remove(file)?;
-        return Ok(());
-    }
-    j.write(file, text)
+/// Take the entries in the multiset `gone` out of `file`, counting them off
+/// `gone`; a day file left with no entries is deleted (its preamble, if any, is
+/// kept in place). Works on the file as it is now, retrying if it changes.
+fn remove_gone(j: &Journal, file: &str, gone: &mut HashMap<String, usize>) -> Result<(), String> {
+    *gone = j.edit_file(file, |content| {
+        let mut left = gone.clone();
+        let text = remove_raws(content, &mut left).map(|text| {
+            if is_day_file(file) && parse_entries(&text).is_empty() && leading_preamble(&text).is_empty() {
+                String::new()
+            } else {
+                text
+            }
+        });
+        Ok((text, left))
+    })?;
+    Ok(())
 }
 
 #[derive(Serialize, Default, Debug)]
@@ -756,15 +757,12 @@ pub fn merge_ex_split(j: &Journal, split_tags: &[String]) -> Result<MergeReport,
         let pre = leading_preamble(&content);
         let res = if moved == entries.len() {
             if pre.trim().is_empty() {
-                j.remove(&name).map(|_| ())
+                j.remove_text(&name, &content)
             } else {
-                j.write(&name, &render(&pre, &[]))
+                j.replace_text(&name, &content, &render(&pre, &[]))
             }
         } else {
-            match remove_raws(&content, &mut gone) {
-                Some(t) => j.write(&name, &t),
-                None => Ok(()),
-            }
+            remove_gone(j, &name, &mut gone)
         };
         match res {
             Ok(()) => {
@@ -790,35 +788,37 @@ pub fn merge_conflict(j: &Journal, rel: &str) -> Result<usize, String> {
     let main_rel = conflict_main_name(rel).ok_or("Can't tell which file that conflict copy belongs to")?;
     let main_rel = check_entry_rel(&main_rel)?;
     let ctext = j.try_read(&crel)?;
-    let mtext = j.try_read(&main_rel)?;
-    let mut main = parse_entries(&mtext);
-    let mut have: HashMap<String, usize> = HashMap::new();
-    for e in &main {
-        *have.entry(e.raw.trim_end().to_string()).or_default() += 1;
-    }
-    let mut added = 0;
-    for e in parse_entries(&ctext) {
-        match have.get_mut(e.raw.trim_end()) {
-            Some(c) if *c > 0 => *c -= 1,
-            _ => {
-                main.push(e);
-                added += 1;
+    let added = j.edit_file(&main_rel, |mtext| {
+        let mut main = parse_entries(mtext);
+        let mut have: HashMap<String, usize> = HashMap::new();
+        for e in &main {
+            *have.entry(e.raw.trim_end().to_string()).or_default() += 1;
+        }
+        let mut added = 0;
+        for e in parse_entries(&ctext) {
+            match have.get_mut(e.raw.trim_end()) {
+                Some(c) if *c > 0 => *c -= 1,
+                _ => {
+                    main.push(e);
+                    added += 1;
+                }
             }
         }
-    }
-    let mut pre = leading_preamble(&mtext);
-    let cpre = leading_preamble(&ctext);
-    let mut pre_changed = false;
-    if !cpre.trim().is_empty() && !pre.contains(cpre.trim()) {
-        pre = if pre.is_empty() { cpre } else { format!("{}\n\n{}", pre, cpre) };
-        pre_changed = true;
-    }
-    if added > 0 || pre_changed {
+        let mut pre = leading_preamble(mtext);
+        let cpre = leading_preamble(&ctext);
+        let mut pre_changed = false;
+        if !cpre.trim().is_empty() && !pre.contains(cpre.trim()) {
+            pre = if pre.is_empty() { cpre } else { format!("{}\n\n{}", pre, cpre) };
+            pre_changed = true;
+        }
+        if added == 0 && !pre_changed {
+            return Ok((None, 0));
+        }
         main.sort_by(|a, b| a.ts.cmp(&b.ts));
         let raws: Vec<String> = main.into_iter().map(|e| e.raw).collect();
-        j.write(&main_rel, &render(&pre, &raws))?;
-    }
-    j.remove(&crel)?;
+        Ok((Some(render(&pre, &raws)), added))
+    })?;
+    j.remove_text(&crel, &ctext)?;
     Ok(added)
 }
 
@@ -1443,7 +1443,7 @@ pub fn import_transfer(j: &Journal, now_ts: &str, split_tags: &[String]) -> Resu
     for (file, raws) in &groups {
         j.insert_entries(file, raws, true)?;
     }
-    j.write("transfer.md", &render(&pre, &[]))?;
+    j.replace_text("transfer.md", &text, &render(&pre, &[]))?;
     Ok(n)
 }
 
@@ -1558,8 +1558,11 @@ pub fn rename_tags(j: &Journal, from: &[String], to: &str) -> Result<usize, Stri
             todo.push((rel, n));
         }
     }
-    for (rel, n) in &todo {
-        j.write(rel, n)?;
+    for (rel, _) in &todo {
+        j.edit_file(rel, |content| {
+            let n = replace_tags(content, &from, &to);
+            Ok(((n != content).then_some(n), ()))
+        })?;
     }
     Ok(todo.len())
 }

@@ -59,6 +59,8 @@ final class CoreJournal: @unchecked Sendable {
     func delete(_ entry: Entry) throws { let _: Bool = try call("delete", reference(entry)) }
     func text(_ rel: String) throws -> String { try call("read", ["file": rel]) }
     func write(_ rel: String, _ content: String) throws { let _: Bool = try call("write", ["file": rel, "content": content]) }
+    /// Replace a file's text, refused if it no longer reads as `expected`.
+    func rewrite(_ rel: String, expected: String, _ content: String) throws { let _: Bool = try call("rewrite", ["file": rel, "expected": expected, "content": content]) }
     func sidecar(write: Bool = false) throws -> String { try call("sidecar", ["write": write]) }
 }
 

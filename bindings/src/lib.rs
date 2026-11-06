@@ -33,6 +33,11 @@ pub struct VaultItem {
 pub trait NativeVault: Send + Sync {
     fn read(&self, rel: String) -> Result<Option<Vec<u8>>>;
     fn write(&self, rel: String, bytes: Vec<u8>) -> Result<()>;
+    /// Replace the file with `bytes`, or delete it when `bytes` is nil, only if
+    /// it still holds exactly `expected` (nil: there is still no file). False
+    /// when it has changed, with nothing touched. Compare and swap in one
+    /// coordinated step: this is what stops a sync being overwritten.
+    fn replace_if_unchanged(&self, rel: String, expected: Option<Vec<u8>>, bytes: Option<Vec<u8>>) -> Result<bool>;
     fn remove(&self, rel: String) -> Result<bool>;
     fn rename(&self, from: String, to: String) -> Result<()>;
     fn list(&self, rel: String) -> Result<Vec<VaultItem>>;
@@ -49,6 +54,16 @@ impl core::Vault for CallbackVault {
     fn write(&self, rel: &str, bytes: &[u8]) -> std::result::Result<(), String> {
         self.0
             .write(rel.into(), bytes.into())
+            .map_err(|e| e.to_string())
+    }
+    fn replace_if_unchanged(
+        &self,
+        rel: &str,
+        expected: Option<&[u8]>,
+        bytes: Option<&[u8]>,
+    ) -> std::result::Result<bool, String> {
+        self.0
+            .replace_if_unchanged(rel.into(), expected.map(Into::into), bytes.map(Into::into))
             .map_err(|e| e.to_string())
     }
     fn remove(&self, rel: &str) -> std::result::Result<bool, String> {
@@ -162,6 +177,11 @@ enum Request {
     },
     Read {
         file: String,
+    },
+    Rewrite {
+        file: String,
+        expected: String,
+        content: String,
     },
     Write {
         file: String,
@@ -323,6 +343,14 @@ impl NativeJournal {
                 j.write(&core::check_rel(&file)?, &content)?;
                 json(true)
             }
+            Request::Rewrite {
+                file,
+                expected,
+                content,
+            } => {
+                j.replace_text(&core::check_rel(&file)?, &expected, &content)?;
+                json(true)
+            }
             Request::Sidecar { write } => json(if write { j.sidecar_mut()? } else { j.sidecar() }),
             Request::Records { prefix } => {
                 let mut records = std::collections::BTreeMap::new();
@@ -478,6 +506,16 @@ mod tests {
         }
         fn write(&self, rel: String, bytes: Vec<u8>) -> Result<()> {
             self.fs.write(&rel, &bytes).map_err(Into::into)
+        }
+        fn replace_if_unchanged(
+            &self,
+            rel: String,
+            expected: Option<Vec<u8>>,
+            bytes: Option<Vec<u8>>,
+        ) -> Result<bool> {
+            self.fs
+                .replace_if_unchanged(&rel, expected.as_deref(), bytes.as_deref())
+                .map_err(Into::into)
         }
         fn remove(&self, rel: String) -> Result<bool> {
             self.fs.remove(&rel).map_err(Into::into)

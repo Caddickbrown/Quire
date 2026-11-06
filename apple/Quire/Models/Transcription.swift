@@ -144,7 +144,7 @@ extension JournalStore {
                 guard let fresh = try? readContentFile(item.file),
                       fresh.contains("](\(item.path))") else { continue }
                 guard rewriteContentFile(item.file,
-                    Transcriber.insert(transcript: transcript, after: item.path, in: fresh)) else { failed += 1; continue }
+                    Transcriber.insert(transcript: transcript, after: item.path, in: fresh), replacing: fresh) else { failed += 1; continue }
                 markTranscribed(assetID: id)
                 done += 1
             } catch Transcriber.TranscriptionError.empty {

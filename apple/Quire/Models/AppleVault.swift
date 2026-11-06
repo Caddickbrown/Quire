@@ -107,12 +107,39 @@ final class AppleVault: NativeVault, @unchecked Sendable {
     func write(rel: String, bytes: Data) throws {
         let target = try url(rel)
         try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try coordinated(target, writing: true) { target in
-            let temp = target.deletingLastPathComponent().appendingPathComponent(".quire-\(UUID().uuidString).tmp")
-            defer { try? self.fm.removeItem(at: temp) }
-            try bytes.write(to: temp)
-            if self.fm.fileExists(atPath: target.path) { _ = try self.fm.replaceItemAt(target, withItemAt: temp) }
-            else { try self.fm.moveItem(at: temp, to: target) }
+        try coordinated(target, writing: true) { try self.replace($0, with: bytes) }
+    }
+    private func replace(_ target: URL, with bytes: Data) throws {
+        let temp = target.deletingLastPathComponent().appendingPathComponent(".quire-\(UUID().uuidString).tmp")
+        defer { try? fm.removeItem(at: temp) }
+        try bytes.write(to: temp)
+        if fm.fileExists(atPath: target.path) { _ = try fm.replaceItemAt(target, withItemAt: temp) }
+        else { try fm.moveItem(at: temp, to: target) }
+    }
+    /// The core's compare-and-swap. The read happens inside the same write
+    /// coordination as the swap, so iCloud and every other coordinated writer
+    /// (the app, an intent, the share extension) wait for it: nothing can land
+    /// between the compare and the replace. This is the writing path only; the
+    /// plain read above stays uncoordinated and fast. `.forMerging` is the
+    /// option for a read-then-write, and has iCloud bring the file up to date.
+    func replaceIfUnchanged(rel: String, expected: Data?, bytes: Data?) throws -> Bool {
+        let target = try url(rel)
+        if bytes != nil { try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true) }
+        return try coordinated(target, writing: true, options: bytes == nil ? .forDeleting : .forMerging) { target in
+            // Evicted: the real file is missing but its content isn't gone, so
+            // "no file" must not be taken for what the caller expected.
+            let placeholder = target.deletingLastPathComponent().appendingPathComponent("." + target.lastPathComponent + ".icloud")
+            if self.fm.fileExists(atPath: placeholder.path) {
+                try self.fm.startDownloadingUbiquitousItem(at: target)
+                throw self.failure("Journal files are downloading from iCloud. Try again shortly.")
+            }
+            let current: Data?
+            do { current = try Data(contentsOf: target) }
+            catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile { current = nil }
+            guard current == expected else { return false }
+            if let bytes { try self.replace(target, with: bytes) }
+            else if current != nil { try self.fm.removeItem(at: target) }
+            return true
         }
     }
     func remove(rel: String) throws -> Bool {

@@ -571,6 +571,13 @@ mod tests {
                 self.0.write(p, b)
             }
         }
+        fn replace_if_unchanged(&self, p: &str, expected: Option<&[u8]>, b: Option<&[u8]>) -> Result<bool, String> {
+            if p == "journal/2026/09/30.md" {
+                Err("injected write failure".into())
+            } else {
+                self.0.replace_if_unchanged(p, expected, b)
+            }
+        }
         fn remove(&self, p: &str) -> Result<bool, String> {
             self.0.remove(p)
         }

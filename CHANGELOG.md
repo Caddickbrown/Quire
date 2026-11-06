@@ -66,6 +66,7 @@ The monitor and a hardware keyboard: ⌘K, a date picker that follows the screen
 
 ### Fixed
 - **Apple**: long lists on the monitor keep the selected row in view when the selection moves far, as a jump to a date does.
+- **Core**: a sync, a Shortcut or the terminal app landing mid-save can't overwrite an edit: every rewrite of a journal file is now a compare-and-swap that redoes the edit on the new text (Apple: inside one file coordination; desktop and terminal: Quire's writers take turns on a folder lock). The format is unchanged.
 - **Backups**: Restore no longer empties the journal before copying the backup in. It stages and checks a copy, swaps it in, and puts everything back if a step fails. Backups and safety copies are checked against the journal, a failed one is removed, and an iCloud placeholder stops the copy instead of being backed up empty. On Apple, hidden items such as Syncthing's now stay put.
 - **Apple**: markdown in a title shows as it reads: `Felt _really_ ill` sets "really" in italics in the lists (Today, Inbox, Journal, Search), on the monitor's lists and at the top of an open entry, and `**bold**` is bold. Underscores inside a word (snake_case) and the star marker are left as they are.
 - **Apple**: deleting a draft from the Inbox works on the phone again. `d` and press and hold → Delete… asked for nothing: the Inbox's "Delete this draft?" never came up.

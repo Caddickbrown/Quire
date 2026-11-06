@@ -275,6 +275,25 @@ final class JournalStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: base.appendingPathComponent("work.md").path))
     }
 
+    func testAppleVaultReplaceIfUnchangedSwapsOnlyWhatItExpected() throws {
+        let (store, base) = makeStore()
+        _ = store
+        defer { try? FileManager.default.removeItem(at: base) }
+        let vault = AppleVault(base: base)
+        let rel = "journal/2026/05/10.md"
+        let one = Data("one".utf8), two = Data("two".utf8)
+        XCTAssertTrue(try vault.replaceIfUnchanged(rel: rel, expected: nil, bytes: one), "a new file")
+        XCTAssertFalse(try vault.replaceIfUnchanged(rel: rel, expected: nil, bytes: two), "another writer made it first")
+        XCTAssertFalse(try vault.replaceIfUnchanged(rel: rel, expected: Data("stale".utf8), bytes: two))
+        XCTAssertEqual(try vault.read(rel: rel), one, "a refused swap touches nothing")
+        XCTAssertTrue(try vault.replaceIfUnchanged(rel: rel, expected: one, bytes: two))
+        XCTAssertEqual(try vault.read(rel: rel), two)
+        XCTAssertFalse(try vault.replaceIfUnchanged(rel: rel, expected: one, bytes: nil), "a delete is guarded too")
+        XCTAssertTrue(vault.isFile(rel: rel))
+        XCTAssertTrue(try vault.replaceIfUnchanged(rel: rel, expected: two, bytes: nil))
+        XCTAssertFalse(vault.isFile(rel: rel))
+    }
+
     func testAppleVaultRefusesSymlinksOutsideJournal() throws {
         let (store, base) = makeStore()
         _ = store

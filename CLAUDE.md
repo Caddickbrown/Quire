@@ -46,7 +46,9 @@ normalised to hyphens. CRLF and a BOM are normalised on read.
 
 **Entry identity** is `(file, index)` plus the entry's raw text: every edit
 presents `expected_raw`, and the store re-locates the entry by it if the
-index moved. A day file (inbox, journal or split) that empties is deleted;
+index moved. Every read-modify-write of a journal file goes through
+`Journal::edit_file`, a compare-and-swap on `Vault::replace_if_unchanged` that
+redoes the edit if the file changed: never read a journal file and `write` it back. A day file (inbox, journal or split) that empties is deleted;
 the legacy `inbox.md` and a legacy root `<tag>.md` are written empty, as jnl
 does.
 

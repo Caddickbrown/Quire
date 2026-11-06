@@ -1700,7 +1700,7 @@ final class JournalStore: ObservableObject {
                 guard let text = try? readContentFile(file) else { relinked = false; continue }
                 guard let renamed = MediaLinks.renaming(text, from: heic.lastPathComponent,
                                                         to: jpgURL.lastPathComponent) else { continue }
-                do { try writeFile(file, renamed) } catch { relinked = false }
+                do { try writeFile(file, renamed, replacing: text) } catch { relinked = false }
             }
             if relinked {
                 try? fm.removeItem(at: heic)
@@ -2197,11 +2197,13 @@ final class JournalStore: ObservableObject {
 
     /// Write via temp-file + rename so an interrupted write never truncates the
     /// user's only copy of their notes. Storage is coordinated by AppleVault.
-    private func writeFile(_ url: URL, _ content: String) throws {
+    /// `expected` is the text the content was worked out from: if the file no
+    /// longer reads that way, nothing is written.
+    private func writeFile(_ url: URL, _ content: String, replacing expected: String) throws {
         guard let base = baseURL, let core else { throw JournalError.journalUnavailable }
         let prefix = base.standardizedFileURL.path + "/"
         guard url.standardizedFileURL.path.hasPrefix(prefix) else { throw JournalError.journalUnavailable }
-        try core.write(String(url.standardizedFileURL.path.dropFirst(prefix.count)), content)
+        try core.rewrite(String(url.standardizedFileURL.path.dropFirst(prefix.count)), expected: expected, content)
         lastLocalWriteAt = Date()
         journalDidChange()
     }
@@ -2314,8 +2316,8 @@ final class JournalStore: ObservableObject {
     /// Atomic rewrite of one journal content file (feature extensions can't
     /// reach the private writeFile).
     @discardableResult
-    func rewriteContentFile(_ url: URL, _ content: String) -> Bool {
-        do { try writeFile(url, content); return true }
+    func rewriteContentFile(_ url: URL, _ content: String, replacing expected: String) -> Bool {
+        do { try writeFile(url, content, replacing: expected); return true }
         catch { lastWriteError = journalErrorMessage(error); return false }
     }
 

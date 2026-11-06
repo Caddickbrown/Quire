@@ -35,6 +35,14 @@ pub trait Vault: Send + Sync {
     fn read(&self, rel: &str) -> Result<Option<Vec<u8>>, String>;
     /// Replace the file atomically, creating parent folders.
     fn write(&self, rel: &str, bytes: &[u8]) -> Result<(), String>;
+    /// Compare-and-swap for read-modify-write: replace the file with `bytes`,
+    /// or delete it when `bytes` is `None`, only if it still holds exactly
+    /// `expected` (`None`: there is still no file). `Ok(false)` when it has
+    /// changed, and then nothing was touched: read again and redo the edit.
+    ///
+    /// The compare and the swap must be as close to one step as the platform
+    /// allows, so another device's entry landing mid-edit is never overwritten.
+    fn replace_if_unchanged(&self, rel: &str, expected: Option<&[u8]>, bytes: Option<&[u8]>) -> Result<bool, String>;
     /// Delete a file, or an empty folder. `Ok(false)` when it was not there.
     fn remove(&self, rel: &str) -> Result<bool, String>;
     /// Rename a file or folder.
@@ -84,7 +92,41 @@ impl Vault for FsVault {
     }
 
     fn write(&self, rel: &str, bytes: &[u8]) -> Result<(), String> {
-        write_atomic_bytes(&self.path(rel), bytes)
+        let path = self.path(rel);
+        let dir = path.parent().ok_or("no parent folder")?;
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let _lock = FolderLock::take(dir);
+        write_atomic_bytes(&path, bytes)
+    }
+
+    fn replace_if_unchanged(&self, rel: &str, expected: Option<&[u8]>, bytes: Option<&[u8]>) -> Result<bool, String> {
+        let path = self.path(rel);
+        let dir = path.parent().ok_or("no parent folder")?;
+        if bytes.is_some() {
+            fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let _lock = FolderLock::take(dir);
+        // A writer that has already lost finds out before paying for a sync
+        // (a full flush on macOS, tens of milliseconds) with the lock held.
+        if self.read(rel)?.as_deref() != expected {
+            return Ok(false);
+        }
+        // Stage before the final compare, so only the rename follows it. The
+        // lock shuts out other Quire writers entirely; a sync tool that ignores
+        // it can only land in the gap between that compare and the rename.
+        let staged = bytes.map(|b| staged_temp(&path, b)).transpose()?;
+        if self.read(rel)?.as_deref() != expected {
+            return Ok(false);
+        }
+        match staged {
+            Some(tmp) => {
+                tmp.persist(&path).map_err(|e| e.to_string())?;
+            }
+            None => {
+                self.remove(rel)?;
+            }
+        }
+        Ok(true)
     }
 
     fn remove(&self, rel: &str) -> Result<bool, String> {
@@ -153,6 +195,13 @@ impl Vault for FsVault {
 pub fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = path.parent().ok_or("no parent folder")?;
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    staged_temp(path, bytes)?.persist(path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// `bytes` in a synced temp file beside `path`, ready to rename over it.
+fn staged_temp(path: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile, String> {
+    let dir = path.parent().ok_or("no parent folder")?;
     let mut tmp = tempfile::Builder::new()
         .prefix(".quire-")
         .suffix(".tmp")
@@ -165,8 +214,26 @@ pub fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o644));
     }
-    tmp.persist(path).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(tmp)
+}
+
+/// An advisory lock on a folder, held while one writer compares and swaps a
+/// file in it, so the app, the terminal app and a second process take turns.
+/// It locks the folder itself: no lock file lands in the journal, so the format
+/// and what syncs are unchanged. Best effort: a filesystem without locks (some
+/// network mounts) still gets the compare, just not the exclusion.
+struct FolderLock(#[allow(dead_code)] Option<fs::File>);
+
+impl FolderLock {
+    #[cfg(unix)]
+    fn take(dir: &Path) -> FolderLock {
+        // Dropping the file closes it, which releases the lock.
+        FolderLock(fs::File::open(dir).ok().filter(|f| f.lock().is_ok()))
+    }
+    #[cfg(not(unix))]
+    fn take(_dir: &Path) -> FolderLock {
+        FolderLock(None)
+    }
 }
 
 #[cfg(test)]
@@ -191,5 +258,27 @@ mod tests {
         assert!(!v.remove("c/d.md").unwrap());
         assert!(v.list("nope").unwrap().is_empty());
         assert_eq!(v.local_path("x").unwrap(), d.path().join("x"));
+    }
+
+    #[test]
+    fn replace_if_unchanged_swaps_only_what_it_expected() {
+        let d = tempfile::tempdir().unwrap();
+        let v = FsVault::new(d.path());
+        // A new file: expects there to be none.
+        assert!(v.replace_if_unchanged("a/b.md", None, Some(b"one")).unwrap());
+        assert!(!v.replace_if_unchanged("a/b.md", None, Some(b"two")).unwrap());
+        assert_eq!(v.read("a/b.md").unwrap().unwrap(), b"one");
+        // A stale expectation leaves the file alone.
+        assert!(!v.replace_if_unchanged("a/b.md", Some(b"stale"), Some(b"two")).unwrap());
+        assert_eq!(v.read("a/b.md").unwrap().unwrap(), b"one");
+        assert!(v.replace_if_unchanged("a/b.md", Some(b"one"), Some(b"two")).unwrap());
+        assert_eq!(v.read("a/b.md").unwrap().unwrap(), b"two");
+        // Deleting is guarded the same way.
+        assert!(!v.replace_if_unchanged("a/b.md", Some(b"one"), None).unwrap());
+        assert!(v.is_file("a/b.md"));
+        assert!(v.replace_if_unchanged("a/b.md", Some(b"two"), None).unwrap());
+        assert!(!v.is_file("a/b.md"));
+        // A refused swap leaves no temp file behind.
+        assert!(v.list("a").unwrap().is_empty());
     }
 }
