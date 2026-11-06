@@ -1,8 +1,9 @@
 //! `quire update` (also `jnl update`): bring the terminal app and the desktop
 //! AppImage up to the latest GitHub release. Release builds of the terminal
 //! app carry their target triple (QUIRE_RELEASE_TARGET, set by
-//! .github/workflows/release.yml); any other build came from source and is
-//! pointed at install.sh instead. The AppImage is found from its launcher
+//! .github/workflows/release.yml); any other build came from source (every
+//! Mac, for now), and rebuilds itself from the release's tag with cargo, or is
+//! pointed at install.sh when it can't. The AppImage is found from its launcher
 //! entry and replaced when its SHA-256 isn't the release's; a .deb or .rpm is
 //! left to the package manager. Runs only when asked: Quire never checks in
 //! the background.
@@ -219,8 +220,7 @@ fn update_terminal(agent: &ureq::Agent, rel: &Release, check_only: bool) -> Resu
         return Ok(());
     }
     let Some(target) = RELEASE_TARGET else {
-        println!("  This copy was built from source. To update it, re-run the installer:\n    {INSTALL}");
-        return Ok(());
+        return rebuild_from_source(&rel.tag_name, version);
     };
     let name = asset_name(target);
     let tar_url = url_of(rel, &name).ok_or_else(|| format!("Release {version} has no build for {target}"))?;
@@ -234,6 +234,53 @@ fn update_terminal(agent: &ureq::Agent, rel: &Release, check_only: bool) -> Resu
         return Err("The download doesn't match its checksum; nothing was changed.".into());
     }
     replace_bins(&dir, &unpack(&tarball)?)?;
+    println!("  ✓ Quire {version} installed in {}.", dir.display());
+    Ok(())
+}
+
+/// Where cargo should install to, given the folder this program runs from:
+/// `--root` is the parent of a `bin` folder. Anywhere else, cargo can't put
+/// the new binaries over these ones.
+pub fn cargo_root(dir: &Path) -> Option<&Path> {
+    (dir.file_name()? == "bin").then(|| dir.parent()).flatten()
+}
+
+/// The `cargo install` arguments that rebuild both binaries from a release tag.
+pub fn cargo_args(tag: &str, root: &Path) -> Vec<String> {
+    let mut args: Vec<String> = ["install", "--locked", "--force", "--git"].map(String::from).to_vec();
+    args.push(format!("https://github.com/{REPO}"));
+    args.extend(["--tag".to_string(), tag.to_string(), "--root".to_string()]);
+    args.push(root.display().to_string());
+    args.push("quire-tui".to_string());
+    args
+}
+
+/// cargo from PATH, or where rustup puts it.
+fn find_cargo() -> Option<PathBuf> {
+    let works = |c: &Path| std::process::Command::new(c).arg("--version").output().is_ok_and(|o| o.status.success());
+    let path = PathBuf::from("cargo");
+    if works(&path) {
+        return Some(path);
+    }
+    let home = std::env::var_os("CARGO_HOME").map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")))?;
+    Some(home.join("bin/cargo")).filter(|c| works(c))
+}
+
+/// A source build has no release file to download, so build the release's tag.
+/// cargo only replaces the binaries once the build has worked.
+fn rebuild_from_source(tag: &str, version: &str) -> Result<(), String> {
+    let dir = install_dir()?;
+    let (Some(cargo), Some(root)) = (find_cargo(), cargo_root(&dir)) else {
+        println!("  This copy was built from source. To update it, re-run the installer:\n    {INSTALL}");
+        return Ok(());
+    };
+    println!("  This copy was built from source, so it's being rebuilt. That takes a few minutes…");
+    let status = std::process::Command::new(cargo).args(cargo_args(tag, root)).status()
+        .map_err(|e| format!("Couldn't run cargo: {e}"))?;
+    if !status.success() {
+        return Err("The build failed; nothing was changed.".into());
+    }
     println!("  ✓ Quire {version} installed in {}.", dir.display());
     Ok(())
 }
@@ -434,6 +481,15 @@ mod tests {
         replace_file(&p, b"new").unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "new");
         assert!(!d.path().join(".Quire.AppImage.update").exists());
+    }
+
+    #[test]
+    fn source_builds_rebuild_into_their_own_folder() {
+        assert_eq!(cargo_root(Path::new("/home/d/.cargo/bin")), Some(Path::new("/home/d/.cargo")));
+        assert_eq!(cargo_root(Path::new("/home/d/.local/bin")), Some(Path::new("/home/d/.local")));
+        assert_eq!(cargo_root(Path::new("/home/d/Quire/target/release")), None);
+        let args = cargo_args("v1.2.3", Path::new("/home/d/.cargo")).join(" ");
+        assert_eq!(args, "install --locked --force --git https://github.com/Caddickbrown/Quire --tag v1.2.3 --root /home/d/.cargo quire-tui");
     }
 
     #[test]

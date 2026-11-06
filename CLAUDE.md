@@ -267,7 +267,8 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   with `CARGO_PKG_VERSION`, downloads the tarball for the target baked in as
   `QUIRE_RELEASE_TARGET`, checks the SHA-256 and renames the new binaries over
   the old ones (`tui/src/update.rs`). A build without `QUIRE_RELEASE_TARGET`
-  came from source and is told to re-run `install.sh`. It updates the desktop
+  came from source (every Mac, for now) and rebuilds the release tag with `cargo install`,
+  or is told to re-run `install.sh` if it has no cargo or isn't in a `bin` folder. It updates the desktop
   AppImage too (found from `Quire.desktop`'s `Exec` (or the old `quire.desktop`), else
   `~/Applications/Quire.AppImage`, or `$QUIRE_APPIMAGE`): replaced when its
   SHA-256 isn't the one `SHA256SUMS-desktop-<arch>` lists; a .deb/.rpm gets
