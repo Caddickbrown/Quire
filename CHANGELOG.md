@@ -21,6 +21,10 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.12.0] — not yet released
+
+The monitor and a hardware keyboard: ⌘K, a date picker that follows the screen it's on, keyboard scrolling and a hint bar that lists the keys that work. Also Quire's design on the iPad, new widgets, hidden mode, media in the composer, and a safe restore. Set the date here when the release is cut.
+
 ### Added
 - **Apple**: ⌘K, from a monitor or any hardware keyboard: type a few letters to go to Today, the Inbox, the Journal, Search, a new draft, a date or Settings, with the same fuzzy match as Pippin and MiniOffice. Jump to a date reads `14 March`, `14/3` or `2026-03-14`, or offers yesterday, a week, a month or a year ago, and says where it lands when nothing was written that day. It is drawn on the monitor (as VS Code's Command Palette in hidden mode) or over the phone, and works over the composer, which saves and closes first.
 - **Apple**: the monitor's date picker shows the time with a line on how to change it, and an exact time can be typed: `1430`, `14:30` or `9`, with ⌫ taking a digit back. - and = still move it by 15 minutes, and the hint bar says so.
