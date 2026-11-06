@@ -101,6 +101,7 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
                 return c
             } : []
         return arrows + displayKeys + letters + chords + [
+            CommandKeys.toggle,
             UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(quireOpenSelection)),
             UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(quireClearSelection)),
             UIKeyCommand(input: "?", modifierFlags: [], action: #selector(quireToggleHints)),

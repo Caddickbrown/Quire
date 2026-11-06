@@ -20,6 +20,8 @@ struct JournalScreen: View {
     var search: () -> Void
     var settings: () -> Void
     var media: () -> Void
+    /// A day to go to (⌘K, Jump to a date): taken and cleared.
+    @Binding var jump: String?
 
     @State private var starredOnly = false
     @State private var selected: Int?
@@ -88,6 +90,7 @@ struct JournalScreen: View {
                             }
                         }
                     }
+                    .id(month.id)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -95,6 +98,22 @@ struct JournalScreen: View {
         }
         .onChange(of: selectedID) { _, id in
             if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+        }
+        // `task`, not `onChange`: the list may only be appearing as the day arrives,
+        // and a list that appears drops its selection first.
+        .task(id: jump) {
+            guard let day = jump else { return }
+            // Cleared last: clearing it changes the id, which cancels this.
+            defer { jump = nil }
+            starredOnly = false
+            await Task.yield()
+            let all = self.months.flatMap { $0.days.flatMap { $0.entries.reversed() } }
+            guard let i = all.firstIndex(where: { $0.date == day }) else { return }
+            selected = i
+            // A far row isn't built yet: the month brings it in, then the row is found.
+            proxy.scrollTo(String(day.prefix(7)), anchor: .top)
+            try? await Task.sleep(for: .milliseconds(120))
+            proxy.scrollTo(all[i].id, anchor: .center)
         }
         .qKeyList(entries: flat, index: $selected, listTitle: "Journal", autoSelect: true,
                   onOpen: { open(EntryRef(entry: $0, source: .archive(date: $0.date))) },

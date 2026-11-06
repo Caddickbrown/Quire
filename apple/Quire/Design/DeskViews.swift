@@ -22,6 +22,7 @@ struct ExternalDisplayRoot: View {
     @ObservedObject private var settings = ExternalSettingsModel.shared
     @ObservedObject private var datePicker = DeskDatePicker.shared
     @ObservedObject private var confirm = DeskConfirm.shared
+    @ObservedObject private var commands = CommandHost.shared
     @AppStorage(QuireTheme.storageKey) private var themeID = QuireTheme.auto
     @AppStorage(ExternalTheme.key) private var monitorTheme = ExternalTheme.followPhone
     @AppStorage(ExternalTextSize.key) private var textSizeRaw = ExternalTextSize.regular.rawValue
@@ -30,15 +31,6 @@ struct ExternalDisplayRoot: View {
         if monitorTheme == ExternalTheme.vsCode {
             DeskCode(store: model.store, hints: hints,
                      scale: (ExternalTextSize(rawValue: textSizeRaw) ?? .regular).scale)
-                // The calendar in the phone's theme over the editor's window.
-                .overlay {
-                    let q = QuireTheme.resolve(themeID, scheme: model.colorScheme)
-                    GeometryReader { geo in
-                        DeskDateOverlay(metrics: ExternalDisplayMetrics(size: geo.size,
-                            scale: (ExternalTextSize(rawValue: textSizeRaw) ?? .regular).scale))
-                    }
-                    .environment(\.quire, q).foregroundStyle(q.inkColor)
-                }
         } else {
             desk
         }
@@ -61,6 +53,7 @@ struct ExternalDisplayRoot: View {
                         page(metrics: metrics).frame(maxWidth: .infinity, maxHeight: .infinity)
                             .overlay { DeskDateOverlay(metrics: metrics) }
                             .overlay { DeskConfirmOverlay(metrics: metrics) }
+                            .overlay { DeskCommandOverlay(metrics: metrics) }
                         DeskHintBar(hints: hints, metrics: metrics)
                     }
                     .environmentObject(store)
@@ -93,7 +86,7 @@ struct ExternalDisplayRoot: View {
             case .editing(let title, let date, let text, let caret, let isStarred, _, let inTitle):
                 DeskEntry(title: title, date: date, text: text, isStarred: isStarred, live: true, caret: caret,
                           inTitle: inTitle, metrics: metrics)
-            case .reading(let title, let date, let text, let isStarred):
+            case .reading(let title, let date, let text, let isStarred, _):
                 DeskEntry(title: title, date: date, text: text, isStarred: isStarred, live: false, caret: nil, metrics: metrics)
             }
         }
@@ -102,25 +95,35 @@ struct ExternalDisplayRoot: View {
     /// Which keys are live right now. Shown on the monitor because the phone is
     /// dimmed; the same keys as the terminal app.
     private var hints: [ShortcutHint] {
+        // The menu takes every key while it's up.
+        if commands.onMonitor, let menu = commands.menu { return menu.hints }
         // A question on the monitor takes every key but these two.
         if let question = confirm.request {
             return [.init(key: "↩", label: question.action), .init(key: "⎋", label: "Cancel")]
         }
         if datePicker.isOpen {
             return [.init(key: "←→", label: "Day"), .init(key: "↑↓", label: "Week"), .init(key: "[ ]", label: "Month"),
-                    .init(key: "t", label: "Today"), .init(key: "- =", label: "Time"), .init(key: "↩", label: "Set"),
-                    .init(key: "⎋", label: "Cancel")]
+                    .init(key: "t", label: "Today"), .init(key: "- =", label: "15 min"), .init(key: "0-9", label: "Type time")]
+                + (datePicker.typed.isEmpty ? [] : [.init(key: "⌫", label: "A digit")])
+                + [.init(key: "↩", label: "Set"), .init(key: "⎋", label: "Cancel")]
         }
+        let menu = ShortcutHint(key: "⌘K", label: "Menu")
         if settings.isOpen {
-            return [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Change"), .init(key: ",", label: "Close"), .init(key: "⎋", label: "Close")]
+            return [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Change"), .init(key: ",", label: "Close"), .init(key: "⎋", label: "Close"), menu]
         }
         let common: [ShortcutHint] = [.init(key: "⌥⌘±", label: "Size"), .init(key: "⌥⌘T", label: "Theme"), .init(key: "⌥⌘P", label: "Pause")]
+        // The root's letters work from lists and open entries too.
+        let go = ShortcutHint(key: "n i l /", label: "New Inbox Look Search")
         switch model.content {
         case .idle:
-            return [.init(key: "n", label: "New"), .init(key: "i", label: "Inbox"), .init(key: "j", label: "Journal"),
+            return [.init(key: "n", label: "New"), .init(key: "↩", label: "Write"), .init(key: "i", label: "Inbox"), .init(key: "j", label: "Journal"),
                     .init(key: "l", label: "Look back"), .init(key: "/", label: "Search"), .init(key: "r", label: "Random"),
-                    .init(key: ",", label: "Settings"), .init(key: "?", label: "Hints")]
-        case .browsing(let listTitle, _, _, _, _):
+                    .init(key: "p", label: "Prompt"), .init(key: ",", label: "Settings"), .init(key: "?", label: "Hints"), menu]
+        case .browsing(let listTitle, let rows, _, _, _):
+            // An empty list has nothing for the row keys to act on.
+            if rows.isEmpty, listTitle != "Search" {
+                return [.init(key: "⎋", label: "Today"), .init(key: "r", label: "Random"), go, .init(key: ",", label: "Settings"), menu]
+            }
             // Esc goes home from any list; Search is a sheet, so it closes that first.
             let base: [ShortcutHint] = [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Open"),
                                         .init(key: "⎋", label: listTitle == "Search" ? "Close" : "Today")]
@@ -129,29 +132,34 @@ struct ExternalDisplayRoot: View {
             case "Inbox":
                 // A random draft, as the Inbox's own Random does.
                 return base + [random, .init(key: "f", label: "File"), .init(key: "e", label: "Edit"), .init(key: "*", label: "Star"),
-                               .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), .init(key: ",", label: "Settings")]
+                               .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), go, .init(key: ",", label: "Settings"), menu]
             case "Journal":
                 return base + [random, .init(key: "e", label: "Edit"), .init(key: "u", label: "Inbox"), .init(key: "*", label: "Star"),
-                               .init(key: "d", label: "Delete"), .init(key: ",", label: "Settings")]
+                               .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), go, .init(key: ",", label: "Settings"), menu]
             case "Search":
                 // The search sheet keeps the app's letters away (they type).
-                return base
+                if model.search?.typing ?? true {
+                    return [.init(key: "Type", label: "To search"), .init(key: "↩", label: "Results"), .init(key: "⎋", label: "Close"), menu]
+                }
+                return base + [.init(key: "/", label: "Query"), menu]
             default:
-                return base + [random, .init(key: "n", label: "New"), .init(key: ",", label: "Settings")]
+                return base + [random, go, .init(key: ",", label: "Settings"), menu]
             }
         case .composing:
             // No `?` or `,` here: with the editor focused they type.
             return [.init(key: "^J", label: "File"), .init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"),
-                    .init(key: "^F", label: "Focus"), .init(key: "^P", label: "Prompt"), .init(key: "^D", label: "Discard"), .init(key: "⎋", label: "Done")]
+                    .init(key: "^F", label: "Focus"), .init(key: "^P", label: "Prompt"), .init(key: "^D", label: "Discard"), .init(key: "⎋", label: "Done"), menu]
         case .editing(_, _, _, _, _, let isDraft, _):
             return (isDraft ? [.init(key: "^J", label: "File")] : []) +
                 [.init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"), .init(key: "^F", label: "Focus"),
                  .init(key: "^P", label: "Prompt")] +
-                (isDraft ? [.init(key: "^D", label: "Discard")] : []) + [.init(key: "⎋", label: "Back")]
-        case .reading:
-            return [.init(key: "e", label: "Edit"), .init(key: "r", label: "Random"), .init(key: "*", label: "Star"),
-                    .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), .init(key: "⎋", label: "Today"),
-                    .init(key: ",", label: "Settings")] + common
+                (isDraft ? [.init(key: "^D", label: "Discard")] : []) + [.init(key: "⎋", label: "Back"), menu]
+        case .reading(_, _, _, _, let isDraft):
+            let move: ShortcutHint = isDraft ? .init(key: "f", label: "File") : .init(key: "u", label: "Inbox")
+            return [.init(key: "↑↓", label: "Scroll"), .init(key: "e", label: "Edit"), .init(key: "r", label: "Random"),
+                    move, .init(key: "*", label: "Star"),
+                    .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), .init(key: "⎋", label: "Today"), go,
+                    .init(key: ",", label: "Settings"), menu] + common
         }
     }
 }
@@ -322,7 +330,8 @@ private struct DeskConfirmOverlay: View {
 
 /// The date picker of desk mode (`DeskDatePicker`), over whatever page is up:
 /// a month on the day ↵ would set, today ringed, the entry's day dotted, and
-/// the time beneath. Drawn only here; the phone shows nothing of it.
+/// the time with how to change it. On Quire's pages only, in the monitor's
+/// theme: hidden mode has `VSDatePicker`, and the phone shows nothing of it.
 private struct DeskDateOverlay: View {
     let metrics: ExternalDisplayMetrics
     @ObservedObject private var picker = DeskDatePicker.shared
@@ -335,7 +344,6 @@ private struct DeskDateOverlay: View {
     }
     private static let day = formatter("EEEE d MMMM yyyy")
     private static let month = formatter("MMMM yyyy")
-    private static let time = formatter("HH:mm")
 
     var body: some View {
         if picker.isOpen, !model.isPaused, !appLock.showsVeil {
@@ -350,7 +358,7 @@ private struct DeskDateOverlay: View {
     private var card: some View {
         let calendar = Calendar.current
         let chosen = picker.date
-        let days = Self.grid(for: chosen, calendar: calendar)
+        let days = DeskDatePicker.grid(for: chosen, calendar: calendar)
         let month = calendar.component(.month, from: chosen)
         let cell = metrics.text * 1.9
         return VStack(alignment: .leading, spacing: metrics.gap * 0.7) {
@@ -360,12 +368,13 @@ private struct DeskDateOverlay: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(q.caps(Self.month.string(from: chosen))).font(q.display(metrics.text * 1.05))
                 Spacer(minLength: metrics.caption)
-                Text(Self.time.string(from: chosen)).font(q.mono(metrics.text * 1.05, weight: .medium))
+                Text(picker.timeText + (picker.typed.isEmpty ? "" : "|"))
+                    .font(q.mono(metrics.text * 1.05, weight: .medium))
                     .foregroundStyle(q.accentColor)
             }
             VStack(spacing: metrics.caption * 0.2) {
                 HStack(spacing: 0) {
-                    ForEach(Array(Self.weekdayInitials(calendar).enumerated()), id: \.offset) { _, initial in
+                    ForEach(Array(DeskDatePicker.weekdayInitials(calendar).enumerated()), id: \.offset) { _, initial in
                         Text(initial).frame(width: cell)
                     }
                 }
@@ -384,8 +393,10 @@ private struct DeskDateOverlay: View {
             }
             .frame(maxWidth: .infinity)
             Rectangle().fill(q.lineColor).frame(height: 1)
-            Text(Self.day.string(from: chosen) + " · " + Self.time.string(from: chosen))
+            Text(Self.day.string(from: chosen) + " · " + picker.timeText)
                 .font(q.writing(metrics.text * 0.8))
+            Text(DeskDatePicker.timePrompt)
+                .font(q.ui(metrics.caption)).foregroundStyle(q.mutedColor).lineLimit(1).minimumScaleFactor(0.7)
             Text("Now \(JournalStore.ts(from: picker.original))  →  \(JournalStore.ts(from: chosen))")
                 .font(q.mono(metrics.caption)).foregroundStyle(q.mutedColor).lineLimit(1).minimumScaleFactor(0.7)
             if let error = picker.error {
@@ -417,22 +428,23 @@ private struct DeskDateOverlay: View {
         .frame(width: size * 0.9, height: size * 0.9)
         .frame(width: size, height: size)
     }
+}
 
-    /// Six weeks from the start of the week the month starts in.
-    static func grid(for date: Date, calendar: Calendar) -> [Date] {
-        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
-        let lead = (calendar.component(.weekday, from: start) - calendar.firstWeekday + 7) % 7
-        // Noon, so a daylight-saving change never lands a cell on the wrong day.
-        let first = calendar.date(byAdding: .day, value: -lead, to: start).flatMap {
-            calendar.date(bySettingHour: 12, minute: 0, second: 0, of: $0)
-        } ?? start
-        return (0..<42).map { calendar.date(byAdding: .day, value: $0, to: first) ?? first }
-    }
+/// ⌘K on Quire's pages: the menu over the page, in the monitor's theme.
+private struct DeskCommandOverlay: View {
+    let metrics: ExternalDisplayMetrics
+    @ObservedObject private var commands = CommandHost.shared
+    @ObservedObject private var model = ExternalDisplayModel.shared
+    @ObservedObject private var appLock = AppLockManager.shared
+    @Environment(\.quire) private var q
 
-    static func weekdayInitials(_ calendar: Calendar) -> [String] {
-        let symbols = calendar.veryShortStandaloneWeekdaySymbols
-        let shift = calendar.firstWeekday - 1
-        return Array(symbols[shift...] + symbols[..<shift])
+    var body: some View {
+        if let menu = commands.menu, commands.onMonitor, !model.isPaused, !appLock.showsVeil {
+            ZStack(alignment: .top) {
+                q.pageColor.opacity(0.82)
+                CommandMenuPanel(menu: menu, z: metrics.text / 24).padding(.top, metrics.padding)
+            }
+        }
     }
 }
 
@@ -612,8 +624,11 @@ private struct DeskBrowse: View {
     let total: Int
     let metrics: ExternalDisplayMetrics
     @Environment(\.quire) private var q
+    @ObservedObject private var model = ExternalDisplayModel.shared
 
     private var current: ExternalRow? { rows.indices.contains(selected) ? rows[selected] : nil }
+    /// Search's own field, on the phone: what's being typed is shown here.
+    private var search: DeskSearch? { listTitle == "Search" ? model.search : nil }
 
     var body: some View {
         GeometryReader { geo in
@@ -629,7 +644,11 @@ private struct DeskBrowse: View {
     private var list: some View {
         VStack(alignment: .leading, spacing: metrics.caption) {
             DeskHeader(kicker: rows.isEmpty ? "No entries" : "\(offset + selected + 1) of \(total)", title: listTitle, metrics: metrics)
-            if rows.isEmpty { Text("No entries here yet.").font(q.writing(metrics.text)).foregroundStyle(q.mutedColor) }
+            if let search { searchLine(search) }
+            if rows.isEmpty {
+                Text(search.map { $0.query.isEmpty ? "Type to search everything." : "Nothing matches that." } ?? "No entries here yet.")
+                    .font(q.writing(metrics.text)).foregroundStyle(q.mutedColor)
+            }
             ScrollViewReader { proxy in
                 ScrollView(showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -645,12 +664,22 @@ private struct DeskBrowse: View {
                         }
                     }
                 }
-                .onChange(of: selected) { _, i in
-                    if rows.indices.contains(i) { withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(rows[i].id, anchor: .center) } }
+                // The row, not its place: the rows sent are a window on a long list,
+                // so the selection can move with its place in the window unchanged.
+                .onChange(of: current?.id) { _, id in
+                    if let id { withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id, anchor: .center) } }
                 }
                 .onAppear { if rows.indices.contains(selected) { proxy.scrollTo(rows[selected].id, anchor: .center) } }
             }
         }
+    }
+
+    private func searchLine(_ search: DeskSearch) -> some View {
+        (Text(search.query) + Text(search.typing ? "|" : "").foregroundColor(q.accentColor))
+            .font(q.writing(metrics.text * 0.9)).foregroundStyle(q.inkColor).lineLimit(1).truncationMode(.head)
+            .padding(.bottom, metrics.caption * 0.4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .bottom) { Rectangle().fill(q.lineColor).frame(height: 1) }
     }
 
     private func rowView(_ row: ExternalRow, on: Bool) -> some View {
@@ -769,8 +798,11 @@ private struct DeskEntry: View {
                               lineSpacing: metrics.text * 0.3, accent: q.accentColor,
                               mirror: true, mirrorCaret: inTitle ? nil : caret)
         } else {
-            MediaPreview(text: text, font: q.writing(metrics.text), textColor: q.inkColor, contentPadding: 0,
-                         mediaScale: max(1, metrics.text / 20))
+            ScrollView {
+                MediaBody(text: text, font: q.writing(metrics.text), textColor: q.inkColor, contentPadding: 0,
+                          onUpdateText: nil, mediaScale: max(1, metrics.text / 20))
+                    .background(QScrollAttach(handle: ExternalDisplayModel.shared.pageScroll))
+            }
         }
     }
 

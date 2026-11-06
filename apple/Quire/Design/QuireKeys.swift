@@ -32,6 +32,91 @@ extension View {
     func qKeyBlocker(active: Bool, onEscape: @escaping () -> Void = {}) -> some View {
         modifier(QKeyBlocker(active: active, onEscape: onEscape))
     }
+
+    /// ↑/↓ and j/k scroll the page this sits in, for a page with no rows to
+    /// select. Goes on the scroll view's content. Esc runs `onEscape`, or backs
+    /// out as a list does.
+    func qKeyScroll(onEscape: (() -> Void)? = nil) -> some View {
+        modifier(QKeyScroll(onEscape: onEscape))
+    }
+}
+
+/// Moves a SwiftUI `ScrollView` by a fraction of a page. iOS 17 has no way to
+/// scroll by a distance, and a page of text has no rows to scroll to, so the
+/// handle holds on to the `UIScrollView` underneath (see `QScrollAttach`).
+@MainActor final class QScrollHandle {
+    fileprivate weak var scroll: UIScrollView?
+
+    /// -1 up, 1 down: a third of the page, so the eye keeps its place.
+    func step(_ direction: Int) {
+        guard let scroll else { return }
+        let inset = scroll.adjustedContentInset
+        let top = -inset.top
+        let bottom = max(top, scroll.contentSize.height + inset.bottom - scroll.bounds.height)
+        let y = min(bottom, max(top, scroll.contentOffset.y + CGFloat(direction) * scroll.bounds.height / 3))
+        UIView.animate(withDuration: 0.12, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+            scroll.contentOffset.y = y
+        }
+    }
+}
+
+/// Goes on a `ScrollView`'s content and tells `handle` which scroll view that is.
+struct QScrollAttach: UIViewRepresentable {
+    let handle: QScrollHandle
+
+    final class Probe: UIView {
+        var handle: QScrollHandle?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            find()
+        }
+
+        func find() {
+            var view = superview
+            while let here = view {
+                if let scroll = here as? UIScrollView { handle?.scroll = scroll; return }
+                view = here.superview
+            }
+        }
+    }
+
+    func makeUIView(context: Context) -> Probe {
+        let probe = Probe()
+        probe.isUserInteractionEnabled = false
+        probe.handle = handle
+        return probe
+    }
+
+    func updateUIView(_ probe: Probe, context: Context) {
+        probe.handle = handle
+        probe.find()
+    }
+}
+
+private struct QKeyScroll: ViewModifier {
+    let onEscape: (() -> Void)?
+    @State private var id = UUID()
+    @State private var handle = QScrollHandle()
+
+    func body(content: Content) -> some View {
+        content
+            .background(QScrollAttach(handle: handle))
+            .onAppear {
+                let handle = handle
+                KeyCommandRouter.shared.register(id, QuireKeyHandlers(
+                    moveUp: { handle.step(-1) },
+                    moveDown: { handle.step(1) },
+                    open: {},
+                    clear: { (onEscape ?? { KeyCommandRouter.shared.onBack?() })() },
+                    key: { k in
+                        if k == "j" { handle.step(1); return true }
+                        if k == "k" { handle.step(-1); return true }
+                        return false
+                    }))
+            }
+            .onDisappear { KeyCommandRouter.shared.unregister(id) }
+    }
 }
 
 private struct QKeyList: ViewModifier {

@@ -30,7 +30,8 @@ struct LookBackScreen: View {
     var body: some View {
         let stats = store.stats()
         let refs = pastRefs
-        return ScrollView {
+        return ScrollViewReader { proxy in
+        ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 QMasthead(onSearch: search, onSettings: settings)
                 QTitle(kicker: "\(stats.days) days written", title: "Look back")
@@ -42,8 +43,12 @@ struct LookBackScreen: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 26).padding(.top, 14).padding(.bottom, 24)
         }
+        .onChange(of: selected) { _, i in
+            if let i, refs.indices.contains(i) { withAnimation { proxy.scrollTo(refs[i].entry.id, anchor: .center) } }
+        }
         .qKeyList(entries: refs.map(\.entry), index: $selected, listTitle: "On this day", autoSelect: true,
                   onOpen: { entry in if let r = refs.first(where: { $0.entry.id == entry.id }) { open(r) } })
+        }
     }
 
     private func figures(_ s: JournalStore.Stats) -> some View {
@@ -111,6 +116,7 @@ struct LookBackScreen: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .id(entry.id)
                         // Old pages dealt onto the desk, one after another.
                         .qFanIn(min(6, pastRefs.firstIndex { $0.entry.id == entry.id } ?? 0))
                     }

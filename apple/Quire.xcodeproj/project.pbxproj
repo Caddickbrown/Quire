@@ -16,6 +16,7 @@
 		03D129E38A9A53FC94D40B21 /* Media.swift in Sources */ = {isa = PBXBuildFile; fileRef = E96653BE1116532A9F3AA70A /* Media.swift */; };
 		4028D0B82AF25463B54185A2 /* SearchQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A46BCF298F15920B60123F7 /* SearchQuery.swift */; };
 		26D1241AF445512281F08D8F /* ListContinuation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1519EDC250CB540183D54A2F /* ListContinuation.swift */; };
+		23ED1A8FD12256B4A37A58BE /* CommandPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E91B2113A1359798356A3EB /* CommandPalette.swift */; };
 		C33255FA5CBE52908C555FA5 /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64DA39CFB5BC597A836E29E3 /* JournalStore.swift */; };
 		A1B080BDCF62550F9BD28602 /* CoreJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D621AD259615470A0332C22 /* CoreJournal.swift */; };
 		D6ADFB3B9BC158F2BFA265B5 /* AppleVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E04E597C279590983417F37 /* AppleVault.swift */; };
@@ -46,6 +47,7 @@
 		329B82BFAA64508EAC853212 /* QuireKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = 080C63026FA75D0C9118E3FC /* QuireKeys.swift */; };
 		F58A0D50DC185DAAA72E4D09 /* DeskViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9D7D0A7D30E58DF86EC669E /* DeskViews.swift */; };
 		68A11AE433BB5028A575F882 /* DeskCode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21068B9616A55B9098750F70 /* DeskCode.swift */; };
+		997A1ABA1E235104B154BC44 /* CommandMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD53CB4669485DF09234FAA9 /* CommandMenu.swift */; };
 		9E3E4ADF81B35579B6F17D7C /* QuireMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA2E404B2B25529B9760F8E9 /* QuireMotion.swift */; };
 		602B5656515A52E998EAAA67 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BB103AAFF885B0884053118 /* RootView.swift */; };
 		9D63C21A390B51859C845D5A /* WritingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3270FC2F109351499EAEAF6F /* WritingView.swift */; };
@@ -97,6 +99,7 @@
 		63DCCB549486507CAC8A8127 /* Media.swift in Sources */ = {isa = PBXBuildFile; fileRef = E96653BE1116532A9F3AA70A /* Media.swift */; };
 		3357E305632F5EF2827BA2C4 /* SearchQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A46BCF298F15920B60123F7 /* SearchQuery.swift */; };
 		0B464C0579FF5E4A91B492C2 /* ListContinuation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1519EDC250CB540183D54A2F /* ListContinuation.swift */; };
+		EF5BAE7C32A35BA7A8423482 /* CommandPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E91B2113A1359798356A3EB /* CommandPalette.swift */; };
 		D1E0CC202230586998DEC9EA /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64DA39CFB5BC597A836E29E3 /* JournalStore.swift */; };
 		B0C979230EF557A797B0925D /* CoreJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D621AD259615470A0332C22 /* CoreJournal.swift */; };
 		26B59243BA985E0C8B6CF245 /* AppleVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E04E597C279590983417F37 /* AppleVault.swift */; };
@@ -150,6 +153,7 @@
 		E96653BE1116532A9F3AA70A /* Media.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Media.swift; sourceTree = "<group>"; };
 		4A46BCF298F15920B60123F7 /* SearchQuery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchQuery.swift; sourceTree = "<group>"; };
 		1519EDC250CB540183D54A2F /* ListContinuation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListContinuation.swift; sourceTree = "<group>"; };
+		2E91B2113A1359798356A3EB /* CommandPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPalette.swift; sourceTree = "<group>"; };
 		64DA39CFB5BC597A836E29E3 /* JournalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalStore.swift; sourceTree = "<group>"; };
 		2D621AD259615470A0332C22 /* CoreJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreJournal.swift; sourceTree = "<group>"; };
 		0E04E597C279590983417F37 /* AppleVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleVault.swift; sourceTree = "<group>"; };
@@ -180,6 +184,7 @@
 		080C63026FA75D0C9118E3FC /* QuireKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireKeys.swift; sourceTree = "<group>"; };
 		D9D7D0A7D30E58DF86EC669E /* DeskViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeskViews.swift; sourceTree = "<group>"; };
 		21068B9616A55B9098750F70 /* DeskCode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeskCode.swift; sourceTree = "<group>"; };
+		FD53CB4669485DF09234FAA9 /* CommandMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandMenu.swift; sourceTree = "<group>"; };
 		BA2E404B2B25529B9760F8E9 /* QuireMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireMotion.swift; sourceTree = "<group>"; };
 		0BB103AAFF885B0884053118 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		3270FC2F109351499EAEAF6F /* WritingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingView.swift; sourceTree = "<group>"; };
@@ -231,7 +236,6 @@
 		3F1EBAD854855B3A88406196 /* QuireShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = QuireShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		053FC432AF4458C5ACD2B884 /* QuireTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireTests.swift; sourceTree = "<group>"; };
 		C98B438B8AE353399F008104 /* JournalStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalStoreTests.swift; sourceTree = "<group>"; };
-		8DB3554C183B5C61ABE18010 /* ParserChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParserChecks.swift; sourceTree = "<group>"; };
 		01D00C8202A35F61865C9DED /* QuireTests.xctest */ = {isa = PBXFileReference; explicitFileType = "wrapper.cfbundle"; includeInIndex = 0; path = QuireTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0DBFECFB8E5C67AE6CC256 /* QuireCoreFFI.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Frameworks/QuireCoreFFI.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -322,6 +326,7 @@
 				E96653BE1116532A9F3AA70A /* Media.swift */,
 				4A46BCF298F15920B60123F7 /* SearchQuery.swift */,
 				1519EDC250CB540183D54A2F /* ListContinuation.swift */,
+				2E91B2113A1359798356A3EB /* CommandPalette.swift */,
 				64DA39CFB5BC597A836E29E3 /* JournalStore.swift */,
 				2D621AD259615470A0332C22 /* CoreJournal.swift */,
 				0E04E597C279590983417F37 /* AppleVault.swift */,
@@ -392,6 +397,7 @@
 				080C63026FA75D0C9118E3FC /* QuireKeys.swift */,
 				D9D7D0A7D30E58DF86EC669E /* DeskViews.swift */,
 				21068B9616A55B9098750F70 /* DeskCode.swift */,
+				FD53CB4669485DF09234FAA9 /* CommandMenu.swift */,
 				BA2E404B2B25529B9760F8E9 /* QuireMotion.swift */,
 			);
 			path = Design;
@@ -444,7 +450,6 @@
 			children = (
 				053FC432AF4458C5ACD2B884 /* QuireTests.swift */,
 				C98B438B8AE353399F008104 /* JournalStoreTests.swift */,
-				8DB3554C183B5C61ABE18010 /* ParserChecks.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -603,6 +608,7 @@
 				03D129E38A9A53FC94D40B21 /* Media.swift in Sources */,
 				4028D0B82AF25463B54185A2 /* SearchQuery.swift in Sources */,
 				26D1241AF445512281F08D8F /* ListContinuation.swift in Sources */,
+				23ED1A8FD12256B4A37A58BE /* CommandPalette.swift in Sources */,
 				C33255FA5CBE52908C555FA5 /* JournalStore.swift in Sources */,
 				A1B080BDCF62550F9BD28602 /* CoreJournal.swift in Sources */,
 				D6ADFB3B9BC158F2BFA265B5 /* AppleVault.swift in Sources */,
@@ -633,6 +639,7 @@
 				329B82BFAA64508EAC853212 /* QuireKeys.swift in Sources */,
 				F58A0D50DC185DAAA72E4D09 /* DeskViews.swift in Sources */,
 				68A11AE433BB5028A575F882 /* DeskCode.swift in Sources */,
+				997A1ABA1E235104B154BC44 /* CommandMenu.swift in Sources */,
 				9E3E4ADF81B35579B6F17D7C /* QuireMotion.swift in Sources */,
 				602B5656515A52E998EAAA67 /* RootView.swift in Sources */,
 				9D63C21A390B51859C845D5A /* WritingView.swift in Sources */,
@@ -697,6 +704,7 @@
 				63DCCB549486507CAC8A8127 /* Media.swift in Sources */,
 				3357E305632F5EF2827BA2C4 /* SearchQuery.swift in Sources */,
 				0B464C0579FF5E4A91B492C2 /* ListContinuation.swift in Sources */,
+				EF5BAE7C32A35BA7A8423482 /* CommandPalette.swift in Sources */,
 				D1E0CC202230586998DEC9EA /* JournalStore.swift in Sources */,
 				B0C979230EF557A797B0925D /* CoreJournal.swift in Sources */,
 				26B59243BA985E0C8B6CF245 /* AppleVault.swift in Sources */,

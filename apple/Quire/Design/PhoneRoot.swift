@@ -34,6 +34,10 @@ struct PhoneRoot: View {
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var rootKeyID = UUID()
+    /// ⌘K, Jump to a date: the day for the Journal to go to.
+    @State private var journalJump: String?
+    /// Chosen from ⌘K over the composer: done once it has closed, through its save.
+    @State private var afterComposer: CommandAction?
     @Environment(\.horizontalSizeClass) private var sizeClass
     /// The page sits beside the list rather than over it.
     @State private var splitActive = false
@@ -59,9 +63,13 @@ struct PhoneRoot: View {
     var body: some View {
         shell
         .background(KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false))
+        .background(CommandMenuShortcut())
         .qKeyBlocker(active: composing != nil || retiming != nil || showSearch || showSettings || showMedia,
                      onEscape: { closeSheet() })
-        .fullScreenCover(item: $composing, onDismiss: { restoreMonitorPage() }) { target in
+        .fullScreenCover(item: $composing, onDismiss: {
+            restoreMonitorPage()
+            if let action = afterComposer { afterComposer = nil; runCommand(action) }
+        }) { target in
             ComposerScreen(target: target, onUpdate: { updated in
                 if target.ref != nil, !path.isEmpty { path[path.count - 1] = updated }
             }, onRemove: {
@@ -130,6 +138,7 @@ struct PhoneRoot: View {
         .onChange(of: scenePhase) { _, _ in ExternalDisplayModel.shared.updateIdleTimer() }
         .onChange(of: q.id) { _, _ in ExternalDisplayModel.shared.colorScheme = q.colorScheme }
         .onAppear(perform: registerRootKeys)
+        .onAppear { CommandHost.shared.perform = runCommand }
         .onAppear {
             switch ProcessInfo.processInfo.environment["QUIRE_OPEN"] {
             case "settings": showSettings = true
@@ -345,7 +354,8 @@ struct PhoneRoot: View {
                         search: { showSearch = true }, settings: { showSettings = true })
         case .journal:
             JournalScreen(open: open, edit: { composing = ComposeTarget(ref: $0) }, retime: retimeFromKeys,
-                          search: { showSearch = true }, settings: { showSettings = true }, media: { showMedia = true })
+                          search: { showSearch = true }, settings: { showSettings = true }, media: { showMedia = true },
+                          jump: $journalJump)
         case .lookBack:
             LookBackScreen(open: open, search: { showSearch = true }, settings: { showSettings = true })
         }
@@ -382,7 +392,8 @@ struct PhoneRoot: View {
     private func restoreMonitorPage() {
         if let ref = path.last {
             ExternalDisplayModel.shared.present(.reading(title: ref.entry.displayTitle,
-                date: QDate.date(ref.entry.ts) ?? Date(), text: ref.entry.body, isStarred: ref.entry.isStarred))
+                date: QDate.date(ref.entry.ts) ?? Date(), text: ref.entry.body, isStarred: ref.entry.isStarred,
+                isDraft: ref.source == .inbox))
         } else if tab == .today { ExternalDisplayModel.shared.present(.idle) }
         else { ExternalDisplayModel.shared.relist() }
     }
@@ -423,6 +434,57 @@ struct PhoneRoot: View {
         if presented { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: push) } else { push() }
     }
 
+    /// What ⌘K chose. Over the composer it closes the composer first, through its
+    /// own save, and carries on from there; if that save fails the page stays and
+    /// the choice is dropped. Sheets are closed before anything is shown.
+    private func runCommand(_ action: CommandAction) {
+        if composing != nil {
+            afterComposer = action
+            KeyCommandRouter.shared.clear()
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                if composing != nil { afterComposer = nil }
+            }
+            return
+        }
+        let keepsSearch = action == .search && showSearch
+        let keepsSettings = action == .settings && showSettings
+        let wasUp = retiming != nil || showMedia || (showSearch && !keepsSearch) || (showSettings && !keepsSettings)
+        retiming = nil; showMedia = false
+        if !keepsSearch { showSearch = false }
+        if !keepsSettings { showSettings = false }
+        if action != .settings { ExternalSettingsModel.shared.close() }
+        let go = {
+            switch action {
+            case .today: path.removeAll(); tab = .today
+            case .inbox: path.removeAll(); tab = .inbox
+            case .journal: path.removeAll(); tab = .journal
+            case .search: if !keepsSearch { openSearch() }
+            case .newDraft: composing = ComposeTarget(ref: nil)
+            case .settings: if !keepsSettings { openSettings() }
+            case .jump(let day): path.removeAll(); tab = .journal; journalJump = day
+            }
+        }
+        // Let a sheet finish leaving first.
+        if wasUp { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: go) } else { go() }
+    }
+
+    /// With the monitor showing things the results go there, and an open entry
+    /// holds its page, so the entry closes first.
+    private func openSearch() {
+        if DeskDatePicker.shared.isAvailable { path.removeAll() }
+        showSearch = true
+    }
+
+    /// With a monitor attached the settings open there, for the keyboard;
+    /// otherwise the usual sheet.
+    private func openSettings() {
+        if DeskDatePicker.shared.isAvailable {
+            let model = ExternalSettingsModel.shared
+            if !model.isOpen { model.open(store: store) }
+        } else { showSettings = true }
+    }
+
     /// The terminal app's keys on Today and Look back: n new, i inbox, j journal,
     /// l look back, / search, r a random entry, p another prompt, "," settings,
     /// ↵ write from the prompt, Esc back to Today. Lists and open entries get
@@ -440,15 +502,11 @@ struct PhoneRoot: View {
                 case "i": path.removeAll(); tab = .inbox
                 case "j": path.removeAll(); tab = .journal
                 case "l": path.removeAll(); tab = .lookBack
-                case "/": showSearch = true
-                case ",":
-                    // With a monitor attached the settings open there, for the keyboard;
-                    // otherwise the usual sheet.
-                    let monitor = ExternalDisplayModel.shared
-                    if monitor.isConnected, !monitor.isPaused, !AppLockManager.shared.showsVeil {
-                        ExternalSettingsModel.shared.toggle(store: store)
-                    } else { showSettings = true }
+                case "/": openSearch()
+                case ",": openSettings()
                 case "p":
+                    // The prompt is on Today.
+                    guard tab == .today, path.isEmpty else { return false }
                     QuirePrompts.next()
                 case "r":
                     // Another random entry takes the open page's place rather than

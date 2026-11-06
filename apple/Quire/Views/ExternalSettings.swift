@@ -32,11 +32,6 @@ import SwiftUI
     private let routerID = UUID()
     private weak var store: JournalStore?
 
-    /// `,` from anywhere. A closed list opens; an open one closes.
-    func toggle(store: JournalStore) {
-        isOpen ? close() : open(store: store)
-    }
-
     func open(store: JournalStore) {
         self.store = store
         selected = 0
@@ -175,29 +170,38 @@ struct ExternalSettingsView: View {
         let items = model.items()
         VStack(alignment: .leading, spacing: metrics.gap * 0.6) {
             DeskHeader(kicker: "Quire", title: "Settings", metrics: metrics)
-            VStack(spacing: 0) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                    let on = i == model.selected
-                    HStack(alignment: .firstTextBaseline, spacing: metrics.gap) {
-                        Text(item.title).foregroundStyle(on ? q.accentColor : q.inkColor)
-                            .font(q.writing(metrics.text * 0.9, weight: on ? .medium : .regular))
-                        Spacer(minLength: metrics.gap)
-                        Text(item.value).foregroundStyle(on ? q.inkColor : q.mutedColor)
-                            .font(q.mono(metrics.text * 0.65)).lineLimit(1)
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 0) {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                            row(item, on: i == model.selected).id(item.id)
+                        }
                     }
-                    .padding(.vertical, metrics.caption * 0.65).padding(.horizontal, metrics.caption * 0.6)
-                    .background(on ? q.accentSoftColor : Color.clear)
-                    .overlay(alignment: .leading) { if on { Rectangle().fill(q.accentColor).frame(width: max(3, metrics.caption * 0.2)) } }
-                    .overlay(alignment: .bottom) { Rectangle().fill(q.lineColor).frame(height: 1) }
+                }
+                .onChange(of: model.selected) { _, i in
+                    if items.indices.contains(i) { withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(items[i].id) } }
                 }
             }
             Text(model.status.isEmpty ? " " : model.status)
                 .font(q.ui(metrics.caption)).foregroundStyle(q.mutedColor)
-            Spacer(minLength: 0)
         }
         .frame(maxWidth: metrics.text * 34, alignment: .leading)
         .padding(metrics.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func row(_ item: ExternalSettingsModel.Item, on: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: metrics.gap) {
+            Text(item.title).foregroundStyle(on ? q.accentColor : q.inkColor)
+                .font(q.writing(metrics.text * 0.9, weight: on ? .medium : .regular))
+            Spacer(minLength: metrics.gap)
+            Text(item.value).foregroundStyle(on ? q.inkColor : q.mutedColor)
+                .font(q.mono(metrics.text * 0.65)).lineLimit(1)
+        }
+        .padding(.vertical, metrics.caption * 0.65).padding(.horizontal, metrics.caption * 0.6)
+        .background(on ? q.accentSoftColor : Color.clear)
+        .overlay(alignment: .leading) { if on { Rectangle().fill(q.accentColor).frame(width: max(3, metrics.caption * 0.2)) } }
+        .overlay(alignment: .bottom) { Rectangle().fill(q.lineColor).frame(height: 1) }
     }
 }
 

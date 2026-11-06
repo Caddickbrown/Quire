@@ -15,7 +15,8 @@ app. The native Apple shell is in `apple/`, brought over from Nook and wired
 to the Rust core. It builds with Xcode and runs on an iPhone: the iPhone has
 Quire's own design (`apple/Quire/Design/`), and so does the iPad (a sidebar at
 regular width); the Mac still uses the earlier shell until its own pass. Android from Wander's
-Kotlin is next. `docs/consolidation-plan.md` records every decision.
+Kotlin comes later. `docs/consolidation-plan.md` records every decision; `docs/suggestions.md`
+is the review of what to do next, with what has been done marked at its top.
 
 ## Data model (jnl's, with drafts in day files)
 
@@ -120,22 +121,30 @@ bindings/           quire-bindings: UniFFI callback Vault + native journal API;
 apple/              Quire SwiftUI app + widget/share extensions from Nook
   Quire/Models/     JournalStore façade, CoreJournal adapter, AppleVault
                     (plain reads, coordinated writes); parser/search/list
-                    adapters call Rust.
+                    adapters call Rust. CommandPalette: ⌘K's list, match and
+                    keys, and the typed dates and times, with no UI in it.
   Quire/Design/     the iPhone design: QuireTheme (themes.json + type + the
                     Marathon family), shared components, and the screens
                     (Today, Inbox, Journal, Reader, Composer, Search, Look
-                    back, Settings pages). Fonts in Quire/fonts/.
+                    back, Settings pages), the monitor (DeskViews, DeskCode)
+                    and ⌘K's glue and drawing (CommandMenu). Fonts in Quire/fonts/.
   gen_pbxproj.py    deterministic app + extensions + hostless test project
   build-core.sh     generated Swift/C bindings + macOS/iOS/simulator XCFramework
   Tests/            parser/search checks and journal integration XCTest
   README.md         Mac build, signing, data flow and verification status
 tools/
   migrate_journal.py   inbox.md → inbox/, .nook/ → .quire/, from outside the app
+  test_migrate_journal.py  its tests (make check)
   drive_tui.py         pseudo-terminal smoke test of every screen (make smoke)
-  make_icon.swift      (Nook's) icon generator
+  check_tui_settings.py  backup, retention and keyboard settings in a pty (make smoke)
+  validate_apple.py    the Xcode project's wiring, on any host (make check)
+  check_linux_editor.js, check_media_library.js  the Linux front end (make check)
   make_apple_icon.swift  Quire's Apple app icon set (`swift tools/make_apple_icon.swift <AppIcon.appiconset>`)
 sample/             the sample journal (new layout)
-docs/consolidation-plan.md   the plan, decisions, and the TUI spec
+docs/               consolidation-plan.md (the plan, decisions, the TUI spec),
+                    suggestions.md, maintenance.md, iphone-duo.md
+legacy/             Nook and Wander, kept for reference: nothing builds from them,
+                    so don't grep them for how Quire works
 ```
 
 ## Shells
@@ -214,7 +223,19 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   design, following the phone's theme) that follows the active entry/editor (the iPhone
   composer and reader publish to it) or browse list; `,` opens `ExternalSettings.swift`
   on the monitor, and `t`/^T change a date there with `DeskDatePicker` (`Design/RetimeSheet.swift`: a
-  keyboard calendar over the page; handlers may claim ← → and extra keys while on top).
+  keyboard calendar over the page, in the monitor's own theme, with digits for an exact time; handlers
+  may claim ← → and extra keys while on top; hidden mode draws it as `VSDatePicker`, a small drop-down).
+  ⌘K is the command menu, from anywhere with a hardware keyboard: `Models/CommandPalette.swift` has the
+  list (today, inbox, journal, search, new draft, jump to a date, settings), Pippin's and MiniOffice's
+  fuzzy match and the keys, tested hostless; `Design/CommandMenu.swift` is the glue (`CommandHost`).
+  It is drawn on the monitor when that is showing things (`VSCommandPalette` in hidden mode) and over
+  the phone otherwise, and its keys go to a hidden text view in a window of its own, so it works over
+  sheets and the composer and nothing beneath hears it. It only goes places; over the composer it closes
+  it through its own save first (`PhoneRoot.runCommand`). It won't open over a question or the date picker.
+  Pages without rows scroll with ↑/↓: `QScrollHandle`/`QScrollAttach` hold the `UIScrollView` under a
+  SwiftUI one (iOS 17 can't scroll by a distance), the reader and the monitor's page together; every list
+  keeps its selection in view. Search's field stays on the phone, so `ExternalDisplayModel.search` shows
+  what's typed on the monitor; ↩ moves to the results, `/` goes back to the query.
   Confirmations (delete, discard) ask on the monitor with `DeskConfirm` (`Design/DeskViews.swift`;
   `VSConfirmDialog` in the VS Code theme) whenever it is available: ↵ confirms, Esc cancels, it takes
   every other key, and unplugging, pausing or locking cancels it; the phone's dialogs are used otherwise. Keys come from `KeyCommandCatcher` at the app root (the app delegate is
@@ -318,8 +339,10 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   Don't add a third sidecar name, a second place for drafts, or a second
   place for split journals.
 - `make test` (core, TUI and bindings tests), `make check` (clippy, keep it clean; it covers
-  the desktop app too where WebKitGTK is installed), `make smoke`
-  (the pty driver, must pass 23/23 at 100×30 and 80×24) before a push.
+  the desktop app too where WebKitGTK is installed, plus the front-end, migration and Apple
+  project checks), `make smoke`
+  (the pty driver, must pass 23/23 at 100×30 and 80×24) before a push. `.github/workflows/ci.yml`
+  runs the three on every push to `main`, and `release.yml` runs them on the tag before it builds.
   Busy hosts can use `QUIRE_SMOKE_WAIT_SCALE=10 make smoke`; this extends
   processing waits without changing any assertion.
 - The one-line Tauri rule from before still holds: the Linux frontend has

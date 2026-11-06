@@ -229,6 +229,7 @@ struct ComposerScreen: View {
                 Button(k) { KeyCommandRouter.shared.chord(k) }
                     .keyboardShortcut(KeyEquivalent(Character(k)), modifiers: .control)
             }
+            CommandMenuShortcut()
         }
         .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
     }
@@ -675,7 +676,7 @@ final class EscapingTextField: UITextField {
     override var keyCommands: [UIKeyCommand]? {
         let esc = UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(quireEscape))
         esc.wantsPriorityOverSystemBehavior = true
-        return (super.keyCommands ?? []) + [esc]
+        return (super.keyCommands ?? []) + [esc, CommandKeys.toggle]
     }
 
     @objc private func quireEscape() { KeyCommandRouter.shared.clear() }

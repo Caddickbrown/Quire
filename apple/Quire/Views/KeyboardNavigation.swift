@@ -53,13 +53,6 @@ enum ShortcutHints {
     }
 }
 
-/// One key prompt: the glyph and what it does.
-struct ShortcutHint: Identifiable, Equatable {
-    let key: String
-    let label: String
-    var id: String { key + label }
-}
-
 // MARK: - Router
 
 /// What the currently-visible list wants done with the navigation keys.
@@ -228,6 +221,7 @@ final class KeyCommandController: UIViewController {
             UIKeyCommand(input: "h", modifierFlags: [.command, .alternate], action: #selector(toggleHints)),
         ] : []
         return arrows + letters + chords + display + [
+            CommandKeys.toggle,
             UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(openSelection)),
             UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(clearSelection)),
             UIKeyCommand(input: "?", modifierFlags: [], action: #selector(toggleHints)),
@@ -307,6 +301,9 @@ private extension UIWindow {
 }
 
 extension UIResponder {
+    /// What has the keyboard now, in any window.
+    static var quireFirstResponder: UIResponder? { UIWindow.currentFirstResponder() }
+
     fileprivate static var quire_capturedResponder: UIResponder?
 
     @objc fileprivate func quire_captureFirstResponder() {

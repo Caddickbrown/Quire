@@ -83,8 +83,10 @@ struct RetimeSheet: View {
 
 /// The date picker of desk mode: a month on the monitor, worked from the
 /// keyboard as Graft's due calendar is. ← → a day, ↑ ↓ a week, [ ] a month,
-/// t today, - = the time by a quarter of an hour, ↵ sets, Esc cancels. The
-/// time of day is kept through every move but - and =. A singleton, like
+/// t today, - = the time by a quarter of an hour, digits type an exact time, ↵
+/// sets, Esc cancels. The time of day is kept through every move but those. It
+/// is drawn in the monitor's own look: `DeskDateOverlay` on Quire's pages,
+/// `VSDatePicker` in hidden mode. A singleton, like
 /// `ExternalSettingsModel`, because the monitor's window can't reach the
 /// app scene's views.
 @MainActor final class DeskDatePicker: ObservableObject {
@@ -98,7 +100,21 @@ struct RetimeSheet: View {
     @Published private(set) var title = ""
     /// A write that failed: said on the card, which stays up.
     @Published private(set) var error: String?
+    /// A time being typed, as far as it's got ("14:3"). Empty otherwise.
+    @Published private(set) var typed = ""
 
+    /// The time as it should read: what's being typed, else the time ↵ would set.
+    var timeText: String { typed.isEmpty ? Self.clock.string(from: date) : typed }
+
+    /// How the time changes, for the card.
+    static let timePrompt = "- = move it 15 minutes, or type a time: 14:30"
+
+    private static let clock: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_GB"); f.dateFormat = "HH:mm"; return f
+    }()
+
+    /// `date` before the first digit, for ⌫ to come back to.
+    private var beforeTyping: Date?
     private var onSet: ((Date) -> String?)?
     private var onClose: (() -> Void)?
     private let routerID = UUID()
@@ -110,8 +126,11 @@ struct RetimeSheet: View {
         return monitor.isConnected && !monitor.isPaused && !AppLockManager.shared.showsVeil
     }
 
+    /// ⌫, which reaches us as a key command like any other.
+    private static let backspace = "\u{8}"
+
     /// The keys besides the arrows, ↵ and Esc.
-    static let letters = ["[", "]", "-", "=", "+"]
+    static let letters = ["[", "]", "-", "=", "+", ":", ".", backspace] + (0...9).map(String.init)
 
     /// `onSet` writes the new time and returns an error to show, or nil to close.
     /// `onClose` runs however it closes (to hand the keyboard back).
@@ -121,6 +140,8 @@ struct RetimeSheet: View {
         original = date
         self.title = title
         error = nil
+        typed = ""
+        beforeTyping = nil
         self.onSet = onSet
         self.onClose = onClose
         isOpen = true
@@ -140,6 +161,10 @@ struct RetimeSheet: View {
 
     private func confirm() {
         guard isOpen else { return }
+        guard typed.isEmpty || TypedTime.parse(typed) != nil else {
+            error = "That isn't a time. Try 14:30."
+            return
+        }
         if let failed = onSet?(date) { error = failed; return }
         close()
     }
@@ -155,7 +180,13 @@ struct RetimeSheet: View {
     }
 
     private func key(_ k: String) {
+        if k == Self.backspace || (k.count == 1 && "0123456789:.".contains(k)) {
+            typeTime(k)
+            error = nil
+            return
+        }
         let calendar = Calendar.current
+        typed = ""
         switch k {
         case "[", "]":
             date = calendar.date(byAdding: .month, value: k == "]" ? 1 : -1, to: date) ?? date
@@ -177,7 +208,44 @@ struct RetimeSheet: View {
 
     private func move(days: Int) {
         date = Calendar.current.date(byAdding: .day, value: days, to: date) ?? date
+        typed = ""
         error = nil
+    }
+
+    /// The time follows the digits as they come: `1`, `14`, `143`, `1430` read as
+    /// 01:00, 14:00, 01:43 and 14:30. What isn't a time leaves it alone, and ↵
+    /// says so rather than setting something else.
+    private func typeTime(_ k: String) {
+        if k == Self.backspace {
+            guard !typed.isEmpty else { return }
+            typed.removeLast()
+        } else {
+            guard typed.count < 5, k.first?.isNumber == true || !typed.isEmpty else { return }
+            if typed.isEmpty { beforeTyping = date }
+            typed += k
+        }
+        if typed.isEmpty, let beforeTyping {
+            date = beforeTyping
+        } else if let time = TypedTime.parse(typed) {
+            date = Calendar.current.date(bySettingHour: time.hour, minute: time.minute, second: 0, of: date) ?? date
+        }
+    }
+
+    /// Six weeks from the start of the week the month starts in.
+    static func grid(for date: Date, calendar: Calendar) -> [Date] {
+        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
+        let lead = (calendar.component(.weekday, from: start) - calendar.firstWeekday + 7) % 7
+        // Noon, so a daylight-saving change never lands a cell on the wrong day.
+        let first = calendar.date(byAdding: .day, value: -lead, to: start).flatMap {
+            calendar.date(bySettingHour: 12, minute: 0, second: 0, of: $0)
+        } ?? start
+        return (0..<42).map { calendar.date(byAdding: .day, value: $0, to: first) ?? first }
+    }
+
+    static func weekdayInitials(_ calendar: Calendar) -> [String] {
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        let shift = calendar.firstWeekday - 1
+        return Array(symbols[shift...] + symbols[..<shift])
     }
 }
 

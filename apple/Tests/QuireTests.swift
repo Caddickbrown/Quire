@@ -2,16 +2,13 @@
 //  QuireTests.swift
 //  QuireTests
 //
-//  The XCTest home for the pure model layer: jnl parser parity (the same cases
-//  ParserChecks runs standalone via `make check`), the search-query grammar,
-//  and the editor's list-continuation rules. The test target compiles the pure
-//  model sources directly (no app host), so these run as plain logic tests:
+//  The XCTest home for the pure model layer: jnl parser parity, the search-query
+//  grammar, the editor's list-continuation rules and the command menu. The test
+//  target compiles the pure model sources directly (no app host), so these run as
+//  plain logic tests:
 //
 //      xcodebuild test -project Quire.xcodeproj -scheme Quire \
 //          -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
-//
-//  `make check` stays the fast no-Xcode path; keep the two in step when the
-//  parser or grammar changes.
 //
 
 import XCTest
@@ -379,5 +376,155 @@ final class MediaLinkTests: XCTestCase {
         XCTAssertEqual(JournalStore.linking("assets/a.jpg", into: "One two", at: 3), "One\n\n![](assets/a.jpg)\n\n two")
         XCTAssertEqual(JournalStore.linking("assets/a.jpg", into: "One\nTwo", at: 4), "One\n\n![](assets/a.jpg)\n\nTwo")
         XCTAssertEqual(JournalStore.linking("assets/a.jpg", into: "Top", at: 0), "![](assets/a.jpg)\n\nTop")
+    }
+}
+
+// MARK: - ⌘K
+
+final class CommandPaletteTests: XCTestCase {
+    private let today = CommandDates.parse("2026-11-06")!
+
+    private func menu(_ counts: [String: Int] = ["2026-03-13": 2, "2026-11-05": 1]) -> CommandPalette {
+        CommandPalette(CommandSources(counts: counts, today: today))
+    }
+
+    func testTheShortListIsInOrderAndTheFirstRowIsLit() {
+        let m = menu()
+        XCTAssertEqual(m.rows.map(\.title), ["Today", "Inbox", "Journal", "Search", "New draft", "Jump to a date", "Settings"])
+        XCTAssertEqual(m.lit?.id, "today")
+    }
+
+    func testTheMatchIsPippins() {
+        XCTAssertNil(CommandMatch.score("xz", "Inbox"))
+        XCTAssertEqual(CommandMatch.score("", "Inbox"), 0)
+        // A word start beats letters in the middle of a word.
+        XCTAssertGreaterThan(CommandMatch.score("d", "New draft")!, CommandMatch.score("d", "Today")!)
+        XCTAssertEqual(CommandMatch.rank(["ab", "ba"], "a") { $0 }, ["ab", "ba"])
+    }
+
+    func testTypingNarrowsAndGoes() {
+        var m = menu()
+        m.type("nd")
+        XCTAssertEqual(m.lit?.id, "new")
+        XCTAssertEqual(m.press(.enter), .run(.newDraft))
+        var s = menu()
+        s.type("set")
+        XCTAssertEqual(s.press(.enter), .run(.settings))
+        var none = menu()
+        none.type("zzz")
+        XCTAssertTrue(none.rows.isEmpty)
+        XCTAssertEqual(none.press(.enter), .stay)
+    }
+
+    func testEscAndTheToggleCloseFromAnywhere() {
+        var m = menu()
+        m.type("jump")
+        XCTAssertEqual(m.press(.enter), .stay)
+        XCTAssertEqual(m.stage, .date)
+        var esc = m, again = m
+        XCTAssertEqual(esc.press(.esc), .close)
+        XCTAssertEqual(again.press(.toggle), .close)
+    }
+
+    func testMovingWrapsAndFollowsTheRow() {
+        var m = menu()
+        _ = m.press(.up)
+        XCTAssertEqual(m.lit?.id, "settings")
+        _ = m.press(.down)
+        XCTAssertEqual(m.lit?.id, "today")
+        _ = m.press(.tab)
+        XCTAssertEqual(m.lit?.id, "inbox")
+        _ = m.press(.backTab)
+        XCTAssertEqual(m.lit?.id, "today")
+    }
+
+    func testBackspaceTakesALetterThenBacksOut() {
+        var m = menu()
+        m.type("jump")
+        _ = m.press(.enter)
+        m.type("1")
+        XCTAssertEqual(m.query, "1")
+        m.backspace()
+        XCTAssertEqual(m.stage, .date)
+        m.backspace()
+        XCTAssertEqual(m.stage, .top)
+        m.backspace()
+        XCTAssertEqual(m.stage, .top)
+    }
+
+    func testTheHintsAreTheKeysThatWork() {
+        var m = menu()
+        XCTAssertEqual(m.hints.map(\.key), ["↑↓ ⇥", "↩", "Type", "⎋ ⌘K"])
+        m.type("zzz")
+        XCTAssertEqual(m.hints.map(\.key), ["Type", "⌫", "⎋ ⌘K"])
+    }
+
+    func testAJumpSaysWhereItLands() {
+        var m = menu()
+        m.type("jump")
+        _ = m.press(.enter)
+        XCTAssertEqual(m.rows.map(\.title), ["Today", "Yesterday", "A week ago", "A month ago", "A year ago"])
+        m.type("14 march")
+        XCTAssertEqual(m.lit?.title, "Saturday 14 March 2026")
+        XCTAssertEqual(m.lit?.detail, "Nothing that day: opens Friday 13 March 2026")
+        XCTAssertEqual(m.press(.enter), .run(.jump("2026-03-13")))
+
+        var hit = menu()
+        hit.type("jump")
+        _ = hit.press(.enter)
+        hit.type("yest")
+        XCTAssertEqual(hit.lit?.detail, "Thursday 5 November 2026 · 1 entry")
+        XCTAssertEqual(hit.press(.enter), .run(.jump("2026-11-05")))
+
+        var empty = menu([:])
+        empty.type("jump")
+        _ = empty.press(.enter)
+        XCTAssertEqual(empty.lit?.detail, "Nothing is filed yet")
+    }
+
+    func testTheNearestDayWithSomethingFiled() {
+        let s = CommandSources(counts: ["2026-01-01": 1, "2026-01-11": 1])
+        XCTAssertNil(CommandSources().nearest(to: "2026-01-01"))
+        XCTAssertEqual(s.nearest(to: "2026-01-01"), "2026-01-01")
+        XCTAssertEqual(s.nearest(to: "2025-12-01"), "2026-01-01")
+        XCTAssertEqual(s.nearest(to: "2026-02-01"), "2026-01-11")
+        XCTAssertEqual(s.nearest(to: "2026-01-04"), "2026-01-01")
+        XCTAssertEqual(s.nearest(to: "2026-01-06"), "2026-01-11", "Equally close: the later one.")
+    }
+
+    func testDatesAsTyped() {
+        func day(_ text: String) -> String? { CommandDates.parse(text, today: today).map(CommandDates.key) }
+        XCTAssertEqual(day("2026-03-14"), "2026-03-14")
+        XCTAssertEqual(day("2026-3-4"), "2026-03-04")
+        XCTAssertEqual(day("2026-03"), "2026-03-01")
+        XCTAssertEqual(day("14/3/2025"), "2025-03-14")
+        XCTAssertEqual(day("14/3/25"), "2025-03-14")
+        XCTAssertEqual(day("14.3"), "2026-03-14")
+        XCTAssertEqual(day("14 March"), "2026-03-14")
+        XCTAssertEqual(day("14th mar 2025"), "2025-03-14")
+        XCTAssertEqual(day("March 14"), "2026-03-14")
+        XCTAssertEqual(day("March 2025"), "2025-03-01")
+        // No year: the latest that isn't in the future, today included.
+        XCTAssertEqual(day("25 December"), "2025-12-25")
+        XCTAssertEqual(day("6/11"), "2026-11-06")
+        for nonsense in ["", "14", "march", "bananas", "31 February", "2026-13-01", "32/1", "1 2 3 march"] {
+            XCTAssertNil(day(nonsense), nonsense)
+        }
+    }
+
+    func testTimesAsTyped() {
+        func time(_ text: String) -> String? { TypedTime.parse(text).map { "\($0.hour):\($0.minute)" } }
+        XCTAssertEqual(time("9"), "9:0")
+        XCTAssertEqual(time("14"), "14:0")
+        XCTAssertEqual(time("930"), "9:30")
+        XCTAssertEqual(time("1430"), "14:30")
+        XCTAssertEqual(time("14:30"), "14:30")
+        XCTAssertEqual(time("14.30"), "14:30")
+        XCTAssertEqual(time("14:"), "14:0")
+        XCTAssertEqual(time("0000"), "0:0")
+        XCTAssertEqual(time("23:59"), "23:59")
+        for nonsense in ["", "24", "2400", "1460", "14:60", "123:4", "14:300", "14:30:00", "abc"] {
+            XCTAssertNil(time(nonsense), nonsense)
+        }
     }
 }

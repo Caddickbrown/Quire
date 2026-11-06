@@ -1012,7 +1012,7 @@ final class PastingTextView: UITextView {
     /// page, not above it, so nothing it declares is in this responder chain.
     /// Priority over the text system, which reads ^f ^p ^d ^t as cursor edits.
     override var keyCommands: [UIKeyCommand]? {
-        var own = super.keyCommands ?? []
+        var own = (super.keyCommands ?? []) + [CommandKeys.toggle]
         // With a monitor showing this text, ↑/↓ move by the monitor's lines;
         // the phone keeps its own wrapping for how the text looks.
         if ExternalDisplayModel.shared.isConnected, ExternalDisplayModel.shared.bodyLayout != nil {

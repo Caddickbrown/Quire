@@ -31,6 +31,7 @@ struct ReaderScreen: View {
     @State private var confirmDelete = false
     @State private var routerID = UUID()
     @State private var visible = false
+    @State private var scroller = QScrollHandle()
 
     init(ref: EntryRef, onEdit: @escaping (EntryRef) -> Void, onRetime: @escaping (EntryRef) -> Void,
          onRetimeKey: ((EntryRef) -> Void)? = nil, onClose: (() -> Void)? = nil) {
@@ -60,6 +61,7 @@ struct ReaderScreen: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 26).padding(.top, 12).padding(.bottom, 40)
+                .background(QScrollAttach(handle: scroller))
             }
         }
         .background(q.pageColor)
@@ -131,21 +133,30 @@ struct ReaderScreen: View {
     private func mirror() {
         guard visible else { return }
         ExternalDisplayModel.shared.present(.reading(
-            title: entry.displayTitle, date: QDate.date(entry.ts) ?? Date(), text: entry.body, isStarred: entry.isStarred), owner: routerID)
+            title: entry.displayTitle, date: QDate.date(entry.ts) ?? Date(), text: entry.body, isStarred: entry.isStarred,
+            isDraft: isDraft), owner: routerID)
     }
 
-    /// The terminal app's keys for an open entry: e edit, * star, f file, u return
-    /// to the inbox, t date and time, d delete, Esc back. With a monitor Esc goes
-    /// all the way to Today, from any depth, as it does from a list there.
+    /// The page here and its twin on the monitor, together.
+    private func scroll(_ direction: Int) {
+        scroller.step(direction)
+        ExternalDisplayModel.shared.pageScroll.step(direction)
+    }
+
+    /// The terminal app's keys for an open entry: ↑/↓ or j/k scroll, e edit, * star,
+    /// f file, u return to the inbox, t date and time, d delete, Esc back. With a
+    /// monitor Esc goes all the way to Today, from any depth, as it does from a list.
     private func registerKeys() {
         KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
-            moveUp: {}, moveDown: {}, open: {},
+            moveUp: { scroll(-1) }, moveDown: { scroll(1) }, open: {},
             clear: {
                 if ExternalDisplayModel.shared.isConnected, let home = KeyCommandRouter.shared.onBack { home() }
                 else { close() }
             },
             key: { k in
                 switch k {
+                case "j": scroll(1); return true
+                case "k": scroll(-1); return true
                 case "e": onEdit(current); return true
                 case "*": store.toggleStar(entry, source: ref.source); refresh(); return true
                 case "f": if isDraft { store.fileDraft(entry); close() }; return isDraft

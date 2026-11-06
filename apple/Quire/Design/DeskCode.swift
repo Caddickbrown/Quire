@@ -195,6 +195,8 @@ struct DeskCode: View {
     @ObservedObject private var appLock = AppLockManager.shared
     @ObservedObject private var settings = ExternalSettingsModel.shared
     @ObservedObject private var confirm = DeskConfirm.shared
+    @ObservedObject private var datePicker = DeskDatePicker.shared
+    @ObservedObject private var commands = CommandHost.shared
 
     var body: some View {
         GeometryReader { geo in
@@ -207,6 +209,13 @@ struct DeskCode: View {
                         .overlay {
                             if let request = confirm.request {
                                 VSConfirmDialog(request: request, error: confirm.error, s: s)
+                            }
+                        }
+                        .overlay(alignment: .top) {
+                            if datePicker.isOpen {
+                                VSDatePicker(s: s).padding(.top, s.titleBar)
+                            } else if let menu = commands.menu, commands.onMonitor {
+                                VSCommandPalette(menu: menu, s: s).padding(.top, s.titleBar)
                             }
                         }
                 } else {
@@ -248,8 +257,8 @@ private struct VSLive: View {
         case .editing(let title, let date, let text, let caret, let isStarred, let isDraft, let inTitle):
             return .file(VSFiles.entry(top: isDraft ? "inbox" : "journal", date: date, title: title, text: text, starred: isStarred,
                                        caret: caret ?? text.utf16.count, inTitle: inTitle, selection: selection))
-        case .reading(let title, let date, let text, let isStarred):
-            return .file(VSFiles.entry(top: "journal", date: date, title: title, text: text, starred: isStarred, caret: nil))
+        case .reading(let title, let date, let text, let isStarred, let isDraft):
+            return .file(VSFiles.entry(top: isDraft ? "inbox" : "journal", date: date, title: title, text: text, starred: isStarred, caret: nil))
         }
     }
 
@@ -324,6 +333,13 @@ private struct VSWindow: View {
 
 private struct VSTitleBar: View {
     let s: VSScale
+    @ObservedObject private var model = ExternalDisplayModel.shared
+
+    /// VS Code's search box: the workspace, or what's being searched for.
+    private var boxText: String {
+        guard let search = model.search else { return "notes" }
+        return search.query + (search.typing ? "|" : "")
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -340,7 +356,7 @@ private struct VSTitleBar: View {
             .font(.system(size: s.small)).foregroundStyle(VS.icon).padding(.trailing, 8 * s.z)
             HStack(spacing: 6 * s.z) {
                 Image(systemName: "magnifyingglass").font(.system(size: s.small))
-                Text("notes").font(.system(size: s.ui))
+                Text(boxText).font(.system(size: s.ui))
             }
             .foregroundStyle(VS.dim)
             .frame(maxWidth: 34 * s.ui).frame(height: 22 * s.z)
@@ -835,6 +851,7 @@ private struct VSEditor: View {
                         }
                     }
                     .padding(.bottom, 200 * s.z)
+                    .background(QScrollAttach(handle: ExternalDisplayModel.shared.pageScroll))
                 }
                 .onChange(of: file.caret?.line) { _, line in if let line { proxy.scrollTo(line) } }
                 .onChange(of: caretKey) { _, _ in moved = Date() }
@@ -1045,11 +1062,16 @@ private struct VSSettings: View {
             .font(.system(size: s.ui))
             .padding(.bottom, 10 * s.z)
             Rectangle().fill(VS.border).frame(height: 1).padding(.bottom, 8 * s.z)
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 2 * s.z) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                        row(item, on: i == model.selected)
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 2 * s.z) {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                            row(item, on: i == model.selected).id(item.id)
+                        }
                     }
+                }
+                .onChange(of: model.selected) { _, i in
+                    if items.indices.contains(i) { proxy.scrollTo(items[i].id) }
                 }
             }
             if !model.status.isEmpty {
@@ -1149,6 +1171,130 @@ private struct VSConfirmDialog: View {
                     RoundedRectangle(cornerRadius: 2 * s.z).stroke(VS.inputBorder, lineWidth: 1)
                 }
             }
+    }
+}
+
+/// `DeskDatePicker` as a small drop-down under the title bar, where VS Code puts
+/// its quick input: an input box with the date and time, a month of small figures,
+/// and one quiet line on changing the time. The window stays as it is behind it.
+private struct VSDatePicker: View {
+    let s: VSScale
+    @ObservedObject private var picker = DeskDatePicker.shared
+
+    private static let day: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; return f
+    }()
+    private static let month: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_GB"); f.dateFormat = "MMMM yyyy"; return f
+    }()
+
+    private var cell: CGFloat { 30 * s.z }
+
+    var body: some View {
+        let calendar = Calendar.current
+        let chosen = picker.date
+        let days = DeskDatePicker.grid(for: chosen, calendar: calendar)
+        let month = calendar.component(.month, from: chosen)
+        return VStack(alignment: .leading, spacing: 6 * s.z) {
+            HStack(spacing: 0) {
+                Text(Self.day.string(from: chosen) + " " + picker.timeText).foregroundStyle(VS.bright)
+                if !picker.typed.isEmpty { Rectangle().fill(VS.caret).frame(width: max(1, 1.5 * s.z), height: s.ui * 1.2) }
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: s.ui, design: .monospaced))
+            .padding(.horizontal, 6 * s.z).frame(height: 24 * s.z)
+            .background(VS.input).overlay(Rectangle().stroke(VS.blue, lineWidth: 1))
+            HStack {
+                Text(Self.month.string(from: chosen)).foregroundStyle(VS.text)
+                Spacer(minLength: 8 * s.z)
+                Text(picker.title.isEmpty ? "Untitled" : picker.title).foregroundStyle(VS.dim).truncationMode(.tail)
+            }
+            .font(.system(size: s.small)).lineLimit(1)
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    ForEach(Array(DeskDatePicker.weekdayInitials(calendar).enumerated()), id: \.offset) { _, initial in
+                        Text(initial).frame(width: cell)
+                    }
+                }
+                .font(.system(size: s.small * 0.9)).foregroundStyle(VS.dim)
+                ForEach(0..<6, id: \.self) { week in
+                    HStack(spacing: 0) {
+                        ForEach(days[(week * 7)..<(week * 7 + 7)], id: \.self) { date in
+                            dayCell(date, selected: calendar.isDate(date, inSameDayAs: chosen),
+                                    isToday: calendar.isDateInToday(date),
+                                    isOriginal: calendar.isDate(date, inSameDayAs: picker.original),
+                                    inMonth: calendar.component(.month, from: date) == month)
+                        }
+                    }
+                }
+            }
+            Text(DeskDatePicker.timePrompt).font(.system(size: s.small)).foregroundStyle(VS.dim)
+                .lineLimit(1).minimumScaleFactor(0.7)
+            if let error = picker.error {
+                Text(error).font(.system(size: s.small)).foregroundStyle(VS.hex(0xF85149)).lineLimit(2)
+            }
+        }
+        .padding(6 * s.z)
+        .frame(width: cell * 7 + 12 * s.z)
+        .background(VS.hex(0x222222))
+        .overlay(Rectangle().stroke(VS.hex(0x454545), lineWidth: 1))
+        .shadow(color: .black.opacity(0.36), radius: 8 * s.z, y: 2 * s.z)
+    }
+
+    private func dayCell(_ date: Date, selected: Bool, isToday: Bool, isOriginal: Bool, inMonth: Bool) -> some View {
+        Text("\(Calendar.current.component(.day, from: date))")
+            .font(.system(size: s.small, design: .monospaced))
+            .foregroundStyle(selected ? VS.bright : inMonth ? VS.text : VS.lineNumber)
+            .frame(width: cell, height: 20 * s.z)
+            .background(selected ? VS.blue : Color.clear)
+            .overlay { if isToday && !selected { Rectangle().stroke(VS.inputBorder, lineWidth: 1) } }
+            .overlay(alignment: .bottom) {
+                if isOriginal && !selected { Rectangle().fill(VS.heading).frame(width: 8 * s.z, height: max(1, 1.5 * s.z)) }
+            }
+    }
+}
+
+/// ⌘K as VS Code's own Command Palette: the box under the title bar, the prompt in
+/// it, and a list with the focused row in the list's blue.
+private struct VSCommandPalette: View {
+    let menu: CommandPalette
+    let s: VSScale
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                if !menu.query.isEmpty { Text(menu.query).foregroundStyle(VS.bright) }
+                Rectangle().fill(VS.caret).frame(width: max(1, 1.5 * s.z), height: s.ui * 1.2)
+                if menu.query.isEmpty { Text(menu.prompt).foregroundStyle(VS.dim) }
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: s.ui)).lineLimit(1)
+            .padding(.horizontal, 6 * s.z).frame(height: 26 * s.z)
+            .background(VS.input).overlay(Rectangle().stroke(VS.blue, lineWidth: 1))
+            .padding(6 * s.z)
+            if menu.rows.isEmpty {
+                Text(menu.nothing).font(.system(size: s.ui)).foregroundStyle(VS.dim)
+                    .padding(.horizontal, 12 * s.z).padding(.bottom, 8 * s.z)
+            }
+            ForEach(menu.rows) { row in
+                let on = row.id == menu.selected
+                HStack(spacing: 8 * s.z) {
+                    Image(systemName: row.symbol).font(.system(size: s.small)).foregroundStyle(on ? VS.bright : VS.icon)
+                        .frame(width: 16 * s.z)
+                    Text(row.title).foregroundStyle(on ? VS.bright : VS.text)
+                    Spacer(minLength: 8 * s.z)
+                    if let detail = row.detail { Text(detail).foregroundStyle(on ? VS.text : VS.dim) }
+                }
+                .font(.system(size: s.ui)).lineLimit(1)
+                .padding(.horizontal, 10 * s.z).frame(height: s.row)
+                .background(on ? VS.hex(0x04395E) : Color.clear)
+            }
+        }
+        .padding(.bottom, 4 * s.z)
+        .frame(width: 560 * s.z)
+        .background(VS.hex(0x222222))
+        .overlay(Rectangle().stroke(VS.hex(0x454545), lineWidth: 1))
+        .shadow(color: .black.opacity(0.36), radius: 8 * s.z, y: 2 * s.z)
     }
 }
 

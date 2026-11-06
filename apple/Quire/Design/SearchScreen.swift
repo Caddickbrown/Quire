@@ -59,12 +59,17 @@ struct SearchScreen: View {
             if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
         }
         .qKeyList(entries: shownResults.map(\.entry), index: $selected, listTitle: "Search", autoSelect: true,
-                  onOpen: { entry in if let ref = shownResults.first(where: { $0.entry.id == entry.id }) { onOpen(ref) } })
-        .onChange(of: query) { _, _ in selected = nil }
+                  onOpen: { entry in if let ref = shownResults.first(where: { $0.entry.id == entry.id }) { onOpen(ref) } },
+                  // Back to the query from the results.
+                  letter: { _, k in if k == "/" { focused = true; return true }; return false })
+        .onChange(of: query) { _, _ in selected = nil; mirror() }
+        .onChange(of: focused) { _, _ in mirror() }
         .onAppear {
             focused = true
             if let pending = nav.pendingSearchQuery { query = pending; nav.pendingSearchQuery = nil }
+            mirror()
         }
+        .onDisappear { ExternalDisplayModel.shared.search = nil }
         .alert("Pin this search", isPresented: $naming) {
             TextField("Name", text: $pinName)
             Button("Pin") {
@@ -84,6 +89,18 @@ struct SearchScreen: View {
     }
 
     // MARK: Pieces
+
+    /// The monitor shows what's being typed: the field itself is on the phone.
+    private func mirror() {
+        ExternalDisplayModel.shared.search = DeskSearch(query: query, typing: focused)
+    }
+
+    /// ↩ in the field: over to the results, if there are any.
+    private func submit() {
+        guard !results.isEmpty else { return }
+        focused = false
+        if selected == nil { selected = 0 }
+    }
 
     private var header: some View {
         HStack {
@@ -118,7 +135,7 @@ struct SearchScreen: View {
                                color: UIColor(q.inkColor), placeholderColor: UIColor(q.faintColor),
                                tint: UIColor(q.accentColor), focused: $focused,
                                returnKey: .search, plain: true,
-                               onSubmit: { focused = false })
+                               onSubmit: submit)
                     .frame(minHeight: 44)
                 if !query.isEmpty {
                     Button { query = "" } label: {

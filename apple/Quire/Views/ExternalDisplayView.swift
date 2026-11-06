@@ -47,7 +47,14 @@ enum ExternalDisplayContent: Equatable {
     /// composer, with the entry editor's own key hints.
     case editing(title: String, date: Date, text: String, caret: Int?, isStarred: Bool, isDraft: Bool = false, inTitle: Bool = false)
     /// An entry being read, rendered with its media inline.
-    case reading(title: String, date: Date, text: String, isStarred: Bool)
+    case reading(title: String, date: Date, text: String, isStarred: Bool, isDraft: Bool = false)
+}
+
+/// Search's field, which is on the phone, for the monitor to show.
+struct DeskSearch: Equatable {
+    var query: String
+    /// The field has the keyboard; otherwise the keys are on the results.
+    var typing: Bool
 }
 
 /// One row of the browse list. A flattened copy rather than an `Entry` because
@@ -104,8 +111,12 @@ struct ExternalRow: Equatable, Identifiable {
     /// RootView pushes its resolved scheme here and the external window forces
     /// it, which also makes the Auto theme track the system on both screens.
     @Published var colorScheme: ColorScheme = .light
+    /// Set while the Search sheet is up.
+    @Published var search: DeskSearch?
 
     #if os(iOS)
+    /// The page on the monitor, for ↑/↓ on an open entry.
+    let pageScroll = QScrollHandle()
     /// How the monitor lays out the live entry's body, so ↑/↓ on the phone
     /// move by the monitor's lines rather than the phone's (`PastingTextView`).
     /// Set by whichever monitor page shows the body: given the body text, it
@@ -164,7 +175,7 @@ struct ExternalRow: Equatable, Identifiable {
         #if os(iOS)
         // Covered, the monitor drops what it was asking: nothing waits behind
         // the lock to be answered, or deleted, once it lifts.
-        if locked { DeskDatePicker.shared.cancel(); DeskConfirm.shared.cancel() }
+        if locked { DeskDatePicker.shared.cancel(); DeskConfirm.shared.cancel(); CommandHost.shared.close() }
         #endif
         updateIdleTimer()
         guard isConnected else { return }
@@ -198,7 +209,7 @@ struct ExternalRow: Equatable, Identifiable {
         #if os(iOS)
         // The monitor no longer shows the date picker or a question, so they let
         // go of the keys.
-        if isPaused { DeskDatePicker.shared.cancel(); DeskConfirm.shared.cancel() }
+        if isPaused { DeskDatePicker.shared.cancel(); DeskConfirm.shared.cancel(); CommandHost.shared.close() }
         #endif
         updateIdleTimer()
         content = isPaused || AppLockManager.shared.showsVeil ? .idle : latest
@@ -264,6 +275,7 @@ struct ExternalRow: Equatable, Identifiable {
         ExternalSettingsModel.shared.close()
         DeskDatePicker.shared.cancel()
         DeskConfirm.shared.cancel()
+        CommandHost.shared.close()
         isConnected = false
         updateIdleTimer()
         content = .idle

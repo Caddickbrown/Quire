@@ -88,6 +88,7 @@ struct PhoneSettings: View {
                     }
                 }
                 .padding(.horizontal, 26).padding(.top, 12).padding(.bottom, 40)
+                .qKeyScroll()
             }
             .background(q.pageColor.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)

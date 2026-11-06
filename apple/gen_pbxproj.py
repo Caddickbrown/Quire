@@ -53,6 +53,7 @@ swift_files = [
     ('Media',           'Models/Media.swift',           'Models'),
     ('SearchQuery',     'Models/SearchQuery.swift',     'Models'),
     ('ListContinuation','Models/ListContinuation.swift','Models'),
+    ('CommandPalette',  'Models/CommandPalette.swift',  'Models'),
     ('JournalStore',    'Models/JournalStore.swift',    'Models'),
     ('CoreJournal',     'Models/CoreJournal.swift',     'Models'),
     ('AppleVault',      'Models/AppleVault.swift',      'Models'),
@@ -83,6 +84,7 @@ swift_files = [
     ('QuireKeys',      'Design/QuireKeys.swift',       'Design'),
     ('DeskViews',      'Design/DeskViews.swift',       'Design'),
     ('DeskCode',       'Design/DeskCode.swift',        'Design'),
+    ('CommandMenu',    'Design/CommandMenu.swift',     'Design'),
     ('QuireMotion',    'Design/QuireMotion.swift',     'Design'),
     ('RootView',        'Views/RootView.swift',         'Views'),
     ('WritingView',     'Views/WritingView.swift',      'Views'),
@@ -151,7 +153,7 @@ test_swift_files = [
 # it with the native Vault, adapter and generated bindings, and link the same
 # Rust XCFramework as the app. `init(testingBase:)` supplies a temporary folder. Keep this list closed over its own
 # dependencies; a view type leaking in is the signal it belongs in Models.
-test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListContinuation',
+test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListContinuation', 'CommandPalette',
                       'JournalStore', 'CoreJournal', 'AppleVault', 'QuireCore', 'QuireShared', 'Reminders', 'SpotlightIndexer']
 
 # Allocate ids
@@ -179,7 +181,6 @@ IDs = {k: new_id(k) for k in [
     'testsGroup', 'testsTarget', 'testsProduct',
     'testsSources', 'testsFrameworks',
     'testsTargetConfigList', 'testsDebugConfig', 'testsReleaseConfig',
-    'parserChecksRef',
     # CHANGELOG.md lives at the repo root (not under Quire/), so it gets its own
     # fileRef in the project group and is copied into the app's Resources —
     # the in-app "What's New" screen renders it.
@@ -312,11 +313,9 @@ def pbxproj():
     a(f'\t\t{IDs["shareIOSEnt"]} /* QuireShare-iOS.entitlements */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "QuireShare-iOS.entitlements"; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["shareMacEnt"]} /* QuireShare-macOS.entitlements */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "QuireShare-macOS.entitlements"; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["shareProduct"]} /* QuireShareExtension.appex */ = {{isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = QuireShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; }};')
-    # Test file refs (ParserChecks is referenced for visibility; `make check`
-    # compiles it standalone — it's in no Xcode target)
+    # Test file refs
     for name, path in test_swift_files:
         a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {base(path)}; sourceTree = "<group>"; }};')
-    a(f'\t\t{IDs["parserChecksRef"]} /* ParserChecks.swift */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParserChecks.swift; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["testsProduct"]} /* QuireTests.xctest */ = {{isa = PBXFileReference; explicitFileType = "wrapper.cfbundle"; includeInIndex = 0; path = QuireTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; }};')
     a(f'\t\t{IDs["coreFramework"]} /* QuireCoreFFI.xcframework */ = {{isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Frameworks/QuireCoreFFI.xcframework; sourceTree = "<group>"; }};')
     a('/* End PBXFileReference section */')
@@ -460,7 +459,6 @@ def pbxproj():
     a('\t\t\tchildren = (')
     for n, p in test_swift_files:
         a(f'\t\t\t\t{IDs[n]} /* {base(p)} */,')
-    a(f'\t\t\t\t{IDs["parserChecksRef"]} /* ParserChecks.swift */,')
     a('\t\t\t);')
     a('\t\t\tpath = Tests;')
     a('\t\t\tsourceTree = "<group>";')
