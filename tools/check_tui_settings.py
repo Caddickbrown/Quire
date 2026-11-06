@@ -1,6 +1,8 @@
 """Integration check: automatic backup, retention and keyboard settings in a PTY.
 Run after cargo build -p quire-tui: python3 -I tools/check_tui_settings.py target/debug/quire
-Uses only temporary journal, backup and configuration directories.
+Uses only temporary journal, backup and configuration directories, on Linux only:
+elsewhere the app ignores XDG_CONFIG_HOME and would read and write the real
+settings file, so this refuses to run. Its version check still expects 0.7.0.
 """
 import fcntl
 import json
@@ -14,6 +16,9 @@ import sys
 import tempfile
 import termios
 import time
+
+if sys.platform != "linux":
+    sys.exit("check_tui_settings.py runs on Linux only: see the note at the top.")
 
 binary = str(Path(sys.argv[1]).resolve())
 with tempfile.TemporaryDirectory(prefix="quire-settings-check-") as scratch:

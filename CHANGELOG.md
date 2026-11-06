@@ -51,7 +51,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: `/` on an open entry with a monitor attached closes the entry first, so Search shows on the monitor.
 - **Linux**: the package description and the sample-journal notices no longer call Quire a prototype.
 - **Releases**: a tag runs `make test`, `make check` and `make smoke` before anything is built, and publishes nothing if they fail; the same checks run on every push to `main` (`.github/workflows/ci.yml`).
-- **Terminal**: the migration tests and the terminal settings check, which nothing ran, are part of `make check` and `make smoke`.
+- **Terminal**: the migration tests, which nothing ran, are part of `make check`.
 - **Terminal**: the Inbox is set out by year, month and day like the Journal, with the same keys and `/` filter, and each draft shows where it will file to. In a narrow window, moving on to the entries now shows them instead of nothing, in both views, and `e` edits in the Journal too.
 - **Terminal**: `jnl update` and `quire update` now update a copy built from source, including every Mac install, by rebuilding the latest release with cargo. Before, they only printed an install command.
 - **Apple**: on the monitor, Esc always gets you home to Today: from a list or an open entry one press, from anything over the page (a question, the date picker, settings, Search, the Media Library, a sheet) it closes that first, and from the composer it saves and closes as before. A question is cancelled, never answered. The hint bar says Today. Search and the Media Library's filter take Esc too, where a typing field used to keep it.

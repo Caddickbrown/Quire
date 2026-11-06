@@ -136,7 +136,8 @@ tools/
   migrate_journal.py   inbox.md → inbox/, .nook/ → .quire/, from outside the app
   test_migrate_journal.py  its tests (make check)
   drive_tui.py         pseudo-terminal smoke test of every screen (make smoke)
-  check_tui_settings.py  backup, retention and keyboard settings in a pty (make smoke)
+  check_tui_settings.py  backup, retention and keyboard settings in a pty; Linux only, by hand,
+                       and stale (it expects version 0.7.0): on a Mac it would reach the real settings
   validate_apple.py    the Xcode project's wiring, on any host (make check)
   check_linux_editor.js, check_media_library.js  the Linux front end (make check)
   make_apple_icon.swift  Quire's Apple app icon set (`swift tools/make_apple_icon.swift <AppIcon.appiconset>`)

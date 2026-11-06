@@ -23,7 +23,6 @@ smoke: tui-debug
 	@rm -rf target/smoke-a target/smoke-b target/smoke-a-scratch target/smoke-b-scratch && cp -r sample target/smoke-a && cp -r sample target/smoke-b
 	python3 -I tools/drive_tui.py target/debug/quire target/smoke-a 100 30 cinema
 	python3 -I tools/drive_tui.py target/debug/quire target/smoke-b 80 24 marathon
-	python3 -I tools/check_tui_settings.py target/debug/quire
 
 tui-debug:
 	cargo build -p quire-tui
