@@ -860,6 +860,39 @@ pub fn copy_tree(from: &Path, to: &Path, skip_hidden_top: bool) -> Result<(), St
     Ok(())
 }
 
+/// Count the files in a tree and add up their bytes, walking it the way
+/// `copy_tree` does, so a copy can be checked against what it was copied from.
+fn tree_stats(root: &Path, skip_hidden_top: bool) -> Result<(u64, u64), String> {
+    let (mut files, mut bytes) = (0, 0);
+    for e in fs::read_dir(root).map_err(|e| e.to_string())? {
+        let e = e.map_err(|e| e.to_string())?;
+        let name = e.file_name().to_string_lossy().to_string();
+        if skip_hidden_top && name.starts_with('.') && name != SIDECAR && name != LEGACY_SIDECAR {
+            continue;
+        }
+        let ft = e.file_type().map_err(|e| e.to_string())?;
+        if ft.is_dir() {
+            let (f, b) = tree_stats(&e.path(), false)?;
+            files += f;
+            bytes += b;
+        } else if ft.is_file() {
+            files += 1;
+            bytes += e.metadata().map_err(|e| e.to_string())?.len();
+        }
+    }
+    Ok((files, bytes))
+}
+
+/// Err unless `copy` holds as many files and bytes as `original`.
+fn verify_copy(original: &Path, copy: &Path, skip_hidden_top: bool) -> Result<(), String> {
+    let (a, b) = (tree_stats(original, skip_hidden_top)?, tree_stats(copy, false)?);
+    if a == b {
+        Ok(())
+    } else {
+        Err(format!("the copy doesn't match: {} files and {} bytes, expected {} and {}", b.0, b.1, a.0, a.1))
+    }
+}
+
 /// Refuse a backup folder inside the journal, or a journal inside the backup folder.
 pub fn check_backup_dir(root: &Path, dest_dir: &Path) -> Result<(), String> {
     let r = root.canonicalize().map_err(|e| e.to_string())?;
@@ -917,7 +950,7 @@ fn copy_to_new_backup(root: &Path, dest_dir: &Path, skip_hidden_top: bool) -> Re
         n += 1;
     }
     let dest = dest_dir.join(&name);
-    if let Err(e) = copy_tree(root, &dest, skip_hidden_top) {
+    if let Err(e) = copy_tree(root, &dest, skip_hidden_top).and_then(|_| verify_copy(root, &dest, skip_hidden_top)) {
         let _ = fs::remove_dir_all(&dest);
         return Err(e);
     }
@@ -963,9 +996,11 @@ pub fn list_backups(dest_dir: &Path) -> Vec<String> {
     v
 }
 
-/// Restore `dest_dir/name` over `root`. Takes a full safety copy first (named
-/// like a normal backup, not pruned), then deletes every item in the root and
-/// copies the backup's items in. Returns the safety copy's name.
+/// Restore `dest_dir/name` over `root`. Nothing in the journal is touched until
+/// a checked safety copy (named like a normal backup, not pruned) and a checked
+/// staged copy of the backup both exist. The swap is then renames inside the
+/// journal folder, undone if one fails, and the old content is deleted last.
+/// Returns the safety copy's name.
 pub fn restore(j: &Journal, dest_dir: &Path, name: &str) -> Result<String, String> {
     let root = j.local()?;
     if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") || name.starts_with('.') {
@@ -984,24 +1019,80 @@ pub fn restore(j: &Journal, dest_dir: &Path, name: &str) -> Result<String, Strin
     let safety = copy_to_new_backup(root, dest_dir, false)
         .map_err(|e| format!("Couldn't make a safety copy first ({}); nothing was changed", e))?;
     let safety_name = safety.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let fail = |e: String| format!("Restore failed part-way ({}). Your previous folder is saved as “{}”.", e, safety_name);
-    for e in fs::read_dir(root).map_err(|e| fail(e.to_string()))?.flatten() {
-        // Leave hidden items other than the sidecars alone: .git, Syncthing's
-        // .stfolder/.stignore and the like aren't in backups, so removing them
-        // would break things the restore can't put back.
-        let n = e.file_name().to_string_lossy().to_string();
-        if n.starts_with('.') && n != SIDECAR && n != LEGACY_SIDECAR {
-            continue;
-        }
-        let ft = e.file_type().map_err(|e| fail(e.to_string()))?;
-        let r = if ft.is_dir() { fs::remove_dir_all(e.path()) } else { fs::remove_file(e.path()) };
-        r.map_err(|err| fail(format!("{}: {}", e.path().display(), err)))?;
-    }
-    copy_tree(&src, root, false).map_err(fail)?;
+    swap_in_backup(root, &src, |_| Ok(())).map_err(|e| {
+        format!("Restore failed ({}). Your journal was put back, and it is also saved as “{}”.", e, safety_name)
+    })?;
     Ok(safety_name)
 }
 
-/// Is a daily/weekly/monthly backup due, given the last one (local ts)?
+/// Hidden items other than the sidecars stay where they are: .git, Syncthing's
+/// .stfolder/.stignore and the like aren't in backups, so moving them would
+/// break things the restore can't put back.
+fn restorable(name: &str) -> bool {
+    !name.starts_with('.') || name == SIDECAR || name == LEGACY_SIDECAR
+}
+
+fn names_in(dir: &Path) -> Result<Vec<String>, String> {
+    let mut v = Vec::new();
+    for e in fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let n = e.map_err(|e| e.to_string())?.file_name().to_string_lossy().to_string();
+        if restorable(&n) {
+            v.push(n);
+        }
+    }
+    Ok(v)
+}
+
+/// Stage `src` inside `root`, check it, then swap it in. On any failure the
+/// journal is left as it was. `before_move` runs before each rename, so tests
+/// can make one fail.
+fn swap_in_backup(root: &Path, src: &Path, mut before_move: impl FnMut(&str) -> Result<(), String>) -> Result<(), String> {
+    // Unique names: a leftover from a crash may hold the only copy of something.
+    let stamp = Local::now().format("%Y%m%d-%H%M%S-%f");
+    let new = root.join(format!(".quire-restore-new-{}", stamp));
+    let old = root.join(format!(".quire-restore-old-{}", stamp));
+    let staged = copy_tree(src, &new, false).and_then(|_| verify_copy(src, &new, false));
+    if let Err(e) = staged {
+        let _ = fs::remove_dir_all(&new);
+        return Err(e);
+    }
+    let (live, incoming) = (names_in(root)?, names_in(&new)?);
+    fs::create_dir(&old).map_err(|e| e.to_string())?;
+    let (mut moved_out, mut moved_in) = (Vec::new(), Vec::new());
+    let mut swap = || -> Result<(), String> {
+        for n in &live {
+            before_move(n)?;
+            fs::rename(root.join(n), old.join(n)).map_err(|e| format!("{}: {}", n, e))?;
+            moved_out.push(n.clone());
+        }
+        for n in &incoming {
+            before_move(n)?;
+            fs::rename(new.join(n), root.join(n)).map_err(|e| format!("{}: {}", n, e))?;
+            moved_in.push(n.clone());
+        }
+        Ok(())
+    };
+    if let Err(e) = swap() {
+        let mut stuck = false;
+        for n in &moved_in {
+            stuck |= fs::rename(root.join(n), new.join(n)).is_err();
+        }
+        for n in &moved_out {
+            stuck |= fs::rename(old.join(n), root.join(n)).is_err();
+        }
+        if stuck {
+            // Keep both folders: they hold what couldn't be moved back.
+            return Err(format!("{}; some items are still in {}", e, old.display()));
+        }
+        let _ = fs::remove_dir_all(&new);
+        let _ = fs::remove_dir_all(&old);
+        return Err(e);
+    }
+    let _ = fs::remove_dir_all(&new);
+    let _ = fs::remove_dir_all(&old);
+    Ok(())
+}
+
 pub fn backup_due(interval: &str, last: Option<&str>) -> bool {
     let period = match interval {
         "daily" => 86_400,
@@ -1885,6 +1976,68 @@ mod tests {
         assert!(!root.join("stray.md").exists());
         assert_eq!(list_backups(&dest).len(), n_before + 1);
         assert!(read(&dest.join(&safety).join("stray.md")).contains("stray"));
+    }
+
+    fn restore_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let t = tempfile::tempdir().unwrap();
+        let (root, src) = (t.path().join("live"), t.path().join("backup"));
+        for (dir, text) in [(&root, "live"), (&src, "backup")] {
+            fs::create_dir_all(dir.join("journal/2026/11")).unwrap();
+            fs::write(dir.join("journal/2026/11/06.md"), text).unwrap();
+            fs::write(dir.join("transfer.md"), text).unwrap();
+        }
+        fs::write(root.join("only-live.md"), "live").unwrap();
+        fs::create_dir(root.join(".stfolder")).unwrap();
+        (t, root, src)
+    }
+
+    #[test]
+    fn restore_swaps_and_keeps_hidden_items() {
+        let (_t, root, src) = restore_fixture();
+        swap_in_backup(&root, &src, |_| Ok(())).unwrap();
+        assert_eq!(fs::read_to_string(root.join("journal/2026/11/06.md")).unwrap(), "backup");
+        assert!(!root.join("only-live.md").exists());
+        assert!(root.join(".stfolder").is_dir());
+        let left: Vec<_> = fs::read_dir(&root).unwrap().flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".quire-restore")).collect();
+        assert!(left.is_empty());
+    }
+
+    #[test]
+    fn restore_failing_partway_leaves_the_journal_as_it_was() {
+        // Fail at every possible step of the swap in turn.
+        let moves = {
+            let (_t, root, src) = restore_fixture();
+            let mut n = 0;
+            swap_in_backup(&root, &src, |_| { n += 1; Ok(()) }).unwrap();
+            n
+        };
+        for fail_at in 0..moves {
+            let (_t, root, src) = restore_fixture();
+            let before = tree_stats(&root, false).unwrap();
+            let mut n = 0;
+            let r = swap_in_backup(&root, &src, |_| {
+                n += 1;
+                if n > fail_at { Err("disk went away".into()) } else { Ok(()) }
+            });
+            assert!(r.is_err());
+            assert_eq!(fs::read_to_string(root.join("journal/2026/11/06.md")).unwrap(), "live");
+            assert!(root.join("only-live.md").exists());
+            assert_eq!(tree_stats(&root, false).unwrap(), before);
+            assert!(fs::read_dir(&root).unwrap().flatten()
+                .all(|e| !e.file_name().to_string_lossy().starts_with(".quire-restore")));
+        }
+    }
+
+    #[test]
+    fn verify_copy_notices_a_short_copy() {
+        let (_t, root, src) = restore_fixture();
+        assert!(verify_copy(&root, &src, true).is_err());
+        let copy = root.parent().unwrap().join("copy");
+        copy_tree(&root, &copy, true).unwrap();
+        verify_copy(&root, &copy, true).unwrap();
+        fs::write(copy.join("transfer.md"), "x").unwrap();
+        assert!(verify_copy(&root, &copy, true).is_err());
     }
 
     #[test]

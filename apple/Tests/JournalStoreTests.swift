@@ -318,4 +318,73 @@ final class JournalStoreTests: XCTestCase {
         XCTAssertNil(try vault.read(rel: "journal/2026/05/03.md"))
     }
 
+
+    // MARK: Restore
+
+    private struct Boom: Error {}
+
+    private func restoreFixture() -> (base: URL, backup: URL) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quire-restore-\(UUID().uuidString)", isDirectory: true)
+        let base = root.appendingPathComponent("live"), backup = root.appendingPathComponent("backup")
+        for (dir, text) in [(base, "live"), (backup, "backup")] {
+            write(text, to: dir.appendingPathComponent("journal/2026/11/06.md"))
+            write(text, to: dir.appendingPathComponent("transfer.md"))
+        }
+        write("live", to: base.appendingPathComponent("only-live.md"))
+        write("", to: base.appendingPathComponent(".stfolder/marker"))
+        return (base, backup)
+    }
+
+    private func text(_ url: URL) -> String? { try? String(contentsOf: url, encoding: .utf8) }
+    private func leftovers(in base: URL) -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: base.path)) ?? []).filter { $0.hasPrefix(".quire-restore") }
+    }
+
+    func testRestoreSwapsTheBackupInAndLeavesHiddenItems() {
+        let (base, backup) = restoreFixture()
+        let result = JournalStore.replaceTree(base: base, from: backup)
+        XCTAssertTrue(result.0, result.1)
+        XCTAssertEqual(text(base.appendingPathComponent("journal/2026/11/06.md")), "backup")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: base.appendingPathComponent("only-live.md").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: base.appendingPathComponent(".stfolder/marker").path))
+        XCTAssertEqual(leftovers(in: base), [])
+    }
+
+    func testRestoreFailingAtAnyStepLeavesTheJournalAsItWas() {
+        var moves = 0
+        do {
+            let (base, backup) = restoreFixture()
+            XCTAssertTrue(JournalStore.replaceTree(base: base, from: backup, beforeMove: { _ in moves += 1 }).0)
+        }
+        XCTAssertGreaterThan(moves, 3)
+        for failAt in 0..<moves {
+            let (base, backup) = restoreFixture()
+            var n = 0
+            let result = JournalStore.replaceTree(base: base, from: backup, beforeMove: { _ in
+                n += 1
+                if n > failAt { throw Boom() }
+            })
+            XCTAssertFalse(result.0)
+            XCTAssertEqual(text(base.appendingPathComponent("journal/2026/11/06.md")), "live")
+            XCTAssertEqual(text(base.appendingPathComponent("only-live.md")), "live")
+            XCTAssertEqual(leftovers(in: base), [])
+        }
+    }
+
+    func testRestoreRefusesAFolderThatIsNotABackup() {
+        let (base, backup) = restoreFixture()
+        try? FileManager.default.removeItem(at: backup.appendingPathComponent("journal"))
+        XCTAssertFalse(JournalStore.replaceTree(base: base, from: backup).0)
+        XCTAssertEqual(text(base.appendingPathComponent("journal/2026/11/06.md")), "live")
+    }
+
+    func testRestoreWithAnICloudPlaceholderChangesNothing() {
+        let (base, backup) = restoreFixture()
+        write("", to: backup.appendingPathComponent("journal/2026/11/.07.md.icloud"))
+        let result = JournalStore.replaceTree(base: base, from: backup)
+        XCTAssertFalse(result.0)
+        XCTAssertEqual(text(base.appendingPathComponent("journal/2026/11/06.md")), "live")
+        XCTAssertEqual(leftovers(in: base), [])
+    }
 }

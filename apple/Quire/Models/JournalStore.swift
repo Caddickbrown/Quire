@@ -509,20 +509,63 @@ final class JournalStore: ObservableObject {
     }
 
     /// The copy + prune itself, off-main. Security-scoped access is held around
-    /// both so a sandboxed user-picked backup folder stays writable.
+    /// both so a sandboxed user-picked backup folder stays writable. A copy that
+    /// fails or doesn't match the journal is removed, so it can never be listed
+    /// as a backup or push a good one out through pruning.
     private nonisolated static func copyTree(
         from base: URL, into backupBase: URL, named name: String, keep: Int
     ) -> (ok: Bool, message: String) {
         let fm = FileManager.default
         let scoped = backupBase.startAccessingSecurityScopedResource()
         defer { if scoped { backupBase.stopAccessingSecurityScopedResource() } }
+        let target = backupBase.appendingPathComponent(name)
         do {
-            try fm.copyItem(at: base, to: backupBase.appendingPathComponent(name))
+            try fm.copyItem(at: base, to: target)
+            try verifyCopy(of: base, at: target)
         } catch {
+            try? fm.removeItem(at: target)
             return (false, "Backup failed: \(error.localizedDescription)")
         }
         prune(in: backupBase, keep: keep)
         return (true, "Backed up to \(name).")
+    }
+
+    private struct CopyFailure: LocalizedError {
+        let errorDescription: String?
+        init(_ text: String) { errorDescription = text }
+    }
+
+    /// Files and bytes in a tree. Throws on an iCloud placeholder, after asking
+    /// for the download: a copy of one holds none of the file's contents.
+    private nonisolated static func treeStats(_ root: URL) throws -> (files: Int, bytes: Int64) {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey]
+        var files = 0
+        var bytes: Int64 = 0
+        var failure: Error?
+        guard let walk = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [],
+                                       errorHandler: { _, error in failure = error; return false })
+        else { throw CopyFailure("Couldn't read \(root.lastPathComponent).") }
+        for case let item as URL in walk {
+            if item.pathExtension == "icloud" {
+                try? fm.startDownloadingUbiquitousItem(at: item)
+                throw CopyFailure("Some files are still downloading from iCloud. Try again shortly.")
+            }
+            let v = try item.resourceValues(forKeys: Set(keys))
+            if v.isRegularFile == true, v.isSymbolicLink != true {
+                files += 1
+                bytes += Int64(v.fileSize ?? 0)
+            }
+        }
+        if let failure { throw failure }
+        return (files, bytes)
+    }
+
+    private nonisolated static func verifyCopy(of original: URL, at copy: URL) throws {
+        let a = try treeStats(original), b = try treeStats(copy)
+        guard a == b else {
+            throw CopyFailure("The copy doesn't match: \(b.files) files and \(b.bytes) bytes, expected \(a.files) and \(a.bytes).")
+        }
     }
 
     // MARK: Restore
@@ -582,10 +625,22 @@ final class JournalStore: ObservableObject {
         return (ok: result.0, message: result.1)
     }
 
-    /// Empty the base folder and copy the backup's contents in. The backup is
-    /// verified to look like a journal (inbox.md or journal/) before anything
-    /// is deleted.
-    private nonisolated static func replaceTree(base: URL, from backup: URL) -> (Bool, String) {
+    /// Hidden items other than the sidecars stay where they are: .git, Syncthing's
+    /// .stfolder/.stignore and the like aren't the journal's to replace. Same rule
+    /// as `restorable` in the core.
+    private nonisolated static func restorable(_ name: String) -> Bool {
+        !name.hasPrefix(".") || name == ".quire" || name == ".nook"
+    }
+
+    /// Replace the journal's contents with a backup's. The backup is first checked
+    /// to look like a journal, copied into a staging folder inside the journal and
+    /// checked against the original; only then does anything live move. The swap
+    /// is renames, undone if one fails, under one coordinated write so a sync
+    /// provider sees a move and never an emptied journal. Old content goes last.
+    /// `beforeMove` runs before each rename, so tests can make one fail.
+    nonisolated static func replaceTree(
+        base: URL, from backup: URL, beforeMove: (String) throws -> Void = { _ in }
+    ) -> (Bool, String) {
         let fm = FileManager.default
         let scoped = backup.deletingLastPathComponent().startAccessingSecurityScopedResource()
         defer { if scoped { backup.deletingLastPathComponent().stopAccessingSecurityScopedResource() } }
@@ -595,17 +650,67 @@ final class JournalStore: ObservableObject {
                 || fm.fileExists(atPath: backup.appendingPathComponent("journal").path) else {
             return (false, "That folder doesn't look like a Quire backup — nothing was changed.")
         }
+        // Unique names: a leftover from a crash may hold the only copy of something.
+        let id = UUID().uuidString
+        let staged = base.appendingPathComponent(".quire-restore-new-\(id)", isDirectory: true)
+        let old = base.appendingPathComponent(".quire-restore-old-\(id)", isDirectory: true)
         do {
-            for item in try fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) {
-                try fm.removeItem(at: item)
+            try fm.copyItem(at: backup, to: staged)
+            try verifyCopy(of: backup, at: staged)
+        } catch {
+            try? fm.removeItem(at: staged)
+            return (false, "Couldn't copy the backup, so nothing was changed. \(error.localizedDescription)")
+        }
+        var result: (Bool, String) = (false, "Restore couldn't get access to the journal folder — nothing was changed.")
+        var coordinationError: NSError?
+        NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: base, options: .forMerging,
+                                                         error: &coordinationError) { folder in
+            result = swapIn(base: folder, staged: staged, old: old, backupName: backup.lastPathComponent, beforeMove: beforeMove)
+        }
+        if coordinationError != nil { try? fm.removeItem(at: staged) }
+        return result
+    }
+
+    private nonisolated static func swapIn(
+        base: URL, staged: URL, old: URL, backupName: String, beforeMove: (String) throws -> Void
+    ) -> (Bool, String) {
+        let fm = FileManager.default
+        var movedOut: [String] = [], movedIn: [String] = []
+        do {
+            let names: (URL) throws -> [String] = { dir in
+                try fm.contentsOfDirectory(atPath: dir.path).filter(restorable)
             }
-            for item in try fm.contentsOfDirectory(at: backup, includingPropertiesForKeys: nil) {
-                try fm.copyItem(at: item, to: base.appendingPathComponent(item.lastPathComponent))
+            let live = try names(base), incoming = try names(staged)
+            try fm.createDirectory(at: old, withIntermediateDirectories: false)
+            for name in live {
+                try beforeMove(name)
+                try fm.moveItem(at: base.appendingPathComponent(name), to: old.appendingPathComponent(name))
+                movedOut.append(name)
+            }
+            for name in incoming {
+                try beforeMove(name)
+                try fm.moveItem(at: staged.appendingPathComponent(name), to: base.appendingPathComponent(name))
+                movedIn.append(name)
             }
         } catch {
-            return (false, "Restore failed partway: \(error.localizedDescription). A safety copy of the pre-restore journal is in the backup folder.")
+            var stuck = false
+            for name in movedIn {
+                do { try fm.moveItem(at: base.appendingPathComponent(name), to: staged.appendingPathComponent(name)) } catch { stuck = true }
+            }
+            for name in movedOut {
+                do { try fm.moveItem(at: old.appendingPathComponent(name), to: base.appendingPathComponent(name)) } catch { stuck = true }
+            }
+            if stuck {
+                // Keep both folders: they hold what couldn't be moved back.
+                return (false, "Restore failed partway: \(error.localizedDescription). Some items are still in \(old.lastPathComponent) in the journal folder, and a safety copy is in the backup folder.")
+            }
+            try? fm.removeItem(at: staged)
+            try? fm.removeItem(at: old)
+            return (false, "Restore failed, and your journal was put back as it was. \(error.localizedDescription)")
         }
-        return (true, "Restored \(backup.lastPathComponent). The pre-restore journal was saved as a new backup.")
+        try? fm.removeItem(at: staged)
+        try? fm.removeItem(at: old)
+        return (true, "Restored \(backupName). The pre-restore journal was saved as a new backup.")
     }
 
     /// Keep only the newest `keep` backups. The timestamped names sort
