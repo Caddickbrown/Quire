@@ -40,9 +40,9 @@ ago.
   than guessed".
 - **Hidden mode.** VS Code on a monitor is the most memorable feature in the
   whole family, and it is also genuinely useful. It deserves its polish.
-- **The Esc rule.** "Esc on the monitor always reaches Today", with what's on top
-  closing first and a question always cancelled, never answered. Simple and
-  learnable.
+- **The Esc rule.** "Esc on the monitor always reaches Today", a step at a time:
+  what's on top closes first, a question is always cancelled, never answered, an
+  open entry goes back to its list, and the list goes to Today. Simple and learnable.
 - **"Never automatic" updates.** A journal app that doesn't phone home on its own
   is a stance, not an omission. Keep it.
 - **The whimsy pass.** It is restrained, respects Reduce Motion, and nothing

@@ -122,11 +122,11 @@ struct ExternalDisplayRoot: View {
         case .browsing(let listTitle, let rows, _, _, _):
             // An empty list has nothing for the row keys to act on.
             if rows.isEmpty, listTitle != "Search" {
-                return [.init(key: "⎋", label: "Today"), .init(key: "r", label: "Random"), go, .init(key: ",", label: "Settings"), menu]
+                return [DeskEscape.list.hint, .init(key: "r", label: "Random"), go, .init(key: ",", label: "Settings"), menu]
             }
             // Esc goes home from any list; Search is a sheet, so it closes that first.
             let base: [ShortcutHint] = [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Open"),
-                                        .init(key: "⎋", label: listTitle == "Search" ? "Close" : "Today")]
+                                        (listTitle == "Search" ? DeskEscape.sheet : DeskEscape.list).hint]
             let random = ShortcutHint(key: "r", label: "Random")
             switch listTitle {
             case "Inbox":
@@ -158,7 +158,7 @@ struct ExternalDisplayRoot: View {
             let move: ShortcutHint = isDraft ? .init(key: "f", label: "File") : .init(key: "u", label: "Inbox")
             return [.init(key: "↑↓", label: "Scroll"), .init(key: "e", label: "Edit"), .init(key: "r", label: "Random"),
                     move, .init(key: "*", label: "Star"),
-                    .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), .init(key: "⎋", label: "Today"), go,
+                    .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), DeskEscape.entry.hint, go,
                     .init(key: ",", label: "Settings"), menu] + common
         }
     }

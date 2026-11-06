@@ -247,8 +247,9 @@ legacy/             Nook and Wander, kept for reference: nothing builds from the
   `KeyCommandRouter.key`, declared on the app delegate so typing is never touched;
   the composer's control chords (^J file, ^S, ^T, ^F, ^P, ^D) are declared only while
   it is open (`wantsChords`), at priority over the text system. Esc on the monitor always
-  reaches Today: what's on top closes first (`qKeyBlocker`'s `onEscape`, the composer through its
-  save), then a list or open entry goes home in one press; a one-line field that must pass Esc on
+  reaches Today, a step at a time: what's on top closes first (`qKeyBlocker`'s `onEscape`, the composer
+  through its save), then an open entry goes back to the list it came from, which keeps its selection,
+  then the list goes to Today (`DeskEscape` holds the hint for each); a one-line field that must pass Esc on
   is a `QEscapingField`. The monitor's hint
   bar (`ExternalDisplayView.hints`) must list exactly the keys that work;
   `ExternalTheme` loads the bundled root `themes.json`. Option-Command +/- changes

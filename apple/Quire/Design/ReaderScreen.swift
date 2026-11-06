@@ -144,15 +144,13 @@ struct ReaderScreen: View {
     }
 
     /// The terminal app's keys for an open entry: ↑/↓ or j/k scroll, e edit, * star,
-    /// f file, u return to the inbox, t date and time, d delete, Esc back. With a
-    /// monitor Esc goes all the way to Today, from any depth, as it does from a list.
+    /// f file, u return to the inbox, t date and time, d delete, Esc back to the list
+    /// it came from, with or without a monitor. The list keeps its selection, and its
+    /// own Esc goes on to Today.
     private func registerKeys() {
         KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
             moveUp: { scroll(-1) }, moveDown: { scroll(1) }, open: {},
-            clear: {
-                if ExternalDisplayModel.shared.isConnected, let home = KeyCommandRouter.shared.onBack { home() }
-                else { close() }
-            },
+            clear: { close() },
             key: { k in
                 switch k {
                 case "j": scroll(1); return true

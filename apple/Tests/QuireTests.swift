@@ -381,6 +381,52 @@ final class MediaLinkTests: XCTestCase {
 
 // MARK: - ⌘K
 
+// MARK: - Esc on the monitor
+
+/// Esc steps back: an open entry to the list it came from, a list to Today. The
+/// keys themselves live in iOS-only views, so the wiring is read from the source.
+final class DeskEscapeTests: XCTestCase {
+    private func source(_ path: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
+    }
+
+    func testTheHintSaysWhereEscGoes() {
+        XCTAssertEqual(DeskEscape.entry.hint, ShortcutHint(key: "⎋", label: "Back"))
+        XCTAssertEqual(DeskEscape.list.hint, ShortcutHint(key: "⎋", label: "Today"))
+        XCTAssertEqual(DeskEscape.sheet.hint, ShortcutHint(key: "⎋", label: "Close"))
+    }
+
+    func testAnOpenEntrySaysBackAndAListSaysToday() throws {
+        let hints = try source("Quire/Design/DeskViews.swift")
+        let reading = try XCTUnwrap(hints.range(of: "case .reading(_, _, _, _, let isDraft):"))
+        let end = try XCTUnwrap(hints.range(of: "// MARK: - Confirmations"))
+        XCTAssertLessThan(reading.lowerBound, end.lowerBound, "the hints come first")
+        let bar = hints[reading.lowerBound..<end.lowerBound]
+        XCTAssertTrue(bar.contains("DeskEscape.entry.hint"), "the open entry's bar")
+        XCTAssertFalse(bar.contains("label: \"Today\""), "an open entry no longer says Today")
+        XCTAssertTrue(hints.contains("DeskEscape.list.hint"), "a list's bar")
+    }
+
+    /// Esc on an open entry closes that page, monitor or not: it doesn't reach for
+    /// the root's way home, which would drop the list and its selection.
+    func testAnOpenEntryStepsBackRatherThanGoingHome() throws {
+        let reader = try source("Quire/Design/ReaderScreen.swift")
+        XCTAssertFalse(reader.contains("onBack"), "the reader never jumps to Today")
+        XCTAssertTrue(reader.contains("clear: { close() }"), "Esc closes the page")
+    }
+
+    /// The list's selection is its own state, kept while a page sits over it; only
+    /// losing the monitor clears it.
+    func testTheListKeepsItsSelectionUnderAnOpenEntry() throws {
+        let keys = try source("Quire/Design/QuireKeys.swift")
+        XCTAssertTrue(keys.contains("if !monitor.isConnected { index = nil }"))
+        // Beside the list nothing reappears, so the list is asked to show itself again.
+        let root = try source("Quire/Design/PhoneRoot.swift")
+        XCTAssertTrue(root.contains("onClose: { path.removeAll(); ExternalDisplayModel.shared.relist() }"))
+    }
+}
+
 final class CommandPaletteTests: XCTestCase {
     private let today = CommandDates.parse("2026-11-06")!
 

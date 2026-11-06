@@ -315,7 +315,7 @@ struct PhoneRoot: View {
                 if let ref = path.last {
                     ReaderScreen(ref: ref, onEdit: { composing = ComposeTarget(ref: $0) },
                                  onRetime: { retiming = $0 }, onRetimeKey: retimeFromKeys,
-                                 onClose: { path.removeAll() })
+                                 onClose: { path.removeAll(); ExternalDisplayModel.shared.relist() })
                         .qArrivalRoot(key: ref.id)
                 } else {
                     emptyPage

@@ -21,6 +21,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Changed
+- **Apple**: on the monitor, Esc from an open entry steps back to the list you came from, with your place in it kept, and the next Esc goes to Today. The hint bar says Back on an open entry.
+
 ## [0.12.0] — not yet released
 
 The monitor and a hardware keyboard: ⌘K, a date picker that follows the screen it's on, keyboard scrolling and a hint bar that lists the keys that work. Also Quire's design on the iPad, new widgets, hidden mode, media in the composer, and a safe restore. Set the date here when the release is cut.

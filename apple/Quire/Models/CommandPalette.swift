@@ -20,6 +20,20 @@ struct ShortcutHint: Identifiable, Equatable {
     var id: String { key + label }
 }
 
+/// What Esc does on the monitor, as the hint bar says it. Each press takes one step:
+/// an open entry goes back to the list it came from, and a list goes to Today.
+enum DeskEscape {
+    case entry, list, sheet
+
+    var hint: ShortcutHint {
+        switch self {
+        case .entry: return ShortcutHint(key: "⎋", label: "Back")
+        case .list: return ShortcutHint(key: "⎋", label: "Today")
+        case .sheet: return ShortcutHint(key: "⎋", label: "Close")
+        }
+    }
+}
+
 /// The letters of `query` in order within `text`, as MiniOffice's palette matches them.
 enum CommandMatch {
     /// Runs and word starts score higher, long titles a little lower. Nil when the letters aren't all there.
