@@ -3,6 +3,12 @@ name: CI
 # release.yml, which runs them on the tag and publishes nothing if they fail.
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'What to check out; empty for the commit that triggered the run'
+        type: string
+        default: ''
 permissions:
   contents: read
 jobs:
