@@ -47,6 +47,12 @@ pub struct Browse {
     pub filtering: bool,
 }
 
+impl Default for Browse {
+    fn default() -> Self {
+        Browse { pick: Pick::Main, col: 2, yi: 0, mi: 0, di: 0, ei: 0, filter: String::new(), filtering: false }
+    }
+}
+
 pub struct Draft {
     pub ed: Editor,
     pub ts: String,
@@ -106,7 +112,6 @@ pub enum Hit {
     /// Open this entry (file, index) in the composer.
     Edit(String, usize),
     /// The same click, on a pane of text: no hover highlight.
-    Preview(String, usize),
     /// Show this entry in Browse.
     Show(String, usize),
     /// Today's prompt: start writing from it.
@@ -114,7 +119,6 @@ pub enum Hit {
     /// The QUIRE mark: back to Today.
     Home,
     /// A row of the inbox's draft list.
-    Draft(usize),
     /// A Browse column (year · month · day · entries), for the wheel.
     Column(usize),
     /// A row in a Browse column: (column, index).
@@ -148,7 +152,7 @@ pub struct App {
     pub stack: Vec<Screen>,
     pub today: String,
     pub prompt_n: usize,
-    pub inbox_i: usize,
+    pub inbox: Browse,
     pub browse: Browse,
     pub draft: Option<Draft>,
     pub year: i32,
@@ -205,8 +209,8 @@ impl App {
             stack: Vec::new(),
             today,
             prompt_n: 0,
-            inbox_i: 0,
-            browse: Browse { pick: Pick::Main, col: 2, yi: 0, mi: 0, di: 0, ei: 0, filter: String::new(), filtering: false },
+            inbox: Browse::default(),
+            browse: Browse::default(),
             draft: None,
             year,
             query: String::new(),
@@ -257,8 +261,6 @@ impl App {
     }
 
     fn clamp(&mut self) {
-        let n = self.drafts().len();
-        self.inbox_i = if n == 0 { 0 } else { self.inbox_i.min(n - 1) };
         let n = self.results().len();
         self.search_i = if n == 0 { 0 } else { self.search_i.min(n - 1) };
         self.clamp_browse();
@@ -279,12 +281,14 @@ impl App {
         if self.screen != s {
             self.stack.push(self.screen);
             self.screen = s;
+            self.clamp_browse();
         }
         self.help = false;
     }
 
     fn back(&mut self) {
         self.screen = self.stack.pop().unwrap_or(Screen::Today);
+        self.clamp_browse();
         self.help = false;
     }
 
@@ -315,10 +319,22 @@ impl App {
         v
     }
 
+    /// The Inbox and the Journal are the same year, month, day and entries
+    /// columns over different entries, each keeping its own place.
+    pub fn nav(&self) -> &Browse {
+        if self.screen == Screen::Inbox { &self.inbox } else { &self.browse }
+    }
+
+    fn nav_mut(&mut self) -> &mut Browse {
+        if self.screen == Screen::Inbox { &mut self.inbox } else { &mut self.browse }
+    }
+
     pub fn browse_pool(&self) -> Vec<&Entry> {
+        let (inbox, pick) = (self.screen == Screen::Inbox, &self.browse.pick);
         self.entries
             .iter()
-            .filter(|e| match &self.browse.pick {
+            .filter(|e| match pick {
+                _ if inbox => e.source == "inbox",
                 Pick::Main => e.source == "journal",
                 Pick::All => true,
                 Pick::Split(t) => e.split.as_deref() == Some(t.as_str()),
@@ -327,10 +343,10 @@ impl App {
     }
 
     fn filtered(&self, items: Vec<(String, usize)>, label: impl Fn(&str) -> String) -> Vec<(String, usize)> {
-        if !self.browse.filtering || self.browse.filter.is_empty() {
+        if !self.nav().filtering || self.nav().filter.is_empty() {
             return items;
         }
-        let f = self.browse.filter.to_lowercase();
+        let f = self.nav().filter.to_lowercase();
         items.into_iter().filter(|(k, _)| k.to_lowercase().starts_with(&f) || label(k).to_lowercase().starts_with(&f)).collect()
     }
 
@@ -341,7 +357,7 @@ impl App {
             *m.entry(e.date[..4].to_string()).or_default() += 1;
         }
         let v: Vec<(String, usize)> = m.into_iter().rev().collect();
-        if self.browse.col == 0 {
+        if self.nav().col == 0 {
             self.filtered(v, |k| k.to_string())
         } else {
             v
@@ -354,7 +370,7 @@ impl App {
             *m.entry(e.date[5..7].to_string()).or_default() += 1;
         }
         let v: Vec<(String, usize)> = m.into_iter().rev().collect();
-        if self.browse.col == 1 {
+        if self.nav().col == 1 {
             self.filtered(v, |k| stats::month_name(k.parse().unwrap_or(1)).to_string())
         } else {
             v
@@ -368,7 +384,7 @@ impl App {
             *m.entry(e.date.clone()).or_default() += 1;
         }
         let v: Vec<(String, usize)> = m.into_iter().rev().collect();
-        if self.browse.col == 2 {
+        if self.nav().col == 2 {
             self.filtered(v, |k| k[8..].to_string())
         } else {
             v
@@ -383,35 +399,35 @@ impl App {
 
     pub fn browse_sel(&self) -> Sel {
         let years = self.browse_years();
-        let year = years.get(self.browse.yi).map(|y| y.0.clone());
+        let year = years.get(self.nav().yi).map(|y| y.0.clone());
         let months = year.as_deref().map(|y| self.browse_months(y)).unwrap_or_default();
-        let month = months.get(self.browse.mi).map(|m| m.0.clone());
+        let month = months.get(self.nav().mi).map(|m| m.0.clone());
         let days = match (&year, &month) {
             (Some(y), Some(m)) => self.browse_days(y, m),
             _ => vec![],
         };
-        let date = days.get(self.browse.di).map(|d| d.0.clone());
-        let entry = date.as_deref().and_then(|d| self.browse_day_entries(d).get(self.browse.ei).map(|e| (*e).clone()));
+        let date = days.get(self.nav().di).map(|d| d.0.clone());
+        let entry = date.as_deref().and_then(|d| self.browse_day_entries(d).get(self.nav().ei).map(|e| (*e).clone()));
         Sel { year, month, date, entry }
     }
 
     fn clamp_browse(&mut self) {
         let years = self.browse_years();
-        self.browse.yi = years.len().saturating_sub(1).min(self.browse.yi);
-        let Some(y) = years.get(self.browse.yi).map(|y| y.0.clone()) else {
-            self.browse.mi = 0;
-            self.browse.di = 0;
-            self.browse.ei = 0;
+        self.nav_mut().yi = years.len().saturating_sub(1).min(self.nav().yi);
+        let Some(y) = years.get(self.nav().yi).map(|y| y.0.clone()) else {
+            self.nav_mut().mi = 0;
+            self.nav_mut().di = 0;
+            self.nav_mut().ei = 0;
             return;
         };
         let months = self.browse_months(&y);
-        self.browse.mi = months.len().saturating_sub(1).min(self.browse.mi);
-        let Some(m) = months.get(self.browse.mi).map(|m| m.0.clone()) else { return };
+        self.nav_mut().mi = months.len().saturating_sub(1).min(self.nav().mi);
+        let Some(m) = months.get(self.nav().mi).map(|m| m.0.clone()) else { return };
         let days = self.browse_days(&y, &m);
-        self.browse.di = days.len().saturating_sub(1).min(self.browse.di);
-        let Some(d) = days.get(self.browse.di).map(|d| d.0.clone()) else { return };
+        self.nav_mut().di = days.len().saturating_sub(1).min(self.nav().di);
+        let Some(d) = days.get(self.nav().di).map(|d| d.0.clone()) else { return };
         let n = self.browse_day_entries(&d).len();
-        self.browse.ei = n.saturating_sub(1).min(self.browse.ei);
+        self.nav_mut().ei = n.saturating_sub(1).min(self.nav().ei);
     }
 
     pub fn results(&self) -> Vec<&Entry> {
@@ -542,7 +558,7 @@ impl App {
     }
 
     fn file_selected_draft(&mut self) {
-        let Some(e) = self.drafts().get(self.inbox_i).map(|e| (*e).clone()) else { return };
+        let Some(e) = self.selected_entry() else { return };
         match self.j.file_draft(&e.file, e.index, &e.raw, &self.split_tags) {
             Ok(dest) => {
                 self.reload();
@@ -553,12 +569,7 @@ impl App {
     }
 
     fn toggle_star_selected(&mut self) {
-        let sel = match self.screen {
-            Screen::Inbox => self.drafts().get(self.inbox_i).map(|e| (*e).clone()),
-            Screen::Browse => self.browse_sel().entry,
-            _ => None,
-        };
-        let Some(e) = sel else { return };
+        let Some(e) = self.selected_entry() else { return };
         match self.j.update_entry(&e.file, e.index, &e.raw, &e.ts, &e.title, !e.starred, &e.body) {
             Ok(_) => self.reload(),
             Err(err) => self.toast(err, true),
@@ -567,8 +578,7 @@ impl App {
 
     fn selected_entry(&self) -> Option<Entry> {
         match self.screen {
-            Screen::Inbox => self.drafts().get(self.inbox_i).map(|e| (*e).clone()),
-            Screen::Browse => self.browse_sel().entry,
+            Screen::Inbox | Screen::Browse => self.browse_sel().entry,
             Screen::Search => self.results().get(self.search_i).map(|e| (*e).clone()),
             _ => None,
         }
@@ -641,6 +651,7 @@ impl App {
 
     /// Open Browse with this entry selected.
     pub fn goto_entry(&mut self, e: &Entry) {
+        self.push(Screen::Browse);
         self.browse.pick = match (&e.source[..], &e.split) {
             ("split", Some(t)) => Pick::Split(t.clone()),
             ("inbox", _) => Pick::All,
@@ -653,9 +664,6 @@ impl App {
         self.browse.di = self.browse_days(&e.date[..4], &e.date[5..7]).iter().position(|d| d.0 == e.date).unwrap_or(0);
         self.browse.ei = self.browse_day_entries(&e.date).iter().position(|x| x.file == e.file && x.index == e.index).unwrap_or(0);
         self.browse.col = 3;
-        if self.screen != Screen::Browse {
-            self.push(Screen::Browse);
-        }
     }
 
     fn cycle_pick(&mut self) {
@@ -742,14 +750,13 @@ impl App {
             self.help = false;
             return;
         }
-        if k.code == KeyCode::F(1) || (k.code == KeyCode::Char('?') && self.screen != Screen::Write && self.screen != Screen::Search && !self.browse.filtering) {
+        if k.code == KeyCode::F(1) || (k.code == KeyCode::Char('?') && self.screen != Screen::Write && self.screen != Screen::Search && !self.nav().filtering) {
             self.help = true;
             return;
         }
         match self.screen {
             Screen::Today => self.today_key(k),
-            Screen::Inbox => self.inbox_key(k),
-            Screen::Browse => self.browse_key(k),
+            Screen::Inbox | Screen::Browse => self.browse_key(k),
             Screen::Write => self.write_key(k, ctrl, alt),
             Screen::LookBack => self.lookback_key(k),
             Screen::Search => self.search_key(k),
@@ -806,54 +813,22 @@ impl App {
         }
     }
 
-    fn inbox_key(&mut self, k: KeyEvent) {
-        let n = self.drafts().len();
-        match k.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.back(),
-            KeyCode::Up | KeyCode::Char('k') => self.inbox_i = self.inbox_i.saturating_sub(1),
-            KeyCode::Down => {
-                if n > 0 {
-                    self.inbox_i = (self.inbox_i + 1).min(n - 1)
-                }
-            }
-            KeyCode::Char('f') => self.file_selected_draft(),
-            KeyCode::Char('e') | KeyCode::Enter => {
-                if let Some(e) = self.drafts().get(self.inbox_i).map(|e| (*e).clone()) {
-                    self.edit_entry(&e);
-                }
-            }
-            KeyCode::Char('*') => self.toggle_star_selected(),
-            KeyCode::Char('t') => {
-                if let Some(e) = self.selected_entry() {
-                    self.modal = Some(Modal::Retime(e.ts[..16].to_string()));
-                }
-            }
-            KeyCode::Char('d') => {
-                if self.selected_entry().is_some() {
-                    self.modal = Some(Modal::Confirm { text: "Delete this draft?".into(), action: Confirm::DeleteSelected });
-                }
-            }
-            _ => {
-                self.common_nav(&k);
-            }
-        }
-    }
-
     fn browse_key(&mut self, k: KeyEvent) {
-        if self.browse.filtering {
+        let inbox = self.screen == Screen::Inbox;
+        if self.nav().filtering {
             match k.code {
                 KeyCode::Esc => {
-                    self.browse.filtering = false;
-                    self.browse.filter.clear();
+                    self.nav_mut().filtering = false;
+                    self.nav_mut().filter.clear();
                     self.clamp_browse();
                 }
-                KeyCode::Enter => self.browse.filtering = false,
+                KeyCode::Enter => self.nav_mut().filtering = false,
                 KeyCode::Backspace => {
-                    self.browse.filter.pop();
+                    self.nav_mut().filter.pop();
                     self.clamp_browse();
                 }
                 KeyCode::Char(c) => {
-                    self.browse.filter.push(c);
+                    self.nav_mut().filter.push(c);
                     self.clamp_browse();
                 }
                 _ => {}
@@ -862,39 +837,45 @@ impl App {
         }
         match k.code {
             KeyCode::Esc | KeyCode::Char('q') => self.back(),
-            KeyCode::Left | KeyCode::Char('h') => self.browse.col = self.browse.col.saturating_sub(1),
-            KeyCode::Right => self.browse.col = (self.browse.col + 1).min(3),
+            KeyCode::Left | KeyCode::Char('h') => self.nav_mut().col = self.nav().col.saturating_sub(1),
+            KeyCode::Right => self.nav_mut().col = (self.nav().col + 1).min(3),
             KeyCode::Up | KeyCode::Char('k') => {
-                match self.browse.col {
-                    0 => self.browse.yi = self.browse.yi.saturating_sub(1),
-                    1 => self.browse.mi = self.browse.mi.saturating_sub(1),
-                    2 => self.browse.di = self.browse.di.saturating_sub(1),
-                    _ => self.browse.ei = self.browse.ei.saturating_sub(1),
+                match self.nav().col {
+                    0 => self.nav_mut().yi = self.nav().yi.saturating_sub(1),
+                    1 => self.nav_mut().mi = self.nav().mi.saturating_sub(1),
+                    2 => self.nav_mut().di = self.nav().di.saturating_sub(1),
+                    _ => self.nav_mut().ei = self.nav().ei.saturating_sub(1),
                 }
                 self.after_browse_move();
             }
             KeyCode::Down => {
-                match self.browse.col {
-                    0 => self.browse.yi += 1,
-                    1 => self.browse.mi += 1,
-                    2 => self.browse.di += 1,
-                    _ => self.browse.ei += 1,
+                match self.nav().col {
+                    0 => self.nav_mut().yi += 1,
+                    1 => self.nav_mut().mi += 1,
+                    2 => self.nav_mut().di += 1,
+                    _ => self.nav_mut().ei += 1,
                 }
                 self.after_browse_move();
             }
             KeyCode::Enter => {
-                if self.browse.col < 3 {
-                    self.browse.col += 1;
+                if self.nav().col < 3 {
+                    self.nav_mut().col += 1;
                 } else if let Some(e) = self.browse_sel().entry {
                     self.edit_entry(&e);
                 }
             }
             KeyCode::Char('/') => {
-                self.browse.filtering = true;
-                self.browse.filter.clear();
+                self.nav_mut().filtering = true;
+                self.nav_mut().filter.clear();
             }
-            KeyCode::Char('s') => self.cycle_pick(),
-            KeyCode::Char('u') => self.unfile_selected(),
+            KeyCode::Char('s') if !inbox => self.cycle_pick(),
+            KeyCode::Char('u') if !inbox => self.unfile_selected(),
+            KeyCode::Char('f') if inbox => self.file_selected_draft(),
+            KeyCode::Char('e') => {
+                if let Some(e) = self.selected_entry() {
+                    self.edit_entry(&e);
+                }
+            }
             KeyCode::Char('*') => self.toggle_star_selected(),
             KeyCode::Char('t') => {
                 if let Some(e) = self.selected_entry() {
@@ -903,7 +884,8 @@ impl App {
             }
             KeyCode::Char('d') => {
                 if self.selected_entry().is_some() {
-                    self.modal = Some(Modal::Confirm { text: "Delete this entry?".into(), action: Confirm::DeleteSelected });
+                    let text = if inbox { "Delete this draft?" } else { "Delete this entry?" };
+                    self.modal = Some(Modal::Confirm { text: text.into(), action: Confirm::DeleteSelected });
                 }
             }
             _ => {
@@ -913,17 +895,17 @@ impl App {
     }
 
     fn after_browse_move(&mut self) {
-        match self.browse.col {
+        match self.nav().col {
             0 => {
-                self.browse.mi = 0;
-                self.browse.di = 0;
-                self.browse.ei = 0;
+                self.nav_mut().mi = 0;
+                self.nav_mut().di = 0;
+                self.nav_mut().ei = 0;
             }
             1 => {
-                self.browse.di = 0;
-                self.browse.ei = 0;
+                self.nav_mut().di = 0;
+                self.nav_mut().ei = 0;
             }
-            2 => self.browse.ei = 0,
+            2 => self.nav_mut().ei = 0,
             _ => {}
         }
         self.clamp_browse();
@@ -1644,7 +1626,7 @@ impl App {
         let (r, h) = hits.iter().rev().find(|(r, _)| r.contains(Position::new(x, y)))?;
         match h {
             // Text you read or write is not a menu.
-            Hit::Text(..) | Hit::TextEnd | Hit::Column(_) | Hit::Preview(..) | Hit::Item(3, _) => None,
+            Hit::Text(..) | Hit::TextEnd | Hit::Column(_) | Hit::Item(3, _) => None,
             _ => Some(*r),
         }
     }
@@ -1691,7 +1673,7 @@ impl App {
                 self.screen = Screen::Today;
                 self.help = false;
             }
-            Hit::Edit(f, i) | Hit::Preview(f, i) => {
+            Hit::Edit(f, i) => {
                 if let Some(e) = self.entry_at(&f, i) {
                     self.edit_entry(&e);
                 }
@@ -1705,17 +1687,9 @@ impl App {
                 let p = self.current_prompt();
                 self.start_draft("", &format!("> {}\n\n", p));
             }
-            Hit::Draft(i) => {
-                if self.inbox_i == i {
-                    // A second click goes on, as ↵ does.
-                    self.handle_key(KeyEvent::from(KeyCode::Enter));
-                } else {
-                    self.inbox_i = i;
-                }
-            }
-            Hit::Column(c) => self.browse.col = c.min(3),
+            Hit::Column(c) => self.nav_mut().col = c.min(3),
             Hit::Item(c, i) => {
-                let b = &mut self.browse;
+                let b = self.nav_mut();
                 let slot = match c {
                     0 => &mut b.yi,
                     1 => &mut b.mi,
@@ -1782,13 +1756,13 @@ impl App {
         }
         let key = KeyEvent::from(code);
         match self.screen {
-            Screen::Browse => {
+            Screen::Inbox | Screen::Browse => {
                 let col = self.hits.borrow().iter().rev().find_map(|(r, h)| match h {
                     Hit::Column(c) if r.contains(Position::new(x, y)) => Some(*c),
                     _ => None,
                 });
                 if let Some(c) = col {
-                    self.browse.col = c;
+                    self.nav_mut().col = c;
                 }
                 self.handle_key(key);
             }
@@ -1797,7 +1771,7 @@ impl App {
                     self.handle_key(key);
                 }
             }
-            Screen::Inbox | Screen::Search => self.handle_key(key),
+            Screen::Search => self.handle_key(key),
             _ => {}
         }
     }
@@ -1832,8 +1806,8 @@ impl App {
                 self.query.push_str(&line);
                 self.search_i = 0;
             }
-            Screen::Browse if self.browse.filtering => {
-                self.browse.filter.push_str(&line);
+            Screen::Inbox | Screen::Browse if self.nav().filtering => {
+                self.nav_mut().filter.push_str(&line);
                 self.clamp_browse();
             }
             _ => {}

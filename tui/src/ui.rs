@@ -43,11 +43,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
         Screen::Inbox => {
             let n = app.drafts().len();
-            let right = plain(Line::from(vec![Span::styled("draft ", p.muted()), Span::styled(format!("{}", (app.inbox_i + 1).min(n.max(1))), p.bold()), Span::styled(format!(" of {}   ", n), p.muted())]));
+            let right = plain(Line::from(vec![Span::styled(format!("{}", n), p.bold()), Span::styled(if n == 1 { " draft   " } else { " drafts   " }, p.muted())]));
             masthead(f, app, head, &p, "inbox  ·  review", right);
             rule(f, rule_row, &p);
-            inbox(f, body, app);
-            hints(f, app, hint_row, &p, &[("f", "file"), ("e", "edit"), ("*", "star"), ("t", "date & time"), ("d", "delete"), ("↑↓", "drafts")], &[("?", "keys"), ("esc", "back")], None);
+            browse(f, body, app);
+            if !filter_hint(f, app, hint_row, &p) {
+                hints(f, app, hint_row, &p, &[("←→", "columns"), ("f", "file"), ("e", "edit"), ("*", "star"), ("t", "date & time"), ("d", "delete"), ("/", "filter")], &[("?", "keys"), ("esc", "back")], None);
+            }
         }
         Screen::Browse => {
             let crumb = match &app.browse.pick {
@@ -58,9 +60,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             masthead(f, app, head, &p, &crumb, picker_line(app));
             rule(f, rule_row, &p);
             browse(f, body, app);
-            if app.browse.filtering {
-                put(f, hint_row, Line::from(vec![Span::styled("/ ", p.key()), Span::styled(app.browse.filter.clone(), p.ink()), Span::styled("▏", p.accent()), Span::styled("   type to filter   ↵ keep   esc clear", p.muted())]));
-            } else {
+            if !filter_hint(f, app, hint_row, &p) {
                 hints(f, app, hint_row, &p, &[("↵", "open"), ("← →", "columns"), ("↑↓", "move"), ("/", "filter"), ("s", "journal"), ("u", "to inbox"), ("r", "random")], &[("?", "keys"), ("esc", "back")], None);
             }
         }
@@ -476,111 +476,13 @@ fn today(f: &mut Frame, r: Rect, app: &App) {
     }
 }
 
-fn inbox(f: &mut Frame, r: Rect, app: &App) {
-    let p = &app.pal;
-    let ds = app.drafts();
-    if ds.is_empty() {
-        put(f, Rect::new(r.x + 2, r.y + 1, r.width - 2, 1), Line::from(Span::styled("Inbox is empty — nothing to review.", p.muted())));
-        put(f, Rect::new(r.x + 2, r.y + 3, r.width - 2, 1), Line::from(vec![Span::styled("n", p.key()), Span::styled(" starts a draft", p.muted())]));
-        return;
+/// The filter being typed, in place of the hints. False when not filtering.
+fn filter_hint(f: &mut Frame, app: &App, r: Rect, p: &Palette) -> bool {
+    let nav = app.nav();
+    if nav.filtering {
+        put(f, r, Line::from(vec![Span::styled("/ ", p.key()), Span::styled(nav.filter.clone(), p.ink()), Span::styled("▏", p.accent()), Span::styled("   type to filter   ↵ keep   esc clear", p.muted())]));
     }
-    let sel = app.inbox_i.min(ds.len() - 1);
-    if r.width >= 80 {
-        // The list beside the draft, as Browse puts its entries.
-        let lw = (r.width / 3).clamp(28, 40);
-        inbox_list(f, Rect::new(r.x, r.y, lw, r.height), app, &ds, sel, false);
-        let sep: Vec<Line> = (0..r.height).map(|_| Line::from(Span::styled("│", p.line()))).collect();
-        put_lines(f, Rect::new(r.x + lw, r.y, 1, r.height), sep);
-        draft_preview(f, Rect::new(r.x + lw + 2, r.y, r.width - lw - 2, r.height), app, ds[sel]);
-    } else {
-        // Narrow: the list above the draft.
-        let rows = (ds.len() as u16).min(if r.height >= 20 { 5 } else { 3 });
-        inbox_list(f, Rect::new(r.x, r.y, r.width, rows), app, &ds, sel, true);
-        rule(f, Rect::new(r.x, r.y + rows, r.width, 1), p);
-        draft_preview(f, Rect::new(r.x, r.y + rows + 1, r.width, r.height.saturating_sub(rows + 1)), app, ds[sel]);
-    }
-}
-
-/// One row a draft: date and time, a star, the title. `wide` adds its first
-/// tag and word count on the right.
-fn inbox_list(f: &mut Frame, r: Rect, app: &App, ds: &[&Entry], sel: usize, wide: bool) {
-    let p = &app.pal;
-    let h = r.height as usize;
-    let top = (sel + 1).saturating_sub(h);
-    for (k, e) in ds.iter().enumerate().skip(top).take(h) {
-        let y = r.y + (k - top) as u16;
-        let row = Rect::new(r.x, y, r.width, 1);
-        let on = k == sel;
-        if on {
-            f.render_widget(Block::default().style(p.selected_bg()), row);
-        }
-        let (t, untitled) = title_of(e);
-        let when = format!("{} {}  ", e.date, e.time);
-        let right = if wide { entry_meta(e, p, word_column_width(app)).spans } else { Vec::new() };
-        let rw = Line::from(right.clone()).width();
-        let room = (r.width as usize).saturating_sub(2 + when.width() + if e.starred { 2 } else { 0 } + if wide { rw + 2 } else { 0 });
-        let mut left = vec![Span::styled(if on { "▸ " } else { "  " }, p.accent()), Span::styled(when, p.muted())];
-        if e.starred {
-            left.push(Span::styled("★ ", p.accent()));
-        }
-        let title_st = if untitled { p.muted_italic() } else if on { p.bold() } else { p.ink() };
-        left.push(Span::styled(trunc(&t, room), title_st));
-        let bg = |l: Vec<Span<'static>>| -> Vec<Span<'static>> { if on { l.into_iter().map(|s| { let st = s.style.bg(p.card); s.style(st) }).collect() } else { l } };
-        two_sided(f, row, Line::from(bg(left)), Line::from(bg(right)));
-        app.hit(row, Hit::Draft(k));
-    }
-}
-
-fn draft_preview(f: &mut Frame, r: Rect, app: &App, e: &Entry) {
-    let p = &app.pal;
-    if r.width < 10 || r.height < 6 {
-        return;
-    }
-    app.hit(r, Hit::Preview(e.file.clone(), e.index));
-    let w = r.width as usize;
-    let mut y = r.y;
-    let dest = app.destination_of(e);
-    let mut head = vec![Span::styled(format!("  {}  ·  {}", e.date, e.time), p.muted()), Span::styled("   →  ", p.faint())];
-    if dest.starts_with("journal/") {
-        head.push(Span::styled(dest.clone(), p.faint()));
-    } else {
-        let tag = dest.trim_end_matches(".md");
-        head.push(Span::styled(dest.clone(), p.accent()));
-        head.push(Span::styled("  split journal, because of ", p.faint()));
-        head.push(Span::styled(format!("@{}", tag), p.accent()));
-    }
-    put(f, Rect::new(r.x, y, r.width, 1), Line::from(head));
-    y += 2;
-    if e.title.is_empty() {
-        put(f, Rect::new(r.x + 2, y, r.width - 2, 1), Line::from(Span::styled("untitled — the first line will be the title", p.muted_italic())));
-    } else {
-        let mut t = vec![Span::styled(trunc(&e.title, w - 6), p.bold())];
-        if e.starred {
-            t.push(Span::styled(" ★", p.accent()));
-        }
-        put(f, Rect::new(r.x + 2, y, r.width - 2, 1), Line::from(t));
-    }
-    y += 2;
-    let body_h = r.height.saturating_sub((y - r.y) + 2);
-    let mut lines: Vec<Line> = Vec::new();
-    for line in e.body.split('\n') {
-        for seg in wrap_text(line, w.saturating_sub(4)) {
-            lines.push(md::style_line(&seg, p, false));
-        }
-    }
-    let shown = lines.len().min(body_h as usize);
-    let more = lines.len() > shown;
-    put_lines(f, Rect::new(r.x + 2, y, r.width - 2, shown as u16), lines.into_iter().take(shown).collect());
-    y = r.y + r.height - 1;
-    let mut foot = vec![Span::styled(format!("{} words  ·  {} tag{}", e.words, e.tags.len(), if e.tags.len() == 1 { "" } else { "s" }), p.muted())];
-    if !e.tags.is_empty() {
-        foot.push(Span::styled("  ·  ", p.muted()));
-        foot.push(Span::styled(e.tags.join(" "), p.accent()));
-    }
-    if more {
-        foot.push(Span::styled("  ·  ⋮ more below — e to read it all", p.faint()));
-    }
-    two_sided(f, Rect::new(r.x + 2, y, r.width - 2, 1), Line::from(foot), Line::from(Span::styled(e.file.clone(), p.faint())));
+    nav.filtering
 }
 
 fn picker_line(app: &App) -> Vec<Item<'static>> {
@@ -636,6 +538,8 @@ fn column<'a>(items: &[(String, usize)], sel: usize, active: bool, label: impl F
 
 fn browse(f: &mut Frame, r: Rect, app: &App) {
     let p = &app.pal;
+    let nav = app.nav();
+    let inbox = app.screen == Screen::Inbox;
     let sel = app.browse_sel();
     let years = app.browse_years();
     let months = sel.year.as_deref().map(|y| app.browse_months(y)).unwrap_or_default();
@@ -644,7 +548,11 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
         _ => vec![],
     };
     if years.is_empty() {
-        put(f, Rect::new(r.x + 2, r.y + 1, r.width - 2, 1), Line::from(Span::styled(if app.browse.filtering { "Nothing matches that filter." } else { "No entries here yet." }, p.muted())));
+        let text = if nav.filtering { "Nothing matches that filter." } else if inbox { "Inbox is empty — nothing to review." } else { "No entries here yet." };
+        put(f, Rect::new(r.x + 2, r.y + 1, r.width - 2, 1), Line::from(Span::styled(text, p.muted())));
+        if inbox && !nav.filtering {
+            put(f, Rect::new(r.x + 2, r.y + 3, r.width - 2, 1), Line::from(vec![Span::styled("n", p.key()), Span::styled(" starts a draft", p.muted())]));
+        }
         return;
     }
     let wide = r.width >= 96;
@@ -673,21 +581,24 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
             put(f, Rect::new(x + 1, yy, 1, 1), Line::from(Span::styled("│", p.line())));
         }
     };
-    draw_col(f, 0, x, wy, "YEAR", column(&years, app.browse.yi, app.browse.col == 0, |k| k.to_string(), wy as usize, p), app.browse.yi);
-    x += wy;
-    vline(f, x);
-    x += sep;
-    draw_col(f, 1, x, wm, "MONTH", column(&months, app.browse.mi, app.browse.col == 1, |k| stats::month_name(k.parse().unwrap_or(1)).to_string(), wm as usize, p), app.browse.mi);
-    x += wm;
-    vline(f, x);
-    x += sep;
-    draw_col(f, 2, x, wd, "DAY", column(&days, app.browse.di, app.browse.col == 2, |k| stats::parse_date(k).map(|d| d.format("%a %d").to_string()).unwrap_or_else(|| k.to_string()), wd as usize, p), app.browse.di);
-    x += wd;
-    if !wide {
-        return;
+    // Narrow: the columns, or the entries once you've moved on to them.
+    if wide || nav.col < 3 {
+        draw_col(f, 0, x, wy, "YEAR", column(&years, nav.yi, nav.col == 0, |k| k.to_string(), wy as usize, p), nav.yi);
+        x += wy;
+        vline(f, x);
+        x += sep;
+        draw_col(f, 1, x, wm, "MONTH", column(&months, nav.mi, nav.col == 1, |k| stats::month_name(k.parse().unwrap_or(1)).to_string(), wm as usize, p), nav.mi);
+        x += wm;
+        vline(f, x);
+        x += sep;
+        draw_col(f, 2, x, wd, "DAY", column(&days, nav.di, nav.col == 2, |k| stats::parse_date(k).map(|d| d.format("%a %d").to_string()).unwrap_or_else(|| k.to_string()), wd as usize, p), nav.di);
+        x += wd;
+        if !wide {
+            return;
+        }
+        vline(f, x);
+        x += sep;
     }
-    vline(f, x);
-    x += sep;
     let pw = (r.x + r.width).saturating_sub(x);
     let Some(date) = &sel.date else { return };
     let es = app.browse_day_entries(date);
@@ -697,7 +608,7 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
     let mut owner: Vec<usize> = Vec::new();
     let mut sel_line = 0usize;
     for (i, e) in es.iter().enumerate() {
-        let active = i == app.browse.ei;
+        let active = i == nav.ei;
         if active {
             sel_line = lines.len();
         }
@@ -705,13 +616,13 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
             lines.push(Line::from(Span::styled(format!("       {}", "─".repeat((pw as usize).saturating_sub(9))), p.line())));
         }
         let (t, untitled) = title_of(e);
-        let marker = if active && app.browse.col == 3 { Span::styled("▌", p.accent()) } else { Span::styled(" ", p.ink()) };
+        let marker = if active && (nav.col == 3 || inbox) { Span::styled("▌", p.accent()) } else { Span::styled(" ", p.ink()) };
         let mut head = vec![marker, Span::styled(format!("{}  ", e.time), p.accent())];
         head.push(Span::styled(trunc(&t, (pw as usize).saturating_sub(12)), if untitled { p.muted_italic() } else { p.bold() }));
         if e.starred {
             head.push(Span::styled(" ★", p.accent()));
         }
-        if e.source == "inbox" {
+        if e.source == "inbox" && !inbox {
             head.push(Span::styled("  draft", p.faint()));
         }
         lines.push(Line::from(head));
@@ -728,6 +639,9 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
         if !e.tags.is_empty() {
             meta.push(Span::styled("  ·  ", p.muted()));
             meta.push(Span::styled(e.tags.join(" "), p.accent()));
+        }
+        if inbox {
+            meta.push(Span::styled(format!("  ·  → {}", app.destination_of(e)), p.faint()));
         }
         lines.push(Line::from(meta));
         owner.resize(lines.len(), i);
@@ -1078,8 +992,8 @@ fn help_overlay(f: &mut Frame, area: Rect, app: &App) {
     let p = &app.pal;
     let rows: Vec<(&str, &str)> = match app.screen {
         Screen::Today => vec![("n", "new draft"), ("↵", "write from the prompt"), ("p", "another prompt"), ("i", "inbox"), ("j", "journal"), ("l", "look back"), ("/", "search"), ("r", "a random entry"), (",", "settings"), ("q", "quit")],
-        Screen::Inbox => vec![("↑ ↓", "move between drafts"), ("f", "file the draft"), ("e  ↵", "edit it"), ("*", "star"), ("t", "change its date and time"), ("d", "delete"), ("n", "new draft"), ("esc", "back")],
-        Screen::Browse => vec![("← →", "year · month · day · entries"), ("↑ ↓", "move"), ("↵", "open (edit) the entry"), ("/", "filter the column"), ("s", "main · split journals · all"), ("u", "return to the inbox"), ("*", "star"), ("t", "date and time"), ("d", "delete"), ("r", "random"), ("esc", "back")],
+        Screen::Inbox => vec![("← →", "year · month · day · drafts"), ("↑ ↓", "move"), ("f", "file the draft"), ("e", "edit it"), ("/", "filter the column"), ("*", "star"), ("t", "change its date and time"), ("d", "delete"), ("n", "new draft"), ("esc", "back")],
+        Screen::Browse => vec![("← →", "year · month · day · entries"), ("↑ ↓", "move"), ("e  ↵", "open (edit) the entry"), ("/", "filter the column"), ("s", "main · split journals · all"), ("u", "return to the inbox"), ("*", "star"), ("t", "date and time"), ("d", "delete"), ("r", "random"), ("esc", "back")],
         Screen::Write => vec![("^j", "file to its day (or split journal)"), ("^s", "save now (it autosaves)"), ("^t", "date and time"), ("^f", "focus: dim all but this paragraph"), ("^p", "insert a prompt"), ("^o", "timer: start · pause · resume"), ("alt-o", "reset the timer"), ("^b ^i ^g", "bold · italic · code on the word"), ("@", "tag autocomplete, ↹ or ↵ accepts"), ("↹", "indent a list item"), ("↵ ↵", "an empty item ends the list"), ("^v", "paste; a clipboard image is attached"), ("drop", "a photo or video on the window attaches it"), ("^d", "discard the draft"), ("esc", "back (saved)")],
         Screen::LookBack => vec![("← →", "earlier · later year"), ("esc", "back")],
         Screen::Settings => vec![("↑ ↓", "choose a setting"), ("← →", "change it"), ("↵", "next value / toggle"), ("esc", "back")],

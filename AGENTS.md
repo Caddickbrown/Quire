@@ -157,7 +157,8 @@ docs/consolidation-plan.md   the plan, decisions, and the TUI spec
   (the desktop binary is `quire-desktop`, so it never collides with the
   terminal's `quire` in the workspace target or on PATH).
 - **Terminal** (`tui/`): ratatui 0.30 + crossterm 0.29. Screens: Today,
-  Inbox (review), Browse (year/month/day/entries + Main/split/all picker),
+  Inbox (review) and Browse (the same year/month/day/entries
+  columns, each with its own place through `App::nav`; Browse adds the Main/split/all picker),
   Write, Look back, Search; a help overlay; a one-line modal for date & time
   and confirmations. Autosave 700 ms after the last keystroke, on Esc, and
   on quit. Mouse: `ui` records a `Hit` for each clickable cell as it draws

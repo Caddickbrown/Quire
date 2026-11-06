@@ -56,7 +56,7 @@ p = os.path.join(folder, "inbox", today[:4], today[5:7], today[8:] + ".md")
 txt = open(p).read() if os.path.exists(p) else ""
 check("draft saved to inbox day file", "Smoke test" in txt and "- two @garden" in txt and "- one" in txt and "![](assets/" in txt)
 send(ESC, 0.6); check("back on today after esc", seen("day streak"))
-click(10, rows - 1); check("a click on the hint bar opens the inbox", seen("review"))
+click(10, rows - 1); check("a click on the hint bar opens the inbox", seen("review") and seen("YEAR") and seen("MONTH"))
 # Select the new (newest) draft explicitly: the review selection can survive
 # a reload while the composer autosaves.
 send(UP * 16)
