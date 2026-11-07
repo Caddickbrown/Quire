@@ -246,11 +246,15 @@ struct PhoneRoot: View {
             HStack(spacing: 0) {
                 if sidebarCollapsed {
                     QSideRail(onNew: { composing = ComposeTarget(ref: nil) },
-                              onExpand: { withAnimation(.easeInOut(duration: 0.2)) { sidebarCollapsed = false } })
+                              onExpand: { withAnimation(.easeInOut(duration: 0.2)) { sidebarCollapsed = false } },
+                              onMedia: { showMedia = true }, onSearch: { showSearch = true },
+                              onSettings: { showSettings = true })
                 } else {
                     QSideBar(tab: $tab, inboxCount: store.inboxDrafts.count,
                              onNew: { composing = ComposeTarget(ref: nil) },
-                             onCollapse: { withAnimation(.easeInOut(duration: 0.2)) { sidebarCollapsed = true } })
+                             onCollapse: { withAnimation(.easeInOut(duration: 0.2)) { sidebarCollapsed = true } },
+                             onMedia: { showMedia = true }, onSearch: { showSearch = true },
+                             onSettings: { showSettings = true })
                 }
                 verticalRule
                 VStack(spacing: 0) {
@@ -268,6 +272,7 @@ struct PhoneRoot: View {
                         }
                     }
                 }
+                .environment(\.qBesideSidebar, true)
             }
             .background(q.pageColor)
             // The sidebar stays in reach while a page is open; choosing another

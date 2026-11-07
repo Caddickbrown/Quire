@@ -94,9 +94,11 @@ struct EntryRef: Hashable, Identifiable {
 
 /// "Quire" in italic, with Search and Settings (and, where given, Random and
 /// the Media Library) as quiet icons. In Marathon the mark sits in a signal
-/// block, and the actions are cells ruled off from it.
+/// block, and the actions are cells ruled off from it. Beside the sidebar, which
+/// has the mark and those actions itself, only Random stays.
 struct QMasthead: View {
     @Environment(\.quire) private var q
+    @Environment(\.qBesideSidebar) private var besideSidebar
     var onRandom: (() -> Void)? = nil
     var randomLabel = "Random entry"
     var onMedia: (() -> Void)? = nil
@@ -104,7 +106,14 @@ struct QMasthead: View {
     var onSettings: () -> Void
 
     var body: some View {
-        if q.isMarathon {
+        if besideSidebar {
+            if let onRandom {
+                HStack {
+                    Spacer()
+                    icon(randomLabel, "dice", onRandom)
+                }
+            }
+        } else if q.isMarathon {
             HStack(spacing: 0) {
                 HStack(spacing: 10) {
                     QMark().stroke(q.onSignalColor, style: StrokeStyle(lineWidth: 7, lineCap: .square))
@@ -304,7 +313,8 @@ struct QTabBar: View {
 
 /// The tab bar's words stacked down a narrow column, for regular width (iPad,
 /// and an iPhone that opens out). Same words, same states, "+ New entry" under
-/// them; the faces keep their own masthead, so Search and Settings stay there.
+/// them, and the Media Library, Search and Settings at the foot, there on every
+/// face. The faces drop their masthead beside it, so the mark shows once.
 struct QSideBar: View {
     @Environment(\.quire) private var q
     @Binding var tab: PhoneTab
@@ -312,6 +322,9 @@ struct QSideBar: View {
     var onNew: () -> Void
     /// Folds the sidebar down to `QSideRail`.
     var onCollapse: () -> Void
+    var onMedia: () -> Void
+    var onSearch: () -> Void
+    var onSettings: () -> Void
 
     static let width: CGFloat = 180
 
@@ -345,6 +358,13 @@ struct QSideBar: View {
             .padding(.top, 8)
             .accessibilityLabel("New entry")
             Spacer(minLength: 0)
+            HStack(spacing: 0) {
+                QSideAction(label: "Media Library", symbol: "photo.on.rectangle", action: onMedia)
+                QSideAction(label: "Search", symbol: "magnifyingglass", action: onSearch)
+                QSideAction(label: "Settings", symbol: "gearshape", action: onSettings)
+            }
+            .padding(.leading, -13)
+            .padding(.bottom, 10)
         }
         .padding(.horizontal, 22).padding(.top, 18)
         .frame(width: Self.width, alignment: .leading)
@@ -369,11 +389,44 @@ struct QSideBar: View {
     }
 }
 
-/// The sidebar folded away: a narrow strip that keeps the way back and "+".
+/// One of the quiet icons at the foot of the sidebar or the rail.
+struct QSideAction: View {
+    @Environment(\.quire) private var q
+    let label: String
+    let symbol: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 18, weight: .regular)).foregroundStyle(q.inkColor)
+                .frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
+/// True beside the sidebar or the rail, which hold the mark and the actions.
+private struct QBesideSidebarKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var qBesideSidebar: Bool {
+        get { self[QBesideSidebarKey.self] }
+        set { self[QBesideSidebarKey.self] = newValue }
+    }
+}
+
+/// The sidebar folded away: a narrow strip that keeps the way back, "+" and the
+/// actions at the foot.
 struct QSideRail: View {
     @Environment(\.quire) private var q
     var onNew: () -> Void
     var onExpand: () -> Void
+    var onMedia: () -> Void
+    var onSearch: () -> Void
+    var onSettings: () -> Void
 
     static let width: CGFloat = 52
 
@@ -387,6 +440,10 @@ struct QSideRail: View {
             .buttonStyle(.plain)
             .accessibilityLabel("New entry")
             Spacer(minLength: 0)
+            QSideAction(label: "Media Library", symbol: "photo.on.rectangle", action: onMedia)
+            QSideAction(label: "Search", symbol: "magnifyingglass", action: onSearch)
+            QSideAction(label: "Settings", symbol: "gearshape", action: onSettings)
+                .padding(.bottom, 10)
         }
         .padding(.top, 14)
         .frame(width: Self.width)
@@ -488,6 +545,22 @@ extension View {
 }
 
 // MARK: - On this day
+
+/// The year over its entries, on Today and Look back.
+struct QYearHeading: View {
+    @Environment(\.quire) private var q
+    let year: String
+    let ago: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(year).font(q.mono(13)).foregroundStyle(q.accentColor)
+            Text(ago).font(q.ui(12)).foregroundStyle(q.mutedColor)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
 
 extension JournalStore {
     /// Filed entries from today's calendar day in earlier years, newest year
