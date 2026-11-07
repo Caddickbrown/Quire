@@ -26,6 +26,26 @@ struct JournalScreen: View {
     @State private var starredOnly = false
     @State private var selected: Int?
     @State private var deleting: Entry?
+    /// The months and the flat list, kept until the journal or the filter
+    /// changes. The store announces every autosave (a draft's words, the
+    /// inbox), and this list redraws for each, under the composer too: regrouping
+    /// every filed entry each time was the stall after each pause in typing,
+    /// worst on an iPad, where the list stays on screen beside the sidebar.
+    @State private var grouped = Grouped()
+
+    /// See `grouped`. Every change to `archiveEntries` comes with a new
+    /// `revision` (or, when the folder goes, a new count).
+    private final class Grouped {
+        private var key: (Int, Int, Bool)?
+        private var months: [Month] = []
+        private var flat: [Entry] = []
+        func lists(for key: (Int, Int, Bool), build: () -> ([Month], [Entry])) -> ([Month], [Entry]) {
+            if let k = self.key, k == key { return (months, flat) }
+            (months, flat) = build()
+            self.key = key
+            return (months, flat)
+        }
+    }
 
     private struct Month: Identifiable {
         let id: String   // "2026-09"
@@ -56,8 +76,10 @@ struct JournalScreen: View {
     }
 
     var body: some View {
-        let months = months
-        let flat = months.flatMap { $0.days.flatMap { $0.entries.reversed() } }
+        let (months, flat) = grouped.lists(for: (store.revision, store.archiveEntries.count, starredOnly)) {
+            let months = self.months
+            return (months, months.flatMap { $0.days.flatMap { $0.entries.reversed() } })
+        }
         let selectedID = selected.flatMap { flat.indices.contains($0) ? flat[$0].id : nil }
         return ScrollViewReader { proxy in
         ScrollView {

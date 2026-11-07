@@ -782,9 +782,20 @@ struct WritingTextEditor: UIViewRepresentable {
     /// view: the text view's own layout depends on the frame we're being asked
     /// to choose, so reading it here would chase its own tail — which on iOS
     /// showed up as the row jittering with every keystroke.
+    ///
+    /// SwiftUI asks more than once per keystroke (twice, counted on an iPad), and
+    /// again whenever the page around it redraws with the text unchanged, so the
+    /// answer is kept for the text, width and type it was measured for.
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
         guard sizeToFit, let width = proposal.width, width > 0 else { return nil }
-        return CGSize(width: width, height: measuredHeight(width: width))
+        let key = "\(fontRaw)|\(size)|\(lineSpacing)|\(mirror)|\(uiView.traitCollection.preferredContentSizeCategory.rawValue)"
+        let cache = context.coordinator.measured
+        if let cache, cache.width == width, cache.key == key, cache.text == text {
+            return CGSize(width: width, height: cache.height)
+        }
+        let height = measuredHeight(width: width)
+        context.coordinator.measured = (text, width, key, height)
+        return CGSize(width: width, height: height)
     }
 
     /// Height of `text` wrapped at `width`, plus a blank line's slack — enough
@@ -816,6 +827,8 @@ struct WritingTextEditor: UIViewRepresentable {
         var tagSuggestions: [String] = []
         /// What the last full apply styled with — updateUIView's skip check.
         var lastStyleSignature = ""
+        /// The last height `sizeThatFits` measured, and what it measured.
+        var measured: (text: String, width: CGFloat, key: String, height: CGFloat)?
         /// Caret reporting for the external display (see `onCaretChange`).
         var onCaretChange: ((Int?) -> Void)?
         /// The post-edit range of the in-flight user edit, recorded in

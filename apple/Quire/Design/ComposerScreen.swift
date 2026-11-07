@@ -41,7 +41,15 @@ struct ComposerScreen: View {
     @State private var pending: Task<Void, Never>?
     private enum Field: Hashable { case title, body }
     @FocusState private var focus: Field?
-    @State private var caret: Int?
+    /// What changes on every keystroke but isn't drawn here: kept out of
+    /// SwiftUI state, so writing it never asks for another pass over the page.
+    @State private var scratch = Scratch()
+    /// The footer's count, brought up to date a moment after typing pauses
+    /// rather than recounted from the whole text on every keystroke.
+    @State private var words = 0
+    /// The known tags for the @ bar, rebuilt when the store's tags change
+    /// rather than on every keystroke's pass over the page.
+    @State private var tagNames: [String] = []
     @State private var savedSource: EntrySource?
     @State private var saveError: String?
     @State private var saveGeneration = 0
@@ -61,9 +69,6 @@ struct ComposerScreen: View {
     @State private var filedBeat = 0
     @State private var savedBeat = 0
     @State private var failedBeat = 0
-    /// Where the caret last was in the body: a picker sheet takes focus away,
-    /// and what it brings back still lands there.
-    @State private var lastCaret: Int?
     @State private var showingPhotoPicker = false
     @State private var showingFilePicker = false
     @State private var showingPhotoCapture = false
@@ -83,7 +88,9 @@ struct ComposerScreen: View {
     private var editing: EntryRef? { target.ref }
     private var source: EntrySource { savedSource ?? editing?.source ?? .inbox }
     private var isDraft: Bool { source == .inbox }
-    private var words: Int { text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count }
+    private static func count(_ text: String) -> Int {
+        text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
+    }
     /// The other drafts still waiting, for working through the inbox one by one.
     private var draftsLeft: Int { store.inboxDrafts.filter { $0.id != current?.id }.count }
     private var draftsNote: String {
@@ -141,16 +148,17 @@ struct ComposerScreen: View {
         }
         .onAppear { load(); registerKeys() }
         .onChange(of: title) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror() }
-        .onChange(of: text) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror() }
+        .onChange(of: text) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror(); scheduleCount() }
+        .onReceive(store.$tagCounts) { counts in tagNames = counts.map { String($0.tag.dropFirst()) } }
         .onDisappear {
             pending?.cancel()
+            scratch.countTask?.cancel()
             DeskDatePicker.shared.cancel()
             DeskConfirm.shared.cancel(owner: routerID)
             ExternalDisplayModel.shared.releasePage(owner: routerID)
             KeyCommandRouter.shared.unregister(routerID)
         }
         .interactiveDismissDisabled()
-        .onChange(of: caret) { _, _ in mirror() }
         .onChange(of: focus) { _, _ in mirror() }
         .onChange(of: starred) { _, _ in scheduleSave(); mirror() }
         .alert("Save a recovery copy?", isPresented: $recoverCopy) {
@@ -244,8 +252,8 @@ struct ComposerScreen: View {
             WritingTextEditor(text: $text, fontRaw: q.editorFontName,
                               size: fontSize + 2, textColor: q.inkColor, lineSpacing: 8,
                               accent: q.accentColor, sizeToFit: true,
-                              tagSuggestions: store.tagCounts.map { String($0.tag.dropFirst()) },
-                              onCaretChange: { caret = $0; if let c = $0 { lastCaret = c } },
+                              tagSuggestions: tagNames,
+                              onCaretChange: caretMoved,
                               onPasteMedia: { if let rel = Attach.pasted($0, into: store) { link(rel) } },
                               focused: Binding(get: { focus == .body }, set: { if $0 { focus = .body } else if focus == .body { focus = nil } }))
                 .focused($focus, equals: .body)
@@ -306,7 +314,7 @@ struct ComposerScreen: View {
 
     /// Put an attachment's link in the body where the caret was.
     private func link(_ rel: String) {
-        text = JournalStore.linking(rel, into: text, at: lastCaret)
+        text = JournalStore.linking(rel, into: text, at: scratch.lastCaret)
     }
 
     private func say(_ message: String) {
@@ -361,6 +369,7 @@ struct ComposerScreen: View {
             starred = ref.entry.isStarred
             opened = (title, text, starred)
         }
+        words = Self.count(text)
         // The page opens ready to type into.
         // A new page starts on its title; an entry opens ready to carry on,
         // with the cursor at the end of its text.
@@ -376,14 +385,40 @@ struct ComposerScreen: View {
         return t.isEmpty ? "*" : t + " *"
     }
 
-    /// Republish the page to a connected monitor as you type.
+    /// Republish the page to a connected monitor as you type. A keystroke
+    /// reaches here from the text and from the caret; the same page twice is
+    /// sent once.
     private func mirror() {
         guard loaded else { return }
+        let caret = scratch.caret
         let content: ExternalDisplayContent = editing == nil
             ? .composing(title: title, date: stampDate, text: text, caret: caret, inTitle: focus == .title)
             : .editing(title: title, date: stampDate, text: text, caret: caret, isStarred: starred, isDraft: isDraft,
                        inTitle: focus == .title)
+        guard content != scratch.mirrored else { return }
+        scratch.mirrored = content
         ExternalDisplayModel.shared.present(content, owner: routerID)
+    }
+
+    /// The body's caret moved. Only the monitor shows it, so it is kept off
+    /// the page's state, and the monitor hears on the next turn: the editor
+    /// can report it while SwiftUI is still updating the page.
+    private func caretMoved(_ new: Int?) {
+        if let new { scratch.lastCaret = new }
+        guard new != scratch.caret else { return }
+        scratch.caret = new
+        DispatchQueue.main.async { mirror() }
+    }
+
+    /// The footer's word count, a quarter of a second after the last keystroke.
+    private func scheduleCount() {
+        scratch.countTask?.cancel()
+        scratch.countTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            let n = Self.count(text)
+            if n != words { words = n }
+        }
     }
 
     /// Until now the header showed the time of each redraw, so typing and
@@ -606,6 +641,17 @@ struct ComposerScreen: View {
         }
         leave()
     }
+}
+
+/// The composer's per-keystroke bookkeeping (see `ComposerScreen.scratch`).
+private final class Scratch {
+    var caret: Int?
+    /// Where the caret last was in the body: a picker sheet takes focus away,
+    /// and what it brings back still lands there.
+    var lastCaret: Int?
+    var countTask: Task<Void, Never>?
+    /// The page last sent to the monitor.
+    var mirrored: ExternalDisplayContent?
 }
 
 /// A one-line field in UIKit so it can claim Esc: a SwiftUI TextField's

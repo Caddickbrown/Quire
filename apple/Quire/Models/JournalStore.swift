@@ -210,7 +210,10 @@ final class JournalStore: ObservableObject {
         guard let core else { lastWriteError = "The journal folder is unavailable."; return nil }
         do {
             let result = try action(core)
-            lastWriteError = nil
+            // Only when there was one: setting a published value, even to nil
+            // again, redraws every screen that watches the store, and this runs
+            // on every autosave.
+            if lastWriteError != nil { lastWriteError = nil }
             lastLocalWriteAt = Date()
             journalDidChange()
             return result
