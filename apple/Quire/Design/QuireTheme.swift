@@ -46,8 +46,25 @@ struct QuireTheme: Decodable, Identifiable, Equatable {
     }
 
     static let storageKey = "quireTheme"
-    /// "auto" follows the system appearance: Almanac by day, Cinema by night.
+    /// "auto" follows the system appearance: the chosen light look by day and
+    /// the chosen dark one by night (Almanac and Cinema until chosen).
     static let auto = "auto"
+    /// Auto's two looks. They live in the App Group, not the app's own
+    /// defaults, so the widgets and the Live Activity resolve "auto" (the id
+    /// `QuireSnapshot` carries) to the same pair.
+    static let autoLightKey = "quireAutoLight"
+    static let autoDarkKey = "quireAutoDark"
+    static let defaultAutoLight = "almanac"
+    static let defaultAutoDark = "cinema"
+    static let sharedDefaults: UserDefaults = UserDefaults(suiteName: QuireSnapshot.suiteName) ?? .standard
+
+    /// The look auto uses by day (`dark` false) or by night: the one chosen, if
+    /// themes.json still has it and it is the right kind, else the default.
+    static func autoID(dark: Bool) -> String {
+        let chosen = sharedDefaults.string(forKey: dark ? autoDarkKey : autoLightKey)
+        if let chosen, all.contains(where: { $0.id == chosen && $0.dark == dark }) { return chosen }
+        return dark ? defaultAutoDark : defaultAutoLight
+    }
 
     static let all: [QuireTheme] = {
         struct Catalog: Decodable { let themes: [QuireTheme] }
@@ -68,7 +85,7 @@ struct QuireTheme: Decodable, Identifiable, Equatable {
 
     static func resolve(_ id: String, scheme: ColorScheme) -> QuireTheme {
         if id != auto, let theme = all.first(where: { $0.id == id }) { return theme }
-        let wanted = scheme == .dark ? "cinema" : "almanac"
+        let wanted = autoID(dark: scheme == .dark)
         return all.first { $0.id == wanted } ?? all[0]
     }
 
@@ -123,6 +140,9 @@ extension EnvironmentValues {
 /// the share sheet) agree with it.
 struct QuireThemed<Content: View>: View {
     @AppStorage(QuireTheme.storageKey) private var themeID = QuireTheme.auto
+    // Read by `resolve`; here so choosing auto's looks redraws the app.
+    @AppStorage(QuireTheme.autoLightKey, store: QuireTheme.sharedDefaults) private var autoLight = QuireTheme.defaultAutoLight
+    @AppStorage(QuireTheme.autoDarkKey, store: QuireTheme.sharedDefaults) private var autoDark = QuireTheme.defaultAutoDark
     @Environment(\.colorScheme) private var systemScheme
     @ViewBuilder var content: Content
 
@@ -137,6 +157,10 @@ struct QuireThemed<Content: View>: View {
             .background(theme.pageColor.ignoresSafeArea())
             .preferredColorScheme(id == QuireTheme.auto ? nil : theme.colorScheme)
             .onChange(of: themeID) { _, id in QuireSnapshot.updateTheme(id) }
+            // The widgets read the pair from the App Group themselves; they only
+            // need telling to draw again.
+            .onChange(of: autoLight) { _, _ in QuireSnapshot.reloadWidgets() }
+            .onChange(of: autoDark) { _, _ in QuireSnapshot.reloadWidgets() }
     }
 }
 

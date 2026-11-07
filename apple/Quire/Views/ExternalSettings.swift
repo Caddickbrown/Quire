@@ -121,7 +121,7 @@ import SwiftUI
 
         return [
             Item(id: "dark", title: "Dark mode", value: appIsDark ? "On" : "Off") {
-                setBoth(self.appIsDark ? "almanac" : "cinema")
+                setBoth(QuireTheme.autoID(dark: !self.appIsDark))
             },
             Item(id: "theme", title: "Theme", value: name(self.appThemeID)) {
                 setBoth(next(self.appThemeID, in: ids))

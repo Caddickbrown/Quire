@@ -24,6 +24,9 @@ struct ExternalDisplayRoot: View {
     @ObservedObject private var confirm = DeskConfirm.shared
     @ObservedObject private var commands = CommandHost.shared
     @AppStorage(QuireTheme.storageKey) private var themeID = QuireTheme.auto
+    // Auto's looks, read by `resolve`: here so a change redraws the monitor.
+    @AppStorage(QuireTheme.autoLightKey, store: QuireTheme.sharedDefaults) private var autoLight = QuireTheme.defaultAutoLight
+    @AppStorage(QuireTheme.autoDarkKey, store: QuireTheme.sharedDefaults) private var autoDark = QuireTheme.defaultAutoDark
     @AppStorage(ExternalTheme.key) private var monitorTheme = ExternalTheme.followPhone
     @AppStorage(ExternalTextSize.key) private var textSizeRaw = ExternalTextSize.regular.rawValue
 

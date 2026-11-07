@@ -21,6 +21,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+- **Apple**: Auto theme picks its looks. Settings → Theme → Auto now asks which light theme to use by day and which dark one at night (Almanac and Cinema until you choose), and switches with the system's appearance. The widgets, the Live Activity and the monitor follow the same pair.
+
 ### Changed
 - **Apple**: on the monitor, Esc from an open entry steps back to the list you came from, with your place in it kept, and the next Esc goes to Today. The hint bar says Back on an open entry.
 

@@ -206,6 +206,9 @@ private struct ThemePicker: View {
     @Environment(\.quire) private var q
     let selected: String
     let pick: (String) -> Void
+    /// Auto's looks (see `QuireTheme.autoID`).
+    @AppStorage(QuireTheme.autoLightKey, store: QuireTheme.sharedDefaults) private var autoLight = QuireTheme.defaultAutoLight
+    @AppStorage(QuireTheme.autoDarkKey, store: QuireTheme.sharedDefaults) private var autoDark = QuireTheme.defaultAutoDark
 
     private static let blurb: [String: String] = [
         "almanac": "Warm paper, terracotta, a book's serif",
@@ -219,10 +222,32 @@ private struct ThemePicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            row(id: QuireTheme.auto, name: "Auto", detail: "Follows your phone: Almanac by day, Cinema at night", swatch: nil)
+            VStack(alignment: .leading, spacing: 0) {
+                row(id: QuireTheme.auto, name: "Auto",
+                    detail: "Follows your phone: \(name(QuireTheme.autoID(dark: false))) by day, \(name(QuireTheme.autoID(dark: true))) at night",
+                    swatch: nil)
+                // With auto chosen, which light look and which dark one it moves between.
+                if selected == QuireTheme.auto {
+                    autoChoice("By day", QuireTheme.all.filter { !$0.dark }, QuireTheme.autoID(dark: false)) { autoLight = $0 }
+                    autoChoice("At night", QuireTheme.all.filter { $0.dark }, QuireTheme.autoID(dark: true)) { autoDark = $0 }
+                }
+            }
             group("Light", QuireTheme.all.filter { !$0.dark })
             group("Dark", QuireTheme.all.filter { $0.dark })
         }
+    }
+
+    private func name(_ id: String) -> String { QuireTheme.all.first { $0.id == id }?.name ?? id }
+
+    private func autoChoice(_ label: String, _ themes: [QuireTheme], _ chosen: String,
+                            pick: @escaping (String) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(q.ui(13)).foregroundStyle(q.mutedColor).padding(.top, 10)
+            FlowChoices(options: themes.map { ($0.id, $0.name) }, selected: chosen, pick: pick)
+        }
+        .padding(.leading, 54)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Auto, \(label.lowercased())")
     }
 
     private func group(_ title: String, _ themes: [QuireTheme]) -> some View {

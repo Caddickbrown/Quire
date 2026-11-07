@@ -209,7 +209,7 @@ legacy/             Nook and Wander, kept for reference: nothing builds from the
   Native media, backup, bookmarks, watchers, widgets, sharing and reminders
   remain Swift. The widgets (`apple/QuireWidget/`) use the iPhone design:
   `QuireTheme.swift` and `themes.json` are built into the extension, and the
-  app's `QuireSnapshot` (App Group) carries the theme id, the day its figures
+  app's `QuireSnapshot` (App Group) carries the theme id ("auto" resolves through the light/dark pair kept in the App Group, `QuireTheme.autoID`), the day its figures
   describe, and On this day; the prompt deck and its reroll offset live in
   `QuireShared.swift`/the App Group so app and widgets agree. Widget and
   control links: `quire://write`, `today`, `inbox`, `capture`, `entry`.
