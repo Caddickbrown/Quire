@@ -211,6 +211,7 @@ struct SettingsView: View {
     @State private var showingExporter = false
     @State private var exportDoc = ExportDocument(text: "")
     @State private var showingCleanup = false
+    @State private var cleaningUp = false
     @State private var cleanupMessage = ""
     @State private var showingNothingToExport = false
     @State private var showingBackupPicker = false
@@ -858,14 +859,30 @@ struct SettingsView: View {
         }
         .disabled(store.backupFolderName == nil || store.backupRunning)
     }
+    /// The work runs on the main actor with the journal, so it would otherwise hold
+    /// the tap until it was done with nothing to show for it. The row changes first,
+    /// and the work starts once that's been drawn.
     private var cleanUpButton: some View {
         Button {
-            let r = store.cleanup()
-            cleanupMessage = "Moved \(r.moved) to their day, formatted \(r.formatted), reordered \(r.reordered), removed \(r.deduped) duplicate(s), extracted \(r.extracted) to split journals."
-            showingCleanup = true
+            cleaningUp = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(60))
+                let r = store.cleanup()
+                cleaningUp = false
+                cleanupMessage = "Moved \(r.moved) to their day, formatted \(r.formatted), reordered \(r.reordered), removed \(r.deduped) duplicate(s), extracted \(r.extracted) to split journals."
+                showingCleanup = true
+            }
         } label: {
-            Label("Clean Up", systemImage: "wand.and.sparkles")
+            if cleaningUp {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Cleaning Up…")
+                }
+            } else {
+                Label("Clean Up", systemImage: "wand.and.sparkles")
+            }
         }
+        .disabled(cleaningUp)
     }
     private var mergeExSplitButton: some View {
         Button {
