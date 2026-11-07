@@ -1007,6 +1007,19 @@ struct WritingTextEditor: UIViewRepresentable {
 final class PastingTextView: UITextView {
     var pasteMedia: ((PastedMedia) -> Void)?
 
+    /// A sized-to-fit editor (the composer) never scrolls inside itself: the
+    /// page around it does. UIKit still nudged the offset on some edits: Dan's
+    /// recording showed the whole body dropping a few points after the
+    /// keyboard turned "..." into "…" with a line below, until the next key.
+    /// Held at the top whenever scrolling is off.
+    override var contentOffset: CGPoint {
+        get { super.contentOffset }
+        set { super.contentOffset = isScrollEnabled ? newValue : .zero }
+    }
+    override func setContentOffset(_ offset: CGPoint, animated: Bool) {
+        super.setContentOffset(isScrollEnabled ? offset : .zero, animated: animated)
+    }
+
     /// The composer's control chords, declared here because the text view is
     /// the first responder while you type: the key catcher sits beside the
     /// page, not above it, so nothing it declares is in this responder chain.
