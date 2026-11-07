@@ -574,3 +574,70 @@ final class CommandPaletteTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Esc and ⌘.
+
+/// An iPad's keyboard often has no Esc, and iOS never makes ⌘. into one, so ⌘. has
+/// to be declared everywhere Esc is.
+final class EscapeChordTests: XCTestCase {
+    func testAFieldAndTheCatcherHearBoth() {
+        XCTAssertEqual(EscapeChord.declared(composing: false), [.escape, .commandPeriod])
+    }
+
+    func testMidCompositionBothBelongToTheInputMethod() {
+        XCTAssertTrue(EscapeChord.declared(composing: true).isEmpty)
+    }
+
+    func testTheChords() {
+        XCTAssertEqual(EscapeChord.escape.input, "\u{1B}")
+        XCTAssertEqual(EscapeChord.commandPeriod.input, ".")
+        XCTAssertTrue(EscapeChord.commandPeriod.command)
+    }
+}
+
+// MARK: - On this day
+
+final class OnThisDayYearsTests: XCTestCase {
+    private typealias Day = (date: String, entries: [String])
+
+    func testEachYearIsOneGroupNewestFirst() {
+        let days: [Day] = [("2021-11-07", ["a"]), ("2024-11-07", ["b", "c"]), ("2023-11-07", ["d"])]
+        let years = OnThisDayYears.group(days, thisYear: "2026")
+        XCTAssertEqual(years.map(\.year), ["2024", "2023", "2021"])
+        XCTAssertEqual(years[0].items.map(\.item), ["b", "c"])
+    }
+
+    func testEachEntryKeepsTheDayItCameFrom() {
+        let years = OnThisDayYears.group([("2024-11-07", ["b"])] as [Day], thisYear: "2026")
+        XCTAssertEqual(years[0].items[0].date, "2024-11-07")
+    }
+
+    func testTwoDaysInOneYearShareAGroup() {
+        let days: [Day] = [("2024-02-29", ["a"]), ("2024-02-28", ["b"])]
+        let years = OnThisDayYears.group(days, thisYear: "2026")
+        XCTAssertEqual(years.count, 1)
+        XCTAssertEqual(years[0].items.map(\.item), ["a", "b"])
+    }
+
+    func testAYearSaysHowLongAgoItWas() {
+        let years = OnThisDayYears.group([("2025-11-07", ["a"]), ("2023-11-07", ["b"])] as [Day], thisYear: "2026")
+        XCTAssertEqual(years[0].ago, "A year ago")
+        XCTAssertEqual(years[1].ago, "3 years ago")
+    }
+
+    func testAYearWithNoEntriesIsLeftOut() {
+        XCTAssertTrue(OnThisDayYears.group([("2024-11-07", [])] as [Day], thisYear: "2026").isEmpty)
+    }
+
+    func testALimitKeepsTheFirstOfEachYearAndCountsTheRest() {
+        let years = OnThisDayYears.group([("2024-11-07", ["a", "b", "c"])] as [Day], thisYear: "2026", perYear: 2)
+        XCTAssertEqual(years[0].items.map(\.item), ["a", "b"])
+        XCTAssertEqual(years[0].hidden, 1)
+    }
+
+    func testNoLimitKeepsThemAll() {
+        let years = OnThisDayYears.group([("2024-11-07", ["a", "b", "c"])] as [Day], thisYear: "2026")
+        XCTAssertEqual(years[0].items.count, 3)
+        XCTAssertEqual(years[0].hidden, 0)
+    }
+}

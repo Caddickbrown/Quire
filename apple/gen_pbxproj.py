@@ -54,6 +54,8 @@ swift_files = [
     ('SearchQuery',     'Models/SearchQuery.swift',     'Models'),
     ('ListContinuation','Models/ListContinuation.swift','Models'),
     ('CommandPalette',  'Models/CommandPalette.swift',  'Models'),
+    ('EscapeChord',     'Models/EscapeChord.swift',     'Models'),
+    ('OnThisDayYears',  'Models/OnThisDayYears.swift',  'Models'),
     ('JournalStore',    'Models/JournalStore.swift',    'Models'),
     ('CoreJournal',     'Models/CoreJournal.swift',     'Models'),
     ('AppleVault',      'Models/AppleVault.swift',      'Models'),
@@ -154,6 +156,7 @@ test_swift_files = [
 # Rust XCFramework as the app. `init(testingBase:)` supplies a temporary folder. Keep this list closed over its own
 # dependencies; a view type leaking in is the signal it belongs in Models.
 test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListContinuation', 'CommandPalette',
+                      'EscapeChord', 'OnThisDayYears',
                       'JournalStore', 'CoreJournal', 'AppleVault', 'QuireCore', 'QuireShared', 'Reminders', 'SpotlightIndexer']
 
 # Allocate ids

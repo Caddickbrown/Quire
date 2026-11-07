@@ -17,6 +17,8 @@
 		4028D0B82AF25463B54185A2 /* SearchQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A46BCF298F15920B60123F7 /* SearchQuery.swift */; };
 		26D1241AF445512281F08D8F /* ListContinuation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1519EDC250CB540183D54A2F /* ListContinuation.swift */; };
 		23ED1A8FD12256B4A37A58BE /* CommandPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E91B2113A1359798356A3EB /* CommandPalette.swift */; };
+		112677D9F63455519217CD08 /* EscapeChord.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47DF0150D675801B65C669B /* EscapeChord.swift */; };
+		0DBAE8D2312253439BC1DF7B /* OnThisDayYears.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118E76BF92015B29A8FA166E /* OnThisDayYears.swift */; };
 		C33255FA5CBE52908C555FA5 /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64DA39CFB5BC597A836E29E3 /* JournalStore.swift */; };
 		A1B080BDCF62550F9BD28602 /* CoreJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D621AD259615470A0332C22 /* CoreJournal.swift */; };
 		D6ADFB3B9BC158F2BFA265B5 /* AppleVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E04E597C279590983417F37 /* AppleVault.swift */; };
@@ -100,6 +102,8 @@
 		3357E305632F5EF2827BA2C4 /* SearchQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A46BCF298F15920B60123F7 /* SearchQuery.swift */; };
 		0B464C0579FF5E4A91B492C2 /* ListContinuation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1519EDC250CB540183D54A2F /* ListContinuation.swift */; };
 		EF5BAE7C32A35BA7A8423482 /* CommandPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E91B2113A1359798356A3EB /* CommandPalette.swift */; };
+		543AD8D57117599096FD35CF /* EscapeChord.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47DF0150D675801B65C669B /* EscapeChord.swift */; };
+		46A4321A9EA55866B24B0F51 /* OnThisDayYears.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118E76BF92015B29A8FA166E /* OnThisDayYears.swift */; };
 		D1E0CC202230586998DEC9EA /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64DA39CFB5BC597A836E29E3 /* JournalStore.swift */; };
 		B0C979230EF557A797B0925D /* CoreJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D621AD259615470A0332C22 /* CoreJournal.swift */; };
 		26B59243BA985E0C8B6CF245 /* AppleVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E04E597C279590983417F37 /* AppleVault.swift */; };
@@ -154,6 +158,8 @@
 		4A46BCF298F15920B60123F7 /* SearchQuery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchQuery.swift; sourceTree = "<group>"; };
 		1519EDC250CB540183D54A2F /* ListContinuation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListContinuation.swift; sourceTree = "<group>"; };
 		2E91B2113A1359798356A3EB /* CommandPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPalette.swift; sourceTree = "<group>"; };
+		C47DF0150D675801B65C669B /* EscapeChord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EscapeChord.swift; sourceTree = "<group>"; };
+		118E76BF92015B29A8FA166E /* OnThisDayYears.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnThisDayYears.swift; sourceTree = "<group>"; };
 		64DA39CFB5BC597A836E29E3 /* JournalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalStore.swift; sourceTree = "<group>"; };
 		2D621AD259615470A0332C22 /* CoreJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreJournal.swift; sourceTree = "<group>"; };
 		0E04E597C279590983417F37 /* AppleVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleVault.swift; sourceTree = "<group>"; };
@@ -327,6 +333,8 @@
 				4A46BCF298F15920B60123F7 /* SearchQuery.swift */,
 				1519EDC250CB540183D54A2F /* ListContinuation.swift */,
 				2E91B2113A1359798356A3EB /* CommandPalette.swift */,
+				C47DF0150D675801B65C669B /* EscapeChord.swift */,
+				118E76BF92015B29A8FA166E /* OnThisDayYears.swift */,
 				64DA39CFB5BC597A836E29E3 /* JournalStore.swift */,
 				2D621AD259615470A0332C22 /* CoreJournal.swift */,
 				0E04E597C279590983417F37 /* AppleVault.swift */,
@@ -609,6 +617,8 @@
 				4028D0B82AF25463B54185A2 /* SearchQuery.swift in Sources */,
 				26D1241AF445512281F08D8F /* ListContinuation.swift in Sources */,
 				23ED1A8FD12256B4A37A58BE /* CommandPalette.swift in Sources */,
+				112677D9F63455519217CD08 /* EscapeChord.swift in Sources */,
+				0DBAE8D2312253439BC1DF7B /* OnThisDayYears.swift in Sources */,
 				C33255FA5CBE52908C555FA5 /* JournalStore.swift in Sources */,
 				A1B080BDCF62550F9BD28602 /* CoreJournal.swift in Sources */,
 				D6ADFB3B9BC158F2BFA265B5 /* AppleVault.swift in Sources */,
@@ -705,6 +715,8 @@
 				3357E305632F5EF2827BA2C4 /* SearchQuery.swift in Sources */,
 				0B464C0579FF5E4A91B492C2 /* ListContinuation.swift in Sources */,
 				EF5BAE7C32A35BA7A8423482 /* CommandPalette.swift in Sources */,
+				543AD8D57117599096FD35CF /* EscapeChord.swift in Sources */,
+				46A4321A9EA55866B24B0F51 /* OnThisDayYears.swift in Sources */,
 				D1E0CC202230586998DEC9EA /* JournalStore.swift in Sources */,
 				B0C979230EF557A797B0925D /* CoreJournal.swift in Sources */,
 				26B59243BA985E0C8B6CF245 /* AppleVault.swift in Sources */,

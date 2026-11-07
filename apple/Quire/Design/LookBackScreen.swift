@@ -22,9 +22,13 @@ struct LookBackScreen: View {
 
     /// The "on this day" entries, in the order they're drawn: what the keys walk.
     private var pastRefs: [EntryRef] {
-        store.qOnThisDay().flatMap { day in
-            day.entries.prefix(2).map { EntryRef(entry: $0, source: .archive(date: day.date)) }
+        pastYears.flatMap { year in
+            year.items.map { EntryRef(entry: $0.item, source: .archive(date: $0.date)) }
         }
+    }
+
+    private var pastYears: [OnThisDayYears.Year<Entry>] {
+        OnThisDayYears.group(store.qOnThisDay(), thisYear: String(JournalStore.nowDate().prefix(4)))
     }
 
     var body: some View {
@@ -91,34 +95,37 @@ struct LookBackScreen: View {
     }
 
     @ViewBuilder private var onThisDay: some View {
-        let past = store.qOnThisDay()
-        if !past.isEmpty {
-            VStack(alignment: .leading, spacing: 14) {
+        let years = pastYears
+        let refs = pastRefs
+        if !years.isEmpty {
+            VStack(alignment: .leading, spacing: 18) {
                 QLabel("On this day").qArrive()
-                ForEach(past, id: \.date) { day in
-                    ForEach(day.entries.prefix(2)) { entry in
-                        let ref = EntryRef(entry: entry, source: .archive(date: day.date))
-                        let on = ref.entry.id == selected.flatMap { pastRefs.indices.contains($0) ? pastRefs[$0].entry.id : nil }
-                        Button { open(ref) } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(String(day.date.prefix(4))).font(q.mono(12)).foregroundStyle(q.accentColor)
-                                Text(entry.qTitle.isEmpty ? "Untitled" : entry.qTitle)
-                                    .font(q.writing(20)).foregroundStyle(q.inkColor)
-                                    .multilineTextAlignment(.leading)
-                                if !entry.qExcerpt.isEmpty {
-                                    Text(entry.qExcerpt).font(q.writing(16, italic: true))
-                                        .foregroundStyle(q.mutedColor).lineLimit(2).multilineTextAlignment(.leading)
+                ForEach(years) { year in
+                    VStack(alignment: .leading, spacing: 8) {
+                        QYearHeading(year: year.year, ago: year.ago)
+                        ForEach(year.items, id: \.item.id) { dated in
+                            let ref = EntryRef(entry: dated.item, source: .archive(date: dated.date))
+                            let on = ref.entry.id == selected.flatMap { refs.indices.contains($0) ? refs[$0].entry.id : nil }
+                            Button { open(ref) } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(dated.item.qTitle.isEmpty ? "Untitled" : dated.item.qTitle)
+                                        .font(q.writing(20)).foregroundStyle(q.inkColor)
+                                        .multilineTextAlignment(.leading)
+                                    if !dated.item.qExcerpt.isEmpty {
+                                        Text(dated.item.qExcerpt).font(q.writing(16, italic: true))
+                                            .foregroundStyle(q.mutedColor).lineLimit(2).multilineTextAlignment(.leading)
+                                    }
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 44)
+                                .padding(.leading, on ? 10 : 0)
+                                .overlay(alignment: .leading) { if on { Rectangle().fill(q.accentColor).frame(width: 3) } }
+                                .contentShape(Rectangle())
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 44)
-                            .padding(.leading, on ? 10 : 0)
-                            .overlay(alignment: .leading) { if on { Rectangle().fill(q.accentColor).frame(width: 3) } }
-                            .contentShape(Rectangle())
+                            .buttonStyle(.plain)
+                            .id(dated.item.id)
+                            // Old pages dealt onto the desk, one after another.
+                            .qFanIn(min(6, refs.firstIndex { $0.entry.id == dated.item.id } ?? 0))
                         }
-                        .buttonStyle(.plain)
-                        .id(entry.id)
-                        // Old pages dealt onto the desk, one after another.
-                        .qFanIn(min(6, pastRefs.firstIndex { $0.entry.id == entry.id } ?? 0))
                     }
                 }
             }

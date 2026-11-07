@@ -41,7 +41,11 @@ struct TodayScreen: View {
     /// Kept in the App Group, so the widgets show the same prompt.
     @AppStorage(QuirePrompts.offsetKey, store: QuirePrompts.defaults) private var promptOffset = 0
     private var prompt: String { QuirePrompts.prompt(offset: promptOffset) }
-    private var onThisDay: [(date: String, entries: [Entry])] { store.qOnThisDay() }
+    /// The earlier years shown here. All of them are in Look back.
+    private static let yearsShown = 3
+    private var onThisDay: [OnThisDayYears.Year<Entry>] {
+        OnThisDayYears.group(store.qOnThisDay(), thisYear: String(JournalStore.nowDate().prefix(4)), perYear: 2)
+    }
 
     var body: some View {
         ScrollView {
@@ -59,7 +63,7 @@ struct TodayScreen: View {
                 begin
                 capture
                 if !filedToday.isEmpty { entries }
-                if let past = onThisDay.first { onThisDaySection(past) }
+                if !onThisDay.isEmpty { onThisDaySection(onThisDay) }
                 if q.isMarathon { marathonFooter }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -332,31 +336,38 @@ struct TodayScreen: View {
         .animation(QMotion.settle, value: filedToday.map(\.id))
     }
 
-    private func onThisDaySection(_ past: (date: String, entries: [Entry])) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private func onThisDaySection(_ years: [OnThisDayYears.Year<Entry>]) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
             QLabel("On this day")
-            ForEach(Array(past.entries.prefix(2).enumerated()), id: \.element.id) { i, entry in
-                let ref = EntryRef(entry: entry, source: .archive(date: past.date))
-                Button { open(ref) } label: {
-                    HStack(alignment: .top, spacing: 12) {
-                        Text(String(past.date.prefix(4))).font(q.mono(12)).foregroundStyle(q.accentColor)
-                            .fixedSize().rotationEffect(.degrees(-90)).frame(width: 14, height: 34)
-                            .padding(.top, 4)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(entry.qTitle.isEmpty ? "Untitled" : entry.qTitle)
-                                .font(q.writing(18)).foregroundStyle(q.inkColor)
-                                .multilineTextAlignment(.leading)
-                            if !entry.tags.isEmpty {
-                                Text(entry.qTagLine).font(q.ui(13)).foregroundStyle(q.accentColor)
-                                    .lineLimit(2).multilineTextAlignment(.leading)
+            ForEach(years.prefix(Self.yearsShown)) { year in
+                VStack(alignment: .leading, spacing: 8) {
+                    QYearHeading(year: year.year, ago: year.ago)
+                    ForEach(Array(year.items.enumerated()), id: \.element.item.id) { i, dated in
+                        let ref = EntryRef(entry: dated.item, source: .archive(date: dated.date))
+                        Button { open(ref) } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(dated.item.qTitle.isEmpty ? "Untitled" : dated.item.qTitle)
+                                    .font(q.writing(18)).foregroundStyle(q.inkColor)
+                                    .multilineTextAlignment(.leading)
+                                if !dated.item.tags.isEmpty {
+                                    Text(dated.item.qTagLine).font(q.ui(13)).foregroundStyle(q.accentColor)
+                                        .lineLimit(2).multilineTextAlignment(.leading)
+                                }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 44)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                        .qFanIn(i)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 44)
-                    .contentShape(Rectangle())
+                    if year.hidden > 0 {
+                        Text("\(year.hidden) more in Look back").font(q.ui(13)).foregroundStyle(q.mutedColor)
+                    }
                 }
-                .buttonStyle(.plain)
-                .qFanIn(i)
+            }
+            if years.count > Self.yearsShown {
+                let more = years.count - Self.yearsShown
+                Text("\(more) more year\(more == 1 ? "" : "s") in Look back").font(q.ui(13)).foregroundStyle(q.mutedColor)
             }
         }
     }
