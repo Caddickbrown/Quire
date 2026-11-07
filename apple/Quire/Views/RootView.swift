@@ -643,27 +643,52 @@ struct AppLockVeil: View {
     @ObservedObject private var appLock = AppLockManager.shared
 
     var body: some View {
-        ZStack {
-            Rectangle().fill(.thickMaterial).ignoresSafeArea()
-            if appLock.isLocked {
-                VStack(spacing: 16) {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.secondary)
-                    Text("Quire is locked")
-                        .font(.headline)
-                    Button("Unlock") { appLock.unlock() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(appLock.unlocking)
-                }
-            }
-        }
+        // A window of its own, so the root's theme doesn't reach it: it reads it again.
+        QuireThemed { AppLockVeilFace(locked: appLock.isLocked, unlocking: appLock.unlocking) { appLock.unlock() } }
         .onAppear { appLock.unlock() }
         // The veil is often already up (covering the switcher snapshot) when
         // the lock itself engages, so appearing isn't the only cue to prompt.
         .onChange(of: appLock.isLocked) { _, locked in
             if locked { appLock.unlock() }
         }
+    }
+}
+
+/// The veil in the journal's own theme: its paper, its serif, its accent.
+private struct AppLockVeilFace: View {
+    @Environment(\.quire) private var q
+    let locked: Bool
+    let unlocking: Bool
+    let unlock: () -> Void
+
+    var body: some View {
+        ZStack {
+            q.pageColor.ignoresSafeArea()
+            if locked {
+                VStack(spacing: 18) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 34, weight: .light))
+                        .foregroundStyle(q.accentColor)
+                    Text("Quire is locked")
+                        .font(QuireFont.serif(26, weight: .medium))
+                        .foregroundStyle(q.inkColor)
+                    Rectangle().fill(q.lineColor).frame(width: 48, height: q.ruleH)
+                    Button(action: unlock) {
+                        Text("Unlock")
+                            .font(QuireFont.sans(15, weight: .semibold))
+                            .foregroundStyle(q.onAccentColor)
+                            .padding(.horizontal, 26)
+                            .padding(.vertical, 11)
+                            .background(Capsule().fill(q.accentColor))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(unlocking)
+                    .opacity(unlocking ? 0.6 : 1)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+        .preferredColorScheme(q.colorScheme)
     }
 }
 
@@ -698,8 +723,8 @@ final class AppLockVeilWindow {
         guard !scenes.isEmpty else { return }
         for scene in scenes {
             let host = UIHostingController(rootView: AppLockVeil())
-            // Opaque under the veil's material: in a window of its own the
-            // material has no backdrop of the app's to thicken.
+            // The veil paints the theme's paper edge to edge; this only shows for
+            // the instant before it draws.
             host.view.backgroundColor = .systemBackground
             let veil = UIWindow(windowScene: scene)
             veil.rootViewController = host
