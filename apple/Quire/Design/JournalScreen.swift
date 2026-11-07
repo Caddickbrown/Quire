@@ -80,7 +80,7 @@ struct JournalScreen: View {
                             .padding(.bottom, 4).overlay(alignment: .bottom) { QRule() }
                         ForEach(month.days, id: \.date) { day in
                             VStack(alignment: .leading, spacing: 10) {
-                                Text(QDate.shortDay(day.date).uppercased()).tracking(1.4)
+                                Text(QDate.fullDay(day.date).uppercased()).tracking(1.4)
                                     .font(q.label(11)).foregroundStyle(q.mutedColor)
                                 ForEach(day.entries.reversed()) { entry in
                                     let ref = EntryRef(entry: entry, source: .archive(date: day.date))

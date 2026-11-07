@@ -684,7 +684,7 @@ private struct DeskBrowse: View {
 
     private func rowView(_ row: ExternalRow, on: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: metrics.caption) {
-            Text(QDate.shortDay(row.date).uppercased()).font(q.label(metrics.caption * 0.85)).tracking(metrics.caption * 0.1)
+            Text(QDate.fullDay(row.date).uppercased()).font(q.label(metrics.caption * 0.85)).tracking(metrics.caption * 0.1)
                 .foregroundStyle(on ? q.accentColor : q.mutedColor)
                 .frame(width: metrics.text * 4.6, alignment: .leading)
             Text(row.title.isEmpty ? AttributedString("Untitled") : QMarkdown.emphasis(row.title))
