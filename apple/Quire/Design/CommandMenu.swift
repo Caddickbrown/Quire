@@ -110,7 +110,7 @@ enum CommandKeys {
 
     /// Everything the menu listens for, declared on its own field.
     static var open: [UIKeyCommand] {
-        [toggle, command(UIKeyCommand.inputEscape), command("\r"), command("\t"), command("\t", .shift),
+        [toggle, command(UIKeyCommand.inputEscape), command(".", .command), command("\r"), command("\t"), command("\t", .shift),
          command(UIKeyCommand.inputUpArrow), command(UIKeyCommand.inputDownArrow)]
     }
 
@@ -118,7 +118,7 @@ enum CommandKeys {
         let flags = command.modifierFlags.intersection([.command, .alternate, .shift, .control])
         switch (command.input, flags) {
         case ("k", .command): return .toggle
-        case (UIKeyCommand.inputEscape, []): return .esc
+        case (UIKeyCommand.inputEscape, []), (".", .command): return .esc
         case ("\r", []): return .enter
         case ("\t", []): return .tab
         case ("\t", .shift): return .backTab

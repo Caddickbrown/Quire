@@ -104,6 +104,7 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
             CommandKeys.toggle,
             UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(quireOpenSelection)),
             UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(quireClearSelection)),
+            EscapeChord.commandPeriod.keyCommand(action: #selector(quireClearSelection)),
             UIKeyCommand(input: "?", modifierFlags: [], action: #selector(quireToggleHints)),
         ]
     }

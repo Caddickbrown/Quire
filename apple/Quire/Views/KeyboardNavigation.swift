@@ -224,6 +224,7 @@ final class KeyCommandController: UIViewController {
             CommandKeys.toggle,
             UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(openSelection)),
             UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(clearSelection)),
+            EscapeChord.commandPeriod.keyCommand(action: #selector(clearSelection)),
             UIKeyCommand(input: "?", modifierFlags: [], action: #selector(toggleHints)),
         ]
     }

@@ -671,12 +671,11 @@ struct QEscapingField: UIViewRepresentable {
     }
 }
 
-/// Declares Esc ahead of the text system and hands it to the router.
+/// Declares Esc and ⌘. ahead of the text system and hands them to the router.
 final class EscapingTextField: UITextField {
     override var keyCommands: [UIKeyCommand]? {
-        let esc = UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(quireEscape))
-        esc.wantsPriorityOverSystemBehavior = true
-        return (super.keyCommands ?? []) + [esc, CommandKeys.toggle]
+        let esc = EscapeChord.declared(composing: markedTextRange != nil).map { $0.keyCommand(action: #selector(quireEscape)) }
+        return (super.keyCommands ?? []) + esc + [CommandKeys.toggle]
     }
 
     @objc private func quireEscape() { KeyCommandRouter.shared.clear() }

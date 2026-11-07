@@ -1024,9 +1024,8 @@ final class PastingTextView: UITextView {
         }
         guard KeyCommandRouter.shared.wantsChords else { return own }
         // Esc leaves the page; ahead of the text system, which may keep it.
-        let esc = UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(quireEscape))
-        esc.wantsPriorityOverSystemBehavior = true
-        return own + [esc] + KeyCommandRouter.chords.map {
+        let esc = EscapeChord.declared(composing: markedTextRange != nil).map { $0.keyCommand(action: #selector(quireEscape)) }
+        return own + esc + KeyCommandRouter.chords.map {
             let c = UIKeyCommand(input: $0, modifierFlags: .control, action: #selector(quireChord(_:)))
             c.wantsPriorityOverSystemBehavior = true
             return c
