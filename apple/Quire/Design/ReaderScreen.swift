@@ -211,25 +211,20 @@ struct ReaderScreen: View {
         entry.body.components(separatedBy: "\n\n").flatMap { raw -> [Block] in
             let part = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !part.isEmpty else { return [] }
-            // A media link on a line of its own is shown as the media, wherever
-            // it sits in the paragraph: an attachment added under a line of text
-            // (one newline, not a blank line) used to show as its raw link.
-            // Text around it, a voice memo's transcript say, reads as text.
-            let lines = part.components(separatedBy: "\n")
-            if lines.contains(where: { Self.mediaPath($0) != nil }) {
-                var out: [Block] = []
-                var pending: [String] = []
-                func flush() {
-                    let text = pending.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !text.isEmpty { out += text.qChunks(1500).map { Block.text($0) } }
-                    pending = []
+            // Media links are found with the same parser the Journal page uses,
+            // so a photo that shows there shows here: wherever it sits in the
+            // paragraph, and with a caption, a title or spaces round it. Text
+            // around it, a voice memo's transcript say, reads as text.
+            let segments = parseMediaSegments(part)
+            if segments.contains(where: { if case .image = $0 { true } else { false } }) {
+                return segments.flatMap { seg -> [Block] in
+                    switch seg {
+                    case .image(let path, _): return [.media(path)]
+                    case .text(let t):
+                        let text = t.trimmingCharacters(in: .whitespacesAndNewlines)
+                        return text.isEmpty ? [] : text.qChunks(1500).map { Block.text($0) }
+                    }
                 }
-                for line in lines {
-                    if let path = Self.mediaPath(line) { flush(); out.append(.media(path)) }
-                    else { pending.append(line) }
-                }
-                flush()
-                return out
             }
             let hashes = part.prefix { $0 == "#" }.count
             if hashes > 0, hashes <= 3, part.dropFirst(hashes).first == " " {
@@ -241,15 +236,6 @@ struct ReaderScreen: View {
             }
             return part.qChunks(1500).map { Block.text($0) }
         }
-    }
-
-    /// The path in a line that is only `![…](path)`, else nil.
-    private static func mediaPath(_ line: String) -> String? {
-        let t = line.trimmingCharacters(in: .whitespaces)
-        guard t.hasPrefix("!["), t.hasSuffix(")"),
-              let mid = t.range(of: "]("), mid.upperBound < t.endIndex else { return nil }
-        let path = t[mid.upperBound..<t.index(before: t.endIndex)]
-        return path.isEmpty ? nil : String(path)
     }
 
     @ViewBuilder private func blockView(_ block: Block) -> some View {
