@@ -12,7 +12,7 @@ import Foundation
 
 /// Relative asset paths referenced by markdown media links in some content.
 enum MediaLinks {
-    private static let regex = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\(\s*(?:<([^>\n]*)>|([^\s)]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)"#)
+    private static let regex = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\(\s*(?:<([^>\n]*)>|([^\s)]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?(?:\s*\)|[ \t]*(?=\r?\n|$))"#)
 
     static func paths(in content: String) -> [String] {
         let ns = content as NSString
