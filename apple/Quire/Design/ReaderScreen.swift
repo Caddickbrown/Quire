@@ -205,7 +205,7 @@ struct ReaderScreen: View {
 
     // MARK: Body
 
-    private enum Block { case heading(String, Int), quote(String), media(String), text(String) }
+    private enum Block { case heading(String, Int), quote(String), media(String, caption: String), text(String) }
 
     private var blocks: [Block] {
         entry.body.components(separatedBy: "\n\n").flatMap { raw -> [Block] in
@@ -219,7 +219,7 @@ struct ReaderScreen: View {
             if segments.contains(where: { if case .image = $0 { true } else { false } }) {
                 return segments.flatMap { seg -> [Block] in
                     switch seg {
-                    case .image(let path, _): return [.media(path)]
+                    case .image(let path, let caption): return [.media(path, caption: caption)]
                     case .text(let t):
                         let text = t.trimmingCharacters(in: .whitespacesAndNewlines)
                         return text.isEmpty ? [] : text.qChunks(1500).map { Block.text($0) }
@@ -248,27 +248,39 @@ struct ReaderScreen: View {
             Text(QMarkdown.inline(text, accent: q.accentColor))
                 .font(q.writing(19, italic: true)).foregroundStyle(q.mutedColor).lineSpacing(6)
                 .padding(.leading, 16)
-        case .media(let path):
-            let url = store.assetURL(forRelative: path)
-            switch MediaKind(path: path) {
-            case .video where url != nil:
-                VideoView(url: url!)
-                    .aspectRatio(16 / 9, contentMode: .fit).frame(maxWidth: .infinity)
-                    .accessibilityLabel("Attached video")
-            case .audio where url != nil:
-                AudioPlayerView(url: url!)
-            default:
-                if let url, let image = UIImage(contentsOfFile: url.path) {
-                    Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity)
-                        .accessibilityLabel("Attached photo")
-                } else {
-                    Text(path).font(q.mono(12)).foregroundStyle(q.mutedColor)
+        case .media(let path, let caption):
+            VStack(spacing: 8) {
+                mediaView(path, caption: caption)
+                if !caption.isEmpty {
+                    Text(caption)
+                        .font(q.writing(15, italic: true)).foregroundStyle(q.mutedColor)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
                 }
             }
         case .text(let text):
             Text(QMarkdown.inline(text, accent: q.accentColor))
                 .font(q.writing(fontSize + 2)).foregroundStyle(q.inkColor).lineSpacing(8)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder private func mediaView(_ path: String, caption: String) -> some View {
+        let url = store.assetURL(forRelative: path)
+        switch MediaKind(path: path) {
+        case .video where url != nil:
+            VideoView(url: url!)
+                .aspectRatio(16 / 9, contentMode: .fit).frame(maxWidth: .infinity)
+                .accessibilityLabel(caption.isEmpty ? "Attached video" : caption)
+        case .audio where url != nil:
+            AudioPlayerView(url: url!)
+        default:
+            if let url, let image = UIImage(contentsOfFile: url.path) {
+                Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity)
+                    .accessibilityLabel(caption.isEmpty ? "Attached photo" : caption)
+            } else {
+                Text(path).font(q.mono(12)).foregroundStyle(q.mutedColor)
+            }
         }
     }
 
