@@ -60,7 +60,9 @@ enum AppColorScheme: String, CaseIterable, Identifiable {
 /// keeps its arrows and `?` to itself.
 final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
     /// Stashed on launch so we can handle quick actions before nav is ready.
-    var pendingShortcut: UIApplicationShortcutItem?
+    /// Static: under SwiftUI the app's delegate object is SwiftUI's wrapper,
+    /// so the scene delegate can't reach this one through UIApplication.
+    static var pendingShortcut: UIApplicationShortcutItem?
 
     // MARK: Hardware keyboard
 
@@ -135,10 +137,30 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
         QuireQuickAction.register()
         // If launched via a quick action, stash it — RootView picks it up.
         if let item = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
-            pendingShortcut = item
+            Self.pendingShortcut = item
             return false   // per Apple docs: return false when handling at launch
         }
         return true
+    }
+
+    /// Quire runs in scenes (the Info.plist's scene manifest), and then iOS
+    /// gives a home screen quick action to the window's scene delegate, never
+    /// to the app delegate: the launch option and `performActionFor` below
+    /// stayed silent, so "New draft" only opened the app. The app's own
+    /// windows get `QuireWindowSceneDelegate`; the external display keeps the
+    /// configuration the manifest gives it.
+    func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        let config = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        if connectingSceneSession.role == .windowApplication {
+            config.delegateClass = QuireWindowSceneDelegate.self
+        } else if connectingSceneSession.role == .windowExternalDisplayNonInteractive {
+            config.delegateClass = ExternalDisplaySceneDelegate.self
+        }
+        return config
     }
 
     func application(
@@ -151,6 +173,30 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
             name: .quireHandleShortcut,
             object: shortcutItem
         )
+        completionHandler(true)
+    }
+}
+
+/// Hands a quick action to the app the way the app delegate meant to: one
+/// that launched the app is stashed for RootView's first task, one that
+/// arrives while it's running is posted.
+final class QuireWindowSceneDelegate: NSObject, UIWindowSceneDelegate {
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession,
+               options connectionOptions: UIScene.ConnectionOptions) {
+        guard let item = connectionOptions.shortcutItem else { return }
+        QuireAppDelegate.pendingShortcut = item
+        // In case the app's views were already up (a second window on iPad).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard QuireAppDelegate.pendingShortcut === item else { return }
+            QuireAppDelegate.pendingShortcut = nil
+            NotificationCenter.default.post(name: .quireHandleShortcut, object: item)
+        }
+    }
+
+    func windowScene(_ windowScene: UIWindowScene,
+                     performActionFor shortcutItem: UIApplicationShortcutItem,
+                     completionHandler: @escaping (Bool) -> Void) {
+        NotificationCenter.default.post(name: .quireHandleShortcut, object: shortcutItem)
         completionHandler(true)
     }
 }
@@ -313,8 +359,8 @@ struct QuireApp: App {
                 }
                 // Pending quick action from cold launch
                 .task {
-                    if let item = delegate.pendingShortcut {
-                        delegate.pendingShortcut = nil
+                    if let item = QuireAppDelegate.pendingShortcut {
+                        QuireAppDelegate.pendingShortcut = nil
                         _ = QuireQuickAction.handle(item, nav: nav)
                     }
                 }
