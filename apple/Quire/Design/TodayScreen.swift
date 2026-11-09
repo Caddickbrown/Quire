@@ -327,7 +327,7 @@ struct TodayScreen: View {
             QLabel("Filed today", trailing: "\(filedToday.count)")
             ForEach(filedToday) { entry in
                 let ref = EntryRef(entry: entry, source: .archive(date: today))
-                QEntryRow(entry: entry, onOpen: { open(ref) }, onDelete: { askDelete(entry) })
+                QEntryRow(entry: entry, onOpen: { open(ref) }, onDelete: { _ = store.deleteFiledEntry(date: entry.date, entry: entry) })
                     // A just-filed entry is set down on the page.
                     .transition(.asymmetric(insertion: .scale(scale: 0.96, anchor: .topLeading).combined(with: .opacity),
                                             removal: .opacity))

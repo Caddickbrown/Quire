@@ -24,6 +24,9 @@ struct JournalScreen: View {
     @Binding var jump: String?
 
     @State private var starredOnly = false
+    /// A split journal being read in place of the main one, picked from the
+    /// title (Dan, 9 Nov: they had no way in on the phone or iPad).
+    @State private var splitName: String?
     @State private var selected: Int?
     @State private var deleting: Entry?
     /// The months and the flat list, kept until the journal or the filter
@@ -36,10 +39,10 @@ struct JournalScreen: View {
     /// See `grouped`. Every change to `archiveEntries` comes with a new
     /// `revision` (or, when the folder goes, a new count).
     private final class Grouped {
-        private var key: (Int, Int, Bool)?
+        private var key: (Int, Int, Bool, String)?
         private var months: [Month] = []
         private var flat: [Entry] = []
-        func lists(for key: (Int, Int, Bool), build: () -> ([Month], [Entry])) -> ([Month], [Entry]) {
+        func lists(for key: (Int, Int, Bool, String), build: () -> ([Month], [Entry])) -> ([Month], [Entry]) {
             if let k = self.key, k == key { return (months, flat) }
             (months, flat) = build()
             self.key = key
@@ -53,9 +56,23 @@ struct JournalScreen: View {
         var count: Int { days.reduce(0) { $0 + $1.entries.count } }
     }
 
+    /// Where an entry in this list lives: the main journal, or the split one.
+    private func source(_ entry: Entry) -> EntrySource {
+        if let splitName { return .journal(name: splitName) }
+        return .archive(date: entry.date)
+    }
+
+    /// The chosen split journal's entries as days, newest day first.
+    private func splitDays(_ name: String) -> [(date: String, entries: [Entry])] {
+        let entries = store.splitEntriesCache[name] ?? []
+        return Dictionary(grouping: entries, by: \.date)
+            .map { (date: $0.key, entries: $0.value.sorted { $0.ts < $1.ts }) }
+            .sorted { $0.date > $1.date }
+    }
+
     /// Days, newest first, narrowed by the star filter.
     private var days: [(date: String, entries: [Entry])] {
-        var days = store.archiveEntries
+        var days = splitName.map(splitDays) ?? store.archiveEntries
         if starredOnly {
             days = days.compactMap { day in
                 let kept = day.entries.filter(\.isStarred)
@@ -76,7 +93,7 @@ struct JournalScreen: View {
     }
 
     var body: some View {
-        let (months, flat) = grouped.lists(for: (store.revision, store.archiveEntries.count, starredOnly)) {
+        let (months, flat) = grouped.lists(for: (store.revision, store.archiveEntries.count, starredOnly, splitName ?? "")) {
             let months = self.months
             return (months, months.flatMap { $0.days.flatMap { $0.entries.reversed() } })
         }
@@ -88,11 +105,12 @@ struct JournalScreen: View {
                               if let r = store.randomEntry() { open(EntryRef(entry: r.entry, source: .archive(date: r.date))) }
                           },
                           onMedia: media, onSearch: search, onSettings: settings)
-                QTitle(kicker: "\(store.archiveEntries.reduce(0) { $0 + $1.entries.count }) filed", title: "Journal")
+                title
                 filters
                 if months.isEmpty {
                     Text(!store.indexed ? "Loading your journal…"
                          : starredOnly ? "Nothing matches."
+                         : splitName != nil ? "Nothing in this journal yet."
                          : "Nothing is filed yet. File a draft from the inbox and it lands here.")
                         .font(q.writing(18)).foregroundStyle(q.mutedColor)
                 }
@@ -105,9 +123,9 @@ struct JournalScreen: View {
                                 Text(QDate.fullDay(day.date).uppercased()).tracking(1.4)
                                     .font(q.label(11)).foregroundStyle(q.mutedColor)
                                 ForEach(day.entries.reversed()) { entry in
-                                    let ref = EntryRef(entry: entry, source: .archive(date: day.date))
+                                    let ref = EntryRef(entry: entry, source: source(entry))
                                     QEntryRow(entry: entry, selected: entry.id == selectedID, onOpen: { open(ref) },
-                                              onDelete: { askDelete(entry) })
+                                              onDelete: { delete(entry) })
                                 }
                             }
                         }
@@ -128,6 +146,7 @@ struct JournalScreen: View {
             // Cleared last: clearing it changes the id, which cancels this.
             defer { jump = nil }
             starredOnly = false
+            splitName = nil
             await Task.yield()
             let all = self.months.flatMap { $0.days.flatMap { $0.entries.reversed() } }
             guard let i = all.firstIndex(where: { $0.date == day }) else { return }
@@ -138,9 +157,9 @@ struct JournalScreen: View {
             proxy.scrollTo(all[i].id, anchor: .center)
         }
         .qKeyList(entries: flat, index: $selected, listTitle: "Journal", autoSelect: true,
-                  onOpen: { open(EntryRef(entry: $0, source: .archive(date: $0.date))) },
+                  onOpen: { open(EntryRef(entry: $0, source: source($0))) },
                   letter: { entry, key in
-                      let source = EntrySource.archive(date: entry.date)
+                      let source = source(entry)
                       switch key {
                       case "e": edit(EntryRef(entry: entry, source: source)); return true
                       case "*": store.toggleStar(entry, source: source); return true
@@ -153,12 +172,48 @@ struct JournalScreen: View {
         .confirmationDialog("Delete this entry?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                             titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
-                if let d = deleting { _ = store.deleteFiledEntry(date: d.date, entry: d) }
+                if let d = deleting { delete(d) }
                 deleting = nil
             }
         }
         .qKeyBlocker(active: deleting != nil, onEscape: { deleting = nil })
         }
+    }
+
+    /// The title, which picks the journal when there are split ones.
+    @ViewBuilder private var title: some View {
+        let count = days.reduce(0) { $0 + $1.entries.count }
+        let heading = QTitle(kicker: "\(count) filed", title: splitName ?? "Journal")
+        if store.splitJournals.isEmpty && splitName == nil {
+            heading
+        } else {
+            Menu {
+                Picker("Journal", selection: $splitName) {
+                    Text("Journal").tag(String?.none)
+                    ForEach(store.splitJournals) { journal in
+                        Text("\(journal.name) · \(journal.count)").tag(String?.some(journal.name))
+                    }
+                }
+            } label: {
+                HStack(alignment: .lastTextBaseline, spacing: 8) {
+                    heading
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(q.mutedColor)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Choose a journal")
+            .onChange(of: splitName) { _, _ in selected = nil }
+        }
+    }
+
+    @discardableResult
+    private func delete(_ entry: Entry) -> Bool {
+        if let splitName { return store.deleteJournalEntry(name: splitName, entry: entry) }
+        return store.deleteFiledEntry(date: entry.date, entry: entry)
     }
 
     /// On the monitor in desk mode, where the keyboard can answer; the phone's
@@ -168,8 +223,7 @@ struct JournalScreen: View {
         let asked = DeskConfirm.shared.ask(.init(kicker: "Journal", question: "Delete this entry?",
                                                  detail: DeskConfirm.describe(entry), when: DeskConfirm.when(entry),
                                                  action: "Delete")) {
-            store.deleteFiledEntry(date: entry.date, entry: entry)
-                ? nil : (store.lastWriteError ?? "The entry could not be deleted.")
+            delete(entry) ? nil : (store.lastWriteError ?? "The entry could not be deleted.")
         }
         if !asked { deleting = entry }
     }

@@ -476,8 +476,9 @@ struct QSidebarToggle: View {
 
 /// Mono time, serif title, one muted line. The time is only text here: changing
 /// an entry's time is a deliberate act inside the entry, never a tap in a list.
-/// Press and hold offers Delete where the list gives `onDelete` (which asks
-/// before anything goes).
+/// Press and hold offers Delete where the list gives `onDelete`. Choosing it
+/// deletes: holding and then tapping a red Delete is the asking (Dan, 9 Nov:
+/// a second question after it was one too many).
 struct QEntryRow: View {
     @Environment(\.quire) private var q
     let entry: Entry
@@ -536,7 +537,7 @@ extension View {
     @ViewBuilder func qDeleteMenu(_ onDelete: (() -> Void)?) -> some View {
         if let onDelete {
             contextMenu {
-                Button(role: .destructive, action: onDelete) { Label("Delete…", systemImage: "trash") }
+                Button(role: .destructive, action: onDelete) { Label("Delete", systemImage: "trash") }
             }
         } else {
             self

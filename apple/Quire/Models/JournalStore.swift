@@ -894,9 +894,13 @@ final class JournalStore: ObservableObject {
             built.heavy.hasEntryToday = built.heavy.hasEntryToday || hasDraftToday
             let idx = built
             let heavy = idx.heavy
+            let diagFP = Date()
             let fp = Self.contentFingerprint(base: base)
+            EditorDiag.note(String(format: "FINGERPRINT %.0fms", Date().timeIntervalSince(diagFP) * 1000))
             await MainActor.run { [weak self] in
                 guard let self, self.baseURL == base, self.indexGeneration == generation else { return }
+                let diagPublish = Date()
+                defer { EditorDiag.note(String(format: "PUBLISH main=%.0fms since-launch=%.1fs", Date().timeIntervalSince(diagPublish) * 1000, Date().timeIntervalSince(EditorDiag.launch))) }
                 self.lastFingerprint = fp
                 self.archiveDays = idx.days
                 var map = Dictionary(uniqueKeysWithValues: idx.tags.map { ($0.tag, $0.count) })
@@ -907,7 +911,9 @@ final class JournalStore: ObservableObject {
                 self.archiveEntries = idx.corpus
                 self.indexed = true
                 self.splitEntriesCache = idx.splitEntries
-                self.lastHeavyStats = heavy
+                var withSizes = heavy
+                withSizes.copySizes(from: self.lastHeavyStats)
+                self.lastHeavyStats = withSizes
                 // Announced here, at publication — every mutation funnels into
                 // this rebuild, and views reloading on `.task(id: revision)`
                 // must find the fresh corpus already in place when they fire.
@@ -918,6 +924,14 @@ final class JournalStore: ObservableObject {
                 #if canImport(CoreSpotlight)
                 SpotlightIndexer.scheduleReindex(source: { self.spotlightSource() })
                 #endif
+            }
+            // The sizes, once the journal is showing.
+            var sizes = HeavyStats()
+            Self.measureSizes(&sizes, base: base)
+            let measured = sizes
+            await MainActor.run { [weak self] in
+                guard let self, self.baseURL == base, self.indexGeneration == generation else { return }
+                self.lastHeavyStats.copySizes(from: measured)
             }
         }
     }
@@ -1021,7 +1035,9 @@ final class JournalStore: ObservableObject {
         var latestOnThisDayYear = 0
         var statDates: [Date] = []
 
+        let diagStart = Date()
         let all = try CoreJournal(base: base).load()
+        let diagLoaded = Date()
         let grouped = Dictionary(grouping: all.filter { $0.source == "journal" }, by: \.date)
         let urls = grouped.keys.sorted(by: >).map { base.appendingPathComponent("journal/" + $0.replacingOccurrences(of: "-", with: "/") + ".md") }
         var tagMap: [String: Int] = [:]
@@ -1065,7 +1081,14 @@ final class JournalStore: ObservableObject {
             }
             if let d = ymd.date(from: day.date) { statDates.append(d) }
         }
+        let diagLooped = Date()
         finishHeavyStats(&idx.heavy, base: base, dates: statDates)
+        let diagSized = Date()
+        EditorDiag.note(String(format: "INDEX entries=%d days=%d load=%.0fms loop=%.0fms sizes=%.0fms",
+                               all.count, idx.days.count,
+                               diagLoaded.timeIntervalSince(diagStart) * 1000,
+                               diagLooped.timeIntervalSince(diagLoaded) * 1000,
+                               diagSized.timeIntervalSince(diagLooped) * 1000))
 
         for (name, values) in Dictionary(grouping: all.filter { $0.source == "split" }, by: { $0.split ?? "" }) {
             let entries = JournalParser.withOccurrences(values.map(\.entry))
@@ -2026,6 +2049,12 @@ final class JournalStore: ObservableObject {
     /// the journal and assets folders. Computed off-main in `rebuildIndex` and
     /// cached, so `stats()` and the widget snapshot are free.
     struct HeavyStats: Sendable {
+        /// Takes the folder sizes from another pass, which `measureSizes` fills.
+        mutating func copySizes(from other: HeavyStats) {
+            journalBytes = other.journalBytes; inboxBytes = other.inboxBytes
+            imageBytes = other.imageBytes; videoBytes = other.videoBytes
+            audioBytes = other.audioBytes; otherMediaBytes = other.otherMediaBytes
+        }
         var days = 0, entries = 0, words = 0
         var currentStreak = 0, bestStreak = 0
         var longestDay = "", longestDayWords = 0
@@ -2082,9 +2111,15 @@ final class JournalStore: ObservableObject {
             if cal.isDate(upToToday[i], inSameDayAs: expected) { cur += 1 } else { break }
         }
         s.currentStreak = cur
+    }
 
-        // Sizes: markdown under the base (minus scratch files), the inbox,
-        // and assets/ split by kind. Stat-only — no file reads.
+    /// Sizes: markdown under the base (minus scratch files), the inbox, and
+    /// assets/ split by kind. Stat-only, but a walk of the whole folder: it runs
+    /// after the journal is on screen, as only Settings shows it (a third of a
+    /// second of the 2.3 the phone took to open the journal, 9 Nov).
+    nonisolated static func measureSizes(_ s: inout HeavyStats, base: URL) {
+        let fm = FileManager.default
+        s.journalBytes = 0; s.imageBytes = 0; s.videoBytes = 0; s.audioBytes = 0; s.otherMediaBytes = 0
         if let en = fm.enumerator(at: base, includingPropertiesForKeys: [.fileSizeKey]) {
             for case let url as URL in en
             where url.pathExtension == "md" && !url.path.contains("/.quire/") && !url.path.contains("/.nook/") && !nonJournalFiles.contains(url.lastPathComponent) {

@@ -73,7 +73,7 @@ struct InboxScreen: View {
                                     .font(q.label(11)).foregroundStyle(q.mutedColor)
                                 ForEach(day.entries) { entry in
                                     QEntryRow(entry: entry, selected: entry.id == selectedID,
-                                              onOpen: { openDraft(entry) }, onDelete: { askDelete(entry) })
+                                              onOpen: { openDraft(entry) }, onDelete: { store.deleteDraft(entry) })
                                 }
                             }
                         }
