@@ -894,13 +894,9 @@ final class JournalStore: ObservableObject {
             built.heavy.hasEntryToday = built.heavy.hasEntryToday || hasDraftToday
             let idx = built
             let heavy = idx.heavy
-            let diagFP = Date()
             let fp = Self.contentFingerprint(base: base)
-            EditorDiag.note(String(format: "FINGERPRINT %.0fms", Date().timeIntervalSince(diagFP) * 1000))
             await MainActor.run { [weak self] in
                 guard let self, self.baseURL == base, self.indexGeneration == generation else { return }
-                let diagPublish = Date()
-                defer { EditorDiag.note(String(format: "PUBLISH main=%.0fms since-launch=%.1fs", Date().timeIntervalSince(diagPublish) * 1000, Date().timeIntervalSince(EditorDiag.launch))) }
                 self.lastFingerprint = fp
                 self.archiveDays = idx.days
                 var map = Dictionary(uniqueKeysWithValues: idx.tags.map { ($0.tag, $0.count) })
@@ -1035,9 +1031,7 @@ final class JournalStore: ObservableObject {
         var latestOnThisDayYear = 0
         var statDates: [Date] = []
 
-        let diagStart = Date()
         let all = try CoreJournal(base: base).load()
-        let diagLoaded = Date()
         let grouped = Dictionary(grouping: all.filter { $0.source == "journal" }, by: \.date)
         let urls = grouped.keys.sorted(by: >).map { base.appendingPathComponent("journal/" + $0.replacingOccurrences(of: "-", with: "/") + ".md") }
         var tagMap: [String: Int] = [:]
@@ -1081,14 +1075,7 @@ final class JournalStore: ObservableObject {
             }
             if let d = ymd.date(from: day.date) { statDates.append(d) }
         }
-        let diagLooped = Date()
         finishHeavyStats(&idx.heavy, base: base, dates: statDates)
-        let diagSized = Date()
-        EditorDiag.note(String(format: "INDEX entries=%d days=%d load=%.0fms loop=%.0fms sizes=%.0fms",
-                               all.count, idx.days.count,
-                               diagLoaded.timeIntervalSince(diagStart) * 1000,
-                               diagLooped.timeIntervalSince(diagLoaded) * 1000,
-                               diagSized.timeIntervalSince(diagLooped) * 1000))
 
         for (name, values) in Dictionary(grouping: all.filter { $0.source == "split" }, by: { $0.split ?? "" }) {
             let entries = JournalParser.withOccurrences(values.map(\.entry))

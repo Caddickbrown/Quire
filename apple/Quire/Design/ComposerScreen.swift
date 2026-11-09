@@ -78,10 +78,6 @@ struct ComposerScreen: View {
     /// A brief word in the footer (a refused drop).
     @State private var notice: String?
     @State private var leaving = false
-    /// The visible height of the page, so the body reaches the footer and a
-    /// tap anywhere below the words lands in it.
-    @State private var pageHeight: CGFloat = 0
-    @State private var caretToEnd = 0
 
     /// Today's prompt, when Settings → Writing prompts is on.
     private static var prompt: String {
@@ -131,9 +127,7 @@ struct ComposerScreen: View {
                     editor
                 }
                 .padding(.horizontal, 28).padding(.top, 16).padding(.bottom, 24)
-                .frame(minHeight: pageHeight, alignment: .top)
             }
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
             .scrollDismissesKeyboard(.interactively)
             footer
         }
@@ -262,19 +256,10 @@ struct ComposerScreen: View {
                               tagSuggestions: tagNames,
                               onCaretChange: caretMoved,
                               onPasteMedia: { if let rel = Attach.pasted($0, into: store) { link(rel) } },
-                              caretToEnd: caretToEnd,
                               focused: Binding(get: { focus == .body }, set: { if $0 { focus = .body } else if focus == .body { focus = nil } }))
                 .focused($focus, equals: .body)
                 .frame(minHeight: 360, alignment: .top)
 
-        }
-        .frame(maxHeight: .infinity, alignment: .top)
-        // Behind the text, so a tap on the words still places the caret there;
-        // a tap anywhere below them puts it after the last word.
-        .background {
-            Color.clear.contentShape(Rectangle())
-                .onTapGesture { caretToEnd += 1; focus = .body }
-                .accessibilityHidden(true)
         }
     }
 

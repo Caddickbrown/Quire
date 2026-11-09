@@ -558,20 +558,13 @@ struct WritingTextEditor: UIViewRepresentable {
     /// setting), with a caret of its own drawn at `mirrorCaret` and kept in
     /// view as the text grows.
     var mirror = false
-    /// Bumped by a tap in the page below the text: the caret goes to the end
-    /// and the keyboard comes up, as if you'd tapped after the last word.
-    var caretToEnd = 0
     var mirrorCaret: Int? = nil
     var focused: Binding<Bool>? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
     func makeUIView(context: Context) -> UITextView {
-        // TextKit 1 for the editor: TextKit 2 laid the first line a line low
-        // after the keyboard turned "..." into "…" (the editor log, 9 Nov: same
-        // font, same line height, view unmoved, yet the text one line down
-        // until the next key).
-        let tv: UITextView = mirror ? MirrorTextView() : PastingTextView(usingTextLayoutManager: false)
+        let tv: UITextView = mirror ? MirrorTextView() : PastingTextView()
         tv.delegate = context.coordinator
         tv.backgroundColor = .clear
         tv.showsVerticalScrollIndicator = false
@@ -593,7 +586,6 @@ struct WritingTextEditor: UIViewRepresentable {
             tv.isUserInteractionEnabled = false
         }
         context.coordinator.textView = tv
-        context.coordinator.lastCaretToEnd = caretToEnd
         apply(to: tv)
         return tv
     }
@@ -604,11 +596,6 @@ struct WritingTextEditor: UIViewRepresentable {
         context.coordinator.focused = focused
         if mirror { updateMirror(tv, context: context); return }
         tv.isScrollEnabled = !sizeToFit
-        if caretToEnd != context.coordinator.lastCaretToEnd {
-            context.coordinator.lastCaretToEnd = caretToEnd
-            if !tv.isFirstResponder { tv.becomeFirstResponder() }
-            tv.selectedRange = NSRange(location: (tv.text as NSString).length, length: 0)
-        }
         // Restyle only when something actually changed — the coordinator has
         // already restyled the edited paragraph on the keystroke path, and the
         // full re-attribute here made every keystroke O(entry).
@@ -700,17 +687,6 @@ struct WritingTextEditor: UIViewRepresentable {
         "\(fontRaw)|\(size)|\(lineSpacing)|\(highlightTags)|\(focusParagraph)|\(textColor)|\(accent)|\(mirror)"
     }
 
-    /// Every line the body font's height, whatever is on it. The keyboard's
-    /// "…" made its line 20 points taller on the phone (Dan's recording and the
-    /// editor log, 9 Nov), dropping everything below until the next edit.
-    private func bodyParagraph(_ font: UIFont) -> NSMutableParagraphStyle {
-        let para = NSMutableParagraphStyle()
-        para.lineSpacing = lineSpacing
-        para.minimumLineHeight = ceil(font.lineHeight)
-        para.maximumLineHeight = ceil(font.lineHeight)
-        return para
-    }
-
     /// Re-attribute just the paragraph(s) covering `range` — the per-keystroke
     /// path. Every styling regex is line-bound, so a paragraph is a safe unit.
     private func styleParagraph(_ tv: UITextView, around range: NSRange?) {
@@ -721,7 +697,7 @@ struct WritingTextEditor: UIViewRepresentable {
         let target = ns.paragraphRange(for: clamped)
         let font = platformFont(fontRaw, size, scaled: !mirror)
         let color = UIColor(textColor)
-        let para = bodyParagraph(font)
+        let para = NSMutableParagraphStyle(); para.lineSpacing = lineSpacing
         tv.textStorage.setAttributes([.font: font, .foregroundColor: color, .paragraphStyle: para], range: target)
         let sub = ns.substring(with: target)
         let subRange = NSRange(location: 0, length: (sub as NSString).length)
@@ -749,7 +725,7 @@ struct WritingTextEditor: UIViewRepresentable {
     private func apply(to tv: UITextView) {
         let font = platformFont(fontRaw, size, scaled: !mirror)
         let color = UIColor(textColor)
-        let para = bodyParagraph(font)
+        let para = NSMutableParagraphStyle(); para.lineSpacing = lineSpacing
         tv.font = font
         tv.textColor = color
         tv.typingAttributes = [.font: font, .foregroundColor: color, .paragraphStyle: para]
@@ -825,11 +801,10 @@ struct WritingTextEditor: UIViewRepresentable {
     /// Height of `text` wrapped at `width`, plus a blank line's slack — enough
     /// room for the line you're about to start, and never a clipped last line.
     private func measuredHeight(width: CGFloat) -> CGFloat {
-        let font = platformFont(fontRaw, size, scaled: !mirror)
-        let para = bodyParagraph(font)
+        let para = NSMutableParagraphStyle(); para.lineSpacing = lineSpacing
         let attributed = NSAttributedString(
             string: text.isEmpty ? " " : text,
-            attributes: [.font: font, .paragraphStyle: para])
+            attributes: [.font: platformFont(fontRaw, size, scaled: !mirror), .paragraphStyle: para])
         let bounds = attributed.boundingRect(
             with: CGSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
@@ -839,7 +814,6 @@ struct WritingTextEditor: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var focused: Binding<Bool>?
-        var lastCaretToEnd = 0
         var text: Binding<String>
         weak var textView: UITextView?
         /// Re-applies styling with current settings (the focus dim tracks the caret).
@@ -1043,44 +1017,8 @@ struct WritingTextEditor: UIViewRepresentable {
 
 /// The editor's text view: a paste of media hands it to `pasteMedia` to be
 /// attached; anything else pastes as usual.
-/// TEMPORARY (9 Nov): what moves when the body drops after an ellipsis on
-/// the phone. Writes Documents/editor-diag.log; remove once found.
-enum EditorDiag {
-    static let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("editor-diag.log")
-    static var last = ""
-    static let launch = Date()
-    static func note(_ line: String) {
-        guard line != last else { return }
-        last = line
-        let stamped = String(format: "%.3f ", Date().timeIntervalSince1970) + line + "\n"
-        if let h = try? FileHandle(forWritingTo: url) {
-            h.seekToEndOfFile(); h.write(Data(stamped.utf8)); try? h.close()
-        } else {
-            try? Data(stamped.utf8).write(to: url)
-        }
-    }
-}
-
 final class PastingTextView: UITextView {
     var pasteMedia: ((PastedMedia) -> Void)?
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        guard !isScrollEnabled, window != nil else { return }
-        let inWindow = convert(CGPoint.zero, to: nil)
-        let first = caretRect(for: beginningOfDocument)
-        let tail = String(text.suffix(12)).replacingOccurrences(of: "\n", with: "⏎")
-        var runs: [String] = []
-        textStorage.enumerateAttributes(in: NSRange(location: 0, length: textStorage.length)) { attrs, range, _ in
-            let font = attrs[.font] as? UIFont
-            let para = attrs[.paragraphStyle] as? NSParagraphStyle
-            runs.append("\(range.location)+\(range.length):\(font?.fontName ?? "nil")@\(f(font?.pointSize ?? 0)) lh=\(f(para?.maximumLineHeight ?? -1))")
-        }
-        EditorDiag.note("RUNS " + runs.joined(separator: " | "))
-        EditorDiag.note("win.y=\(f(inWindow.y)) frame=\(f(frame.minY)),\(f(frame.height)) bounds.y=\(f(bounds.minY)) off=\(f(contentOffset.y)) adj=\(f(adjustedContentInset.top)) inset=\(f(contentInset.top)) tci=\(f(textContainerInset.top)) caret0=\(f(first.minY)),\(f(first.height)) cs=\(f(contentSize.height)) marked=\(markedTextRange != nil) tail=[\(tail)]")
-    }
-    private func f(_ v: CGFloat) -> String { String(format: "%.1f", v) }
 
     /// A sized-to-fit editor (the composer) never scrolls inside itself: the
     /// page around it does. UIKit still nudged the offset on some edits: Dan's
@@ -1093,24 +1031,6 @@ final class PastingTextView: UITextView {
     }
     override func setContentOffset(_ offset: CGPoint, animated: Bool) {
         super.setContentOffset(isScrollEnabled ? offset : .zero, animated: animated)
-    }
-    /// The phone still dropped by a safe-area inset's worth (Dan's recording,
-    /// 9 Nov): UIKit can also move the text through `bounds`, and it rests the
-    /// view at minus its adjusted inset. Neither applies to a view that never
-    /// scrolls, so both are held too.
-    override var bounds: CGRect {
-        get { super.bounds }
-        set {
-            var b = newValue
-            if !isScrollEnabled { b.origin = .zero }
-            super.bounds = b
-        }
-    }
-    override var isScrollEnabled: Bool {
-        didSet {
-            contentInsetAdjustmentBehavior = isScrollEnabled ? .automatic : .never
-            if !isScrollEnabled, bounds.origin != .zero { super.bounds.origin = .zero }
-        }
     }
 
     /// The composer's control chords, declared here because the text view is

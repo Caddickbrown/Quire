@@ -134,7 +134,6 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         // Register home screen quick actions.
-        _ = EditorDiag.launch   // TEMPORARY: the log's clock starts at launch
         QuireQuickAction.register()
         // If launched via a quick action, stash it — RootView picks it up.
         if let item = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
