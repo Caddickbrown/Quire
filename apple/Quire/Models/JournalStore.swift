@@ -182,7 +182,7 @@ final class JournalStore: ObservableObject {
         case .archive: destination = .archive(date: entry.date)
         default: destination = source
         }
-        publishCoreChange()
+        publishAutosave()
         return (entry, destination)
     }
 
@@ -202,7 +202,7 @@ final class JournalStore: ObservableObject {
         guard let result, var entry = JournalParser.parseEntries(result.raw).first else { return nil }
         entry.file = result.file
         entry.fileIndex = result.index
-        publishCoreChange()
+        publishAutosave()
         return entry
     }
 
@@ -221,6 +221,15 @@ final class JournalStore: ObservableObject {
     }
     private func publishCoreChange(reindex: Bool = true) {
         if reindex { loadInbox(); rebuildIndex() }
+    }
+
+    /// After an autosave. The words are already on disk; what waits is the
+    /// rebuild, which re-reads every file in the journal and redraws every
+    /// screen. Run on each pause in typing, it made the phone lag (Dan, 9 Nov),
+    /// so it waits until typing has rested for two seconds.
+    private func publishAutosave() {
+        loadInbox()
+        scheduleRebuild(after: 2_000_000_000)
     }
 
 
@@ -827,18 +836,27 @@ final class JournalStore: ObservableObject {
     /// reconciles tags, stats, the widget, and Spotlight in the background.
     private var rebuildDebounce: Task<Void, Never>?
     private var indexGeneration = 0
-    private func scheduleRebuild() {
+    private func scheduleRebuild(after nanoseconds: UInt64 = 300_000_000) {
         rebuildDebounce?.cancel()
         rebuildDebounce = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try? await Task.sleep(nanoseconds: nanoseconds)
             guard !Task.isCancelled else { return }
             self?.rebuildIndex()
         }
     }
 
+    /// The rebuild an autosave put off, now: the composer calls this as it
+    /// closes, so the screens beneath show the entry as soon as you're back.
+    func settlePendingRebuild() {
+        guard let pending = rebuildDebounce, !pending.isCancelled else { return }
+        rebuildIndex()
+    }
+
     /// Rebuild the archive/tags/split-journal index off the main thread and
     /// publish the results, so no view body ever does directory-wide file reads.
     private func rebuildIndex() {
+        rebuildDebounce?.cancel()
+        rebuildDebounce = nil
         indexGeneration &+= 1
         let generation = indexGeneration
         guard let base = baseURL else {

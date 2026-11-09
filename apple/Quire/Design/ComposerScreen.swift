@@ -152,6 +152,7 @@ struct ComposerScreen: View {
         .onReceive(store.$tagCounts) { counts in tagNames = counts.map { String($0.tag.dropFirst()) } }
         .onDisappear {
             pending?.cancel()
+            store.settlePendingRebuild()
             scratch.countTask?.cancel()
             DeskDatePicker.shared.cancel()
             DeskConfirm.shared.cancel(owner: routerID)

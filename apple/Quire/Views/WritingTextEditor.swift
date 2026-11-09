@@ -1032,6 +1032,24 @@ final class PastingTextView: UITextView {
     override func setContentOffset(_ offset: CGPoint, animated: Bool) {
         super.setContentOffset(isScrollEnabled ? offset : .zero, animated: animated)
     }
+    /// The phone still dropped by a safe-area inset's worth (Dan's recording,
+    /// 9 Nov): UIKit can also move the text through `bounds`, and it rests the
+    /// view at minus its adjusted inset. Neither applies to a view that never
+    /// scrolls, so both are held too.
+    override var bounds: CGRect {
+        get { super.bounds }
+        set {
+            var b = newValue
+            if !isScrollEnabled { b.origin = .zero }
+            super.bounds = b
+        }
+    }
+    override var isScrollEnabled: Bool {
+        didSet {
+            contentInsetAdjustmentBehavior = isScrollEnabled ? .automatic : .never
+            if !isScrollEnabled, bounds.origin != .zero { super.bounds.origin = .zero }
+        }
+    }
 
     /// The composer's control chords, declared here because the text view is
     /// the first responder while you type: the key catcher sits beside the

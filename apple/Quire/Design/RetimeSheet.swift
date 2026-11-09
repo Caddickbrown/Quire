@@ -74,6 +74,8 @@ struct RetimeSheet: View {
         guard let result = store.saveEditorEntry(entry, source: ref.source, text: text) else {
             return store.lastWriteError ?? "The date could not be saved. Please try again."
         }
+        // Not an autosave: the screens catch up now, not after typing rests.
+        store.settlePendingRebuild()
         onUpdate(EntryRef(entry: result.entry, source: result.source))
         return nil
     }
