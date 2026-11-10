@@ -54,7 +54,7 @@ struct InboxScreen: View {
         return ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
-                QMasthead(onRandom: store.inboxDrafts.isEmpty ? nil : {
+                QMasthead(calendarEntries: { store.inboxDrafts.map { EntryRef(entry: $0, source: .inbox) } }, onCalendarOpen: open, onRandom: store.inboxDrafts.isEmpty ? nil : {
                               if let draft = store.inboxDrafts.randomElement() { openDraft(draft) }
                           },
                           randomLabel: "Random draft", onSearch: search, onSettings: settings)

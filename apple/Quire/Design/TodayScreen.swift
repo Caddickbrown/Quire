@@ -95,7 +95,7 @@ struct TodayScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                QMasthead(onMedia: media, onSearch: search, onSettings: settings)
+                QMasthead(calendarEntries: { store.archiveEntries.flatMap { day in day.entries.map { EntryRef(entry: $0, source: .archive(date: day.date)) } } }, onCalendarOpen: open, onMedia: media, onSearch: search, onSettings: settings)
                 if q.isMarathon {
                     // In a timeline, like the header below it, so the date
                     // moves on at midnight with the page left open.

@@ -104,7 +104,7 @@ struct JournalScreen: View {
         return ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22, pinnedViews: []) {
-                QMasthead(onRandom: store.archiveEntries.isEmpty ? nil : {
+                QMasthead(calendarEntries: { days.flatMap { $0.entries }.map { EntryRef(entry: $0, source: source($0)) } }, onCalendarOpen: open, onRandom: store.archiveEntries.isEmpty ? nil : {
                               if let r = store.randomEntry() { open(EntryRef(entry: r.entry, source: .archive(date: r.date))) }
                           },
                           onMedia: media, onSearch: search, onSettings: settings)

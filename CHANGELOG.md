@@ -22,6 +22,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ## [Unreleased]
 
 ### Added
+- **Apple**: Today, Inbox, Journal and Look back offer a quiet calendar icon opening a themed sheet, with marked entry dates, month/year navigation and entries for the selected day; Inbox shows drafts and Journal follows its chosen journal and star filter.
 - **Apple**: Auto theme picks its looks. Settings → Theme → Auto now asks which light theme to use by day and which dark one at night (Almanac and Cinema until you choose), and switches with the system's appearance. The widgets, the Live Activity and the monitor follow the same pair.
 - **Apple**: Today is on screen at launch, drawn from what it showed last time while the journal is read; a new day starts empty, never with yesterday's figures.
 - **Apple**: a page Quire closed on before it was saved is offered back at the next launch or unlock: save it to the Inbox, copy its text, or discard it. The save-failure banner has "Copy text".
