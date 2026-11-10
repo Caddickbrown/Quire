@@ -185,7 +185,11 @@ legacy/             Nook and Wander, kept for reference: nothing builds from the
   The version/build commit is shown in Settings and `--version`.
   Non-tty invocations print (jnl parity). The design the screens
   follow is on the canvas linked from the plan's section 8.
-- **Apple** (`apple/`): iOS 17 / macOS 14 SwiftUI. The Media Library reuses
+- **Apple** (`apple/`): iOS 17 / macOS 14 SwiftUI. Today, Inbox, Journal and Look back
+  expose a themed calendar sheet through `QMasthead` (`QBrowseCalendar` in
+  `Design/QuireComponents.swift`), with marked dates and selectable entry rows;
+  Inbox uses drafts, Journal respects its split/star filter, and the other pages
+  use filed entries. The icon remains in the page header beside the iPad sidebar. The Media Library reuses
   `Views/AssetsView.swift`: Journal and Settings present a Quire-themed sheet on
   iPhone and iPad; the Mac uses the sidebar. It filters/searches, sorts/groups, previews
   and opens owning entries. Asset identity for dates/usages is the full relative

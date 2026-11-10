@@ -95,10 +95,13 @@ struct EntryRef: Hashable, Identifiable {
 /// "Quire" in italic, with Search and Settings (and, where given, Random and
 /// the Media Library) as quiet icons. In Marathon the mark sits in a signal
 /// block, and the actions are cells ruled off from it. Beside the sidebar, which
-/// has the mark and those actions itself, only Random stays.
+/// has the mark and those actions itself, Calendar and Random stay.
 struct QMasthead: View {
     @Environment(\.quire) private var q
     @Environment(\.qBesideSidebar) private var besideSidebar
+    var calendarEntries: (() -> [EntryRef])? = nil
+    var onCalendarOpen: ((EntryRef) -> Void)? = nil
+    @State private var showingCalendar = false
     var onRandom: (() -> Void)? = nil
     var randomLabel = "Random entry"
     var onMedia: (() -> Void)? = nil
@@ -106,12 +109,27 @@ struct QMasthead: View {
     var onSettings: () -> Void
 
     var body: some View {
-        if besideSidebar {
-            if let onRandom {
-                HStack {
-                    Spacer()
-                    icon(randomLabel, "dice", onRandom)
+        masthead
+            .sheet(isPresented: $showingCalendar) {
+                #if os(iOS)
+                QBrowseCalendar(entries: calendarEntries?() ?? []) { ref in
+                    showingCalendar = false
+                    onCalendarOpen?(ref)
                 }
+                .environment(\.quire, q)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(q.pageColor)
+                #endif
+            }
+    }
+
+    @ViewBuilder private var masthead: some View {
+        if besideSidebar {
+            HStack {
+                Spacer()
+                if calendarEntries != nil { icon("Calendar", "calendar") { showingCalendar = true } }
+                if let onRandom { icon(randomLabel, "dice", onRandom) }
             }
         } else if q.isMarathon {
             HStack(spacing: 0) {
@@ -120,12 +138,13 @@ struct QMasthead: View {
                         .frame(width: 19, height: 21)
                     Text("QUIRE").font(q.display(17)).tracking(0.4)
                 }
-                .padding(.horizontal, 16).frame(height: 48)
+                .padding(.horizontal, 8).frame(height: 48)
                 .background(q.signalColor, ignoresSafeAreaEdges: []).foregroundStyle(q.onSignalColor)
                 .accessibilityElement(children: .combine).accessibilityLabel("Quire")
                 Spacer(minLength: 0)
                 // Random beside Search, so the Media Library coming and going
                 // never moves it.
+                if calendarEntries != nil { cell("Calendar", "calendar") { showingCalendar = true } }
                 if let onMedia { cell("Media Library", "photo.on.rectangle", onMedia) }
                 if let onRandom { cell(randomLabel, "dice", onRandom) }
                 cell("Search", "magnifyingglass", onSearch)
@@ -133,14 +152,15 @@ struct QMasthead: View {
             }
             .overlay(alignment: .bottom) { QRule() }
         } else {
-            HStack(alignment: .center, spacing: 18) {
+            HStack(alignment: .center, spacing: 4) {
                 HStack(spacing: 8) {
                     QMark().stroke(q.inkColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                         .frame(width: 16, height: 18).accessibilityHidden(true)
                     Text("Quire").font(q.writing(22, italic: true)).foregroundStyle(q.inkColor)
                 }
                 Spacer()
-                HStack(spacing: 4) {
+                HStack(spacing: 0) {
+                    if calendarEntries != nil { icon("Calendar", "calendar") { showingCalendar = true } }
                     if let onMedia { icon("Media Library", "photo.on.rectangle", onMedia) }
                     if let onRandom { icon(randomLabel, "dice", onRandom) }
                     icon("Search", "magnifyingglass", onSearch)
@@ -163,7 +183,7 @@ struct QMasthead: View {
     private func cell(_ label: String, _ symbol: String, _ run: @escaping () -> Void) -> some View {
         Button(action: run) {
             Image(systemName: symbol).font(.system(size: 16, weight: .medium)).foregroundStyle(q.inkColor)
-                .frame(width: 48, height: 48).contentShape(Rectangle())
+                .frame(width: 44, height: 48).contentShape(Rectangle())
                 .overlay(alignment: .leading) { Rectangle().fill(q.lineColor).frame(width: 1) }
         }
         .buttonStyle(.plain)
@@ -610,3 +630,114 @@ enum QMarkdown {
         return out
     }
 }
+
+#if os(iOS)
+/// A quiet way into a day's entries, using the page's own type and palette.
+private struct QBrowseCalendar: View {
+    @Environment(\.quire) private var q
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("firstWeekday") private var firstWeekday = 1
+    let entries: [EntryRef]
+    var open: (EntryRef) -> Void
+    @State private var month = Date()
+    @State private var selected = JournalStore.nowDate()
+    @State private var pickingMonth = false
+
+    private var cal: Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.firstWeekday = min(7, max(1, firstWeekday))
+        return c
+    }
+    private func key(_ date: Date) -> String {
+        let c = cal.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
+    }
+    private var grid: [Date] {
+        guard let first = cal.date(from: cal.dateComponents([.year, .month], from: month)),
+              let start = cal.date(byAdding: .day, value: -(cal.component(.weekday, from: first) - cal.firstWeekday + 7) % 7, to: first) else { return [] }
+        return (0..<42).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
+    }
+
+    var body: some View {
+        let byDay = Dictionary(grouping: entries, by: { $0.entry.date })
+        let symbols = cal.veryShortWeekdaySymbols
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    QTitle(kicker: "Browse by date", title: "Calendar", size: 32)
+                    Spacer()
+                    Button("Done") { dismiss() }.font(q.ui(15)).foregroundStyle(q.accentColor)
+                        .frame(minHeight: 44)
+                }
+                HStack {
+                    Button { pickingMonth = true } label: {
+                        HStack {
+                            Text(QDate.monthYear(key(month))).font(q.writing(22))
+                            Image(systemName: "chevron.down").font(q.ui(12))
+                        }
+                    }
+                    .popover(isPresented: $pickingMonth) {
+                        MonthYearPicker(month: $month).padding()
+                            .tint(q.accentColor).foregroundStyle(q.inkColor)
+                            .presentationBackground(q.pageColor)
+                            .presentationCompactAdaptation(.popover)
+                    }
+                    Spacer(minLength: 0)
+                    control("Previous month", "chevron.left") { shift(-1) }
+                    control("This month", "smallcircle.filled.circle") { month = Date(); selected = key(Date()) }
+                    control("Next month", "chevron.right") { shift(1) }
+                }
+                .foregroundStyle(q.inkColor).buttonStyle(.plain)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7), spacing: 0) {
+                    ForEach(0..<7, id: \.self) { i in
+                        Text(symbols[(i + cal.firstWeekday - 1) % 7])
+                            .font(q.label(11)).foregroundStyle(q.mutedColor)
+                            .frame(height: 28).accessibilityHidden(true)
+                    }
+                    ForEach(grid, id: \.self) { date in
+                        let day = key(date)
+                        let count = byDay[day]?.count ?? 0
+                        let active = selected == day
+                        Button { selected = day; month = date } label: {
+                            VStack(spacing: 3) {
+                                Text("\(cal.component(.day, from: date))").font(q.ui(16))
+                                Circle().fill(count > 0 ? (active ? q.pageColor : q.accentColor) : .clear)
+                                    .frame(width: 4, height: 4)
+                            }
+                            .frame(maxWidth: .infinity).frame(height: 44)
+                            .foregroundStyle(active ? q.pageColor : cal.isDate(date, equalTo: month, toGranularity: .month) ? q.inkColor : q.faintColor)
+                            .background(active ? q.inkColor : .clear)
+                            .overlay(Rectangle().strokeBorder(cal.isDateInToday(date) ? q.accentColor : .clear, lineWidth: 1))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(QDate.fullDay(day)), \(count) entries")
+                        .accessibilityAddTraits(active ? .isSelected : [])
+                    }
+                }
+                QRule()
+                QLabel(QDate.fullDay(selected), trailing: "\(byDay[selected]?.count ?? 0) entries")
+                if let refs = byDay[selected], !refs.isEmpty {
+                    ForEach(refs.sorted { $0.entry.ts > $1.entry.ts }) { ref in
+                        QEntryRow(entry: ref.entry, onOpen: { open(ref) })
+                    }
+                } else {
+                    Text("No entries on this day.").font(q.writing(18)).foregroundStyle(q.mutedColor)
+                }
+            }
+            .padding(26)
+        }
+        .background(q.pageColor).foregroundStyle(q.inkColor)
+        .qKeyBlocker(active: true, onEscape: { dismiss() })
+    }
+
+    private func control(_ label: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(q.ui(15)).frame(width: 44, height: 44)
+        }.accessibilityLabel(label)
+    }
+    private func shift(_ offset: Int) {
+        if let next = cal.date(byAdding: .month, value: offset, to: month) { month = next }
+    }
+}
+#endif

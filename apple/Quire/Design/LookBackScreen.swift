@@ -37,7 +37,7 @@ struct LookBackScreen: View {
         return ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
-                QMasthead(onSearch: search, onSettings: settings)
+                QMasthead(calendarEntries: { store.archiveEntries.flatMap { day in day.entries.map { EntryRef(entry: $0, source: .archive(date: day.date)) } } }, onCalendarOpen: open, onSearch: search, onSettings: settings)
                 QTitle(kicker: "\(stats.days) days written", title: "Look back")
                 figures(stats)
                 onThisDay
