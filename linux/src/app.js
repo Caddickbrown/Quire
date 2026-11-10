@@ -71,6 +71,8 @@ const nowTs = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-$
 const today = () => nowTs().slice(0, 10);
 const dateObj = iso => new Date(iso.slice(0, 10) + 'T12:00:00');
 const isoOf = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+/** The day before today, by the calendar: a day is 23 or 25 hours long when the clocks change, so "24 hours ago" can be the wrong date. */
+const yesterday = () => { const d = dateObj(today()); d.setDate(d.getDate() - 1); return isoOf(d); };
 const fmtDay = iso => dateObj(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 const fmtLong = iso => dateObj(iso).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 const fmtDayYear = iso => dateObj(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
@@ -88,7 +90,9 @@ const HDR_LINE = /^\[[0-9]{4}[-–][0-9]{2}[-–][0-9]{2} [0-9]{2}:[0-9]{2}:[0-9
 const unguard = s => String(s || '').replace(/^\\(\[[0-9]{4}[-–][0-9]{2}[-–][0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\])/gm, '$1');
 const firstLine = s => { const l = unguard(s).split('\n').find(l => l.trim() && !/^[-*_\s]+$/.test(l)) || ''; return l.replace(/^#+\s*/, '').replace(/^\s*([-*+]\s+(\[[ xX]\]\s*)?|\d+[.)]\s+|>\s?)/, '').replace(/!\[[^\]]*\]\([^)]*\)/g, '[image]').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/(\*\*|__|`)/g, '').trim().slice(0, 90); };
 const dayFile = date => `journal/${date.slice(0, 4)}/${date.slice(5, 7)}/${date.slice(8, 10)}.md`;
-const mediaRe = /!?\[([^\]]*)\]\(\s*(?:<([^>\n]*)>|([^)\s]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+// The bare target is the core's (journal.rs LINK_TARGET_RE): balanced brackets are part of the name, so
+// `image(1).jpg` is one file and not `image(1` followed by stray text.
+const mediaRe = /!?\[([^\]]*)\]\(\s*(?:<([^>\n]*)>|((?:[^()\s]|\([^()\s]*\))+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
 const mediaKind = p => { const x = (p.split('.').pop() || '').toLowerCase(); return /^(jpe?g|png|gif|webp|heic|heif|bmp|svg|avif)$/.test(x) ? 'image' : /^(mp4|mov|m4v|webm|mkv)$/.test(x) ? 'video' : /^(m4a|mp3|wav|aac|ogg|opus|flac|caf)$/.test(x) ? 'audio' : 'file'; };
 /** Local links in an entry that resolve to a file under the journal root. */
 const mediaOf = e => [...(e.body || '').matchAll(mediaRe)].map(m => m[2] ?? m[3]).filter(p => resolveRel(e.file, p));
@@ -125,7 +129,9 @@ const WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'S
 const MO = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 function fmtDate(iso, fmt = S.ui.dateFormat) {
   const d = dateObj(iso), y = d.getFullYear();
-  if (fmt === 'iso') return iso.slice(0, 10);
+  // A header can carry a date that doesn't exist (2026-06-31: the parser keeps it, as jnl does). It has no
+  // weekday or month name, so it is shown as written; naming them would throw and take the whole list with it.
+  if (fmt === 'iso' || isNaN(d)) return iso.slice(0, 10);
   if (fmt === 'medium') return `${d.getDate()} ${MO[d.getMonth()].slice(0, 3)} ${y}`;
   if (fmt === 'long') return `${WD[d.getDay()]}, ${d.getDate()} ${MO[d.getMonth()]} ${y}`;
   return `${WD[d.getDay()].slice(0, 3)}, ${d.getDate()} ${MO[d.getMonth()].slice(0, 3)}${y !== new Date().getFullYear() ? ' ' + y : ''}`;
@@ -252,6 +258,10 @@ async function load(reselect) {
   if (entriesChanged) {
     // Unchanged entries keep their array, so selections and caches made from it stay good.
     S.entries = entries; S.statsExtra = null; S.sizes = null;
+    // The Journal picker lists the split journals that have entries. One whose last entry has gone (deleted,
+    // sent back to the inbox, merged away, another folder) is no longer a choice, so the list goes back to the
+    // main journal instead of showing "Main journal" over an empty list filtered by a journal that isn't there.
+    if (S.journal !== 'main' && S.journal !== 'all' && !entries.some(e => e.split === S.journal)) S.journal = 'main';
     const sig = mediaSig(entries);
     if (sig !== S.mediaSig) { S.mediaSig = sig; S.assets = null; }
   }
@@ -277,6 +287,9 @@ const inbox = () => S.entries.filter(e => e.source === 'inbox').sort((a, b) => b
 const filed = () => S.entries.filter(e => e.source !== 'inbox');
 const byNewest = arr => [...arr].sort((a, b) => b.ts.localeCompare(a.ts));
 const sorted = arr => S.ui.sortNewest ? byNewest(arr) : [...arr].sort((a, b) => a.ts.localeCompare(b.ts));
+/** Main-journal entries from this day and month in earlier years, newest first. Split journals are kept
+ *  apart from the main one, so they aren't memories here: the core's stats::on_this_day, and the Apple app. */
+const onThisDay = () => { const t = today(), md = t.slice(5); return byNewest(S.entries.filter(e => e.source === 'journal' && e.date.slice(5) === md && e.date < t)); };
 
 /** Text on a custom accent: near-black or white, whichever has the higher WCAG contrast with it. */
 function onAccent(hex) {
@@ -351,7 +364,7 @@ function resolveLink(fileRel, p) {
   if (p.startsWith('../') || p.startsWith('./')) return joined();
   return p.startsWith('assets/') ? normalizeRel(p) : joined();
 }
-const coreMediaKind = path => { const ext = path.split('.').pop().toLowerCase(); return /^(jpg|jpeg|png|gif|webp|heic|bmp|svg|avif)$/.test(ext) ? 'image' : /^(mp4|mov|m4v|webm|mkv)$/.test(ext) ? 'video' : /^(m4a|mp3|wav|aac|ogg|opus|flac|caf)$/.test(ext) ? 'audio' : 'file'; };
+const coreMediaKind = path => { const ext = path.split('.').pop().toLowerCase(); return /^(jpg|jpeg|png|gif|webp|heic|heif|bmp|svg|avif)$/.test(ext) ? 'image' : /^(mp4|mov|m4v|webm|mkv)$/.test(ext) ? 'video' : /^(m4a|mp3|wav|aac|ogg|opus|flac|caf)$/.test(ext) ? 'audio' : 'file'; };
 /** The asset paths an entry links (root-relative, under assets/). */
 function mediaPaths(e) {
   const text = e.raw ?? e.body ?? '';
@@ -560,7 +573,7 @@ function renderList() {
       </div>
       <div class="search-row">${searchBox('search', 'Search · "phrase" · tag: · before: · after: · has: · is:starred')}${S.query.trim() && !S.searches.some(s => s.query === S.query.trim()) ? '<button class="btn ghost" data-action="pin-search" title="Save this search">Pin</button>' : ''}</div>
       ${S.searches.length ? `<div class="saved">${S.searches.map((s, i) => `<button class="chip ${S.query.trim() === s.query ? 'on' : ''}" data-action="saved" data-i="${i}" title="${esc(s.query)} · right-click to remove" data-ctx="saved">${esc(s.name)}</button>`).join('')}</div>` : ''}
-      <div class="group-label"><button class="daylink" data-action="toggle-ui" data-k="showCal">${S.ui.showCal ? '▾' : '▸'} Calendar</button><span style="display:flex;gap:12px;letter-spacing:0;text-transform:none;font-weight:500"><button class="daylink" data-action="day" data-day="${today()}">Today</button><button class="daylink" data-action="day" data-day="${isoOf(new Date(Date.now() - 864e5))}">Yesterday</button></span></div>
+      <div class="group-label"><button class="daylink" data-action="toggle-ui" data-k="showCal">${S.ui.showCal ? '▾' : '▸'} Calendar</button><span style="display:flex;gap:12px;letter-spacing:0;text-transform:none;font-weight:500"><button class="daylink" data-action="day" data-day="${today()}">Today</button><button class="daylink" data-action="day" data-day="${yesterday()}">Yesterday</button></span></div>
       ${S.ui.showCal ? renderCalendar() : ''}
       ${tagCounts.length ? `<div class="group-label"><button class="daylink" data-action="toggle-ui" data-k="showTags">${S.ui.showTags ? '▾' : '▸'} Tags · ${tagCounts.length}</button>${S.ui.showTags ? '<button class="btn ghost" style="min-height:22px;padding:0;font-size:12px" data-action="random-tag">Random</button>' : ''}</div>${S.ui.showTags ? `<div class="chips">
         ${shown.map(([t, n]) => `<button class="chip" data-action="tag" data-tag="${esc(t)}" aria-pressed="${S.tag === t}">${esc(t)}<small>${n}</small></button>`).join('')}
@@ -650,7 +663,7 @@ function renderRead(e) {
       ${e.title ? `<h1>${esc(e.title)}</h1><div class="rule"></div>` : ''}
       <div class="prose" data-file="${esc(e.file)}" data-index="${e.index}">${renderProse(e.body, e.file)}</div>
     </article></div>
-    <div class="statusbar"><span class="mono">${e.words} words · ${isDraft ? 'draft' : 'filed'}</span><span class="spacer"></span><span class="mono">${esc(e.file)}</span></div>
+    <div class="statusbar"><span class="mono">${plural(e.words, 'word')} · ${isDraft ? 'draft' : 'filed'}</span><span class="spacer"></span><span class="mono">${esc(e.file)}</span></div>
   </section>`;
 }
 
@@ -720,8 +733,7 @@ function renderProse(body, file) {
 }
 
 function renderHome() {
-  const md = today().slice(5);
-  const otd = byNewest(filed().filter(e => e.date.slice(5) === md && e.date < today()));
+  const otd = onThisDay();
   const drafts = inbox();
   const prompt = promptText();
   const todayN = filed().filter(e => e.date === today()).length;
@@ -876,7 +888,7 @@ function renderWrite() {
       ${S.ui.prompts && !d.body.trim() ? '<button class="prompt-again" data-action="prompt">↻ Another prompt</button>' : ''}
     </article></div>
     <div class="statusbar">
-      <span class="mono" id="wc">${words(d.body)} words</span>
+      <span class="mono" id="wc">${plural(words(d.body), 'word')}</span>
       <span class="focus-hint">Esc to leave focus</span>
       <span class="spacer"></span>
       <span id="goal">${S.ui.goalOn ? goalHtml() : ''}</span>
@@ -1186,7 +1198,7 @@ async function flushDraft(d) {
   }
 }
 function refreshChrome(updateTabs = true) {
-  const wc = $('#wc'); if (wc && S.draft) wc.textContent = `${words(S.draft.body)} words`;
+  const wc = $('#wc'); if (wc && S.draft) wc.textContent = plural(words(S.draft.body), 'word');
   const g = $('#goal'); if (g && S.ui.goalOn) g.innerHTML = goalHtml();
   const pill = $('.toolbar .pill');
   if (pill && S.draft) { pill.textContent = pillText(S.draft); pill.classList?.toggle('warn', pillWarn(S.draft)); }
@@ -1630,7 +1642,7 @@ function renderDayPage(date) {
         ${e.title ? `<h2>${esc(e.title)}</h2>` : ''}
         <div class="prose" data-file="${esc(e.file)}" data-index="${e.index}">${renderProse(e.body, e.file)}</div></section>`).join('') : '<p class="empty-note">Nothing written this day.</p>'}
     </article></div>
-    <div class="statusbar"><span class="mono">${es.length} entr${es.length === 1 ? 'y' : 'ies'} · ${wordsN} words</span><span class="spacer"></span><span class="mono">${esc(dayFile(date))}</span></div>
+    <div class="statusbar"><span class="mono">${plural(es.length, 'entry', 'entries')} · ${plural(wordsN, 'word')}</span><span class="spacer"></span><span class="mono">${esc(dayFile(date))}</span></div>
   </section>`;
 }
 
@@ -1787,7 +1799,8 @@ function renderLookBack() {
   const yearEntries = all.filter(e => e.date.startsWith(String(Y)));
   const yWords = yearEntries.reduce((a, e) => a + e.words, 0);
   const yDays = new Set(yearEntries.map(e => e.date)).size;
-  const years = [...new Set(dates.map(d => +d.slice(0, 4)))].sort((a, b) => b - a);
+  // The year on show is always in the picker, even when this folder has nothing written in it.
+  const years = [...new Set([Y, ...dates.map(d => +d.slice(0, 4))])].sort((a, b) => b - a);
   if (!years.includes(new Date().getFullYear())) years.unshift(new Date().getFullYear());
   const vals = [...days.entries()].filter(([d]) => d.startsWith(String(Y))).map(([, w]) => w).sort((a, b) => a - b);
   const q = p => vals.length ? vals[Math.floor(p * (vals.length - 1))] : 0;
@@ -1797,24 +1810,27 @@ function renderLookBack() {
   const jan1 = new Date(Y, 0, 1), off = (jan1.getDay() + 6) % 7;
   let cells = '<span class="blank"></span>'.repeat(off);
   const end = new Date(Y, 11, 31), tdy = today();
-  for (let d = new Date(jan1); d <= end; d.setDate(d.getDate() + 1)) {
+  // Walked at noon and ended by date: where the clocks go forward at midnight a day has no 00:00, and a
+  // walk from midnight would drift an hour and stop a day short of 31 December.
+  for (let d = new Date(Y, 0, 1, 12); isoOf(d) <= isoOf(end); d.setDate(d.getDate() + 1)) {
     const k = isoOf(d);
     if (k > tdy) { cells += '<span class="future"></span>'; continue; }
     const w = days.get(k) || 0;
-    cells += `<button class="heatcell" data-action="day-jump" data-day="${k}" title="${fmtDayYear(k)}: ${w} words" style="background:${shades[lv(w)]}" ${w ? '' : 'disabled'}></button>`;
+    cells += `<button class="heatcell" data-action="day-jump" data-day="${k}" title="${fmtDayYear(k)}: ${plural(w, 'word')}" style="background:${shades[lv(w)]}" ${w ? '' : 'disabled'}></button>`;
   }
-  const mw = Array(12).fill(0); yearEntries.forEach(e => mw[+e.date.slice(5, 7) - 1] += e.words);
+  // Counted only where the header's month, weekday and hour exist: one entry dated month 13 or hour 25
+  // would otherwise turn a whole chart into NaN.
+  const mw = Array(12).fill(0); yearEntries.forEach(e => { const m = +e.date.slice(5, 7) - 1; if (m >= 0 && m < 12) mw[m] += e.words; });
   const mmax = Math.max(1, ...mw), lastM = Y === new Date().getFullYear() ? new Date().getMonth() : 11;
-  const bars = mw.map((w, i) => `<div class="b ${i === lastM ? 'hi' : ''}" title="${w} words"><span>${w ? short(w) : ''}</span><i style="height:${Math.round(w / mmax * 110)}px"></i><span>${'JFMAMJJASOND'[i]}</span></div>`).join('');
-  const wd = Array(7).fill(0); all.forEach(e => wd[(dateObj(e.date).getDay() + 6) % 7]++);
+  const bars = mw.map((w, i) => `<div class="b ${i === lastM ? 'hi' : ''}" title="${plural(w, 'word')}"><span>${w ? short(w) : ''}</span><i style="height:${Math.round(w / mmax * 110)}px"></i><span>${'JFMAMJJASOND'[i]}</span></div>`).join('');
+  const wd = Array(7).fill(0); all.forEach(e => { const i = (dateObj(e.date).getDay() + 6) % 7; if (i >= 0) wd[i]++; });
   const wmax = Math.max(1, ...wd);
   const wbars = wd.map((n, i) => `<div class="b ${n === wmax ? 'hi' : ''}"><span>${n || ''}</span><i style="height:${Math.round(n / wmax * 110)}px"></i><span>${'MTWTFSS'[i]}</span></div>`).join('');
-  const hours = Array(24).fill(0); all.forEach(e => hours[+e.time.slice(0, 2)]++);
+  const hours = Array(24).fill(0); all.forEach(e => { const h = +e.time.slice(0, 2); if (h >= 0 && h < 24) hours[h]++; });
   const hmax = Math.max(1, ...hours);
   const hbars = hours.map((n, i) => `<div class="b ${n === hmax ? 'hi' : ''}" title="${n} at ${pad(i)}:00"><i style="height:${Math.round(n / hmax * 70)}px"></i><span>${i % 6 === 0 ? pad(i) : ''}</span></div>`).join('');
   const tags = countTags(yearEntries).slice(0, 6), tmax = Math.max(1, ...tags.map(x => x[1]));
-  const md = today().slice(5);
-  const otd = byNewest(all.filter(e => e.date.slice(5) === md && e.date < today()));
+  const otd = onThisDay();
   // Year in review
   let yLongest = 0, yRun = 0, yPrev = null;
   for (const d of [...new Set(yearEntries.map(e => e.date))].sort()) { const dt = dateObj(d); yRun = yPrev && Math.round((dt - yPrev) / 864e5) === 1 ? yRun + 1 : 1; yLongest = Math.max(yLongest, yRun); yPrev = dt; }
@@ -1845,8 +1861,8 @@ function renderLookBack() {
       <div class="panel"><h2>Top tags in ${Y}</h2>${tags.map(([tg, n]) => `<div class="tagbar"><button class="chip" data-action="tag-jump" data-tag="${esc(tg)}">${esc(tg)}</button><div class="track"><div class="fill" style="width:${Math.round(n / tmax * 100)}%"></div></div><span class="n">${n}</span></div>`).join('') || '<div class="empty-note">No tags this year.</div>'}</div>
       <div class="panel review"><h2>${Y} in review</h2>
         <div class="kv"><span>Entries</span><b>${yearEntries.length}</b><span>Days written</span><b>${yDays}</b><span>Words</span><b>${yWords.toLocaleString('en-GB')}</b><span>Longest streak</span><b>${yLongest} day${yLongest === 1 ? '' : 's'}</b>
-        <span>Best month</span><b>${mw[bestMonth] ? new Date(Y, bestMonth, 1).toLocaleDateString('en-GB', { month: 'long' }) + ' · ' + short(mw[bestMonth]) + ' words' : '—'}</b>
-        <span>Longest entry</span><b>${longestEntry ? `${link(longestEntry)} · ${longestEntry.words} words` : '—'}</b>
+        <span>Best month</span><b>${mw[bestMonth] ? new Date(Y, bestMonth, 1).toLocaleDateString('en-GB', { month: 'long' }) + ' · ' + short(mw[bestMonth]) + (mw[bestMonth] === 1 ? ' word' : ' words') : '—'}</b>
+        <span>Longest entry</span><b>${longestEntry ? `${link(longestEntry)} · ${plural(longestEntry.words, 'word')}` : '—'}</b>
         <span>First entry</span><b>${firstE ? fmtDayYear(firstE.date) + ' · ' : ''}${link(firstE)}</b><span>Latest entry</span><b>${lastE ? fmtDayYear(lastE.date) + ' · ' : ''}${link(lastE)}</b>
         <span>Starred</span><b>${starredN}</b><span>With media</span><b>${mediaN}</b></div></div>
     </div>
@@ -1855,7 +1871,7 @@ function renderLookBack() {
       ${otd.length ? otd.slice(0, 4).map(e => `<button class="card" data-action="open-journal" data-file="${esc(e.file)}" data-index="${e.index}"><span class="sub mono">${fmtDayYear(e.date)}</span><span class="title">${esc(e.title || firstLine(e.body))}</span>${e.title ? `<span class="sub">${esc(firstLine(e.body))}</span>` : ''}</button>`).join('') : '<div class="empty-note">Nothing on this day in earlier years.</div>'}
       <button class="daylink" data-action="random" style="font-family:var(--writing);font-size:19px;color:var(--ink)">A random entry <span style="color:var(--accent)">→</span> <span class="k mono" style="font-size:11px;color:var(--muted)">Ctrl+R</span></button>
       <div class="panel"><h2>All time</h2>
-        <div class="sub" style="font-size:13px;color:var(--muted);line-height:1.6">${all.length} entries over ${days.size} days · ${short(all.reduce((a, e) => a + e.words, 0))} words · since ${dates[0] ? fmtDayYear(dates[0]) : '—'}</div></div>
+        <div class="sub" style="font-size:13px;color:var(--muted);line-height:1.6">${plural(all.length, 'entry', 'entries')} over ${plural(days.size, 'day')} · ${(n => `${short(n)} ${n === 1 ? 'word' : 'words'}`)(all.reduce((a, e) => a + e.words, 0))} · since ${dates[0] ? fmtDayYear(dates[0]) : '—'}</div></div>
       <div class="panel review"><h2>Library</h2><div id="stats-extra">${statsExtraHtml()}</div></div>
       <div class="panel"><h2>Storage</h2><div id="sizes">${sizesHtml()}</div></div>
     </div>
@@ -2250,7 +2266,7 @@ document.addEventListener('click', async ev => {
       case 'print-day-btn': { S.printDay = el.dataset.day; S.sel = null; render(); setTimeout(() => { window.print(); S.printDay = null; render(); }, 150); break; }
       case 'day-jump': if (S.mode === 'write' && !(await leaveWrite())) break; S.view = 'journal'; S.jview = 'list'; S.day = el.dataset.day; S.tag = null; S.query = ''; S.calMonth = [+el.dataset.day.slice(0, 4), +el.dataset.day.slice(5, 7) - 1]; S.sel = null; S.mode = 'read'; render(); break;
       case 'cal': { const now = new Date(); let [y, m] = S.calMonth || [now.getFullYear(), now.getMonth()]; if (el.dataset.d === '0') { y = now.getFullYear(); m = now.getMonth(); } else { m += +el.dataset.d; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } } S.calMonth = [y, m]; render(); break; }
-      case 'random': randomEntry(); break;
+      case 'random': if (S.mode === 'write' && !(await leaveWrite())) break; randomEntry(); break; // as Ctrl+R: the composer saves before it is replaced
       case 'saved': { const s = S.searches[+el.dataset.i]; S.query = S.query.trim() === s.query ? '' : s.query; S.sel = null; render(); break; }
       case 'pin-search': { const name = await askText('Name this search', 'e.g. Starred this year', S.query.trim()); if (!name) break; S.searches.push({ name, query: S.query.trim() }); await invoke('save_searches_cmd', { list: S.searches }); render(); break; }
       case 'clear-orphans': { const offered = await invoke('orphan_files'), n = offered.length; if (!n) { toast('No orphan media'); break; } if (!(await askConfirm(`Clear ${n} orphan media file${n === 1 ? '' : 's'}? Recovery copies will be kept under .quire/media-cleanup/ for 30 days.`, 'Clear'))) break; const d = await invoke('clear_orphans', { offered }); S.assets = null; toast(`Cleared ${d}; recovery copies kept in .quire/media-cleanup/ for 30 days`); render(); break; }
@@ -2339,9 +2355,9 @@ document.addEventListener('click', async ev => {
         S.tagPicks = {}; S.tagReview = await invoke('tag_review_cmd').catch(() => S.tagReview); await load();
         toast(`Merged ${plural(done, 'group')} · ${plural(files, 'file')} changed${errs.length ? ' · ' + errs.join('; ') : ''}`); render(); break;
       }
-      case 'export': { const p = await pick('save', 'Export all entries', 'export.md'); if (p) { const n = await invoke('export_cmd', { dest: p }); toast(`${n} entries exported`); } break; }
-      case 'import-md': { const p = await pick('folder', 'Folder of dated markdown files'); if (!p) break; const dry = await invoke('import_markdown', { dir: p, dryRun: true }); if (!dry.found) { toast('No dated .md or .txt files found'); break; } if (!(await askConfirm(`${dry.found} entries found; ${dry.written} new, ${dry.skipped} already here. Import the new ones?`, 'Import'))) break; const r = await invoke('import_markdown', { dir: p, dryRun: false }); await load(); toast(`Imported ${r.written}`); render(); break; }
-      case 'import-dayone': { const p = await pick('file', 'Day One export (Journal.json)'); if (!p) break; const dry = await invoke('import_dayone', { path: p, dryRun: true }); if (!(await askConfirm(`${dry.found} entries found; ${dry.written} new, ${dry.skipped} already here. Import the new ones?`, 'Import'))) break; const r = await invoke('import_dayone', { path: p, dryRun: false }); await load(); S.assetUrls.clear(); S.assets = null; toast(`Imported ${r.written}`); render(); break; }
+      case 'export': { const p = await pick('save', 'Export all entries', 'export.md'); if (p) { const n = await invoke('export_cmd', { dest: p }); toast(`${plural(n, 'entry', 'entries')} exported`); } break; }
+      case 'import-md': { const p = await pick('folder', 'Folder of dated markdown files'); if (!p) break; const dry = await invoke('import_markdown', { dir: p, dryRun: true }); if (!dry.found) { toast('No dated .md or .txt files found'); break; } if (!(await askConfirm(`${plural(dry.found, 'entry', 'entries')} found; ${dry.written} new, ${dry.skipped} already here. Import the new ones?`, 'Import'))) break; const r = await invoke('import_markdown', { dir: p, dryRun: false }); await load(); toast(`Imported ${r.written}`); render(); break; }
+      case 'import-dayone': { const p = await pick('file', 'Day One export (Journal.json)'); if (!p) break; const dry = await invoke('import_dayone', { path: p, dryRun: true }); if (!(await askConfirm(`${plural(dry.found, 'entry', 'entries')} found; ${dry.written} new, ${dry.skipped} already here. Import the new ones?`, 'Import'))) break; const r = await invoke('import_dayone', { path: p, dryRun: false }); await load(); S.assetUrls.clear(); S.assets = null; toast(`Imported ${r.written}`); render(); break; }
       case 'tag-review': S.tagReview = await invoke('tag_review_cmd'); S.tagPicks = {}; render(); location.hash = '#s-maint'; break;
       case 'welcome': S.ui.welcomed = false; await saveUi(); showWelcome(); break;
     }
@@ -2530,7 +2546,8 @@ document.addEventListener('keydown', async ev => {
       const isAsk = !!($('#ask-yes') || $('#ask-no'));
       if (popoverKey(ev)) return;
       if (ev.key === 'Escape') { ev.preventDefault(); if (isAsk && askConfirm.cancel) askConfirm.cancel(); else closePopover(); }
-      if (ev.key === 'Enter' && !isAsk && $('#rt-date')) { ev.preventDefault(); await retimeSave(); }
+      // ↵ in the date or time field saves. On a button it presses that button: ↵ on Cancel must not save.
+      if (ev.key === 'Enter' && !isAsk && $('#rt-date') && document.activeElement?.tagName !== 'BUTTON') { ev.preventDefault(); await retimeSave(); }
       return;
     }
     if (ctrl && ev.altKey && ev.key.toLowerCase() === 'f') { ev.preventDefault(); toggleFocus(); return; }
@@ -2600,8 +2617,11 @@ document.addEventListener('keydown', async ev => {
       ev.preventDefault();
       let i = rows.findIndex(r => r.classList.contains('sel') || (S.sel && r.dataset.file === S.sel.file && +r.dataset.index === S.sel.index));
       i = i < 0 ? (ev.key === 'ArrowDown' ? 0 : rows.length - 1) : Math.max(0, Math.min(rows.length - 1, i + (ev.key === 'ArrowDown' ? 1 : -1)));
-      const e = entryFrom(rows[i]); if (!e) return;
+      let e = entryFrom(rows[i]); if (!e) return;
       if (S.view === 'journal' && S.jview !== 'list') { rows[i].focus(); rows[i].scrollIntoView({ block: 'nearest' }); S.sel = e; return; }
+      // With the composer open and the focus off its text, the arrows still walk the list: the composer
+      // saves first, as it does for a click on a row, or its edits would be dropped without a word.
+      if (S.mode === 'write') { if (!(await leaveWrite())) return; e = reresolve(e); if (!e) return; }
       S.sel = e; S.mode = 'read'; render();
       return;
     }

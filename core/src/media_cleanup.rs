@@ -1,6 +1,6 @@
 //! Conservative media organisation: verified copies first, backed-up references,
 //! then archive originals only after every reference update succeeds.
-use crate::journal::{link_targets, parse_entries, resolve_link_all, Journal, LINK_TARGET_RE};
+use crate::journal::{link_targets, normalised, parse_entries, resolve_link_all, Journal, LINK_TARGET_RE};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use unicode_normalization::UnicodeNormalization;
@@ -330,7 +330,11 @@ pub fn cleanup_media(j: &Journal) -> Result<MediaCleanupReport, String> {
                     .push(format!("Missing media in {file}: {target}"));
             }
         }
-        for entry in parse_entries(text) {
+        // Dated from the text as every other read sees it: behind a byte-order
+        // mark the first header is not at the start of its line, and the file's
+        // first entry (and the month of the media it links) would be missed.
+        // The rewrite below still works on the bytes exactly as they are.
+        for entry in parse_entries(&normalised(text)) {
             if entry.ts.len() < 7 {
                 continue;
             }
@@ -544,6 +548,23 @@ mod tests {
         let repeat = cleanup_media(&j).unwrap();
         assert_eq!(repeat.organised, 0);
         assert!(repeat.backup.is_none());
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_hide_the_first_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let j = Journal::open(temp.path());
+        put(&j, "assets/first.jpg", b"one");
+        put(&j, "journal/2026/09/30.md", "\u{FEFF}[2026-09-30 10:00:00] photo\r\n![](assets/first.jpg)\r\n".as_bytes());
+        let r = cleanup_media(&j).unwrap();
+        assert!(r.issues.is_empty(), "{:?}", r.issues);
+        assert_eq!(r.organised, 1);
+        assert!(j.is_file("assets/2026/09/first.jpg") && !j.is_file("assets/first.jpg"));
+        // The mark and the line endings the file had are still there.
+        let bytes = j.vault().read("journal/2026/09/30.md").unwrap().unwrap();
+        assert!(bytes.starts_with("\u{FEFF}[2026-09-30 10:00:00] photo\r\n".as_bytes()));
+        let text = j.read("journal/2026/09/30.md");
+        assert!(text.contains("assets/2026/09/first.jpg"), "{text:?}");
     }
 
     #[test]

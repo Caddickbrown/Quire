@@ -8,7 +8,7 @@ test:
 check:
 	python3 tools/validate_apple.py
 	python3 tools/test_migrate_journal.py
-	@if command -v node >/dev/null 2>&1; then node --check linux/src/app.js && node tools/check_media_library.js && node tools/check_linux_editor.js && node tools/check_search.js; else echo "skipping frontend checks: node is not installed"; fi
+	@if command -v node >/dev/null 2>&1; then node --check linux/src/app.js && node tools/check_media_library.js && node tools/check_linux_editor.js && node tools/check_search.js && node tools/check_linux_views.js; else echo "skipping frontend checks: node is not installed"; fi
 	cargo clippy -p quire-core -p quire-tui -- -D warnings
 	cargo clippy -p quire-bindings --all-targets --all-features -- -D warnings
 	@if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then \

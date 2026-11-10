@@ -100,7 +100,8 @@ core/               quire-core
                     both sidecars, writes .quire/). Path-based: local only.
   src/search.rs     the search grammar shared with Nook's SearchQuery.swift and
                     the Linux app's parseQuery — keep the three in step
-  src/stats.rs      streaks, on this day, year stats (Look back), jnl's `stats`
+  src/stats.rs      streaks, on this day (the main journal only: never drafts or a
+                    split journal, in every shell), year stats (Look back), jnl's `stats`
   src/editing.rs    ↩ in a list, wrap toggling, word_at — the editor macros
   src/settings.rs   ~/.config/quire/settings.json, shared by Linux and the TUI
   src/prompts.rs    Nook's PromptDeck; prompt_of_day
@@ -147,7 +148,8 @@ tools/
                        scratch home; by hand, and its keys were last checked against 0.7
   bump_version.py      the version in its four fields and both lock files (make bump V=x.y.z)
   validate_apple.py    the Xcode project's wiring, on any host (make check)
-  check_linux_editor.js, check_media_library.js  the Linux front end (make check)
+  check_linux_editor.js, check_media_library.js, check_search.js, check_linux_views.js
+                       the Linux front end, run in node with no browser (make check)
   make_apple_icon.swift  Quire's Apple app icon set (`swift tools/make_apple_icon.swift <AppIcon.appiconset>`)
 sample/             the sample journal (new layout)
 docs/               consolidation-plan.md (the plan, decisions, the TUI spec),

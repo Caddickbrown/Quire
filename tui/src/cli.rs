@@ -104,7 +104,12 @@ pub fn stats_text(j: &Journal) {
     println!();
     print!("  Current streak:   {} day(s)", s.current_streak);
     if s.current_streak > 1 {
-        print!("  ({} → {})", s.current_start.clone().unwrap_or_default(), stats::today());
+        // The streak's own last day: yesterday when nothing is filed yet
+        // today (it isn't broken until the day ends), so the range is as
+        // long as the count beside it.
+        let start = s.current_start.clone().unwrap_or_default();
+        let end = stats::parse_date(&start).map(|d| (d + chrono::Duration::days(s.current_streak as i64 - 1)).format("%Y-%m-%d").to_string()).unwrap_or_else(stats::today);
+        print!("  ({} → {})", start, end);
     }
     println!();
     print!("  Best streak:      {} day(s)", s.best_streak);

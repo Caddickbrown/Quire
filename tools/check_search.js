@@ -96,8 +96,8 @@ const MORE = [
   ['match', 'has:image', entry('2026-01-02', '', '![](assets/2026/01/image(1).jpg)'), true],
   ['match', 'has:image', entry('2026-01-02', '', '![](<assets/2026/01/two words.png> "t")'), true],
   ['match', 'has:image', entry('2026-01-02', '', '![](../../assets/a.png)'), false], // from journal/x.md this climbs out of the root
-  // extras::media_kind has no "heif": the core calls it a file, so has:image doesn't match it.
-  ['match', 'has:image', entry('2026-01-02', '', '![](assets/a.heif)'), false],
+  // extras::media_kind: "heif" is the same container as "heic", and an image.
+  ['match', 'has:image', entry('2026-01-02', '', '![](assets/a.heif)'), true],
   ['match', 'has:image', entry('2026-01-02', '', '![](assets/a.HEIC)'), true],
   ['match', 'has:image has:audio', recorded, false],
   // Tags compare whole and case-folded; terms search the title and body only.

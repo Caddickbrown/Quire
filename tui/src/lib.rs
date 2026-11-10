@@ -195,7 +195,7 @@ pub fn run(name: &str) {
         }
         let mut a = make_app();
         if let Some(t) = draft_title {
-            a.start_draft(&t, "");
+            a.start_titled_draft(&t);
         } else {
             a.screen = screen;
         }

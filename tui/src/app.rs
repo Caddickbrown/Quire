@@ -45,11 +45,15 @@ pub struct Browse {
     pub ei: usize,
     pub filter: String,
     pub filtering: bool,
+    /// The column and the place (year, month, day, entry) when `/` was
+    /// pressed: what Esc goes back to, since each letter typed moves the
+    /// selection.
+    pub before_filter: Option<(usize, usize, usize, usize, usize)>,
 }
 
 impl Default for Browse {
     fn default() -> Self {
-        Browse { pick: Pick::Main, col: 2, yi: 0, mi: 0, di: 0, ei: 0, filter: String::new(), filtering: false }
+        Browse { pick: Pick::Main, col: 2, yi: 0, mi: 0, di: 0, ei: 0, filter: String::new(), filtering: false, before_filter: None }
     }
 }
 
@@ -249,9 +253,26 @@ const RESTORE_LEFTOVER_AGE: Duration = Duration::from_secs(3600);
 /// Where the last backup of each journal other than the settings' own is
 /// kept in settings.json: `{ "<journal key>": "YYYY-MM-DD HH:MM:SS" }`.
 const LAST_BACKUPS: &str = "last_backups";
+/// Search lists the newest this many matches; the count above it is of them all.
+pub const RESULTS_LISTED: usize = 300;
 /// The composer needs a title row, a text row and its status lines.
 pub const COMPOSER_MIN_ROWS: u16 = 9;
 pub const COMPOSER_MIN_COLS: u16 = 30;
+
+/// A day as the DAY column shows it, "Wed 04": what is drawn and what the
+/// column's filter matches are the same text.
+pub fn day_label(date: &str) -> String {
+    stats::parse_date(date).map(|d| d.format("%a %d").to_string()).unwrap_or_else(|| date.to_string())
+}
+
+/// The noun for a count: `noun(1, "entry", "entries")` is "entry".
+pub fn noun(n: usize, one: &'static str, many: &'static str) -> &'static str {
+    if n == 1 {
+        one
+    } else {
+        many
+    }
+}
 
 /// The date, time and title of an entry, to ask about it by name.
 pub fn entry_name(e: &Entry) -> String {
@@ -498,8 +519,12 @@ impl App {
         if !self.nav().filtering || self.nav().filter.is_empty() {
             return items;
         }
+        // By what the column shows as well as its key, a word at a time and
+        // with or without a leading zero: "wed" and "4" both find "Wed 04",
+        // "5" finds May.
         let f = self.nav().filter.to_lowercase();
-        items.into_iter().filter(|(k, _)| k.to_lowercase().starts_with(&f) || label(k).to_lowercase().starts_with(&f)).collect()
+        let hit = |s: String| s.split_whitespace().any(|w| w.starts_with(&f) || w.trim_start_matches('0').starts_with(&f));
+        items.into_iter().filter(|(k, _)| hit(k.to_lowercase()) || hit(label(k).to_lowercase())).collect()
     }
 
     /// Years, newest first, with entry counts.
@@ -537,7 +562,7 @@ impl App {
         }
         let v: Vec<(String, usize)> = m.into_iter().rev().collect();
         if self.nav().col == 2 {
-            self.filtered(v, |k| k[8..].to_string())
+            self.filtered(v, day_label)
         } else {
             v
         }
@@ -589,8 +614,17 @@ impl App {
         }
         let mut v: Vec<&Entry> = self.entries.iter().filter(|e| q.matches(e)).collect();
         v.sort_by(|a, b| b.ts.cmp(&a.ts));
-        v.truncate(300);
+        v.truncate(RESULTS_LISTED);
         v
+    }
+
+    /// How many entries match the query, however many of them are listed.
+    pub fn result_count(&self) -> usize {
+        let q = Query::parse(&self.query);
+        if q.is_empty() {
+            return 0;
+        }
+        self.entries.iter().filter(|e| q.matches(e)).count()
     }
 
     /// Matching tags for the `@word` under the caret, most used first.
@@ -655,6 +689,18 @@ impl App {
         self.tag_pick = 0;
         self.tag_moved = false;
         self.push(Screen::Write);
+    }
+
+    /// A draft whose title was typed on the command line (`quire new Call the
+    /// dentist`). The title is the writer's own text, so it counts as unsaved
+    /// from the start: leaving, ^s and ^j keep it even if nothing more is
+    /// typed. (Today's prompt draft is Quire's text, and stays unwritten until
+    /// something is added to it.)
+    pub fn start_titled_draft(&mut self, title: &str) {
+        self.start_draft(title, "");
+        if let Some(d) = self.draft.as_mut().filter(|d| !d.ed.is_empty()) {
+            d.ed.dirty = true;
+        }
     }
 
     pub fn edit_entry(&mut self, e: &Entry) {
@@ -977,7 +1023,19 @@ impl App {
     /// False when the value is not a real date and time: the prompt stays.
     fn apply_retime(&mut self, value: &str, target: Option<&Target>) -> bool {
         let v = value.trim();
-        let ts = if v.len() == 16 { format!("{}:00", v) } else { v.to_string() };
+        // The time it has now. The prompt shows it to the minute, so a value
+        // still in that minute keeps the seconds it had: ↵ on an untouched
+        // prompt must not rewrite 10:15:42 as 10:15:00 (which could also
+        // reorder two entries from the same minute).
+        let was: Option<String> = match target {
+            Some(t) => parse_entries(&t.at.2).into_iter().next().map(|r| r.ts),
+            None => self.draft.as_ref().map(|d| d.ts.clone()),
+        };
+        let ts = match &was {
+            Some(w) if v.len() == 16 && w.get(..16) == Some(v) => w.clone(),
+            _ if v.len() == 16 => format!("{}:00", v),
+            _ => v.to_string(),
+        };
         if check_ts_shape(&ts).is_err() {
             self.toast("Use YYYY-MM-DD HH:MM".into(), true);
             return false;
@@ -1001,6 +1059,9 @@ impl App {
         // selected now, and whatever a reload has done to the list.
         let (f, i, raw) = &target.at;
         let Some(r) = parse_entries(raw).into_iter().next() else { return true };
+        if r.ts == ts {
+            return true; // the time it already has: nothing to move
+        }
         match self.j.update_entry(f, *i, raw, &ts, &strip_star(&r.suffix), has_star(&r.suffix), &r.body) {
             Ok(w) => {
                 self.reload();
@@ -1209,8 +1270,14 @@ impl App {
         if self.nav().filtering {
             match k.code {
                 KeyCode::Esc => {
-                    self.nav_mut().filtering = false;
-                    self.nav_mut().filter.clear();
+                    // Back to where `/` was pressed: typing moved the
+                    // selection through the matches, and Esc undoes that.
+                    let nav = self.nav_mut();
+                    nav.filtering = false;
+                    nav.filter.clear();
+                    if let Some((col, yi, mi, di, ei)) = nav.before_filter.take() {
+                        (nav.col, nav.yi, nav.mi, nav.di, nav.ei) = (col, yi, mi, di, ei);
+                    }
                     self.clamp_browse();
                 }
                 KeyCode::Enter => self.keep_filtered(),
@@ -1256,8 +1323,15 @@ impl App {
                 }
             }
             KeyCode::Char('/') => {
-                self.nav_mut().filtering = true;
-                self.nav_mut().filter.clear();
+                // The filter narrows the year, month or day column. From the
+                // entries it has nothing to narrow, so it goes to the days
+                // (as `t` and `d` go to the entries) instead of opening a
+                // prompt that ignores what is typed. Esc comes back.
+                let nav = self.nav_mut();
+                nav.before_filter = Some((nav.col, nav.yi, nav.mi, nav.di, nav.ei));
+                nav.col = nav.col.min(2);
+                nav.filtering = true;
+                nav.filter.clear();
             }
             KeyCode::Char('s') if !inbox => self.cycle_pick(),
             // These act at once, so only on an entry that is marked on
@@ -1313,6 +1387,7 @@ impl App {
         let col = self.nav().col;
         self.nav_mut().filtering = false;
         self.nav_mut().filter.clear();
+        self.nav_mut().before_filter = None;
         let find = |items: Vec<(String, usize)>, key: &Option<String>| key.as_ref().and_then(|k| items.iter().position(|i| i.0 == *k));
         match col {
             0 => {
@@ -1420,10 +1495,9 @@ impl App {
                     self.prompt_n += 1;
                     let p = self.current_prompt();
                     let d = self.draft.as_mut().unwrap();
-                    if d.ed.col > 0 {
-                        d.ed.insert_str("\n\n");
-                    }
-                    d.ed.insert_str(&format!("> {}\n\n", p));
+                    // Into the body, as Today's ↵ puts it: from the title it
+                    // would otherwise become the header line (or cut it in two).
+                    d.ed.insert_block(&format!("> {}\n\n", p));
                 }
                 KeyCode::Char('o') => self.toggle_timer(),
                 KeyCode::Char('b') => d.ed.toggle_wrap_word("**", "**"),
@@ -1488,7 +1562,10 @@ impl App {
                         d.ed.lines.push(String::new());
                         d.ed.dirty = true;
                     }
-                    d.ed.row = 2.min(d.ed.lines.len() - 1);
+                    // The body starts on the row under the title when that
+                    // row has text (a paste, or a joined line), not past it.
+                    let first = if d.ed.lines[1].trim().is_empty() { 2 } else { 1 };
+                    d.ed.row = first.min(d.ed.lines.len() - 1);
                     d.ed.col = 0;
                 } else {
                     d.ed.newline();
@@ -1680,7 +1757,7 @@ impl App {
                             Confirm::ClearOrphans => self.run_clear_orphans(),
                             Confirm::MergeSplits => {
                                 let tags = self.split_tags.clone();
-                                self.start_maintenance(move |j| merge_ex_split(&j, &tags).and_then(|r| if r.errors.is_empty() { Ok(format!("Merged {} entries from {} journals", r.entries, r.journals)) } else { Err(r.errors.join("; ")) }));
+                                self.start_maintenance(move |j| merge_ex_split(&j, &tags).and_then(|r| if r.errors.is_empty() { Ok(format!("Merged {} {} from {} {}", r.entries, noun(r.entries, "entry", "entries"), r.journals, noun(r.journals, "journal", "journals"))) } else { Err(r.errors.join("; ")) }));
                             }
                             Confirm::CompressMedia => {
                                 // Minted under the settings lock, so two
@@ -1697,17 +1774,17 @@ impl App {
                                     else { Ok(message) }
                                 });
                             }
-                            Confirm::MergeTags(from, to) => self.start_maintenance(move |j| rename_tags(&j, &from, &to).map(|n| format!("Updated tags in {} files", n))),
-                            Confirm::ImportMarkdown(path) => self.start_maintenance(move |j| import_markdown_folder(&j, std::path::Path::new(&path), false).map(|r| format!("Imported {} entries; {} skipped", r.written, r.skipped))),
-                            Confirm::ImportDayOne(path) => self.start_maintenance(move |j| import_day_one(&j, std::path::Path::new(&path), false).map(|r| format!("Imported {} entries and {} media", r.written, r.media))),
+                            Confirm::MergeTags(from, to) => self.start_maintenance(move |j| rename_tags(&j, &from, &to).map(|n| format!("Updated tags in {} {}", n, noun(n, "file", "files")))),
+                            Confirm::ImportMarkdown(path) => self.start_maintenance(move |j| import_markdown_folder(&j, std::path::Path::new(&path), false).map(|r| format!("Imported {} {}; {} skipped", r.written, noun(r.written, "entry", "entries"), r.skipped))),
+                            Confirm::ImportDayOne(path) => self.start_maintenance(move |j| import_day_one(&j, std::path::Path::new(&path), false).map(|r| format!("Imported {} {} and {} media", r.written, noun(r.written, "entry", "entries"), r.media))),
                             Confirm::MergeConflicts => self.start_maintenance(move |j| {
                                 let files = j.conflict_files(); let mut added = 0;
                                 for file in &files { added += merge_conflict(&j, file)?; }
-                                Ok(format!("Merged {} entries from {} conflict copies", added, files.len()))
+                                Ok(format!("Merged {} {} from {} conflict {}", added, noun(added, "entry", "entries"), files.len(), noun(files.len(), "copy", "copies")))
                             }),
                             Confirm::FileTransfer => {
                                 let tags = self.split_tags.clone();
-                                self.start_maintenance(move |j| import_transfer(&j, &now_local(), &tags).map(|n| format!("Filed {} entries from transfer.md", n)));
+                                self.start_maintenance(move |j| import_transfer(&j, &now_local(), &tags).map(|n| format!("Filed {} {} from transfer.md", n, noun(n, "entry", "entries"))));
                             }
                             Confirm::Restore(name) => self.run_restore(&name),
                             Confirm::DeleteSelected(at) => self.delete_at(&at),
@@ -1770,7 +1847,7 @@ impl App {
                 "daily" => "daily (24 hours)", "weekly" => "weekly (7 days)", "monthly" => "monthly (30 days)",
                 "change" => "on change (30s idle)", _ => "off",
             }.into()),
-            8 => ("Keep backups", format!("{} copies", self.settings.keep())),
+            8 => ("Keep backups", format!("{} {}", self.settings.keep(), noun(self.settings.keep(), "copy", "copies"))),
             9 => ("Back up now", if self.backup_result.is_some() { "running…".into() } else {
                 let last = self.last_backup().map(|t| format!("last {}", &t[..t.len().min(16)])).unwrap_or_else(go);
                 match &self.backup_note { Some(note) => format!("{} · {}", last, note), None => last }
@@ -2211,6 +2288,11 @@ impl App {
                     if self.screen == Screen::Write {
                         return; // the save failed; stay with the draft
                     }
+                }
+                // A column filter left open would follow to Today, where it
+                // can't be seen or closed and it swallows `?`.
+                if self.nav().filtering {
+                    self.keep_filtered();
                 }
                 self.stack.clear();
                 self.screen = Screen::Today;
@@ -2762,6 +2844,116 @@ mod tests {
         type_in(&mut a, "may");
         press(&mut a, KeyCode::Enter);
         assert_eq!(a.browse_sel().date.as_deref(), Some("2023-05-06"));
+    }
+
+    #[test]
+    fn a_filter_given_up_goes_back_to_where_it_started() {
+        let d = tempfile::tempdir().unwrap();
+        for (day, text) in [
+            ("2026/01/02", "[2026-01-02 10:00:00] new\nx\n"),
+            ("2023/05/06", "[2023-05-06 10:00:00] a Saturday\nx\n"),
+            ("2023/05/10", "[2023-05-10 10:00:00] a Wednesday\nx\n"),
+        ] {
+            let p = d.path().join("journal").join(format!("{day}.md"));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        let mut a = app_in(d.path(), Settings::default());
+        a.screen = Screen::Browse;
+        // 2023 is marked; typing a filter for 2026 moves the mark, Esc undoes it.
+        a.browse.col = 0;
+        a.browse.yi = 1;
+        press(&mut a, KeyCode::Char('/'));
+        type_in(&mut a, "2026");
+        assert_eq!(a.browse_sel().year.as_deref(), Some("2026"));
+        press(&mut a, KeyCode::Esc);
+        assert!(!a.nav().filtering);
+        assert_eq!(a.browse_sel().year.as_deref(), Some("2023"), "Esc puts the selection back");
+        // The day column is found by what it shows: "Wed 10", "Sat 06".
+        a.browse.col = 2;
+        for (typed, day) in [("wed", "2023-05-10"), ("sat", "2023-05-06"), ("6", "2023-05-06"), ("10", "2023-05-10")] {
+            press(&mut a, KeyCode::Char('/'));
+            type_in(&mut a, typed);
+            assert_eq!(a.browse_days("2023", "05").iter().map(|d| d.0.as_str()).collect::<Vec<_>>(), [day], "{typed}");
+            press(&mut a, KeyCode::Esc);
+        }
+        // From the entries the filter is the day column's, not a prompt that
+        // ignores typing; Esc goes back to the entries.
+        a.browse.col = 3;
+        press(&mut a, KeyCode::Char('/'));
+        assert!(a.nav().filtering);
+        assert_eq!(a.nav().col, 2);
+        type_in(&mut a, "wed");
+        assert_eq!(a.browse_sel().date.as_deref(), Some("2023-05-10"));
+        press(&mut a, KeyCode::Esc);
+        assert_eq!((a.nav().col, a.nav().filtering), (3, false));
+        // A click on QUIRE with a filter open closes it: `?` works on Today.
+        a.browse.col = 0;
+        press(&mut a, KeyCode::Char('/'));
+        type_in(&mut a, "2023");
+        a.click(Hit::Home, 0);
+        assert_eq!(a.screen, Screen::Today);
+        assert!(!a.browse.filtering && a.browse.filter.is_empty());
+        press(&mut a, KeyCode::Char('?'));
+        assert!(a.help, "the help overlay opens");
+    }
+
+    #[test]
+    fn a_title_from_the_command_line_is_kept() {
+        let d = tempfile::tempdir().unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.start_titled_draft("Call the dentist");
+        press(&mut a, KeyCode::Esc);
+        assert!(a.draft.is_none());
+        assert!(inbox_text(&a).contains("] Call the dentist"), "left with nothing more typed, it is still a draft: {}", inbox_text(&a));
+        // No title is no draft, and Today's prompt alone is still not one.
+        a.start_titled_draft("");
+        press(&mut a, KeyCode::Esc);
+        a.screen = Screen::Today;
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Esc);
+        assert_eq!(a.entries.len(), 1);
+    }
+
+    #[test]
+    fn a_prompt_asked_for_from_the_title_goes_in_the_body() {
+        let d = tempfile::tempdir().unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.start_draft("", "");
+        type_in(&mut a, "My day");
+        press(&mut a, KeyCode::Left); // the caret inside the title
+        ctrl(&mut a, 'p');
+        let ed = &a.draft.as_ref().unwrap().ed;
+        assert_eq!(ed.title(), "My day", "the title is whole and still the title");
+        assert!(ed.body().starts_with("> "), "{:?}", ed.lines);
+        // From an empty title too: the prompt is not the header line.
+        a.draft = None;
+        a.start_draft("", "");
+        ctrl(&mut a, 'p');
+        let ed = &a.draft.as_ref().unwrap().ed;
+        assert!(ed.title().is_empty() && ed.body().starts_with("> "), "{:?}", ed.lines);
+    }
+
+    #[test]
+    fn a_date_prompt_left_as_it_was_changes_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        j.new_draft("2026-03-04 10:15:42", "Timed", false, "x").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.screen = Screen::Inbox;
+        let before = inbox_text(&a);
+        press(&mut a, KeyCode::Char('t'));
+        assert!(matches!(&a.modal, Some(Modal::Retime(v, _)) if v == "2026-03-04 10:15"));
+        press(&mut a, KeyCode::Enter);
+        assert!(a.modal.is_none());
+        assert_eq!(inbox_text(&a), before, "the seconds are not rewritten as :00");
+        assert!(a.toast.is_none(), "and nothing is said to have moved");
+        // Another minute is a move, on the minute as typed.
+        press(&mut a, KeyCode::Char('t'));
+        let Some(Modal::Retime(v, _)) = a.modal.as_mut() else { panic!("no prompt") };
+        *v = "2026-03-04 10:16".into();
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.entries[0].ts, "2026-03-04 10:16:00");
     }
 
     /// T6, decision D3.

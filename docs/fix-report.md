@@ -198,7 +198,8 @@ with a backup running or owed; clipboard image paste; the popover focus trap.
 **Not done.**
 
 - E3a, as above.
-- `.heif` is still a plain file, not an image, in the core's `media_kind`.
+- ~~`.heif` is still a plain file, not an image, in the core's `media_kind`.~~
+  Done on 10 November, with the Linux mirror (`coreMediaKind`).
 - The Mac's File All and Clean Up buttons still block while they run.
 - Scroll position is still lost when an iPad crosses the size class.
 - The layout repair after an edit also runs on ordinary typing after a focus
@@ -222,3 +223,162 @@ with a backup running or owed; clipboard image paste; the popover focus trap.
   whether that write is what did it is not certain.
 - If the new editor misbehaves on the phone, the last build known to work is
   `b87666a`.
+
+## Second pass, 10 November
+
+A read-through of the core, the terminal app and the Linux app after `main`
+(`f42d15b`, the Apple calendar sheets) was merged into `review-fixes`. It
+started from one report: split journals were showing in On this day in the
+terminal app. Nothing here touches Swift.
+
+### How it was checked
+
+| Check | Result |
+|---|---|
+| `make test` | 131 core, 10 bindings and 44 terminal tests pass |
+| `make check` | clean, with the new `tools/check_linux_views.js`; the desktop crate is skipped on a Mac and was not checked separately this time (`lib.rs` is unchanged) |
+| `make smoke` | 23/23 at 100×30 and 80×24 |
+| `make -C apple test` | 105 hostless tests pass on the merged tree |
+| `make -C apple build-ios` | the iOS Simulator build succeeds on the merged tree |
+
+Not run: the Linux app itself (its changes are checked in node only), the
+Apple UI tests, anything on a device.
+
+### On this day
+
+`stats::on_this_day` took every entry that was not a draft, so a split
+journal's entries were memories on the terminal's Today. It now takes the main
+journal only. The Linux app had the same filter in two places (Today and Look
+back) and now uses one `onThisDay()` helper with the core's rule. The Apple
+app already read the main journal only. Both new tests were confirmed to fail
+against the old filter.
+
+### What else was fixed
+
+**Terminal**
+
+- `quire new Call the dentist` (and `jnl Call the dentist`) lost the title
+  unless something more was typed: leaving, `^s` and `^j` all saved nothing.
+- `^p` from the title made the prompt the header line, or cut the title in two.
+  It goes in the body, as Today's ↵ puts it.
+- Text on the row under the title (a paste into the title, a line joined with
+  Backspace) was drawn over by the rule, and ↵ from the title skipped it.
+- `t` then ↵ on an untouched date prompt rewrote the entry's seconds as `:00`
+  and said it had moved.
+- The column filter: Esc goes back to where `/` was pressed; the DAY column is
+  matched by what it shows (`wed`, `4`); `/` from the entries filters the days
+  instead of opening a prompt that ignored typing; a click on QUIRE with a
+  filter open no longer leaves `?` dead on Today.
+- Today's summary line was cut off at 80 columns with a four-figure entry
+  count. Search reported its cap of 300 as the number of results. Look back
+  was a week short for a leap year starting on a Sunday (2012, 2040). `stats`
+  in a pipe ended the current streak's range on today even when the streak
+  ended yesterday. Plurals ("1 words", "1 entries", "1 copies").
+- A tag suggestion wider than the window overflowed a `u16` (a panic in debug
+  builds only).
+
+**Core**
+
+- `.heif` is an image (the open item above).
+- A HEIC attached with Data Saver on and no converter installed was written to
+  the ledger as done, so "Compress existing media" never converted it later.
+- A root `.md` with no entries was counted and weighed as a split journal on
+  Look back.
+- Media cleanup parsed un-normalised text, so a byte-order mark hid a file's
+  first entry and the media it linked was reported as undated.
+
+**Linux**
+
+- ↑/↓ with the focus off the text, and the list's Random button, replaced the
+  composer without saving: edits to a filed entry were dropped silently.
+- An entry with a date that doesn't exist (`2026-06-31`, which the parser
+  keeps) threw in `fmtDate` and stopped the list drawing; an impossible month
+  or hour turned Look back's charts into `NaN`.
+- The reader's link pattern stopped at the first `)`, so `image(1).jpg` was a
+  broken link and stray text. It is the core's pattern now.
+- ↵ on Cancel, Now or Yesterday in the date popover saved.
+- "Yesterday" was 24 hours ago, wrong for an hour around a clock change. The
+  heat map lost 31 December where clocks change at midnight.
+- The Journal picker showed "Main journal" over an empty list once the split
+  journal it was filtering by had no entries left. Look back's year picker
+  could show a year that wasn't the one on the page. Plurals.
+
+### Behaviour that changed
+
+- **Terminal:** `/` pressed on the entries column moves to the day column and
+  filters there. `quire new <title>` followed by Esc now leaves a draft.
+  Search's masthead reads "1,000 results · the newest 300 listed" past the cap.
+- **Linux:** the Journal picker can change by itself, to the main journal,
+  when a split journal empties.
+
+### Found and left alone
+
+These came out of the same read-through. None is fixed; the first group needs
+a decision before anyone writes code.
+
+**Main journal or every journal?** On this day is now the main journal's. The
+figures around it are not consistent with it or with each other:
+
+- Terminal Today's "N entries since …", Look back's totals, heat strip, tags
+  and year list (`year_stats`, `years`), and `stats_extra` (Linux Look back)
+  count split journals. `jnl_stats` (`quire stats` in a pipe) does not, so the
+  same command gives different totals on a terminal and in a pipe.
+- The streak on Today and Look back counts drafts and split journals
+  (`days_written`); the piped one counts journal days only. On Linux the
+  reminder's streak counts drafts and Look back's tile does not.
+- Random draws from split journals too, in the terminal and on Linux.
+- Terminal `list` and `log` are main-only, `tag` includes split journals, and
+  `tags` also counts drafts, so a tag's count can exceed what `tag` prints.
+- Linux: tag chips count every journal while the list they filter may be the
+  main one; the calendar and the day page include split-only days the list
+  beside them doesn't; the Marathon counters include split journals.
+- `export_all` interleaves the main journal and every split journal into one
+  file. `cleanup` re-homes split day files but never sorts or dedupes them.
+  The markdown-folder and Day One imports write to the main journal whatever
+  the split tags are, until `cleanup` moves the entries.
+
+**Terminal**
+
+- `^i` (italic) cannot be pressed: a terminal sends Tab for it. It needs
+  another key or the kitty keyboard protocol.
+- `h` and `k` move in the columns; `j` and `l` leave the screen.
+- ↑/↓ do nothing while a column filter is open.
+- Under about 54 columns the DAY column is clipped. In 15 rows or fewer Look
+  back's heat strip is drawn onto the hint row.
+- Look back's years run newest-first left to right, so ← moves the highlight
+  right, and only six years are drawn.
+- One-line prompts (a backup folder, an import path) don't scroll.
+- The help overlay misses several working keys on every screen, and Search
+  shows no help key. `quire migrate`'s help says it folds `.nook/`; alone, it
+  doesn't.
+- Ctrl+letter types the letter in Search and in the column filter.
+
+**Core**
+
+- `migrate_legacy_inbox` does not rebase `./assets/…` links as
+  `migrate_legacy_splits` does, so such a link in `inbox.md` breaks for
+  display once folded (the asset is still counted as used).
+  `tools/migrate_journal.py` behaves the same way.
+- An e-mail address makes a tag: `boss@work.com` gives the entry `@work`, and
+  with a split tag `work` files it there, while `rename_tags` refuses the same
+  token. Whether that is jnl's behaviour was not checked. A search for
+  `@gmail.com` can never match.
+- 29 February entries surface in On this day only on 29 February.
+- `tif`, `tiff` and `weba` are compressible media in `media.rs` and plain
+  files in `media_kind`.
+- An entry dated month 13 has its media renamed again on every cleanup run
+  (traced, not run). A failed relink after a HEIC conversion makes a second
+  JPEG on the next run.
+
+**Linux**
+
+- Print and Export PDF show `[image · name]` for pictures not yet loaded; a
+  second print works.
+- Below 860 px wide the Journal's Stream and Media views show nothing.
+- Lists stop at 500 rows and the Stream at 300 without saying so.
+- After "Import as separate entries…" the list beside the composer is not
+  redrawn, so a later row in that day file can open the wrong draft.
+- A hand-edited entry not in Quire's exact shape looks edited as soon as it is
+  opened, and is rewritten on leaving.
+- Not confirmed: the PIN not locking after a failed first load; an update's
+  restart not saving a composer opened during the download.

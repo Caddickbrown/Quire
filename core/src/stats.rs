@@ -98,10 +98,12 @@ pub fn count_tags<'a>(entries: impl Iterator<Item = &'a Entry>) -> Vec<(String, 
     v
 }
 
-/// Filed entries from the same day and month in earlier years, newest first.
+/// Main-journal entries from the same day and month in earlier years, newest
+/// first. Drafts aren't filed yet, and a split journal is kept apart from the
+/// main one, so neither is a memory here (the Apple app reads the same pool).
 pub fn on_this_day<'a>(entries: &'a [Entry], today: &str) -> Vec<&'a Entry> {
-    let md = &today[4..];
-    let mut v: Vec<&Entry> = entries.iter().filter(|e| e.source != "inbox" && e.date.len() == 10 && &e.date[4..] == md && e.date.as_str() < today).collect();
+    let Some(md) = today.get(4..) else { return Vec::new() };
+    let mut v: Vec<&Entry> = entries.iter().filter(|e| e.source == "journal" && e.date.len() == 10 && e.date.get(4..) == Some(md) && e.date.as_str() < today).collect();
     v.sort_by(|a, b| b.ts.cmp(&a.ts));
     v
 }
@@ -284,5 +286,22 @@ mod tests {
         assert_eq!(j.per_year.len(), 2);
         assert_eq!(long_date("2026-10-12"), "Monday 12 October 2026");
         assert_eq!(short_date("2026-10-12"), "Mon 12 Oct");
+    }
+
+    #[test]
+    fn on_this_day_is_the_main_journal_only() {
+        let es = entries(&[
+            ("journal/2025/10/12.md", "2025-10-12 08:00:00", "last year"),
+            ("journal/2024/10/12.md", "2024-10-12 08:00:00", "two years ago"),
+            ("split/work/2025/10/12.md", "2025-10-12 09:00:00", "standup @work"),
+            ("split/work/2023/10/12.md", "2023-10-12 09:00:00", "retro @work"),
+            ("inbox/2025/10/12.md", "2025-10-12 10:00:00", "an old draft"),
+            ("journal/2026/10/12.md", "2026-10-12 08:00:00", "today"),
+            ("journal/2025/10/13.md", "2025-10-13 08:00:00", "the day after"),
+        ]);
+        assert!(es.iter().any(|e| e.source == "split"), "the split entries were read as split");
+        let otd: Vec<(&str, &str)> = on_this_day(&es, "2026-10-12").iter().map(|e| (e.source.as_str(), e.date.as_str())).collect();
+        assert_eq!(otd, vec![("journal", "2025-10-12"), ("journal", "2024-10-12")]);
+        assert!(on_this_day(&es, "").is_empty(), "a date that isn't one finds nothing");
     }
 }

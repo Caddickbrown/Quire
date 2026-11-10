@@ -12,7 +12,7 @@ use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -156,7 +156,8 @@ fn walk_visible(dir: &Path, out: &mut Vec<PathBuf>) {
 pub fn media_kind(path: &str) -> &'static str {
     let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
     match ext.as_str() {
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "heic" | "bmp" | "svg" | "avif" => "image",
+        // `heif` is the same container as `heic` (media.rs converts both).
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "heic" | "heif" | "bmp" | "svg" | "avif" => "image",
         "mp4" | "mov" | "m4v" | "webm" | "mkv" => "video",
         "m4a" | "mp3" | "wav" | "aac" | "ogg" | "opus" | "flac" | "caf" => "audio",
         _ => "file",
@@ -333,7 +334,10 @@ pub fn attach_bytes(j: &Journal, bytes: &[u8], ext: &str, ts: &str, saver: bool,
     let tmp = tempfile::Builder::new().prefix(".quire-attach-").suffix(&format!(".{}", out_ext.to_lowercase())).tempfile().map_err(|e| e.to_string())?;
     fs::write(tmp.path(), &out).map_err(|e| e.to_string())?;
     let a = attached(attach(j, tmp.path(), ts, "")?, saver);
-    if image && saver {
+    // A HEIC that is still a HEIC was not converted (no converter here, or it
+    // failed). It stays out of the ledger: the ledger is what tells "Compress
+    // existing media" a file is done, and this one is still to do.
+    if image && saver && !crate::media::is_heic(&out_ext) {
         let root = j.local()?;
         crate::media::record_saving(root, device, &root.join(&a.rel), bytes.len() as i64 - out.len() as i64);
     }
@@ -1877,8 +1881,11 @@ pub fn stats_extra(j: &Journal) -> StatsExtra {
             longest = LongestDay { date: d.to_string(), words: w };
         }
     }
-    let splits = j.split_files();
-    let split_tags: HashSet<&String> = splits.iter().map(|(_, t)| t).collect();
+    // A split journal is one that holds entries. A root `.md` with none
+    // (someone's notes kept beside the journal) is not a journal, and is
+    // neither counted nor weighed as one.
+    let split_tags: HashSet<&String> = all.iter().filter_map(|e| e.split.as_ref()).collect();
+    let split_files: BTreeSet<&str> = all.iter().filter(|e| e.source == "split").map(|e| e.file.as_str()).collect();
     StatsExtra {
         drafts,
         tags: tags.len(),
@@ -1888,7 +1895,7 @@ pub fn stats_extra(j: &Journal) -> StatsExtra {
         sizes_by_location: SizesByLocation {
             inbox: j.len(LEGACY_INBOX) + j.tree_bytes(INBOX_DIR),
             journal: j.tree_bytes(JOURNAL_DIR),
-            splits: splits.iter().map(|(rel, _)| j.len(rel)).sum(),
+            splits: split_files.iter().map(|rel| j.len(rel)).sum(),
             media: j.tree_bytes("assets"),
         },
     }
@@ -2182,6 +2189,17 @@ mod tests {
         assert_eq!(crate::media::encode_clipboard_image(2, 2, clear).unwrap().1, "png");
         assert!(crate::media::encode_clipboard_image(3, 3, vec![0; 5]).is_err());
         assert!(attach_bytes(&j, &[], "png", "2026-09-30 08:00:00", false, "DEV").is_err());
+        // A HEIC that could not be converted (these bytes are not one, so no
+        // converter can) is stored as it came, linked as a picture, and left
+        // out of the ledger so a later "Compress existing media" still tries it.
+        for (ext, ts, name) in [("heic", "2026-09-30 09:00:00", "30-090000.heic"), ("HEIF", "2026-09-30 10:00:00", "30-100000.heif")] {
+            let a = attach_bytes(&j, b"not really a heic", ext, ts, true, "DEV").unwrap();
+            assert_eq!(a.link, format!("![](assets/2026/09/{name})"));
+            let ledger = crate::media::read_ledger(d.path(), "DEV");
+            assert!(!ledger.assets.iter().any(|id| id.contains(&name[..9])), "{:?}", ledger.assets);
+            assert!(!crate::media::try_handled(d.path()).unwrap().has(d.path(), &d.path().join(&a.rel)));
+        }
+        assert_eq!(media_kind("assets/2026/09/IMG_0001.HEIF"), "image");
         let doc = d.path().join("notes.pdf");
         fs::write(&doc, b"x").unwrap();
         assert_eq!(attach_media(&j, &doc, "2026-09-30 08:00:00", true, "DEV").unwrap().link, "[30-080000.pdf](assets/2026/09/30-080000.pdf)");
@@ -2655,5 +2673,14 @@ mod tests {
         assert_eq!(s.longest_day.words, 7);
         assert_eq!(s.avg_words_per_entry, 2.5);
         assert!(s.sizes_by_location.journal > 0 && s.sizes_by_location.media == 0);
+        // Notes kept beside the journal are not a split journal: not counted,
+        // and their size is not the split journals'.
+        let before = s.sizes_by_location.splits;
+        assert!(before > 0);
+        w(d.path(), "ideas.md", "Just notes, with no entries in them.\n");
+        w(d.path(), "split/home/2026/09/28.md", "[2026-09-28 08:00:00]\nat home\n");
+        let s = stats_extra(&jn(d.path()));
+        assert_eq!(s.splits, 2, "work and home, not ideas");
+        assert_eq!(s.sizes_by_location.splits, before + jn(d.path()).len("split/home/2026/09/28.md"));
     }
 }

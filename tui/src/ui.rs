@@ -2,7 +2,7 @@
 //! masthead; hairline section rules with a left label; keys in the accent
 //! with muted labels, in the same order on every screen.
 
-use crate::app::{App, Hit, Modal, Pick, Screen};
+use crate::app::{day_label, noun, App, Hit, Modal, Pick, Screen};
 use crate::md;
 use crate::theme::Palette;
 use quire_core::stats;
@@ -106,8 +106,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             hints(f, app, hint_row, &p, &[("← →", "change"), ("↑↓", "choose")], &[("?", "keys"), ("esc", "back")], None);
         }
         Screen::Search => {
-            let n = app.results().len();
-            masthead(f, app, head, &p, "search", plain(Line::from(Span::styled(if app.query.is_empty() { String::new() } else { format!("{} result{}", n, if n == 1 { "" } else { "s" }) }, p.muted()))));
+            // Every match is counted; the list below holds the newest of them.
+            let (n, shown) = (app.result_count(), app.results().len());
+            let found = if app.query.is_empty() {
+                String::new()
+            } else if n > shown {
+                format!("{} results · the newest {} listed", commas(n), shown)
+            } else {
+                format!("{} {}", n, noun(n, "result", "results"))
+            };
+            masthead(f, app, head, &p, "search", plain(Line::from(Span::styled(found, p.muted()))));
             rule(f, rule_row, &p);
             search(f, body, app);
             hints(f, app, hint_row, &p, &[("↵", "open"), ("↑↓", "results")], &[("esc", if app.query.is_empty() { "back" } else { "clear" })], None);
@@ -403,7 +411,8 @@ fn entry_meta(e: &Entry, p: &Palette, digits: usize) -> Line<'static> {
     let tag = trunc(e.tags.first().map(String::as_str).unwrap_or(""), 14);
     Line::from(vec![
         Span::styled(format!("{:<14}  ", tag), p.accent()),
-        Span::styled(format!("{:>digits$} words", e.words), p.muted()),
+        // "word " keeps the column as wide as "words", so the tags stay aligned.
+        Span::styled(format!("{:>digits$} {}", e.words, noun(e.words, "word ", "words")), p.muted()),
     ])
 }
 
@@ -431,7 +440,7 @@ fn today(f: &mut Frame, r: Rect, app: &App) {
     let otd_rows = if roomy { 3 } else { 2 };
     let words = app.words_today();
     let goal = app.settings.word_goal();
-    put(f, Rect::new(r.x, y, r.width, 1), Line::from(vec![Span::styled(format!("  {}", commas(words)), p.bold()), Span::styled(" words today", p.muted())]));
+    put(f, Rect::new(r.x, y, r.width, 1), Line::from(vec![Span::styled(format!("  {}", commas(words)), p.bold()), Span::styled(format!(" {} today", noun(words, "word", "words")), p.muted())]));
     y += 1;
     let mut bar = vec![Span::styled("  ", p.ink())];
     bar.extend(goal_bar(words, goal, p));
@@ -443,18 +452,24 @@ fn today(f: &mut Frame, r: Rect, app: &App) {
     let drafts = app.drafts().len();
     let filed = app.filed();
     let first = filed.iter().map(|e| e.date.as_str()).min().map(|d| format!(" since {}", d.get(..7).unwrap_or(d))).unwrap_or_default();
-    put(
-        f,
-        Rect::new(r.x, y, r.width, 1),
+    // The whole line or a shorter one, never one cut off mid-word: tighter
+    // dots first (80 columns with a four-figure count), then without "since".
+    let summary = |sep: &str, since: &str| {
         Line::from(vec![
             Span::styled(format!("  {}", streak), p.bold()),
-            Span::styled(" day streak   ·   ".to_string(), p.muted()),
+            Span::styled(format!(" day streak{}", sep), p.muted()),
             Span::styled(format!("{}", drafts), p.bold()),
-            Span::styled(format!(" draft{} in the inbox   ·   ", if drafts == 1 { "" } else { "s" }), p.muted()),
+            Span::styled(format!(" {} in the inbox{}", noun(drafts, "draft", "drafts"), sep), p.muted()),
             Span::styled(commas(filed.len()), p.bold()),
-            Span::styled(format!(" entr{}{}", if filed.len() == 1 { "y" } else { "ies" }, first), p.muted()),
-        ]),
-    );
+            Span::styled(format!(" {}{}", noun(filed.len(), "entry", "entries"), since), p.muted()),
+        ])
+    };
+    let line = [("   ·   ", first.as_str()), ("  ·  ", first.as_str()), ("  ·  ", "")]
+        .into_iter()
+        .map(|(sep, since)| summary(sep, since))
+        .find(|l| l.width() <= w)
+        .unwrap_or_else(|| summary(" · ", ""));
+    put(f, Rect::new(r.x, y, r.width, 1), line);
     y += gap + 1;
     let otd = stats::on_this_day(&app.entries, &app.today);
     if y + 3 < max_y {
@@ -623,7 +638,7 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
         x += wm;
         vline(f, x);
         x += sep;
-        draw_col(f, 2, x, wd, "DAY", column(&days, nav.di, nav.col == 2, |k| stats::parse_date(k).map(|d| d.format("%a %d").to_string()).unwrap_or_else(|| k.to_string()), wd as usize, p), nav.di);
+        draw_col(f, 2, x, wd, "DAY", column(&days, nav.di, nav.col == 2, day_label, wd as usize, p), nav.di);
         x += wd;
         if !wide {
             return;
@@ -668,7 +683,7 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
             }
         }
         lines.push(Line::from(""));
-        let mut meta = vec![Span::styled(format!("       {} words", e.words), p.muted())];
+        let mut meta = vec![Span::styled(format!("       {} {}", e.words, noun(e.words, "word", "words")), p.muted())];
         if !e.tags.is_empty() {
             meta.push(Span::styled("  ·  ", p.muted()));
             meta.push(Span::styled(e.tags.join(" "), p.accent()));
@@ -773,7 +788,11 @@ fn write(f: &mut Frame, r: Rect, app: &mut App) {
             line_after_title = Some(y + 1);
         }
     }
-    if let Some(ly) = line_after_title {
+    // The rule under the title sits on the blank row that separates it from
+    // the body. When that row has text (a paste into the title, a line joined
+    // up with Backspace) the text is what shows, not a rule over its start.
+    let gap_is_blank = d.ed.lines.get(1).is_none_or(|l| l.trim().is_empty());
+    if let Some(ly) = line_after_title.filter(|_| gap_is_blank) {
         if ly < r.y + text_h as u16 {
             put(f, Rect::new(left, ly, 2, 1), Line::from(Span::styled("──", p.accent())));
         }
@@ -783,7 +802,7 @@ fn write(f: &mut Frame, r: Rect, app: &mut App) {
         if !suggestions.is_empty() {
             let w = suggestions.iter().map(|s| s.width()).max().unwrap_or(4) as u16 + 6;
             let hgt = suggestions.len() as u16;
-            let px = cx.min(r.x + r.width - w);
+            let px = cx.min((r.x + r.width).saturating_sub(w));
             let py = if cy + 1 + hgt <= r.y + r.height { cy + 1 } else { cy.saturating_sub(hgt) };
             let area = Rect::new(px, py, w, hgt);
             f.render_widget(Clear, area);
@@ -803,7 +822,7 @@ fn write(f: &mut Frame, r: Rect, app: &mut App) {
     }
     // status line
     let sy = r.y + r.height - 1;
-    let mut st: Vec<Span> = vec![Span::styled(commas(words_today), p.bold()), Span::styled(" words   ", p.muted())];
+    let mut st: Vec<Span> = vec![Span::styled(commas(words_today), p.bold()), Span::styled(format!(" {}   ", noun(words_today, "word", "words")), p.muted())];
     st.extend(goal_bar(words_today, goal, &p));
     st.push(Span::styled(format!("  {}", goal), p.muted()));
     if let Some((t, paused)) = timer {
@@ -887,7 +906,7 @@ fn lookback(f: &mut Frame, r: Rect, app: &App) {
     let mut y = r.y;
     let span_txt = span.map(|(a, b)| format!("       longest {}, {} – {}", longest, a, b)).unwrap_or_default();
     let left = Line::from(vec![Span::styled(format!("  {}", streak), p.bold()), Span::styled(" day streak", p.muted()), Span::styled(span_txt, p.faint())]);
-    let right = Line::from(vec![Span::styled(commas(total_words), p.bold()), Span::styled(" words", p.muted()), Span::styled(format!("   in {} entries, {} days", commas(all_filed.len()), commas(total_days)), p.faint())]);
+    let right = Line::from(vec![Span::styled(commas(total_words), p.bold()), Span::styled(format!(" {}", noun(total_words, "word", "words")), p.muted()), Span::styled(format!("   in {} {}, {} {}", commas(all_filed.len()), noun(all_filed.len(), "entry", "entries"), commas(total_days), noun(total_days, "day", "days")), p.faint())]);
     two_sided(f, Rect::new(r.x, y, r.width, 1), left, right);
     y += 2;
     // The year as a heat strip: one column a week, Mon to Sun.
@@ -895,7 +914,10 @@ fn lookback(f: &mut Frame, r: Rect, app: &App) {
     y += 2;
     let jan1 = chrono::NaiveDate::from_ymd_opt(app.year, 1, 1).unwrap();
     let off = jan1.weekday().num_days_from_monday() as i64;
-    let weeks = 53usize;
+    // One column a week: 53 for most years, 54 for a leap year that starts on
+    // a Sunday (2012, 2040), whose 31 December is alone in the last one.
+    let dec31 = chrono::NaiveDate::from_ymd_opt(app.year, 12, 31).unwrap();
+    let weeks = ((dec31 - jan1).num_days() + off) as usize / 7 + 1;
     let strip_w = weeks.min(w.saturating_sub(8));
     for (wd, name) in WEEKDAYS.iter().enumerate() {
         let mut spans: Vec<Span> = vec![Span::styled(format!("  {} ", name), p.faint())];
@@ -996,7 +1018,7 @@ fn lookback(f: &mut Frame, r: Rect, app: &App) {
         put(f, Rect::new(xx, y2, col_w as u16, 1), Line::from(s));
         y2 += 1;
         if y2 < max_y {
-            put(f, Rect::new(xx, y2, col_w as u16, 1), Line::from(vec![Span::styled(format!("  {} entries · {} days · {} starred", commas(ys.entries), ys.days, ys.starred), p.muted())]));
+            put(f, Rect::new(xx, y2, col_w as u16, 1), Line::from(vec![Span::styled(format!("  {} {} · {} {} · {} starred", commas(ys.entries), noun(ys.entries, "entry", "entries"), ys.days, noun(ys.days, "day", "days"), ys.starred), p.muted())]));
         }
     }
 }
@@ -1085,5 +1107,73 @@ mod tests {
         assert_eq!(rows[0].find("words"), rows[1].find("words"));
         assert!(rows.iter().any(|row| row.contains(" 99 words")));
         assert!(rows.iter().any(|row| row.contains("100 words")));
+    }
+
+    /// The screen as rows of text, at `w` by `h`.
+    fn screen(app: &mut App, w: u16, h: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..h).map(|y| (0..w).map(|x| buffer[(x, y)].symbol()).collect::<String>()).collect()
+    }
+
+    fn write_file(root: &std::path::Path, rel: &str, text: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+
+    #[test]
+    fn today_keeps_split_journals_out_of_on_this_day() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path(), "journal/2025/10/12.md", "[2025-10-12 08:00:00] A walk by the canal\nx\n");
+        write_file(temp.path(), "split/work/2025/10/12.md", "[2025-10-12 09:00:00] Quarterly standup @work\nx\n");
+        write_file(temp.path(), "split/work/2024/10/12.md", "[2024-10-12 09:00:00] Budget review @work\nx\n");
+        let mut app = App::new(Journal::open(temp.path()), Settings::default(), vec!["work".into()], "almanac");
+        app.today = "2026-10-12".into();
+        assert_eq!(app.entries.iter().filter(|e| e.source == "split").count(), 2, "the split journal is loaded");
+        let rows = screen(&mut app, 100, 30).join("\n");
+        assert!(rows.contains("ON THIS DAY") && rows.contains("A walk by the canal"), "{rows}");
+        assert!(!rows.contains("Quarterly standup") && !rows.contains("Budget review"), "{rows}");
+        // With only split entries on the day, there is nothing from earlier years.
+        std::fs::remove_file(temp.path().join("journal/2025/10/12.md")).unwrap();
+        let mut app = App::new(Journal::open(temp.path()), Settings::default(), vec!["work".into()], "almanac");
+        app.today = "2026-10-12".into();
+        let rows = screen(&mut app, 100, 30).join("\n");
+        assert!(rows.contains("Nothing yet from earlier years."), "{rows}");
+    }
+
+    #[test]
+    fn today_summary_is_never_cut_off_and_counts_one_as_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let many: String = (0..1234).map(|i| format!("[2019-03-04 {:02}:{:02}:{:02}] e{i}\nx\n\n", i / 3600, i / 60 % 60, i % 60)).collect();
+        write_file(temp.path(), "journal/2019/03/04.md", &many);
+        let mut app = App::new(Journal::open(temp.path()), Settings::default(), vec![], "almanac");
+        let rows = screen(&mut app, 80, 24);
+        let line = rows.iter().find(|r| r.contains("day streak")).unwrap();
+        assert!(line.contains("1,234 entries since 2019-03"), "whole at 80 columns: {line:?}");
+        // One of each reads as one.
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path(), "journal/2019/03/04.md", "[2019-03-04 08:00:00] only\nword\n");
+        let journal = Journal::open(temp.path());
+        journal.new_draft(&now_local(), "", false, "one").unwrap();
+        let mut app = App::new(journal, Settings::default(), vec![], "almanac");
+        let rows = screen(&mut app, 100, 30).join("\n");
+        assert!(rows.contains("1 word today") && rows.contains("1 draft in the inbox") && rows.contains("1 entry since 2019-03"), "{rows}");
+        assert!(!rows.contains("1 words"), "{rows}");
+    }
+
+    #[test]
+    fn text_on_the_row_under_the_title_is_not_drawn_over() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = App::new(Journal::open(temp.path()), Settings::default(), vec![], "almanac");
+        app.start_draft("", "");
+        let rows = screen(&mut app, 100, 30).join("\n");
+        assert!(rows.contains("──"), "the rule sits under an empty title");
+        // Two lines pasted into the title: the second is on the row the rule uses.
+        app.handle_paste("First line\nsecond line".into());
+        let rows = screen(&mut app, 100, 30);
+        assert!(rows.iter().any(|r| r.contains("second line")), "{}", rows.join("\n"));
+        assert!(!rows.iter().any(|r| r.contains("──cond line")), "{}", rows.join("\n"));
     }
 }
