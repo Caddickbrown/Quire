@@ -311,6 +311,21 @@ against the old filter.
 - **Linux:** the Journal picker can change by itself, to the main journal,
   when a split journal empties.
 
+### Main journal only, and a Split journals section
+
+Decided after the pass: every figure is the main journal's, and the split
+journals are shown apart, all of them together. `stats::is_main` is the rule
+and `stats::split_stats` the combined figures. Done in the core, the terminal
+(Today's count, the streak, Look back, Random, and a "Split journals" block in
+`quire stats`) and Linux (Look back with a Split journals panel, the Marathon
+counters, the reminder's streak, Random). This settles the first, second and
+third bullets under "Main journal or every journal?" below.
+
+Still different: the terminal's streak counts a day that has only a draft, and
+`quire stats` in a pipe counts filed days only, as jnl does. Not done: a Split
+journals section on the Apple app's Look back (its figures were already the
+main journal's), and the Linux Today list, tag chips, calendar and day page.
+
 ### Found and left alone
 
 These came out of the same read-through. None is fixed; the first group needs

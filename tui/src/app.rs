@@ -473,8 +473,16 @@ impl App {
         v
     }
 
-    pub fn filed(&self) -> Vec<&Entry> {
-        self.entries.iter().filter(|e| e.source != "inbox").collect()
+    /// The main journal's entries: what Today counts, Look back totals and
+    /// Random draws from. A split journal's are its own (`stats::split_stats`).
+    pub fn journal(&self) -> Vec<&Entry> {
+        self.entries.iter().filter(|e| stats::is_main(e)).collect()
+    }
+
+    /// The days the streak is counted over: the main journal's, and a
+    /// draft's unless it is headed for a split journal.
+    pub fn days_written(&self) -> std::collections::BTreeSet<String> {
+        stats::days_written(&self.entries, &self.split_tags)
     }
 
     pub fn current_prompt(&self) -> &'static str {
@@ -1077,7 +1085,7 @@ impl App {
 
     pub fn random(&mut self) {
         use rand::Rng;
-        let pool: Vec<Entry> = self.filed().into_iter().cloned().collect();
+        let pool: Vec<Entry> = self.journal().into_iter().cloned().collect();
         if pool.is_empty() {
             self.toast("No journal entries yet".into(), false);
             return;

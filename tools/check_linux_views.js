@@ -23,7 +23,7 @@ const source = fs.readFileSync('linux/src/app.js', 'utf8');
 vm.runInContext(source.slice(0, source.indexOf('/* ---------- boot ---------- */')), context);
 const run = text => vm.runInContext(text, context);
 const entry = (file, source, ts, title, extra = '') =>
-  `{file:'${file}', index:0, source:'${source}', ts:'${ts}', date:'${ts.slice(0, 10)}', time:'${ts.slice(11, 16)}', title:'${title}', body:'x', words:1, tags:[], starred:false${extra}}`;
+  `{file:'${file}', index:0, source:'${source}', ts:'${ts}', date:'${ts.slice(0, 10)}', time:'${ts.slice(11, 16)}', title:'${title}', body:'x', raw:'[${ts}] ${title}\\nx', words:1, tags:[], starred:false${extra}}`;
 
 assert.equal(run('today()'), '2026-10-12', 'the fixed clock is in use');
 
@@ -48,6 +48,38 @@ assert.match(look, /A walk by the canal/);
 assert.doesNotMatch(look, /Quarterly standup|Budget review/);
 run("S.entries = S.entries.filter(e => e.source !== 'journal')");
 assert.match(run('renderHome()'), /Nothing written on this day in earlier years/, 'split entries alone are not On this day');
+
+// Look back is the main journal's; the split journals have a panel of their own, all of them together.
+run(`S.entries = [
+  ${entry('journal/2026/10/10.md', 'journal', '2026-10-10 08:00:00', 'Main one')},
+  ${entry('journal/2026/10/11.md', 'journal', '2026-10-11 08:00:00', 'Main two')},
+  ${entry('split/work/2026/10/11.md', 'split', '2026-10-11 09:00:00', 'Standup', ", split:'work'")},
+  ${entry('split/work/2026/10/12.md', 'split', '2026-10-12 09:00:00', 'Retro', ", split:'work'")},
+  ${entry('split/home/2026/10/12.md', 'split', '2026-10-12 10:00:00', 'Shelves', ", split:'home'")},
+  ${entry('split/home/2024/02/03.md', 'split', '2024-02-03 10:00:00', 'Long ago', ", split:'home'")},
+  ${entry('inbox/2026/10/12.md', 'inbox', '2026-10-12 11:00:00', 'A draft')}
+]; S.entries.forEach((e, i) => { e.words = i + 1; }); S.year = 2026; S.view = 'lookback';`);
+assert.deepEqual(JSON.parse(run('JSON.stringify(splitStats())')), { names: ['home', 'work'], entries: 4, words: 3 + 4 + 5 + 6, days: 3 });
+assert.deepEqual(JSON.parse(run('JSON.stringify(splitStats(2026))')), { names: ['home', 'work'], entries: 3, words: 3 + 4 + 5, days: 2 });
+const page = run('renderLookBack()');
+assert.match(page, /<span class="v">2<\/span><span class="l">days written in 2026/, 'the split entry on the 12th is not a day written');
+assert.match(page, /<span class="v">3<\/span><span class="l">words in 2026/, 'words: the main journal\'s 1 + 2');
+assert.match(page, /<h2>All time<\/h2>[^]*?2 entries over 2 days · 3 words/);
+assert.doesNotMatch(page, /<option[^>]*>2024<\/option>/, 'a year with only split entries is not one of the journal\'s years');
+const panel = page.slice(page.indexOf('id="split-journals"'), page.indexOf('<h2>Library</h2>'));
+assert.match(panel, /<h2>Split journals<\/h2>/);
+assert.match(panel, /@home<\/span> <span[^>]*>@work<\/span>/);
+assert.match(panel, /4 entries over 3 days · 18 words/);
+assert.match(panel, /2026: 3 entries over 2 days · 12 words/);
+run('S.year = 2025');
+assert.match(run('renderLookBack()'), /2025: nothing written/);
+run('S.year = 2026');
+// The counters, the reminder's streak and Random are the main journal's too.
+assert.equal(run('streakToYesterday()'), 2, 'the 10th and 11th; the split entries and today are not in it');
+context.render = noop;
+for (let i = 0; i < 40; i++) { run("S.journal = 'work'; randomEntry()"); assert.equal(run('S.sel.source'), 'journal'); assert.equal(run('S.journal'), 'main', 'the list beside it holds the entry'); }
+run("S.sel = null; S.entries = S.entries.filter(e => e.source !== 'split')");
+assert.doesNotMatch(run('renderLookBack()'), /split-journals/, 'no split journals, no panel');
 
 // Yesterday is the calendar's day before, not 24 hours ago.
 assert.equal(run('yesterday()'), '2026-10-11');
@@ -87,4 +119,4 @@ assert.doesNotMatch(one, /(?<!\d)1 (entries|days|words)\b/);
 run('S.year = 2019');
 assert.match(run('renderLookBack()'), /<option selected>2019<\/option>/);
 
-console.log('Linux view checks passed: On this day without split journals, impossible dates, bracketed links, plurals, yesterday and the year picker.');
+console.log('Linux view checks passed: On this day and Look back without split journals, the Split journals panel, impossible dates, bracketed links, plurals, yesterday and the year picker.');

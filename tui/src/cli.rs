@@ -101,6 +101,15 @@ pub fn stats_text(j: &Journal) {
         println!("  Busiest day:      {}  ({} entries)", d, n);
     }
     println!("  Inbox drafts:     {} waiting", s.drafts);
+    // Everything above and below is the main journal's. The split journals
+    // are counted apart, all of them together (Look back shows the same).
+    if !s.split.is_empty() {
+        println!();
+        println!("  Split journals:   {}  ({})", s.split.names.len(), s.split.names.iter().map(|n| format!("@{}", n)).collect::<Vec<_>>().join(" "));
+        println!("    Entries:        {}", s.split.entries);
+        println!("    Words:          {}", s.split.words);
+        println!("    Days written:   {}", s.split.days);
+    }
     println!();
     print!("  Current streak:   {} day(s)", s.current_streak);
     if s.current_streak > 1 {
@@ -203,7 +212,7 @@ pub fn tag(j: &Journal, name: &str) {
 
 pub fn random_text(j: &Journal) -> Option<Entry> {
     use rand::Rng;
-    let es: Vec<Entry> = load(j).into_iter().filter(|e| e.source != "inbox").collect();
+    let es: Vec<Entry> = load(j).into_iter().filter(stats::is_main).collect();
     if es.is_empty() {
         println!("  No journal entries yet.");
         return None;

@@ -147,9 +147,9 @@ function promptText() {
   const day = Math.floor((Date.now() - new Date().getTimezoneOffset() * 6e4) / 864e5);
   return P[(((day + S.promptReroll) % P.length) + P.length) % P.length];
 }
-/** Consecutive written days (drafts count) ending yesterday. */
+/** Consecutive written days ending yesterday: the main journal's, and drafts count; a split journal's don't. */
 function streakToYesterday() {
-  const days = new Set(S.entries.map(e => e.date));
+  const days = new Set(S.entries.filter(e => e.source !== 'split').map(e => e.date));
   const t = new Date(); t.setDate(t.getDate() - 1);
   let n = 0; while (days.has(isoOf(t))) { n++; t.setDate(t.getDate() - 1); }
   return n;
@@ -285,6 +285,19 @@ async function load(reselect) {
 const saveUi = () => invoke('save_ui', { ui: S.ui }).catch(fail);
 const inbox = () => S.entries.filter(e => e.source === 'inbox').sort((a, b) => b.ts.localeCompare(a.ts));
 const filed = () => S.entries.filter(e => e.source !== 'inbox');
+/** The main journal's entries. Every figure (Look back, the streak, the counters, Random) is the main journal's:
+ *  a split journal is kept apart, and splitStats() gives the split journals' own figures. The core's stats.rs. */
+const mainJournal = () => S.entries.filter(e => e.source === 'journal');
+/** Every split journal's entries as one set of figures (the core's stats::split_stats); with a year, that year's only. */
+function splitStats(year = null) {
+  const es = S.entries.filter(e => e.source === 'split' && (year === null || e.date.startsWith(String(year))));
+  return {
+    names: [...new Set(es.map(e => e.split).filter(Boolean))].sort(),
+    entries: es.length,
+    words: es.reduce((n, e) => n + (e.words || 0), 0),
+    days: new Set(es.map(e => e.date)).size,
+  };
+}
 const byNewest = arr => [...arr].sort((a, b) => b.ts.localeCompare(a.ts));
 const sorted = arr => S.ui.sortNewest ? byNewest(arr) : [...arr].sort((a, b) => a.ts.localeCompare(b.ts));
 /** Main-journal entries from this day and month in earlier years, newest first. Split journals are kept
@@ -426,10 +439,10 @@ function renderTabs() {
     if (t.id === 'inbox' && inboxN) extra = `<span class="badge">${inboxN}</span>`;
     return `<button class="tab" data-action="view" data-view="${t.id}" ${S.view === t.id ? 'aria-current="page"' : ''} title="Ctrl+${t.key}">${t.label}${extra}</button>`;
   }).join('');
-  // Marathon's counter strip (hidden in other themes): filed entries, drafts, words.
+  // Marathon's counter strip (hidden in other themes): the main journal's entries, drafts, words.
   const c = $('#counters');
   if (c) {
-    const f = filed(), words = f.reduce((n, e) => n + (e.words || 0), 0);
+    const f = mainJournal(), words = f.reduce((n, e) => n + (e.words || 0), 0);
     const n = v => v.toLocaleString('en-GB');
     c.innerHTML = `<span class="ctr c-entries" title="Filed entries"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12"/><rect x="5" y="5" width="6" height="6"/></svg>${n(f.length)}</span>`
       + `<span class="ctr c-drafts" title="Drafts in the inbox"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12M2 6.5h12M2 10h12M2 13.5h8"/></svg>${n(inboxN)}</span>`
@@ -1785,7 +1798,10 @@ async function lockNow() { if (!S.ui.pinHash) return toast('Set a PIN in Setting
 
 /* ---------- Look back ---------- */
 function renderLookBack() {
-  const all = filed();
+  // The main journal only, as in the terminal app and `quire stats`; the split journals have their own panel.
+  const all = mainJournal();
+  const split = splitStats(), splitY = splitStats(S.year);
+  const figures = x => `${plural(x.entries, 'entry', 'entries')} over ${plural(x.days, 'day')} · ${short(x.words)} ${x.words === 1 ? 'word' : 'words'}`;
   const days = new Map();
   all.forEach(e => days.set(e.date, (days.get(e.date) || 0) + e.words));
   const dates = [...days.keys()].sort();
@@ -1872,6 +1888,9 @@ function renderLookBack() {
       <button class="daylink" data-action="random" style="font-family:var(--writing);font-size:19px;color:var(--ink)">A random entry <span style="color:var(--accent)">→</span> <span class="k mono" style="font-size:11px;color:var(--muted)">Ctrl+R</span></button>
       <div class="panel"><h2>All time</h2>
         <div class="sub" style="font-size:13px;color:var(--muted);line-height:1.6">${plural(all.length, 'entry', 'entries')} over ${plural(days.size, 'day')} · ${(n => `${short(n)} ${n === 1 ? 'word' : 'words'}`)(all.reduce((a, e) => a + e.words, 0))} · since ${dates[0] ? fmtDayYear(dates[0]) : '—'}</div></div>
+      ${split.entries ? `<div class="panel" id="split-journals"><h2>Split journals</h2>
+        <div class="sub" style="font-size:13px;color:var(--muted);line-height:1.6">${split.names.map(n => `<span style="color:var(--accent)">@${esc(n)}</span>`).join(' ')}<br>${figures(split)}<br>${S.year}: ${splitY.entries ? figures(splitY) : 'nothing written'}</div>
+        <div class="sub" style="font-size:12px;color:var(--muted);line-height:1.5;margin-top:6px">${split.names.length === 1 ? 'Counted apart from' : 'All of them together, counted apart from'} the journal: nothing else on this page includes them.</div></div>` : ''}
       <div class="panel review"><h2>Library</h2><div id="stats-extra">${statsExtraHtml()}</div></div>
       <div class="panel"><h2>Storage</h2><div id="sizes">${sizesHtml()}</div></div>
     </div>
@@ -2432,7 +2451,7 @@ async function switchView(v) {
   if (v === 'journal' && S.jview === 'list' && !S.day) S.sel = journalList()[0] || null;
   render();
 }
-function randomEntry() { const f = filed(); if (!f.length) return; const e = f[Math.floor(Math.random() * f.length)]; S.view = 'journal'; S.jview = 'list'; S.tag = null; S.query = ''; S.day = null; S.sel = e; S.mode = 'read'; S.showList = false; render(); }
+function randomEntry() { const f = mainJournal(); if (!f.length) return; const e = f[Math.floor(Math.random() * f.length)]; S.view = 'journal'; S.journal = 'main'; S.jview = 'list'; S.tag = null; S.query = ''; S.day = null; S.sel = e; S.mode = 'read'; S.showList = false; render(); }
 
 /* ---------- timer ---------- */
 function refreshTimer() { const b = $('#timerbtn'); if (b) b.outerHTML = timerHtml(); }

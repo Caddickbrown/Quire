@@ -1865,11 +1865,14 @@ pub struct StatsExtra {
     pub sizes_by_location: SizesByLocation,
 }
 
+/// Look back's all-time extras. The average and the longest day are the main
+/// journal's, like every figure in `stats`; `splits` is how many split
+/// journals there are.
 pub fn stats_extra(j: &Journal) -> StatsExtra {
     let all = j.load_all();
     let drafts = all.iter().filter(|e| e.source == "inbox").count();
     let tags: HashSet<&String> = all.iter().flat_map(|e| e.tags.iter()).collect();
-    let filed: Vec<&Entry> = all.iter().filter(|e| e.source != "inbox").collect();
+    let filed: Vec<&Entry> = all.iter().filter(|e| crate::stats::is_main(e)).collect();
     let avg = if filed.is_empty() { 0.0 } else { filed.iter().map(|e| e.words).sum::<usize>() as f64 / filed.len() as f64 };
     let mut per_day: BTreeMap<&str, usize> = BTreeMap::new();
     for e in &filed {
@@ -2671,7 +2674,7 @@ mod tests {
         assert_eq!((s.drafts, s.tags, s.splits), (1, 2, 1));
         assert_eq!(s.longest_day.date, "2026-09-30");
         assert_eq!(s.longest_day.words, 7);
-        assert_eq!(s.avg_words_per_entry, 2.5);
+        assert_eq!(s.avg_words_per_entry, 2.7, "8 words in the journal's 3 entries; work.md's are its own");
         assert!(s.sizes_by_location.journal > 0 && s.sizes_by_location.media == 0);
         // Notes kept beside the journal are not a split journal: not counted,
         // and their size is not the split journals'.

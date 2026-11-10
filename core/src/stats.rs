@@ -1,5 +1,13 @@
 //! Streaks, totals and the Look back figures, computed from loaded entries.
 //! Pure: no I/O, no clock except where a `today` is passed in.
+//!
+//! One rule for every figure here: they are the main journal's. A split
+//! journal is kept apart from the main one, so its entries are in no streak,
+//! total, year or On this day; `split_stats` gives the split journals' own
+//! figures, all of them taken together, for the section each shell shows
+//! beside the main ones. Drafts are not filed yet and count only where a
+//! function says so: `words_on` (today's words) and `days_written` (the
+//! streak on Today and Look back, where writing a draft keeps the day).
 
 use crate::journal::Entry;
 use chrono::{Datelike, Duration, Local, NaiveDate};
@@ -36,14 +44,66 @@ pub fn month_name(m: u32) -> &'static str {
     ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][(m.clamp(1, 12) - 1) as usize]
 }
 
-/// Words written on `date`, drafts included.
+/// Is this entry in the main journal: filed, and not in a split journal.
+pub fn is_main(e: &Entry) -> bool {
+    e.source == "journal"
+}
+
+/// Words written on `date`, wherever they are: drafts and split journals
+/// included (the day's writing, for the word goal).
 pub fn words_on(entries: &[Entry], date: &str) -> usize {
     entries.iter().filter(|e| e.date == date).map(|e| e.words).sum()
 }
 
-/// Days with any writing (drafts count), newest last.
-pub fn days_written(entries: &[Entry]) -> BTreeSet<String> {
-    entries.iter().map(|e| e.date.clone()).collect()
+/// The days written in the main journal, oldest first: what the streak on
+/// Today and Look back is counted over. A day with only a draft counts (it
+/// was written, and filing it comes later), unless the draft carries one of
+/// `split_tags` and so is on its way to a split journal. jnl's `stats`
+/// counts filed days only: see `jnl_stats`.
+pub fn days_written(entries: &[Entry], split_tags: &[String]) -> BTreeSet<String> {
+    entries
+        .iter()
+        .filter(|e| is_main(e) || (e.source == "inbox" && crate::journal::split_tag(&e.raw, split_tags).is_none()))
+        .map(|e| e.date.clone())
+        .collect()
+}
+
+/// The split journals taken together: how many there are, and their
+/// entries, words and days written as one figure each.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SplitStats {
+    /// The journals' tags, by name.
+    pub names: Vec<String>,
+    pub entries: usize,
+    pub words: usize,
+    /// Days with an entry in any of them.
+    pub days: usize,
+}
+
+impl SplitStats {
+    pub fn is_empty(&self) -> bool {
+        self.entries == 0
+    }
+}
+
+/// Every split journal's entries as one set of figures; with a `year`, that
+/// year's only.
+pub fn split_stats(entries: &[Entry], year: Option<i32>) -> SplitStats {
+    let ys = year.map(|y| format!("{:04}", y));
+    let mut s = SplitStats::default();
+    let mut names: BTreeSet<&str> = BTreeSet::new();
+    let mut days: BTreeSet<&str> = BTreeSet::new();
+    for e in entries.iter().filter(|e| e.source == "split" && ys.as_ref().is_none_or(|y| e.date.starts_with(y.as_str()))) {
+        s.entries += 1;
+        s.words += e.words;
+        days.insert(&e.date);
+        if let Some(t) = &e.split {
+            names.insert(t);
+        }
+    }
+    s.days = days.len();
+    s.names = names.into_iter().map(str::to_string).collect();
+    s
 }
 
 /// Consecutive days up to today, or up to yesterday if nothing is written
@@ -143,11 +203,11 @@ impl YearStats {
     }
 }
 
-/// Over filed entries only, like the Linux app's Look back.
+/// Over the main journal only, like the Linux app's Look back.
 pub fn year_stats(entries: &[Entry], year: i32) -> YearStats {
     let ys = format!("{:04}", year);
     let mut s = YearStats { year, ..Default::default() };
-    let filed: Vec<&Entry> = entries.iter().filter(|e| e.source != "inbox" && e.date.starts_with(&ys)).collect();
+    let filed: Vec<&Entry> = entries.iter().filter(|e| is_main(e) && e.date.starts_with(&ys)).collect();
     for e in &filed {
         s.entries += 1;
         s.words += e.words;
@@ -172,17 +232,19 @@ pub fn year_stats(entries: &[Entry], year: i32) -> YearStats {
     s
 }
 
-/// The years with filed entries, newest first, the current year always present.
+/// The years with entries in the main journal, newest first, the current year always present.
 pub fn years(entries: &[Entry], this_year: i32) -> Vec<i32> {
-    let mut v: BTreeSet<i32> = entries.iter().filter(|e| e.source != "inbox").filter_map(|e| e.date[..4].parse().ok()).collect();
+    let mut v: BTreeSet<i32> = entries.iter().filter(|e| is_main(e)).filter_map(|e| e.date.get(..4)?.parse().ok()).collect();
     v.insert(this_year);
     v.into_iter().rev().collect()
 }
 
 /// jnl's `stats` figures, over journal day files only (its definition of
-/// "days written"), plus the inbox count.
+/// "days written"), plus the inbox count and, apart from all of those, the
+/// split journals taken together.
 #[derive(Debug, Default, Clone)]
 pub struct JnlStats {
+    pub split: SplitStats,
     pub days: usize,
     pub entries: usize,
     pub words: usize,
@@ -198,7 +260,7 @@ pub struct JnlStats {
 }
 
 pub fn jnl_stats(entries: &[Entry], today: &str) -> JnlStats {
-    let mut s = JnlStats::default();
+    let mut s = JnlStats { split: split_stats(entries, None), ..Default::default() };
     let mut per_day: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for e in entries {
         if e.source == "inbox" {
@@ -266,7 +328,7 @@ mod tests {
             ("journal/2025/10/12.md", "2025-10-12 08:00:00", "last year"),
             ("journal/2026/01/01.md", "2026-01-01 08:00:00", "new year"),
         ]);
-        let days = days_written(&es);
+        let days = days_written(&es, &[]);
         assert_eq!(current_streak(&days, "2026-10-12"), 3, "today's draft counts");
         assert_eq!(current_streak(&days, "2026-10-13"), 3, "not broken until the day ends");
         assert_eq!(current_streak(&days, "2026-10-14"), 0);
@@ -303,5 +365,43 @@ mod tests {
         let otd: Vec<(&str, &str)> = on_this_day(&es, "2026-10-12").iter().map(|e| (e.source.as_str(), e.date.as_str())).collect();
         assert_eq!(otd, vec![("journal", "2025-10-12"), ("journal", "2024-10-12")]);
         assert!(on_this_day(&es, "").is_empty(), "a date that isn't one finds nothing");
+    }
+
+    /// Every figure is the main journal's; the split journals have one set of
+    /// their own, all of them together.
+    #[test]
+    fn split_journals_are_counted_apart_and_together() {
+        let es = entries(&[
+            ("journal/2026/10/10.md", "2026-10-10 08:00:00", "a b @x"),
+            ("journal/2026/10/11.md", "2026-10-11 09:00:00", "a b c"),
+            ("split/work/2026/10/11.md", "2026-10-11 10:00:00", "one two three four @work"),
+            ("split/work/2026/10/12.md", "2026-10-12 10:00:00", "one two @work"),
+            ("split/home/2026/10/12.md", "2026-10-12 11:00:00", "one @home"),
+            ("split/home/2024/02/03.md", "2024-02-03 11:00:00", "long ago @home"),
+            ("inbox/2026/10/12.md", "2026-10-12 21:00:00", "a draft for @work"),
+        ]);
+        // The main journal's figures don't move for a split entry, or for a
+        // draft that will be filed into a split journal.
+        let tags = vec!["work".to_string(), "home".to_string()];
+        let days = days_written(&es, &tags);
+        assert_eq!(days.iter().map(String::as_str).collect::<Vec<_>>(), ["2026-10-10", "2026-10-11"]);
+        assert_eq!(current_streak(&days, "2026-10-12"), 2, "a split entry today is not the journal's day");
+        assert!(days_written(&es, &[]).contains("2026-10-12"), "with no split tags that draft is the main journal's");
+        let y = year_stats(&es, 2026);
+        assert_eq!((y.entries, y.words, y.days), (2, 6, 2));
+        assert_eq!(y.tags, vec![("@x".to_string(), 1)], "@work and @home are the split journals' tags");
+        assert_eq!(years(&es, 2026), vec![2026], "2024 has only a split entry");
+        let j = jnl_stats(&es, "2026-10-12");
+        assert_eq!((j.days, j.entries, j.words, j.drafts), (2, 2, 6, 1));
+        // The split journals, as one.
+        let all = split_stats(&es, None);
+        assert_eq!(all.names, ["home", "work"]);
+        assert_eq!((all.entries, all.words, all.days), (4, 13, 3), "two of them share the 12th: one day");
+        assert_eq!(j.split, all, "`stats` carries the same figures");
+        let this_year = split_stats(&es, Some(2026));
+        assert_eq!((this_year.entries, this_year.words, this_year.days), (3, 10, 2));
+        assert_eq!(split_stats(&es, Some(2024)).names, ["home"]);
+        assert!(split_stats(&es, Some(2020)).is_empty());
+        assert!(split_stats(&es[..2], None).is_empty() && split_stats(&es[..2], None).names.is_empty());
     }
 }

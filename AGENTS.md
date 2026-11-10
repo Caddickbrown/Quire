@@ -100,8 +100,10 @@ core/               quire-core
                     both sidecars, writes .quire/). Path-based: local only.
   src/search.rs     the search grammar shared with Nook's SearchQuery.swift and
                     the Linux app's parseQuery — keep the three in step
-  src/stats.rs      streaks, on this day (the main journal only: never drafts or a
-                    split journal, in every shell), year stats (Look back), jnl's `stats`
+  src/stats.rs      streaks, on this day, year stats (Look back), jnl's `stats`. THE RULE:
+                    every figure is the main journal's (`is_main`), in every shell; the
+                    split journals are counted apart and together by `split_stats`, shown
+                    as "Split journals" on Look back and in `quire stats`
   src/editing.rs    ↩ in a list, wrap toggling, word_at — the editor macros
   src/settings.rs   ~/.config/quire/settings.json, shared by Linux and the TUI
   src/prompts.rs    Nook's PromptDeck; prompt_of_day

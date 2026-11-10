@@ -447,10 +447,10 @@ fn today(f: &mut Frame, r: Rect, app: &App) {
     bar.push(Span::styled(format!("  of {}", goal), p.muted()));
     put(f, Rect::new(r.x, y, r.width, 1), Line::from(bar));
     y += gap;
-    let days = stats::days_written(&app.entries);
+    let days = app.days_written();
     let streak = stats::current_streak(&days, &app.today);
     let drafts = app.drafts().len();
-    let filed = app.filed();
+    let filed = app.journal();
     let first = filed.iter().map(|e| e.date.as_str()).min().map(|d| format!(" since {}", d.get(..7).unwrap_or(d))).unwrap_or_default();
     // The whole line or a shorter one, never one cut off mid-word: tighter
     // dots first (80 columns with a four-figure count), then without "since".
@@ -896,10 +896,11 @@ fn settings(f: &mut Frame, r: Rect, app: &App) {
 fn lookback(f: &mut Frame, r: Rect, app: &App) {
     let p = &app.pal;
     let ys = stats::year_stats(&app.entries, app.year);
-    let days = stats::days_written(&app.entries);
+    let days = app.days_written();
     let streak = stats::current_streak(&days, &app.today);
     let (longest, span) = stats::longest_streak(&days);
-    let all_filed = app.filed();
+    let all_filed = app.journal();
+    let split = stats::split_stats(&app.entries, None);
     let total_words: usize = all_filed.iter().map(|e| e.words).sum();
     let total_days = all_filed.iter().map(|e| e.date.as_str()).collect::<std::collections::BTreeSet<_>>().len();
     let w = r.width as usize;
@@ -908,6 +909,25 @@ fn lookback(f: &mut Frame, r: Rect, app: &App) {
     let left = Line::from(vec![Span::styled(format!("  {}", streak), p.bold()), Span::styled(" day streak", p.muted()), Span::styled(span_txt, p.faint())]);
     let right = Line::from(vec![Span::styled(commas(total_words), p.bold()), Span::styled(format!(" {}", noun(total_words, "word", "words")), p.muted()), Span::styled(format!("   in {} {}, {} {}", commas(all_filed.len()), noun(all_filed.len(), "entry", "entries"), commas(total_days), noun(total_days, "day", "days")), p.faint())]);
     two_sided(f, Rect::new(r.x, y, r.width, 1), left, right);
+    // Everything on this page is the main journal's. The split journals have
+    // a line of their own under its totals: all of them as one figure each,
+    // laid out as the line above so the two read as a pair. Not drawn when
+    // there are none, and then the page is as it always was.
+    if !split.is_empty() {
+        y += 1;
+        let names = split.names.iter().map(|n| format!("@{}", n)).collect::<Vec<_>>().join(" ");
+        let right = Line::from(vec![
+            Span::styled(commas(split.words), p.bold()),
+            Span::styled(format!(" {}", noun(split.words, "word", "words")), p.muted()),
+            Span::styled(format!("   in {} {}, {} {}", commas(split.entries), noun(split.entries, "entry", "entries"), commas(split.days), noun(split.days, "day", "days")), p.faint()),
+        ]);
+        let room = w.saturating_sub(right.width() + 4 + 19);
+        let mut left = vec![Span::styled("  SPLIT JOURNALS", p.muted()), Span::styled(format!("  {}", split.names.len()), p.bold())];
+        if names.width() <= room {
+            left.push(Span::styled(format!("  {}", names), p.accent()));
+        }
+        two_sided(f, Rect::new(r.x, y, r.width, 1), Line::from(left), right);
+    }
     y += 2;
     // The year as a heat strip: one column a week, Mon to Sun.
     put(f, Rect::new(r.x + 2, y, r.width - 2, 1), section(&format!("THE YEAR  {}", app.year), w - 2, p));
@@ -1141,6 +1161,52 @@ mod tests {
         app.today = "2026-10-12".into();
         let rows = screen(&mut app, 100, 30).join("\n");
         assert!(rows.contains("Nothing yet from earlier years."), "{rows}");
+    }
+
+    /// Today and Look back count the main journal; the split journals have
+    /// a line of their own on Look back, all of them together.
+    #[test]
+    fn split_journals_are_apart_from_the_figures_and_have_their_own_line() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path(), "journal/2026/10/10.md", "[2026-10-10 08:00:00] Main one\na b c\n");
+        write_file(temp.path(), "journal/2026/10/11.md", "[2026-10-11 08:00:00] Main two\na b\n");
+        write_file(temp.path(), "split/work/2026/10/11.md", "[2026-10-11 09:00:00] Standup @work\none two three four\n\n[2026-10-11 10:00:00] Retro @work\none two\n");
+        write_file(temp.path(), "split/home/2026/10/12.md", "[2026-10-12 09:00:00] Shelves @home\none\n");
+        let tags = vec!["work".to_string(), "home".to_string()];
+        let mut app = App::new(Journal::open(temp.path()), Settings::default(), tags.clone(), "almanac");
+        app.today = "2026-10-12".into();
+        app.year = 2026;
+        let today = screen(&mut app, 100, 30);
+        let line = today.iter().find(|r| r.contains("day streak")).unwrap();
+        assert!(line.contains("2 day streak") && line.contains("2 entries since 2026-10"), "the split entry on the 12th is not the journal's: {line:?}");
+        // Look back: the main journal's totals, then the split journals' as one.
+        app.screen = Screen::LookBack;
+        let look = screen(&mut app, 100, 30);
+        let main = look.iter().find(|r| r.contains("day streak")).unwrap();
+        assert!(main.contains("5 words") && main.contains("in 2 entries, 2 days"), "{main:?}");
+        let split = look.iter().find(|r| r.contains("SPLIT JOURNALS")).expect("a line for the split journals");
+        assert!(split.contains("SPLIT JOURNALS  2") && split.contains("@home @work"), "{split:?}");
+        assert!(split.contains("7 words") && split.contains("in 3 entries, 2 days"), "{split:?}");
+        let column = |row: &str| row.find(" words").map(|i| row[..i].chars().count());
+        assert_eq!(column(main), column(split), "the two lines line up: {main:?} / {split:?}");
+        assert!(look.iter().any(|r| r.contains("THE YEAR")) && look.iter().any(|r| r.contains("WORDS A MONTH")));
+        // At 80 by 24 too, with the year still under it.
+        let small = screen(&mut app, 80, 24);
+        assert!(small.iter().any(|r| r.contains("SPLIT JOURNALS") && r.contains("in 3 entries, 2 days")), "{}", small.join("\n"));
+        assert!(small.iter().any(|r| r.contains("WORDS A MONTH")), "{}", small.join("\n"));
+        // Random stays in the main journal.
+        for _ in 0..40 {
+            app.random();
+            assert_ne!(app.browse_sel().entry.map(|e| e.source), Some("split".to_string()));
+        }
+        // No split journals: no line, and the page is as it was.
+        std::fs::remove_dir_all(temp.path().join("split")).unwrap();
+        let mut app = App::new(Journal::open(temp.path()), Settings::default(), tags, "almanac");
+        app.today = "2026-10-12".into();
+        app.year = 2026;
+        app.screen = Screen::LookBack;
+        let look = screen(&mut app, 100, 30);
+        assert!(!look.iter().any(|r| r.contains("SPLIT JOURNALS")));
     }
 
     #[test]
