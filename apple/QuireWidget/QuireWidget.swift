@@ -258,7 +258,7 @@ private struct TodayLarge: View {
                         HStack(alignment: .top, spacing: 10) {
                             Text(memory.year).font(q.mono(10.5)).foregroundStyle(q.accentColor)
                                 .fixedSize().rotationEffect(.degrees(-90)).frame(width: 12, height: 30)
-                            Text(memory.title).font(q.writing(15)).lineLimit(2)
+                            Text(memory.title).font(q.writing(15)).lineLimit(2).privacySensitive()
                         }
                     }
                 }
@@ -386,12 +386,12 @@ private struct OnThisDaySmall: View {
                 Text(memory.year).font(q.mono(11)).foregroundStyle(q.accentColor)
                     .fixedSize().rotationEffect(.degrees(-90)).frame(width: 12, height: 32)
                     .widgetAccentable()
-                Text(memory.title).font(q.writing(19)).lineLimit(3).minimumScaleFactor(0.8)
+                Text(memory.title).font(q.writing(19)).lineLimit(3).minimumScaleFactor(0.8).privacySensitive()
             }
             .padding(.top, 12)
             if let excerpt = memory.excerpt {
                 Text(excerpt).font(q.writing(12.5, italic: true)).foregroundStyle(q.mutedColor)
-                    .lineLimit(2).padding(.top, 6)
+                    .lineLimit(2).padding(.top, 6).privacySensitive()
             }
             Spacer(minLength: 4)
             Text(day.yearsAgoPhrase).font(q.ui(11)).foregroundStyle(q.mutedColor)
@@ -409,7 +409,7 @@ private struct OnThisDaySmall: View {
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(q.signalColor).foregroundStyle(q.onSignalColor)
                 .padding(.top, 10)
-            Text(memory.title.uppercased()).font(q.display(16)).lineLimit(3).minimumScaleFactor(0.7)
+            Text(memory.title.uppercased()).font(q.display(16)).lineLimit(3).minimumScaleFactor(0.7).privacySensitive()
                 .padding(.top, 8)
             Spacer(minLength: 4)
             Text(memory.yearsAgo == 1 ? "1 YEAR AGO" : "\(memory.yearsAgo) YEARS AGO").tracking(1.2).font(q.label(10)).foregroundStyle(q.mutedColor)

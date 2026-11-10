@@ -364,7 +364,10 @@ retain the Rust file/index/raw reference across autosaves and retiming.
 `make apple` produces the XCFramework, generates Swift bindings and the Xcode
 project, and builds unsigned macOS/iOS Simulator apps. `make apple-test` runs
 hostless XCTest. Rust callback integration tests and project checks run on
-Linux; the first Apple SDK build and signed-device validation are still
-pending, since this host has neither Swift nor Xcode. The Apple CI workflow
-provides a Mac build gate. The inherited Nook visual design remains for now;
-Quire theme adoption and macOS desk-mode composition are subsequent work.
+Linux. The Apple SDK build is no longer pending: the iOS Simulator build and
+macOS XCTest pass, and the iPhone app has been built signed and run on a
+device with a real journal (`apple/README.md`, "Verification status", lists
+what still needs a signed-device check). The Apple workflow builds on a Mac
+when asked and on pull requests that touch Apple, bindings or core paths. The
+iPhone and iPad have Quire's own design; the Mac keeps the inherited Nook
+design until its own pass.

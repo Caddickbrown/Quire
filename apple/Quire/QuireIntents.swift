@@ -14,6 +14,7 @@
 //
 
 import AppIntents
+import Foundation
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -41,6 +42,10 @@ struct AddJournalEntryIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let added = try JournalStore.quickAddDraft(title: title ?? "", body: body)
+        // The app may be running behind this: tell it, as the reminder's
+        // "Write a line" action does, or its Inbox stays as it was until the
+        // next time it comes forward.
+        if added { NotificationCenter.default.post(name: .quireJournalChangedExternally, object: nil) }
         return .result(dialog: added
                        ? "Added to your journal inbox."
                        : "There was nothing to add.")

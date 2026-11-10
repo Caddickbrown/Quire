@@ -31,6 +31,14 @@ Dependency-free, Python 3.8+. Dry run by default; --apply writes.
 
 Run it again later and it merges any inbox.md or <tag>.md an older app has
 written since (entries already in place are skipped by raw text).
+
+Each source is read again just before it is moved; if an app wrote to it in the
+meantime it is planned again, so the new drafts are in the day files before the
+file goes. A file that is not UTF-8 is skipped with a message and left where it
+is. With --keep-nook on a folder that has .nook/ and no .quire/, the moved
+originals go to .nook/migration/ instead: making .quire/ there would hide
+Nook's templates and saved searches from Quire, which reads .nook/ only while
+it is the only sidecar (and renames it, migration/ and all, on its first write).
 """
 import argparse
 import os
@@ -42,6 +50,8 @@ from collections import OrderedDict
 
 # jnl's header regex: ASCII hyphen or en-dash in the date.
 HEADER_RE = re.compile(r"^\[(\d{4}[-–]\d{2}[-–]\d{2}) (\d{2}:\d{2}:\d{2})\](.*)")
+# The same header in bytes, for a file that will not decode: is it a journal at all?
+HEADER_BYTES_RE = re.compile(rb"(?m)^\[\d{4}(?:-|\xe2\x80\x93)\d{2}(?:-|\xe2\x80\x93)\d{2} \d{2}:\d{2}:\d{2}\]")
 
 
 class Entry:
@@ -107,9 +117,42 @@ def render_entries(preamble, entries):
 
 # ---------- files ----------
 
-def read_text(path):
+class Unreadable(Exception):
+    """A file that is not UTF-8. Carries its path; nothing is done with the file."""
+
+    def __init__(self, path):
+        Exception.__init__(self, path)
+        self.path = path
+
+
+def read_bytes(path):
     with open(path, "rb") as f:
-        return normalised(f.read().decode("utf-8"))
+        return f.read()
+
+
+def decode(raw, path):
+    try:
+        return normalised(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        raise Unreadable(path)
+
+
+def read_text(path):
+    return decode(read_bytes(path), path)
+
+
+def migration_dir(base):
+    """Where moved originals go: .quire/migration/, or .nook/migration/ while
+    .nook/ is the folder's only sidecar (--keep-nook), so it stays the one read."""
+    side = ".quire"
+    if os.path.isdir(os.path.join(base, ".nook")) and not os.path.isdir(os.path.join(base, ".quire")):
+        side = ".nook"
+    return os.path.join(base, side, "migration")
+
+
+# How many times a source that changes under us is planned again before it is
+# left in place for another run.
+MAX_PLANS = 5
 
 
 def write_atomic(path, text):
@@ -138,12 +181,13 @@ def day_path(base, date):
 
 # ---------- step 1: split the inbox ----------
 
-def plan_inbox(base):
+def plan_inbox(base, content=None):
     """Return (plan, preamble, source_entries) where plan maps day file -> (preamble, entries)."""
     src = os.path.join(base, "inbox.md")
-    if not os.path.isfile(src):
-        return None, "", []
-    content = read_text(src)
+    if content is None:
+        if not os.path.isfile(src):
+            return None, "", []
+        content = read_text(src)
     entries = parse_entries(content)
     preamble = leading_preamble(content)
 
@@ -186,32 +230,50 @@ def all_inbox_entries(base):
     for dirpath, _, files in os.walk(root):
         for fn in sorted(files):
             if fn.endswith(".md") and re.fullmatch(r"\d{2}\.md", fn):
-                out.extend(parse_entries(read_text(os.path.join(dirpath, fn))))
+                try:
+                    out.extend(parse_entries(read_text(os.path.join(dirpath, fn))))
+                except Unreadable:
+                    pass  # counts for nothing: the check can only get stricter
     return out
 
 
-def apply_inbox(base, plan, preamble, source_entries, log):
-    for target, (pre, entries, _, _) in plan.items():
-        write_atomic(target, render_entries(pre, entries))
-    if preamble:
-        p = os.path.join(base, "inbox", "preamble.md")
-        if os.path.exists(p):
-            existing = read_text(p)
-            if preamble.strip() not in existing:
-                write_atomic(p, existing.rstrip("\n") + "\n\n" + preamble + "\n")
-        else:
-            write_atomic(p, preamble + "\n")
-        log("  preamble (text before the first header) kept in inbox/preamble.md")
+def apply_inbox(base, plan, preamble, source_entries, log, raw=None):
+    """Write the plan, check it, then move inbox.md. `raw` is the bytes the plan
+    was made from: the file is read again just before the move, and planned
+    again if an app has written to it since."""
+    src = os.path.join(base, "inbox.md")
+    for _ in range(MAX_PLANS):
+        for target, (pre, entries, _, _) in plan.items():
+            write_atomic(target, render_entries(pre, entries))
+        if preamble:
+            p = os.path.join(base, "inbox", "preamble.md")
+            if os.path.exists(p):
+                existing = read_text(p)
+                if preamble.strip() not in existing:
+                    write_atomic(p, existing.rstrip("\n") + "\n\n" + preamble + "\n")
+            else:
+                write_atomic(p, preamble + "\n")
+            log("  preamble (text before the first header) kept in inbox/preamble.md")
 
-    missing = verify_inbox(base, source_entries)
-    if missing:
-        log("  VERIFY FAILED: %d entries not found in inbox/ — inbox.md left in place" % len(missing))
-        for k in missing[:5]:
-            log("    " + k.split("\n")[0])
+        missing = verify_inbox(base, source_entries)
+        if missing:
+            log("  VERIFY FAILED: %d entries not found in inbox/ — inbox.md left in place" % len(missing))
+            for k in missing[:5]:
+                log("    " + k.split("\n")[0])
+            return False
+
+        now = read_bytes(src)
+        if raw is None or now == raw:
+            break
+        log("  inbox.md changed while it was being moved; planning it again")
+        raw = now
+        plan, preamble, source_entries = plan_inbox(base, decode(raw, src))
+    else:
+        log("  inbox.md keeps changing — left in place; run again when nothing is writing to it")
         return False
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup_dir = os.path.join(base, ".quire", "migration")
+    backup_dir = migration_dir(base)
     os.makedirs(backup_dir, exist_ok=True)
     backup = os.path.join(backup_dir, "inbox-%s.md" % stamp)
     n = 1
@@ -300,60 +362,89 @@ def all_split_entries(base, tag):
     for dirpath, _, files in os.walk(root):
         for fn in sorted(files):
             if re.fullmatch(r"\d{2}\.md", fn):
-                out.extend(parse_entries(read_text(os.path.join(dirpath, fn))))
+                try:
+                    out.extend(parse_entries(read_text(os.path.join(dirpath, fn))))
+                except Unreadable:
+                    pass
     return out
 
 
-def plan_splits(base):
-    """[(name, tag, plan, preamble, source_entries)] for each root split journal with entries."""
+def plan_split(base, name, raw):
+    """(plan, preamble, source_entries) for one root split journal, from its bytes."""
+    # Root-relative ./assets/ links become assets/, which work from any depth.
+    content = LINK_DOT_ASSETS_RE.sub(r"](\1assets/", decode(raw, os.path.join(base, name)))
+    entries = parse_entries(content)
+    tag = name[:-3]
+    by_day = OrderedDict()
+    for e in entries:
+        by_day.setdefault(e.date, []).append(e)
+    plan = OrderedDict()
+    for date, new in by_day.items():
+        target = split_day_path(base, tag, date)
+        existing_pre, existing = "", []
+        if os.path.isfile(target):
+            existing_text = read_text(target)
+            existing = parse_entries(existing_text)
+            existing_pre = leading_preamble(existing_text)
+        seen = {e.raw.rstrip("\n") for e in existing}
+        added = [e for e in new if e.raw.rstrip("\n") not in seen]
+        plan[target] = (existing_pre, sorted_by_timestamp(existing + added), len(added), len(new) - len(added))
+    return plan, leading_preamble(content), entries
+
+
+def plan_splits(base, log=None):
+    """[(name, tag, plan, preamble, source_entries, raw)] for each root split
+    journal with entries. One that is not UTF-8 is skipped, and said so."""
     out = []
     for name in legacy_split_files(base):
-        # Root-relative ./assets/ links become assets/, which work from any depth.
-        content = LINK_DOT_ASSETS_RE.sub(r"](\1assets/", read_text(os.path.join(base, name)))
-        entries = parse_entries(content)
-        if not entries:
+        raw = read_bytes(os.path.join(base, name))
+        try:
+            plan, preamble, entries = plan_split(base, name, raw)
+        except Unreadable as e:
+            if not HEADER_BYTES_RE.search(raw):
+                continue  # no entries in it: not a journal, and none of our business
+            if log:
+                log("  %s skipped: %s is not UTF-8 text — left as it is" % (name, os.path.relpath(e.path, base)))
             continue
-        tag = name[:-3]
-        by_day = OrderedDict()
-        for e in entries:
-            by_day.setdefault(e.date, []).append(e)
-        plan = OrderedDict()
-        for date, new in by_day.items():
-            target = split_day_path(base, tag, date)
-            existing_pre, existing = "", []
-            if os.path.isfile(target):
-                existing_text = read_text(target)
-                existing = parse_entries(existing_text)
-                existing_pre = leading_preamble(existing_text)
-            seen = {e.raw.rstrip("\n") for e in existing}
-            added = [e for e in new if e.raw.rstrip("\n") not in seen]
-            plan[target] = (existing_pre, sorted_by_timestamp(existing + added), len(added), len(new) - len(added))
-        out.append((name, tag, plan, leading_preamble(content), entries))
+        if entries:
+            out.append((name, name[:-3], plan, preamble, entries, raw))
     return out
 
 
-def apply_split(base, name, tag, plan, preamble, source_entries, log):
-    for target, (pre, entries, _, _) in plan.items():
-        write_atomic(target, render_entries(pre, entries))
-    if preamble:
-        p = os.path.join(base, "split", tag, "preamble.md")
-        if os.path.exists(p):
-            existing = read_text(p)
-            if preamble.strip() not in existing:
-                write_atomic(p, existing.rstrip("\n") + "\n\n" + preamble + "\n")
-        else:
-            write_atomic(p, preamble + "\n")
-        log("  preamble of %s kept in split/%s/preamble.md" % (name, tag))
-    have = {}
-    for e in all_split_entries(base, tag):
-        k = e.raw.rstrip("\n")
-        have[k] = have.get(k, 0) + 1
-    missing = [e.raw.rstrip("\n") for e in source_entries if have.get(e.raw.rstrip("\n"), 0) < 1]
-    if missing:
-        log("  VERIFY FAILED: %d entries not found in split/%s/ — %s left in place" % (len(missing), tag, name))
+def apply_split(base, name, tag, plan, preamble, source_entries, log, raw=None):
+    """As apply_inbox: write, check, read the source again, then move it."""
+    src = os.path.join(base, name)
+    for _ in range(MAX_PLANS):
+        for target, (pre, entries, _, _) in plan.items():
+            write_atomic(target, render_entries(pre, entries))
+        if preamble:
+            p = os.path.join(base, "split", tag, "preamble.md")
+            if os.path.exists(p):
+                existing = read_text(p)
+                if preamble.strip() not in existing:
+                    write_atomic(p, existing.rstrip("\n") + "\n\n" + preamble + "\n")
+            else:
+                write_atomic(p, preamble + "\n")
+            log("  preamble of %s kept in split/%s/preamble.md" % (name, tag))
+        have = {}
+        for e in all_split_entries(base, tag):
+            k = e.raw.rstrip("\n")
+            have[k] = have.get(k, 0) + 1
+        missing = [e.raw.rstrip("\n") for e in source_entries if have.get(e.raw.rstrip("\n"), 0) < 1]
+        if missing:
+            log("  VERIFY FAILED: %d entries not found in split/%s/ — %s left in place" % (len(missing), tag, name))
+            return False
+        now = read_bytes(src)
+        if raw is None or now == raw:
+            break
+        log("  %s changed while it was being moved; planning it again" % name)
+        raw = now
+        plan, preamble, source_entries = plan_split(base, name, raw)
+    else:
+        log("  %s keeps changing — left in place; run again when nothing is writing to it" % name)
         return False
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup_dir = os.path.join(base, ".quire", "migration")
+    backup_dir = migration_dir(base)
     os.makedirs(backup_dir, exist_ok=True)
     backup = os.path.join(backup_dir, "split-%s-%s.md" % (tag, stamp))
     n = 1
@@ -391,9 +482,19 @@ def run(base, apply, keep_nook, log=print, keep_splits=False):
             if apply:
                 apply_sidecar(base, sp, log)
 
-    plan, preamble, source = plan_inbox(base)
     log("\ninbox.md -> inbox/YYYY/MM/DD.md")
-    if plan is None:
+    src = os.path.join(base, "inbox.md")
+    plan, preamble, source, raw, unreadable = None, "", [], None, None
+    if os.path.isfile(src):
+        try:
+            raw = read_bytes(src)
+            plan, preamble, source = plan_inbox(base, decode(raw, src))
+        except Unreadable as e:
+            unreadable = e.path
+    if unreadable:
+        ok = False
+        log("  skipped: %s is not UTF-8 text — inbox.md left as it is" % os.path.relpath(unreadable, base))
+    elif plan is None:
         n = len(all_inbox_entries(base))
         log("  no inbox.md; inbox/ holds %d draft(s). Nothing to do." % n)
     else:
@@ -405,21 +506,33 @@ def run(base, apply, keep_nook, log=print, keep_splits=False):
         if preamble:
             log("  preamble: %d line(s) before the first header -> inbox/preamble.md" % (preamble.count("\n") + 1))
         if apply:
-            ok = apply_inbox(base, plan, preamble, source, log) and ok
+            try:
+                ok = apply_inbox(base, plan, preamble, source, log, raw) and ok
+            except Unreadable as e:
+                ok = False
+                log("  stopped: %s is not UTF-8 text — inbox.md left in place" % os.path.relpath(e.path, base))
 
     log("\n<tag>.md -> split/<tag>/YYYY/MM/DD.md")
     if keep_splits:
         log("  skipped (--keep-splits)")
     else:
-        splits = plan_splits(base)
-        if not splits:
+        skipped = []
+        splits = plan_splits(base, skipped.append)
+        for line in skipped:
+            ok = False
+            log(line)
+        if not splits and not skipped:
             log("  no root split journals with entries. Nothing to do.")
-        for name, tag, splan, spre, ssource in splits:
+        for name, tag, splan, spre, ssource, sraw in splits:
             new = sum(a for _, _, a, _ in splan.values())
             dup = sum(d for _, _, _, d in splan.values())
             log("  %s: %d entr%s across %d day(s); %d new, %d already in split/%s/" % (name, len(ssource), "y" if len(ssource) == 1 else "ies", len(splan), new, dup, tag))
             if apply:
-                ok = apply_split(base, name, tag, splan, spre, ssource, log) and ok
+                try:
+                    ok = apply_split(base, name, tag, splan, spre, ssource, log, sraw) and ok
+                except Unreadable as e:
+                    ok = False
+                    log("  stopped: %s is not UTF-8 text — %s left in place" % (os.path.relpath(e.path, base), name))
 
     if not apply:
         log("\nNothing written. Re-run with --apply.")

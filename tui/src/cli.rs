@@ -6,8 +6,20 @@ use quire_core::*;
 use std::path::Path;
 use std::io::{self, IsTerminal, Write};
 
+/// Every entry, or stop: a folder that can't be listed or a file that can't
+/// be read would otherwise print as a shorter journal, with nothing to say so.
+fn load(j: &Journal) -> Vec<Entry> {
+    match j.try_load_all() {
+        Ok(es) => es,
+        Err(e) => {
+            eprintln!("  error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
 pub fn inbox(j: &Journal) {
-    let drafts: Vec<Entry> = j.load_all().into_iter().filter(|e| e.source == "inbox").collect();
+    let drafts: Vec<Entry> = load(j).into_iter().filter(|e| e.source == "inbox").collect();
     if drafts.is_empty() {
         println!("  Inbox is empty.");
         return;
@@ -24,6 +36,12 @@ pub fn inbox(j: &Journal) {
 }
 
 pub fn log(j: &Journal, date: &str) {
+    // `journal_rel` slices the date, so anything else (`2026-11`, a word) is answered
+    // here. The shape only: jnl lets a file be named for any day.
+    if check_ts_shape(&format!("{} 00:00:00", date)).is_err() {
+        println!("  Usage: log [YYYY-MM-DD]");
+        return;
+    }
     let rel = journal_rel(date);
     let content = j.read(&rel);
     if content.trim().is_empty() {
@@ -65,7 +83,7 @@ pub fn list(j: &Journal) {
 }
 
 pub fn stats_text(j: &Journal) {
-    let es = j.load_all();
+    let es = load(j);
     let s = jnl_stats(&es, &stats::today());
     println!();
     println!("  Writing stats");
@@ -123,7 +141,7 @@ pub fn search(j: &Journal, query: &str) {
     let q = search::Query::parse(query);
     let mut found = 0;
     let mut cur = String::new();
-    let mut es = j.load_all();
+    let mut es = load(j);
     es.sort_by(|a, b| b.ts.cmp(&a.ts));
     for e in es.iter().filter(|e| q.matches(e)) {
         let head = if e.source == "inbox" { "inbox (unfiled)".to_string() } else { e.date.clone() };
@@ -145,7 +163,7 @@ pub fn search(j: &Journal, query: &str) {
 }
 
 pub fn tags(j: &Journal) {
-    let es = j.load_all();
+    let es = load(j);
     println!();
     println!("  Tags used:");
     for (t, n) in stats::count_tags(es.iter()) {
@@ -163,7 +181,7 @@ pub fn tag(j: &Journal, name: &str) {
     println!();
     println!("  Entries tagged {}:", name);
     println!();
-    let mut es: Vec<Entry> = j.load_all().into_iter().filter(|e| e.source != "inbox" && e.tags.iter().any(|t| t.eq_ignore_ascii_case(&name))).collect();
+    let mut es: Vec<Entry> = load(j).into_iter().filter(|e| e.source != "inbox" && e.tags.iter().any(|t| t.eq_ignore_ascii_case(&name))).collect();
     es.sort_by(|a, b| b.ts.cmp(&a.ts));
     let mut cur = String::new();
     for e in es {
@@ -180,7 +198,7 @@ pub fn tag(j: &Journal, name: &str) {
 
 pub fn random_text(j: &Journal) -> Option<Entry> {
     use rand::Rng;
-    let es: Vec<Entry> = j.load_all().into_iter().filter(|e| e.source != "inbox").collect();
+    let es: Vec<Entry> = load(j).into_iter().filter(|e| e.source != "inbox").collect();
     if es.is_empty() {
         println!("  No journal entries yet.");
         return None;

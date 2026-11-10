@@ -1,4 +1,4 @@
-.PHONY: test check smoke tui install setup linux migrate fmt
+.PHONY: test check smoke tui install setup linux migrate fmt bump
 
 # The core and the terminal app (the default workspace members).
 test:
@@ -8,7 +8,7 @@ test:
 check:
 	python3 tools/validate_apple.py
 	python3 tools/test_migrate_journal.py
-	@if command -v node >/dev/null 2>&1; then node --check linux/src/app.js && node tools/check_media_library.js && node tools/check_linux_editor.js; else echo "skipping frontend checks: node is not installed"; fi
+	@if command -v node >/dev/null 2>&1; then node --check linux/src/app.js && node tools/check_media_library.js && node tools/check_linux_editor.js && node tools/check_search.js; else echo "skipping frontend checks: node is not installed"; fi
 	cargo clippy -p quire-core -p quire-tui -- -D warnings
 	cargo clippy -p quire-bindings --all-targets --all-features -- -D warnings
 	@if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then \
@@ -18,7 +18,9 @@ check:
 	fi
 
 # Drive every screen of the terminal app in a pseudo-terminal, twice: a roomy
-# window in Cinema and a small one in Marathon. 23/23 each or it fails.
+# window in Cinema and a small one in Marathon. 23/23 each or it fails. The
+# driver gives the app a scratch home (HOME, XDG_CONFIG_HOME, QUIRE_CONFIG_DIR),
+# so the real settings are never read or written, on Linux or a Mac.
 smoke: tui-debug
 	@rm -rf target/smoke-a target/smoke-b target/smoke-a-scratch target/smoke-b-scratch && cp -r sample target/smoke-a && cp -r sample target/smoke-b
 	python3 -I tools/drive_tui.py target/debug/quire target/smoke-a 100 30 cinema
@@ -50,6 +52,17 @@ migrate:
 
 fmt:
 	cargo fmt --all
+
+# One version number, everywhere it is written: the four fields release.yml
+# checks against the tag, Cargo.lock, linux/package-lock.json, and the
+# generated Xcode project (make check fails until that is regenerated).
+# CHANGELOG.md, the commit and the tag stay yours: see Releases in CLAUDE.md.
+bump:
+	@test -n "$(V)" || (echo "usage: make bump V=x.y.z" && exit 2)
+	python3 -I tools/bump_version.py "$(V)"
+	$(MAKE) -C apple project
+	cargo metadata --locked --format-version 1 >/dev/null
+	@echo "→ $(V) in Cargo.toml, linux/ (3 files), both lock files and apple/Quire.xcodeproj"
 
 .PHONY: apple apple-test
 apple:

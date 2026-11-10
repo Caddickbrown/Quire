@@ -67,6 +67,8 @@ struct AssetsView: View {
     @State private var viewing: JournalStore.AssetItem?
     @State private var usagePicker: UsagePicker?
     @State private var pendingDelete: PendingDelete?
+    /// Why a file the person asked to delete is still there.
+    @State private var deleteFailure: String?
 
     /// Shown when an asset is used by several entries, so you can pick one.
     struct UsagePicker: Identifiable {
@@ -176,9 +178,21 @@ struct AssetsView: View {
             .background(.bar)
     }
 
+    /// A tile is a picture with no words: what it is, and its file's name.
+    private static func spoken(_ item: JournalStore.AssetItem) -> String {
+        let kind: String
+        switch MediaKind(path: item.name) {
+        case .image: kind = "Photo"
+        case .video: kind = "Video"
+        case .audio: kind = "Audio"
+        }
+        return "\(kind), \(item.name)"
+    }
+
     private func tile(_ item: JournalStore.AssetItem) -> some View {
         Button { viewing = item } label: { cell(item) }
             .buttonStyle(.plain)
+            .accessibilityLabel(Self.spoken(item))
             .contextMenu {
                 Button { viewing = item } label: {
                     Label("View", systemImage: "eye")
@@ -321,12 +335,26 @@ struct AssetsView: View {
                                     set: { if !$0 { pendingDelete = nil } }),
                presenting: pendingDelete) { pending in
             Button("Delete", role: .destructive) {
-                store.deleteAsset(pending.item.url)
+                // Gone from the grid only when it has really been moved away;
+                // one that couldn't be stays, and the reason is said here (the
+                // root's notice is behind this sheet).
+                if store.deleteAsset(pending.item.url) {
+                    assets.removeAll { $0.url == pending.item.url }
+                    if viewing?.url == pending.item.url { viewing = nil }
+                } else {
+                    deleteFailure = store.lastWriteError ?? "Couldn't delete \(pending.item.url.lastPathComponent)."
+                }
                 reload()
             }
             Button("Cancel", role: .cancel) { }
         } message: { pending in
             Text(deleteMessage(for: pending))
+        }
+        .alert("Not deleted", isPresented: Binding(get: { deleteFailure != nil },
+                                                 set: { if !$0 { deleteFailure = nil } })) {
+            Button("OK") { }
+        } message: {
+            Text(deleteFailure ?? "")
         }
         #if os(iOS)
         // Esc closes these first, then the root's closes the library.

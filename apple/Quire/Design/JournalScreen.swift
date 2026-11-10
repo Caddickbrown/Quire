@@ -23,12 +23,15 @@ struct JournalScreen: View {
     /// A day to go to (⌘K, Jump to a date): taken and cleared.
     @Binding var jump: String?
 
-    @State private var starredOnly = false
+    /// The filter, the journal chosen and the selection are the root's, so they
+    /// outlast a rotation or a resized window, which builds this page afresh.
+    @Binding var starredOnly: Bool
     /// A split journal being read in place of the main one, picked from the
     /// title (Dan, 9 Nov: they had no way in on the phone or iPad).
-    @State private var splitName: String?
-    @State private var selected: Int?
+    @Binding var splitName: String?
+    @Binding var selected: Int?
     @State private var deleting: Entry?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The months and the flat list, kept until the journal or the filter
     /// changes. The store announces every autosave (a draft's words, the
     /// inbox), and this list redraws for each, under the composer too: regrouping
@@ -105,10 +108,12 @@ struct JournalScreen: View {
                               if let r = store.randomEntry() { open(EntryRef(entry: r.entry, source: .archive(date: r.date))) }
                           },
                           onMedia: media, onSearch: search, onSettings: settings)
-                title
+                // The count from the months already grouped: counting the days again
+                // regrouped a split journal on every autosave.
+                title(count: months.reduce(0) { $0 + $1.count })
                 filters
                 if months.isEmpty {
-                    Text(!store.indexed ? "Loading your journal…"
+                    Text(!store.indexed ? (store.foldingLegacy ? "Moving your journal into day files…" : "Loading your journal…")
                          : starredOnly ? "Nothing matches."
                          : splitName != nil ? "Nothing in this journal yet."
                          : "Nothing is filed yet. File a draft from the inbox and it lands here.")
@@ -137,8 +142,12 @@ struct JournalScreen: View {
             .padding(.horizontal, 26).padding(.top, 14).padding(.bottom, 24)
         }
         .onChange(of: selectedID) { _, id in
-            if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+            if let id { withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(id, anchor: .center) } }
         }
+        // A split journal that is gone (its tag removed, merged back, another
+        // folder chosen) leaves nothing to read: back to the main journal.
+        .onChange(of: store.splitJournals) { _, _ in dropMissingSplit() }
+        .onAppear(perform: dropMissingSplit)
         // `task`, not `onChange`: the list may only be appearing as the day arrives,
         // and a list that appears drops its selection first.
         .task(id: jump) {
@@ -181,8 +190,7 @@ struct JournalScreen: View {
     }
 
     /// The title, which picks the journal when there are split ones.
-    @ViewBuilder private var title: some View {
-        let count = days.reduce(0) { $0 + $1.entries.count }
+    @ViewBuilder private func title(count: Int) -> some View {
         let heading = QTitle(kicker: "\(count) filed", title: splitName ?? "Journal")
         if store.splitJournals.isEmpty && splitName == nil {
             heading
@@ -208,6 +216,14 @@ struct JournalScreen: View {
             .accessibilityHint("Choose a journal")
             .onChange(of: splitName) { _, _ in selected = nil }
         }
+    }
+
+    private func dropMissingSplit() {
+        guard store.indexed, let name = splitName,
+              !store.splitJournals.contains(where: { $0.name == name }),
+              store.splitEntriesCache[name] == nil else { return }
+        splitName = nil
+        selected = nil
     }
 
     @discardableResult

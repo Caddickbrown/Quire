@@ -100,7 +100,7 @@ private struct DayPDFPage: View {
                                 .font(font.weight(.bold))
                         }
                     }
-                    PDFEntryBody(text: entry.body, font: font)
+                    PDFEntryBody(text: entry.shownBody, font: font)
                 }
             }
         }

@@ -535,7 +535,7 @@ input.picker::placeholder { color: var(--faint); }
   --page: #0B0C0C; --ground: #111313; --chrome: #151818; --card: #151818;
   --ink: #ECEFE9; --muted: #8B918C; --faint: #6F7570; --line: #2A2E2E; --line2: #1C1F1F;
   --accent: #C8FF00; --accent-soft: #2A3310; --accent-ink: #DFFF66; --on-accent: #0B0C0C;
-  --signal: var(--accent); --on-signal: #0B0C0C; --flag: #FF6A1F;
+  --signal: #C8FF00; --on-signal: #0B0C0C; --flag: #FF6A1F;
   --head-weight: 800; --head-track: -0.02em; --rule-h: 6px; --heat0: #1C1F1F;
   --shadow: none;
 }
@@ -675,6 +675,8 @@ input.picker::placeholder { color: var(--faint); }
 /* The folder can't be reached: a full-width rule-bounded strip above every view. */
 .missing-banner:not([hidden]) { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 18px; padding: 10px 40px; background: var(--page); border-bottom: 1px solid var(--line); box-shadow: inset 3px 0 0 #B3261E; color: var(--ink); font-size: 14px; line-height: 1.45; }
 .missing-banner .btn { min-height: 28px; }
+.missing-banner .banner-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 18px; width: 100%; }
+.pill.warn { color: var(--danger); font-style: normal; font-weight: 600; }
 [data-theme="cinema"] .missing-banner, [data-theme="night"] .missing-banner { box-shadow: inset 3px 0 0 #F2A29B; }
 [data-theme="marathon"] .missing-banner { box-shadow: inset 3px 0 0 #FF8A80; }
 [data-theme^="marathon"] .missing-banner { font-family: "DM Mono", monospace; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; border-bottom-color: var(--ink); }

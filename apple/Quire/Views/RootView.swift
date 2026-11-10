@@ -127,13 +127,14 @@ enum WritingTimer {
     /// these fall back to the nearest section (the composer, for a line).
     func request(_ request: PhoneRequest) {
         #if os(iOS)
-        phoneRequest = request; return
-        #endif
+        phoneRequest = request
+        #else
         switch request {
         case .today: section = .write
         case .inbox: section = .inbox
         case .capture: requestNewEntry()
         }
+        #endif
     }
     /// Pop one level (mouse Back button / ⌘[).
     func goBack() { if !path.isEmpty { path.removeLast() } }
@@ -147,6 +148,56 @@ enum WritingTimer {
         static func == (a: OpenRequest, b: OpenRequest) -> Bool { a.id == b.id }
     }
     @Published var openRequest: OpenRequest?
+
+    /// An entry link that has not been matched to an entry yet. A widget, a
+    /// notification or a Spotlight result can arrive before the journal has been
+    /// read (a cold launch), when looking the entry up finds nothing and the tap
+    /// lands on Today. So the link waits here for the store's index, and is
+    /// resolved against it then (`resolvePendingLink`, called by the root view).
+    struct PendingLink: Equatable {
+        let id = UUID()
+        let asked = Date()
+        let resolve: @MainActor (JournalStore) -> (Entry, EntrySource)?
+        static func == (a: PendingLink, b: PendingLink) -> Bool { a.id == b.id }
+    }
+    @Published var pendingLink: PendingLink?
+
+    /// Open whatever `resolve` finds, once the journal's index is built.
+    func openWhenIndexed(_ resolve: @escaping @MainActor (JournalStore) -> (Entry, EntrySource)?) {
+        pendingLink = PendingLink(resolve: resolve)
+    }
+
+    /// quire://entry?date=…&ts=… and the notification's entry: the named split
+    /// journal first, then the day's file, then every split journal (a widget
+    /// link names none, so an entry filed to one was never found), then the inbox.
+    func openLink(date: String?, ts: String, journal: String? = nil) {
+        guard !ts.isEmpty else { return }
+        openWhenIndexed { store in
+            if let journal, !journal.isEmpty,
+               let entry = store.entries(inJournal: journal).first(where: { $0.ts == ts }) {
+                return (entry, .journal(name: journal))
+            }
+            let day = (date?.isEmpty ?? true) ? String(ts.prefix(10)) : date!
+            if let entry = store.archiveEntries.first(where: { $0.date == day })?.entries.first(where: { $0.ts == ts }) {
+                return (entry, .archive(date: day))
+            }
+            for (name, entries) in store.splitEntriesCache.sorted(by: { $0.key < $1.key }) {
+                if let entry = entries.first(where: { $0.ts == ts }) { return (entry, .journal(name: name)) }
+            }
+            if let draft = store.inboxDrafts.first(where: { $0.ts == ts }) { return (draft, .inbox) }
+            return nil
+        }
+    }
+
+    /// Resolve the waiting link if the index is ready; until then it stays. A
+    /// link that waited more than two minutes is dropped: an entry opening by
+    /// itself long after the tap would be a surprise.
+    func resolvePendingLink(in store: JournalStore) {
+        guard let link = pendingLink, store.indexed else { return }
+        pendingLink = nil
+        guard Date().timeIntervalSince(link.asked) < 120, let (entry, source) = link.resolve(store) else { return }
+        open(entry, source: source)
+    }
 
     /// Programmatically open an entry: switch section, then push it. Both
     /// steps are synchronous, so the entry is always what ends up on screen.
@@ -254,6 +305,11 @@ struct RootView: View {
                 }
             }
             .task(id: store.revision) { savedSearches = store.savedSearches() }
+            // An entry link that arrived before the journal was read waits for
+            // the index (see `NavigationModel.pendingLink`).
+            .onChange(of: nav.pendingLink) { _, _ in nav.resolvePendingLink(in: store) }
+            .onChange(of: store.indexed) { _, _ in nav.resolvePendingLink(in: store) }
+            .onAppear { nav.resolvePendingLink(in: store) }
             .safeAreaInset(edge: .bottom) { sidebarFooter }
             #if os(iOS)
             // No wordmark in the sidebar bar — the sections speak for themselves

@@ -219,7 +219,7 @@ struct DeskCode: View {
                             }
                         }
                 } else {
-                    VSWindow(page: .empty, hints: [], s: s)
+                    VSWindow(page: .empty, hints: [], search: nil, s: s)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
@@ -238,10 +238,14 @@ private struct VSLive: View {
     let hints: [ShortcutHint]
     let s: VSScale
     @EnvironmentObject private var store: JournalStore
+    /// Read here, on the live page only: the paused or locked window is drawn
+    /// without it, so what was being searched for never stays up in the title bar.
+    @ObservedObject private var model = ExternalDisplayModel.shared
+    private var search: DeskSearch? { model.search }
     @AppStorage(QuirePrompts.offsetKey, store: QuirePrompts.defaults) private var promptOffset = 0
 
     var body: some View {
-        VSWindow(page: page, hints: hints, s: s)
+        VSWindow(page: page, hints: hints, search: search, s: s)
     }
 
     private var page: VSPage {
@@ -284,6 +288,8 @@ private struct VSLive: View {
 private struct VSWindow: View {
     let page: VSPage
     let hints: [ShortcutHint]
+    /// Search's query for the title bar; nil while paused or locked.
+    let search: DeskSearch?
     let s: VSScale
 
     private var file: VSFile? { if case .file(let f) = page { return f } else { return nil } }
@@ -291,7 +297,7 @@ private struct VSWindow: View {
     var body: some View {
         GeometryReader { geo in
             VStack(spacing: 0) {
-                VSTitleBar(s: s)
+                VSTitleBar(search: search, s: s)
                 HStack(spacing: 0) {
                     VSActivityBar(s: s)
                     VSExplorer(tree: file?.tree ?? VSFiles.tree(open: nil, children: []), selected: file?.selectedRow, s: s)
@@ -332,12 +338,14 @@ private struct VSWindow: View {
 // MARK: - Chrome
 
 private struct VSTitleBar: View {
+    /// Handed in by the live page; never read from the model here, which a
+    /// paused or locked window would show too.
+    let search: DeskSearch?
     let s: VSScale
-    @ObservedObject private var model = ExternalDisplayModel.shared
 
     /// VS Code's search box: the workspace, or what's being searched for.
     private var boxText: String {
-        guard let search = model.search else { return "notes" }
+        guard let search else { return "notes" }
         return search.query + (search.typing ? "|" : "")
     }
 

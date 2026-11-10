@@ -147,9 +147,10 @@ struct EntryPreviewRow: View {
     /// already shows the body's first line, so the snippet starts after it
     /// rather than repeating it.
     private var snippet: String {
-        guard entry.displayTitle.isEmpty else { return entry.body }
-        guard let cut = entry.body.range(of: "\n") else { return "" }
-        return String(entry.body[cut.upperBound...])
+        let body = entry.shownBody
+        guard entry.displayTitle.isEmpty else { return body }
+        guard let cut = body.range(of: "\n") else { return "" }
+        return String(body[cut.upperBound...])
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

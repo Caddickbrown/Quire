@@ -18,7 +18,32 @@ struct LookBackScreen: View {
     var search: () -> Void
     var settings: () -> Void
 
-    @State private var selected: Int?
+    /// The root's, so it outlasts a rotation, which builds this page afresh.
+    @Binding var selected: Int?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Entries by weekday, kept until the journal changes: every autosave
+    /// redraws this page, and counting walked every filed day each time.
+    @State private var weekdayCounts = WeekdayCounts()
+
+    private final class WeekdayCounts {
+        /// The store's revision and, for a folder that goes away, its day count.
+        private var key: (Int, Int)?
+        private var counts = [Int](repeating: 0, count: 7)
+        /// Monday first.
+        func counts(revision: Int, days: [(date: String, entries: [Entry])]) -> [Int] {
+            if let key, key == (revision, days.count) { return counts }
+            var out = [Int](repeating: 0, count: 7)
+            var cal = Calendar(identifier: .gregorian)
+            cal.firstWeekday = 2
+            for day in days {
+                guard let date = QDate.date(day.date) else { continue }
+                out[(cal.component(.weekday, from: date) + 5) % 7] += day.entries.count   // Mon = 0
+            }
+            counts = out
+            key = (revision, days.count)
+            return out
+        }
+    }
 
     /// The "on this day" entries, in the order they're drawn: what the keys walk.
     private var pastRefs: [EntryRef] {
@@ -48,9 +73,14 @@ struct LookBackScreen: View {
             .padding(.horizontal, 26).padding(.top, 14).padding(.bottom, 24)
         }
         .onChange(of: selected) { _, i in
-            if let i, refs.indices.contains(i) { withAnimation { proxy.scrollTo(refs[i].entry.id, anchor: .center) } }
+            if let i, refs.indices.contains(i) {
+                withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(refs[i].entry.id, anchor: .center) }
+            }
         }
+        // With nothing on this day the monitor keeps its Today page: an empty
+        // list of its own said "No entries here yet" over a page that has plenty.
         .qKeyList(entries: refs.map(\.entry), index: $selected, listTitle: "On this day", autoSelect: true,
+                  publishesEmpty: false,
                   onOpen: { entry in if let r = refs.first(where: { $0.entry.id == entry.id }) { open(r) } })
         }
     }
@@ -134,14 +164,7 @@ struct LookBackScreen: View {
 
     /// Entries by weekday, Monday first.
     private var weekdays: some View {
-        var counts = [Int](repeating: 0, count: 7)
-        var cal = Calendar(identifier: .gregorian)
-        cal.firstWeekday = 2
-        for day in store.archiveEntries {
-            guard let date = QDate.date(day.date) else { continue }
-            let w = (cal.component(.weekday, from: date) + 5) % 7   // Mon = 0
-            counts[w] += day.entries.count
-        }
+        let counts = weekdayCounts.counts(revision: store.revision, days: store.archiveEntries)
         let top = max(counts.max() ?? 1, 1)
         let best = counts.firstIndex(of: top) ?? 0
         return VStack(alignment: .leading, spacing: 12) {

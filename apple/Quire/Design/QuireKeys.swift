@@ -17,13 +17,17 @@ extension View {
     /// Arrow-key selection over `entries` with a per-row letter handler.
     /// `index` is the host's selection, so the list can highlight and scroll to it.
     /// `autoSelect` adopts the first row only while a monitor is connected.
+    /// `publishesEmpty` false: with no rows the monitor is left alone rather than
+    /// shown an empty list (Look back's "On this day", which is one part of a page).
     func qKeyList(entries: [Entry],
                   index: Binding<Int?>,
                   listTitle: String,
                   autoSelect: Bool = false,
+                  publishesEmpty: Bool = true,
                   onOpen: @escaping (Entry) -> Void,
                   letter: @escaping (Entry, String) -> Bool = { _, _ in false }) -> some View {
-        modifier(QKeyList(entries: entries, index: index, listTitle: listTitle, autoSelect: autoSelect, onOpen: onOpen, letter: letter))
+        modifier(QKeyList(entries: entries, index: index, listTitle: listTitle, autoSelect: autoSelect,
+                          publishesEmpty: publishesEmpty, onOpen: onOpen, letter: letter))
     }
 
     /// While a sheet or full-screen page is up, keep every key away from the list
@@ -124,6 +128,7 @@ private struct QKeyList: ViewModifier {
     @Binding var index: Int?
     let listTitle: String
     let autoSelect: Bool
+    let publishesEmpty: Bool
     let onOpen: (Entry) -> Void
     let letter: (Entry, String) -> Bool
 
@@ -134,6 +139,11 @@ private struct QKeyList: ViewModifier {
     @State private var routerID = UUID()
     @State private var visible = false
     @State private var published: ExternalDisplayContent?
+    /// The entry the selection is on. The host's selection is a row number, and
+    /// rows move: a sync or a widget capture puts one in above, and the same
+    /// number is then another entry, which `f`, `u` and `*` would act on unasked.
+    /// So the entry is remembered, and the number follows it when the rows change.
+    @State private var selectedID: String?
 
     func body(content: Content) -> some View {
         content
@@ -141,19 +151,26 @@ private struct QKeyList: ViewModifier {
             .onAppear {
                 visible = true
                 if !monitor.isConnected { index = nil }
-                adopt(); register(); publish()
+                adopt(); remember(); register(); publish()
             }
-            .task { adopt(); register(); publish() }
+            .task { adopt(); remember(); register(); publish() }
             .onChange(of: monitor.isConnected) { _, connected in
                 if !connected { index = nil }
                 adopt(); register(); publish()
             }
-            .onChange(of: index) { _, _ in register(); publish() }
+            .onChange(of: index) { _, _ in remember(); register(); publish() }
             .onChange(of: monitor.relistSignal) { _, _ in publish() }
             .onChange(of: entries) { _, _ in
                 adopt()
-                if let i = index, i >= entries.count { index = entries.isEmpty ? nil : entries.count - 1 }
-                register(); publish()
+                if let id = selectedID, let i = entries.firstIndex(where: { $0.id == id }) {
+                    // Still here, perhaps on another row: the selection goes with it.
+                    if index != nil, index != i { index = i }
+                } else if let i = index, i >= entries.count {
+                    // Gone (filed, deleted): the selection keeps its place, on
+                    // the next entry, or the one before if this was the last.
+                    index = entries.isEmpty ? nil : entries.count - 1
+                }
+                remember(); register(); publish()
             }
             .onDisappear {
                 visible = false
@@ -165,6 +182,11 @@ private struct QKeyList: ViewModifier {
     /// Desk mode starts ready for ↵; phone-only lists wait for keyboard movement.
     private func adopt() {
         if visible, selectsAutomatically, index == nil, !entries.isEmpty { index = 0 }
+    }
+
+    /// Note which entry the selection is on now.
+    private func remember() {
+        selectedID = selected?.id
     }
 
     private func register() {
@@ -204,7 +226,7 @@ private struct QKeyList: ViewModifier {
     private func publish() {
         guard visible else { return }
         let i = index.flatMap { entries.indices.contains($0) ? $0 : nil }
-        guard selectsAutomatically || i != nil else {
+        guard (selectsAutomatically && (publishesEmpty || !entries.isEmpty)) || i != nil else {
             if let published { ExternalDisplayModel.shared.clear(ifShowing: published) }
             return
         }

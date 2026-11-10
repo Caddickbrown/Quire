@@ -23,8 +23,10 @@ struct InboxScreen: View {
     var search: () -> Void
     var settings: () -> Void
 
-    @State private var selected: Int?
+    /// The root's, so it outlasts a rotation, which builds this page afresh.
+    @Binding var selected: Int?
     @State private var deleting: Entry?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Month: Identifiable {
         let id: String   // "2026-09"
@@ -60,7 +62,7 @@ struct InboxScreen: View {
                 if store.inboxDrafts.isEmpty {
                     Text(store.indexed
                          ? "Everything is filed. Captures from the widget, the share sheet and the reminder land here first."
-                         : "Loading your journal…")
+                         : store.foldingLegacy ? "Moving your journal into day files…" : "Loading your journal…")
                         .font(q.writing(18)).foregroundStyle(q.mutedColor).lineSpacing(5)
                 }
                 ForEach(months) { month in
@@ -84,7 +86,7 @@ struct InboxScreen: View {
             .padding(.horizontal, 26).padding(.top, 14).padding(.bottom, 24)
         }
         .onChange(of: selectedID) { _, id in
-            if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+            if let id { withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(id, anchor: .center) } }
         }
         .qKeyList(entries: flat, index: $selected, listTitle: "Inbox", autoSelect: true,
                   onOpen: { openDraft($0) },

@@ -32,6 +32,8 @@ struct ReaderScreen: View {
     @State private var routerID = UUID()
     @State private var visible = false
     @State private var scroller = QScrollHandle()
+    /// The body as blocks, kept until the body changes (see `Parsed`).
+    @State private var parsed = Parsed()
 
     init(ref: EntryRef, onEdit: @escaping (EntryRef) -> Void, onRetime: @escaping (EntryRef) -> Void,
          onRetimeKey: ((EntryRef) -> Void)? = nil, onClose: (() -> Void)? = nil) {
@@ -56,7 +58,7 @@ struct ReaderScreen: View {
                         .foregroundStyle(entry.qHasTitle ? q.inkColor : q.mutedColor)
                         .fixedSize(horizontal: false, vertical: true)
                     QTitleRule().qDrawIn()
-                    ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in blockView(block) }
+                    ForEach(Array(parsed.blocks(of: entry.shownBody).enumerated()), id: \.offset) { _, block in blockView(block) }
                     footer
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -133,7 +135,7 @@ struct ReaderScreen: View {
     private func mirror() {
         guard visible else { return }
         ExternalDisplayModel.shared.present(.reading(
-            title: entry.displayTitle, date: QDate.date(entry.ts) ?? Date(), text: entry.body, isStarred: entry.isStarred,
+            title: entry.displayTitle, date: QDate.date(entry.ts) ?? Date(), text: entry.shownBody, isStarred: entry.isStarred,
             isDraft: isDraft), owner: routerID)
     }
 
@@ -191,51 +193,92 @@ struct ReaderScreen: View {
         if let onClose { onClose() } else { dismiss() }
     }
 
-    /// Re-read the entry after an edit, a retime or a star. Matched by timestamp
-    /// (an edit that moved it to another day pops back instead).
+    /// Re-read the entry after an edit, a retime or a star (an edit that moved
+    /// it to another day pops back instead).
     private func refresh() {
-        let found: Entry?
+        let pool: [Entry]
         switch ref.source {
-        case .inbox: found = store.inboxDrafts.first { $0.ts == entry.ts }
-        case .archive: found = store.archiveEntries.first { $0.date == entry.date }?.entries.first { $0.ts == entry.ts }
-        case .journal(let n): found = store.entries(inJournal: n).first { $0.ts == entry.ts }
+        case .inbox: pool = store.inboxDrafts
+        case .archive: pool = store.archiveEntries.first { $0.date == entry.date }?.entries ?? []
+        case .journal(let n): pool = store.entries(inJournal: n)
         }
-        if let found { entry = found }
+        if let found = Self.locate(entry, in: pool) { entry = found }
+    }
+
+    /// The entry on this page, among those now in its file. Two entries can
+    /// share a second (imports make these), so the timestamp alone found the
+    /// first of them and Star, Delete and Edit then acted on that one. Its id
+    /// first (the file, the second, and which of that second's entries it is);
+    /// then its text, for an entry that came without a place in a file; a
+    /// timestamp only when a single entry has it.
+    static func locate(_ entry: Entry, in pool: [Entry]) -> Entry? {
+        if let same = pool.first(where: { $0.id == entry.id }) { return same }
+        let sameText = pool.filter { $0.raw == entry.raw }
+        if sameText.count == 1 { return sameText[0] }
+        let sameTime = pool.filter { $0.ts == entry.ts }
+        return sameTime.count == 1 ? sameTime[0] : nil
     }
 
     // MARK: Body
 
-    private enum Block { case heading(String, Int), quote(String), media(String, caption: String), text(String) }
+    fileprivate enum Block { case heading(String, Int), quote(String), media(String, caption: String), text(String) }
 
-    private var blocks: [Block] {
-        entry.body.components(separatedBy: "\n\n").flatMap { raw -> [Block] in
+    /// The blocks of the body last drawn. The page is redrawn for every change
+    /// the store announces (each autosave, under the composer too), and parsing
+    /// the body again each time, links and all, was done for nothing.
+    private final class Parsed {
+        private var body: String?
+        private var blocks: [Block] = []
+        func blocks(of body: String) -> [Block] {
+            if self.body == body { return blocks }
+            blocks = ReaderScreen.blocks(of: body)
+            self.body = body
+            return blocks
+        }
+    }
+
+    private static func blocks(of body: String) -> [Block] {
+        body.components(separatedBy: "\n\n").flatMap { raw -> [Block] in
             let part = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !part.isEmpty else { return [] }
-            // Media links are found with the same parser the Journal page uses,
-            // so a photo that shows there shows here: wherever it sits in the
-            // paragraph, and with a caption, a title or spaces round it. Text
-            // around it, a voice memo's transcript say, reads as text.
-            let segments = parseMediaSegments(part)
-            if segments.contains(where: { if case .image = $0 { true } else { false } }) {
-                return segments.flatMap { seg -> [Block] in
-                    switch seg {
-                    case .image(let path, let caption): return [.media(path, caption: caption)]
-                    case .text(let t):
-                        let text = t.trimmingCharacters(in: .whitespacesAndNewlines)
-                        return text.isEmpty ? [] : text.qChunks(1500).map { Block.text($0) }
-                    }
+            // Only the first line of a block is its heading. `## Morning` with
+            // its paragraph straight under it, no blank line between, was set
+            // whole in heading type and cut off at 300 characters; what follows
+            // the line now reads as any other text does (a quote, a photo).
+            let hashes = part.prefix { $0 == "#" }.count
+            let line = part.prefix { $0 != "\n" }
+            // (A heading line that carries a photo is left to the photo's path, as before.)
+            if hashes > 0, hashes <= 3, part.dropFirst(hashes).first == " ", !line.contains("![") {
+                let rest = part.dropFirst(line.count).trimmingCharacters(in: .whitespacesAndNewlines)
+                let heading = Block.heading(String(line.dropFirst(hashes + 1)).qClamped(300), hashes)
+                return [heading] + (rest.isEmpty ? [] : prose(rest))
+            }
+            return prose(part)
+        }
+    }
+
+    /// A block that isn't a heading: media and the text around it, a quote, or text.
+    private static func prose(_ part: String) -> [Block] {
+        // Media links are found with the same parser the Journal page uses,
+        // so a photo that shows there shows here: wherever it sits in the
+        // paragraph, and with a caption, a title or spaces round it. Text
+        // around it, a voice memo's transcript say, reads as text.
+        let segments = parseMediaSegments(part)
+        if segments.contains(where: { if case .image = $0 { true } else { false } }) {
+            return segments.flatMap { seg -> [Block] in
+                switch seg {
+                case .image(let path, let caption): return [.media(path, caption: caption)]
+                case .text(let t):
+                    let text = t.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return text.isEmpty ? [] : text.qChunks(1500).map { Block.text($0) }
                 }
             }
-            let hashes = part.prefix { $0 == "#" }.count
-            if hashes > 0, hashes <= 3, part.dropFirst(hashes).first == " " {
-                return [.heading(String(part.dropFirst(hashes + 1)).qClamped(300), hashes)]
-            }
-            if part.hasPrefix(">") {
-                return part.split(separator: "\n").map { $0.drop { $0 == ">" || $0 == " " } }.joined(separator: "\n")
-                    .qChunks(1500).map { Block.quote($0) }
-            }
-            return part.qChunks(1500).map { Block.text($0) }
         }
+        if part.hasPrefix(">") {
+            return part.split(separator: "\n").map { $0.drop { $0 == ">" || $0 == " " } }.joined(separator: "\n")
+                .qChunks(1500).map { Block.quote($0) }
+        }
+        return part.qChunks(1500).map { Block.text($0) }
     }
 
     @ViewBuilder private func blockView(_ block: Block) -> some View {
@@ -268,16 +311,20 @@ struct ReaderScreen: View {
     @ViewBuilder private func mediaView(_ path: String, caption: String) -> some View {
         let url = store.assetURL(forRelative: path)
         switch MediaKind(path: path) {
+        // A player belongs to its file: blocks are told apart by their place on
+        // the page, so without this another file arriving in the same place
+        // kept the last one's player, still playing.
         case .video where url != nil:
             VideoView(url: url!)
                 .aspectRatio(16 / 9, contentMode: .fit).frame(maxWidth: .infinity)
                 .accessibilityLabel(caption.isEmpty ? "Attached video" : caption)
+                .id(url!)
         case .audio where url != nil:
             AudioPlayerView(url: url!)
+                .id(url!)
         default:
-            if let url, let image = UIImage(contentsOfFile: url.path) {
-                Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity)
-                    .accessibilityLabel(caption.isEmpty ? "Attached photo" : caption)
+            if let url {
+                ReaderImage(url: url, path: path, caption: caption).id(url)
             } else {
                 Text(path).font(q.mono(12)).foregroundStyle(q.mutedColor)
             }
@@ -292,6 +339,49 @@ struct ReaderScreen: View {
         }
         .font(q.mono(11)).foregroundStyle(q.mutedColor)
         .padding(.top, 10)
+    }
+}
+
+/// A photo on the page. Decoded off the main thread, and no larger than the
+/// screen can show: a full-size photo read while the page was being drawn held
+/// the page up, and held tens of megabytes for each one.
+private struct ReaderImage: View {
+    @Environment(\.quire) private var q
+    @Environment(\.displayScale) private var displayScale
+    let url: URL
+    let path: String
+    let caption: String
+
+    private enum Loaded { case waiting, image(Image), missing }
+    @State private var loaded = Loaded.waiting
+
+    /// The screen's longer side, in pixels: enough for either way up.
+    private var side: Int {
+        let bounds = UIScreen.main.bounds.size
+        return Int(max(bounds.width, bounds.height) * displayScale)
+    }
+
+    var body: some View {
+        Group {
+            switch loaded {
+            case .image(let image):
+                image.resizable().scaledToFit().frame(maxWidth: .infinity)
+                    .accessibilityLabel(caption.isEmpty ? "Attached photo" : caption)
+            case .missing:
+                Text(path).font(q.mono(12)).foregroundStyle(q.mutedColor)
+            case .waiting:
+                // Room for it, so the page moves little when it arrives.
+                Color.clear.aspectRatio(4 / 3, contentMode: .fit).frame(maxWidth: .infinity)
+                    .accessibilityHidden(true)
+            }
+        }
+        .task(id: url) {
+            let side = side
+            if let hit = RowThumbnail.cached(url, side: side) { loaded = .image(hit); return }
+            let image = await Task.detached(priority: .userInitiated) { RowThumbnail.load(url, side: side) }.value
+            guard !Task.isCancelled else { return }
+            loaded = image.map(Loaded.image) ?? .missing
+        }
     }
 }
 

@@ -1,20 +1,37 @@
-# Quire — Linux (0.7)
+# Quire — Linux
 
-> The desktop app for Linux. It is one shell over `../core/` (see the root `README.md`); this file keeps the Linux-specific detail. Since 0.7 drafts live in `inbox/YYYY/MM/DD.md` and the sidecar is `.quire/`; an `inbox.md` is folded in on open.
+> The desktop app for Linux. It is one shell over `../core/` (see the root `README.md`); this file keeps the Linux-specific detail. It carries the workspace's version (0.11.0 as this is written; `../CHANGELOG.md` has what each release changed). Since 0.7 drafts live in `inbox/YYYY/MM/DD.md` and the sidecar is `.quire/`; an `inbox.md` is folded in on open.
 
-One journalling app over a plain jnl folder: jnl's format, Nook's features, Wander's writing room. Tauri 2 (Rust back end, HTML/JS front end), x86_64 Linux.
+One journalling app over a plain jnl folder: jnl's format, Nook's features, Wander's writing room. Tauri 2 (Rust back end, HTML/JS front end). Releases are built for x86_64 and arm64.
 
 ## Run it
 
-**.deb (Debian / Ubuntu / Mint / Pop!_OS):** `sudo apt install ./Quire_0.6.2_amd64.deb`, then open Quire from your launcher.
-
-**AppImage (any x86_64 distro):** join the parts, then run:
+**The installer** (from the repository root, or straight from GitHub):
 
 ```sh
-cat Quire_0.6.2_amd64.AppImage.part0* > Quire.AppImage
-sha256sum -c Quire_0.6.2_amd64.AppImage.sha256   # optional, after renaming to match
-chmod +x Quire.AppImage && ./Quire.AppImage
+./install.sh --gui      # or --both, for the terminal app too; --dry-run shows every command first
+curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash
 ```
+
+On x86_64 and arm64 it downloads the latest release from [GitHub Releases](https://github.com/Caddickbrown/Quire/releases), checks it against the release's SHA-256 file, and installs the desktop app as an AppImage at `~/Applications/Quire.AppImage` with a launcher entry and icon. The AppImage mounts itself with FUSE; the installer offers to install `fuse3`, and without it the launcher entry unpacks the AppImage on each start instead. `--bundle deb` or `--bundle rpm` installs the package instead; `--build` builds from source.
+
+**By hand.** Each release carries, per architecture:
+
+| File | For |
+|---|---|
+| `Quire_<version>_amd64.AppImage` · `Quire_<version>_aarch64.AppImage` | any distro |
+| `Quire_<version>_amd64.deb` · `Quire_<version>_arm64.deb` | Debian / Ubuntu / Mint / Pop!_OS |
+| `Quire-<version>-1.x86_64.rpm` · `Quire-<version>-1.aarch64.rpm` | Fedora / openSUSE |
+| `SHA256SUMS-desktop-x86_64` · `SHA256SUMS-desktop-aarch64` | the checksums of the three above |
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS-desktop-x86_64
+chmod +x Quire_<version>_amd64.AppImage && ./Quire_<version>_amd64.AppImage
+sudo apt install ./Quire_<version>_amd64.deb        # or
+sudo dnf install ./Quire-<version>-1.x86_64.rpm
+```
+
+**Updates** are never automatic: Settings › About › Updates checks when you ask. The AppImage updates itself (the download is signature-checked, then the app restarts); a .deb or .rpm only says a new version is out, since the package manager owns it. `quire update` in the terminal app brings the AppImage up to date too.
 
 First launch opens a **sample journal** (copied to `~/.local/share/com.caddickbrown.quire/sample-journal`, so nothing of yours is touched). Settings › Folder › Choose… points it at a **copy** of your real `JNL_DIR`. Settings live in `~/.config/quire/settings.json`.
 
@@ -33,7 +50,11 @@ First launch opens a **sample journal** (copied to `~/.local/share/com.caddickbr
 
 Writes are atomic (temp file and rename), as in jnl. The journal layer is never rewritten to fit the sidecar layer.
 
-## What's in 0.4
+## History, 0.4 to 0.6
+
+The sections from here to "Not here" were written release by release up to 0.6 and are kept as they were (0.6's `.nook/` sidecar is `.quire/` now). Everything since is in `../CHANGELOG.md`.
+
+### What's in 0.4
 
 | Area | Features |
 |---|---|
@@ -47,7 +68,7 @@ Writes are atomic (temp file and rename), as in jnl. The journal layer is never 
 | Starred | Across journal, inbox and split journals; Random (Ctrl+R) |
 | Look back | Streaks, days, words; words-per-day heat strip (click a day); words per month; weekday and hour-of-day; top tags; year in review; On this day; storage by type |
 | Media | Attach from the composer, drop files onto a draft, or paste an image (all copied into assets/); gallery; orphan check and clean-up |
-| Settings | Folder, split tags, templates editor, 7 themes (Almanac, Broadsheet, Linen, Cinema, Night, Marathon, Marathon Day) + Nook's 8 accents, fonts, sizes, follow-system-dark; writing options; daily reminder (system notification); PIN lock (Ctrl+L, lock on launch); backups (choose folder — not inside the journal —, back up now, daily/weekly on launch, keeps the 10 newest, restore); JNL_DIR offered as the folder when set; maintenance |
+| Settings | Folder, split tags, templates editor, 7 themes (Almanac, Broadsheet, Linen, Cinema, Night, Marathon, Marathon Day) + Nook's 8 accents, fonts, sizes, follow-system-dark; writing options; daily reminder (system notification); PIN lock (Ctrl+L; with a PIN set, every launch asks for it, and changing or removing it asks for the current one); backups (choose folder — not inside the journal —, back up now, daily/weekly on launch, keeps the 10 newest, restore); JNL_DIR offered as the folder when set; maintenance |
 | Maintenance | Clean up (jnl's cleanup + duplicate removal + retroactive split routing), sort inbox, clear orphan media, export all, import a markdown folder, import a Day One JSON export, tag review (merge near-duplicate tags) |
 | Live | Watches the folder: edits from jnl, Nook or sync show up; narrow windows get a phone-style one-pane layout |
 
@@ -61,7 +82,7 @@ A full parity pass against Nook and jnl, plus a bug review. Highlights:
 | Maintenance macros | **Merge ex-split journals** (Nook's), **File all** in one pass, **Clean up** at full jnl + Nook parity (punctuation outside links, re-sort, dedupe, split extraction, inbox sort/dedupe; skips unreadable files and carries on), **Sort inbox** only rewrites when needed, **sync-conflict** files (Syncthing/Dropbox) detected and merged keep-both |
 | Split journals | Reads jnl's own config file (`~/.config/jnl/config`) for `JNL_SPLIT_TAGS` and `JNL_DIR`, so routing matches jnl even when launched from a menu. Reserved names (inbox, transfer, export) can't be split tags |
 | Media links | Written Nook-style (`assets/…`, relative to the journal), read either way; moving entries between files keeps links working; orphan check is conservative |
-| Safety | A pasted log line like `[2026-01-02 08:00:00] …` no longer splits an entry: autosave pauses and asks Import or Keep as one. Edits to filed entries save when you click away. Failed saves ask before discarding. Unreachable folder shows a banner and blocks writes instead of silently switching to the sample. Restore replaces the folder (hidden folders like .git/.stfolder left alone) after a listed safety copy. Stale temp files swept |
+| Safety | A pasted log line like `[2026-01-02 08:00:00] …` no longer splits an entry: autosave pauses and asks Import or Keep as one, keeping a recovery copy in `.quire/` meanwhile. A failed autosave retries and the pill says Not saved. An entry changed on another device is never written over: a clean composer takes the new version, a dirty one asks Keep mine as a new draft or Take theirs. Edits to filed entries save when you click away. Failed saves ask before discarding. Unreachable folder shows a banner and blocks writes instead of silently switching to the sample. Restore replaces the folder (hidden folders like .git/.stfolder left alone) after a listed safety copy. Stale temp files swept |
 | Backups | Off / Daily / Weekly / **On every change**, keep last N (1–50), last backup time, checked on launch and focus; Nook backups listed too |
 | Imports | Day One: real time zones, videos and audio, safe paths, tag cleanup, re-run dedupe. Markdown folders: file creation date fallback, no timestamp collisions |
 | Everyday | Paste images from the clipboard (native fallback for Linux), media gallery sort/group/delete/go-to-entry, date format, week start and numbers, prompt of the day, tag review "not a match", Look back library stats, Tab only indents lists (keyboard users can leave the editor), focus refresh no longer wipes Settings input, Settings keeps its scroll position |
@@ -90,14 +111,17 @@ Voice recording and on-device transcription, iCloud sync, widgets and share shee
 
 ## Keys
 
-`Ctrl+N` new · `Ctrl+J` file · `Ctrl+S` save · `Ctrl+Enter` save & new · `Ctrl+[` back · `Tab` indent · `Ctrl+B` `Ctrl+I` `` Ctrl+` `` wrap · `Ctrl+Alt+F` focus · `Ctrl+Shift+F` search · `Ctrl+T` date & time · `Ctrl+R` random · `Ctrl+P` print · `Ctrl+L` lock · `Ctrl+1–5` tabs · `Ctrl+,` settings · `↑ ↓ ↵` lists · `Esc` back out.
+`Ctrl+N` new · `Ctrl+J` file · `Ctrl+S` save · `Ctrl+Enter` save & new · `Ctrl+[` back · `Tab` indent · `Ctrl+B` `Ctrl+I` `` Ctrl+` `` wrap · `Ctrl+Alt+F` focus · `Ctrl+Shift+F` search · `Ctrl+T` date & time · `Ctrl+R` random · `Ctrl+P` print · `Ctrl+L` lock · `Ctrl+1–6` tabs · `Ctrl+,` settings · `↑ ↓ ↵` lists · `Esc` back out.
 
 ## Build from source
 
 ```sh
-sudo apt install libwebkit2gtk-4.1-dev build-essential libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-npm install && npx tauri build      # → src-tauri/target/release/bundle/ (run from linux/)
-cd .. && cargo test                 # the core's tests (format round-trips and more)
+sudo apt install libwebkit2gtk-4.1-dev build-essential file libxdo-dev libssl-dev \
+  libayatana-appindicator3-dev librsvg2-dev patchelf pkg-config
+npm install && npx tauri build      # run from linux/ (or `make linux` from the root) → ../target/release/bundle/
+cd .. && make test                  # the core, terminal and bindings tests
 ```
+
+The desktop crate is a member of the root workspace, so its build output is the root `target/`, not `src-tauri/target/`. The front end has no build step.
 
 `../core/src/journal.rs` is the format and the store; `../core/src/extras.rs` is templates, media, cleanup, backup, imports and tag review; `src-tauri/src/lib.rs` the commands and file watcher; `src/app.js` + `style.css` the UI.

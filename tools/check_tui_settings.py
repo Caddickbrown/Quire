@@ -1,14 +1,20 @@
 """Integration check: automatic backup, retention and keyboard settings in a PTY.
 Run after cargo build -p quire-tui: python3 -I tools/check_tui_settings.py target/debug/quire
-Uses only temporary journal, backup and configuration directories, on Linux only:
-elsewhere the app ignores XDG_CONFIG_HOME and would read and write the real
-settings file, so this refuses to run. Its version check still expects 0.7.0.
+Uses only temporary journal, backup and configuration directories. The app is
+pointed at them three ways, because no one of them is enough everywhere:
+QUIRE_CONFIG_DIR (the folder Quire reads settings.json from when it is set),
+XDG_CONFIG_HOME (Linux only; macOS ignores it) and HOME (a Mac's
+~/Library/Application Support, jnl's config, ~/notes). A binary from before
+QUIRE_CONFIG_DIR existed fails the first check on a Mac instead of reaching the
+real settings. The version it looks for is the workspace's, from Cargo.toml.
+Run by hand, not by make; the keys it sends were last checked against 0.7.
 """
 import fcntl
 import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import signal
 import struct
@@ -17,10 +23,9 @@ import tempfile
 import termios
 import time
 
-if sys.platform != "linux":
-    sys.exit("check_tui_settings.py runs on Linux only: see the note at the top.")
-
 binary = str(Path(sys.argv[1]).resolve())
+cargo = (Path(__file__).resolve().parent.parent / "Cargo.toml").read_text()
+version = re.search(r'(?ms)^\[workspace\.package\].*?^version = "([^"]+)"', cargo).group(1)
 with tempfile.TemporaryDirectory(prefix="quire-settings-check-") as scratch:
     root = Path(scratch)
     journal = root / "notes"
@@ -36,7 +41,8 @@ with tempfile.TemporaryDirectory(prefix="quire-settings-check-") as scratch:
     config.write_text(json.dumps({"backup_dir": str(backups), "backup_interval": "daily", "backup_keep": 2}))
     pid, fd = pty.fork()
     if pid == 0:
-        os.environ.update(TERM="xterm-256color", XDG_CONFIG_HOME=str(root / "config"))
+        os.environ.update(TERM="xterm-256color", HOME=str(root), XDG_CONFIG_HOME=str(root / "config"),
+                          QUIRE_CONFIG_DIR=str(config.parent))
         os.execv(binary, [binary, "--folder", str(journal)])
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
     output = bytearray()
@@ -75,7 +81,7 @@ with tempfile.TemporaryDirectory(prefix="quire-settings-check-") as scratch:
         assert json.loads(config.read_text())["backup_keep"] == 3, "retention increase"
         send("\x1b[D")
         assert json.loads(config.read_text())["backup_keep"] == 2, "retention decrease"
-        assert b"Quire 0.7.0" in output, "version display"
+        assert ("Quire " + version).encode() in output, "version display"
         send("\x03")
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:

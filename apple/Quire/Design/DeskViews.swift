@@ -114,31 +114,40 @@ struct ExternalDisplayRoot: View {
         if settings.isOpen {
             return [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Change"), .init(key: ",", label: "Close"), .init(key: "⎋", label: "Close"), menu]
         }
-        let common: [ShortcutHint] = [.init(key: "⌥⌘±", label: "Size"), .init(key: "⌥⌘T", label: "Theme"), .init(key: "⌥⌘P", label: "Pause")]
+        let common: [ShortcutHint] = [.init(key: "⌥⌘±", label: "Size"), .init(key: "⌥⌘T", label: "Theme"), .init(key: "⌥⌘P", label: "Pause"),
+                                      .init(key: "⌥⌘H", label: "Hints")]
+        // `r` picks from what is filed: with nothing filed it does nothing, so
+        // it isn't listed (the Inbox's own `r`, a random draft, is its list's).
+        let random: [ShortcutHint] = (model.store?.archiveEntries.isEmpty ?? true) ? [] : [.init(key: "r", label: "Random")]
         // The root's letters work from lists and open entries too.
         let go = ShortcutHint(key: "n i l /", label: "New Inbox Look Search")
         switch model.content {
         case .idle:
-            return [.init(key: "n", label: "New"), .init(key: "↩", label: "Write"), .init(key: "i", label: "Inbox"), .init(key: "j", label: "Journal"),
-                    .init(key: "l", label: "Look back"), .init(key: "/", label: "Search"), .init(key: "r", label: "Random"),
-                    .init(key: "p", label: "Prompt"), .init(key: ",", label: "Settings"), .init(key: "?", label: "Hints"), menu]
+            // ↑/↓ from here go to the Journal's first or last entry.
+            let first: [ShortcutHint] = [.init(key: "n", label: "New"), .init(key: "↩", label: "Write"), .init(key: "↑↓", label: "Journal"),
+                                         .init(key: "i", label: "Inbox"), .init(key: "j", label: "Journal"),
+                                         .init(key: "l", label: "Look back"), .init(key: "/", label: "Search")]
+            let rest: [ShortcutHint] = [.init(key: "p", label: "Prompt"), .init(key: ",", label: "Settings"), .init(key: "?", label: "Hints"), menu]
+            return first + random + rest
         case .browsing(let listTitle, let rows, _, _, _):
             // An empty list has nothing for the row keys to act on.
             if rows.isEmpty, listTitle != "Search" {
-                return [DeskEscape.list.hint, .init(key: "r", label: "Random"), go, .init(key: ",", label: "Settings"), menu]
+                let rest: [ShortcutHint] = [go, .init(key: ",", label: "Settings"), menu]
+                return [DeskEscape.list.hint] + random + rest
             }
             // Esc goes home from any list; Search is a sheet, so it closes that first.
             let base: [ShortcutHint] = [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Open"),
                                         (listTitle == "Search" ? DeskEscape.sheet : DeskEscape.list).hint]
-            let random = ShortcutHint(key: "r", label: "Random")
             switch listTitle {
             case "Inbox":
                 // A random draft, as the Inbox's own Random does.
-                return base + [random, .init(key: "f", label: "File"), .init(key: "e", label: "Edit"), .init(key: "*", label: "Star"),
+                let keys: [ShortcutHint] = [.init(key: "r", label: "Random"), .init(key: "f", label: "File"), .init(key: "e", label: "Edit"), .init(key: "*", label: "Star"),
                                .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), go, .init(key: ",", label: "Settings"), menu]
+                return base + keys
             case "Journal":
-                return base + [random, .init(key: "e", label: "Edit"), .init(key: "u", label: "Inbox"), .init(key: "*", label: "Star"),
+                let keys: [ShortcutHint] = [.init(key: "e", label: "Edit"), .init(key: "u", label: "Inbox"), .init(key: "*", label: "Star"),
                                .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), go, .init(key: ",", label: "Settings"), menu]
+                return base + random + keys
             case "Search":
                 // The search sheet keeps the app's letters away (they type).
                 if model.search?.typing ?? true {
@@ -146,7 +155,8 @@ struct ExternalDisplayRoot: View {
                 }
                 return base + [.init(key: "/", label: "Query"), menu]
             default:
-                return base + [random, go, .init(key: ",", label: "Settings"), menu]
+                let keys: [ShortcutHint] = [go, .init(key: ",", label: "Settings"), menu]
+                return base + random + keys
             }
         case .composing:
             // No `?` or `,` here: with the editor focused they type.
@@ -159,10 +169,11 @@ struct ExternalDisplayRoot: View {
                 (isDraft ? [.init(key: "^D", label: "Discard")] : []) + [.init(key: "⎋", label: "Back"), menu]
         case .reading(_, _, _, _, let isDraft):
             let move: ShortcutHint = isDraft ? .init(key: "f", label: "File") : .init(key: "u", label: "Inbox")
-            return [.init(key: "↑↓", label: "Scroll"), .init(key: "e", label: "Edit"), .init(key: "r", label: "Random"),
-                    move, .init(key: "*", label: "Star"),
+            let first: [ShortcutHint] = [.init(key: "↑↓", label: "Scroll"), .init(key: "e", label: "Edit")]
+            let rest: [ShortcutHint] = [move, .init(key: "*", label: "Star"),
                     .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), DeskEscape.entry.hint, go,
-                    .init(key: ",", label: "Settings"), menu] + common
+                    .init(key: ",", label: "Settings"), menu]
+            return first + random + rest + common
         }
     }
 }

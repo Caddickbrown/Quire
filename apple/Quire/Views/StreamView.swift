@@ -404,7 +404,7 @@ private struct StreamRow: View {
                     // Full text — the stream never truncates. Images come through
                     // the thumbnail cache so scrolling the corpus doesn't decode
                     // every photo at full resolution.
-                    MediaBody(text: entry.body,
+                    MediaBody(text: entry.shownBody,
                               font: font,
                               textColor: Theme.bodyText(colorScheme),
                               contentPadding: 0,
@@ -542,7 +542,7 @@ private struct StreamEditor: View {
         self.item = item
         self.onDone = onDone
         _title = State(initialValue: item.entry.suffix)
-        _text = State(initialValue: item.entry.body)
+        _text = State(initialValue: item.entry.shownBody)
         // Baseline from the composed text, not the file's raw: a non-canonical
         // entry shouldn't read as dirty (and be rewritten) just by being opened.
         _baselineRaw = State(initialValue: JournalStore.makeEntry(
@@ -652,7 +652,9 @@ private struct StreamEditor: View {
         // Only a write that happened moves the baseline, or the row would go
         // clean with nothing on disk and never retry.
         guard saved else { return }
-        current = JournalParser.parseEntries(raw).first ?? current
+        // The store's own reference for what it wrote: a freshly parsed entry has
+        // no file or index, and every later save of this row would be refused.
+        current = store.writtenEntry(fallback: current)
         baselineRaw = raw
         pendingReindex = !reindex
     }

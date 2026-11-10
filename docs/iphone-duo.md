@@ -11,13 +11,15 @@ tab bar, the reader and composer pushed over the list.
 
 ## Open (≈ 890 × 626 pt, regular × regular, landscape)
 
-The iPad layout from `claude/ipad-layout`: the narrow leading sidebar (folds to
+The iPad layout (built on the `claude/ipad-layout` branch, on `main` since): the narrow leading sidebar (folds to
 a strip with the sidebar button or ⌃⌘S, remembered) replaces the tab bar, and an
 entry opens beside the list once there is room. Fold and unfold resize the same
 window, so the selection, scroll position and an open draft carry across. The
 system status area sits on the right edge; Quire adds no right-hand rail.
 
-## What this branch does
+## What the code does
+
+This began as the notes of the `claude/iphone-duo` branch; the work is on `main`.
 
 - Shell chosen by size class, not `userInterfaceIdiom` (`AppRoot`, `PhoneRoot`).
 - List + reader side by side at regular width; the sidebar in place of tabs.

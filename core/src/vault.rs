@@ -121,6 +121,7 @@ impl Vault for FsVault {
         match staged {
             Some(tmp) => {
                 tmp.persist(&path).map_err(|e| e.to_string())?;
+                sync_dir(dir);
             }
             None => {
                 self.remove(rel)?;
@@ -136,7 +137,12 @@ impl Vault for FsVault {
         let is_dir = fs::symlink_metadata(&p).map(|m| m.is_dir()).unwrap_or(false);
         let removed = if is_dir { fs::remove_dir(&p) } else { fs::remove_file(&p) };
         match removed {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                if let Some(dir) = p.parent() {
+                    sync_dir(dir);
+                }
+                Ok(true)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(format!("Can't delete {}: {}", p.display(), e)),
         }
@@ -147,7 +153,11 @@ impl Vault for FsVault {
         if let Some(parent) = b.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        fs::rename(&a, &b).map_err(|e| format!("Can't rename {} to {}: {}", a.display(), b.display(), e))
+        fs::rename(&a, &b).map_err(|e| format!("Can't rename {} to {}: {}", a.display(), b.display(), e))?;
+        for dir in [a.parent(), b.parent()].into_iter().flatten() {
+            sync_dir(dir);
+        }
+        Ok(())
     }
 
     fn list(&self, rel: &str) -> Result<Vec<Item>, String> {
@@ -196,7 +206,37 @@ pub fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = path.parent().ok_or("no parent folder")?;
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     staged_temp(path, bytes)?.persist(path).map_err(|e| e.to_string())?;
+    sync_dir(dir);
     Ok(())
+}
+
+/// Flush a folder's own entry table, so a rename or removal in it survives a
+/// crash that follows. Best effort, Unix only: a filesystem that can't sync a
+/// folder (some network mounts) still has the file's own sync.
+pub fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(f) = fs::File::open(dir) {
+        let _ = f.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+/// The permission bits a file written at `path` gets: the ones the file there
+/// already has, so a journal someone made private stays private; for a new
+/// file, what its folder allows (a 0700 folder gives 0600 files, the usual
+/// 0755 gives 0644).
+#[cfg(unix)]
+pub(crate) fn mode_for(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(m) = fs::metadata(path) {
+        if m.is_file() {
+            return m.permissions().mode() & 0o777;
+        }
+    }
+    let folder = path.parent().and_then(|d| fs::metadata(d).ok()).map(|m| m.permissions().mode()).unwrap_or(0o755);
+    // Always readable and writable by the owner; group and other as the folder has them.
+    0o600 | (folder & 0o066)
 }
 
 /// `bytes` in a synced temp file beside `path`, ready to rename over it.
@@ -212,7 +252,7 @@ fn staged_temp(path: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile, Str
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o644));
+        let _ = fs::set_permissions(tmp.path(), fs::Permissions::from_mode(mode_for(path)));
     }
     Ok(tmp)
 }
@@ -222,16 +262,16 @@ fn staged_temp(path: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile, Str
 /// It locks the folder itself: no lock file lands in the journal, so the format
 /// and what syncs are unchanged. Best effort: a filesystem without locks (some
 /// network mounts) still gets the compare, just not the exclusion.
-struct FolderLock(#[allow(dead_code)] Option<fs::File>);
+pub(crate) struct FolderLock(#[allow(dead_code)] Option<fs::File>);
 
 impl FolderLock {
     #[cfg(unix)]
-    fn take(dir: &Path) -> FolderLock {
+    pub(crate) fn take(dir: &Path) -> FolderLock {
         // Dropping the file closes it, which releases the lock.
         FolderLock(fs::File::open(dir).ok().filter(|f| f.lock().is_ok()))
     }
     #[cfg(not(unix))]
-    fn take(_dir: &Path) -> FolderLock {
+    pub(crate) fn take(_dir: &Path) -> FolderLock {
         FolderLock(None)
     }
 }
@@ -280,5 +320,30 @@ mod tests {
         assert!(!v.is_file("a/b.md"));
         // A refused swap leaves no temp file behind.
         assert!(v.list("a").unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_keep_a_files_mode_and_follow_the_folder_for_new_ones() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let d = tempfile::tempdir().unwrap();
+        let v = FsVault::new(d.path());
+        fs::create_dir(d.path().join("open")).unwrap();
+        fs::set_permissions(d.path().join("open"), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::create_dir(d.path().join("private")).unwrap();
+        fs::set_permissions(d.path().join("private"), fs::Permissions::from_mode(0o700)).unwrap();
+        v.write("open/a.md", b"one").unwrap();
+        v.write("private/a.md", b"one").unwrap();
+        assert_eq!(mode(&d.path().join("open/a.md")), 0o644);
+        assert_eq!(mode(&d.path().join("private/a.md")), 0o600, "a private folder gets private files");
+        // chmod 600 on a file in an open folder survives every kind of save.
+        fs::set_permissions(d.path().join("open/a.md"), fs::Permissions::from_mode(0o600)).unwrap();
+        v.write("open/a.md", b"two").unwrap();
+        assert_eq!(mode(&d.path().join("open/a.md")), 0o600);
+        assert!(v.replace_if_unchanged("open/a.md", Some(b"two"), Some(b"three")).unwrap());
+        assert_eq!(mode(&d.path().join("open/a.md")), 0o600);
+        write_atomic_bytes(&d.path().join("open/a.md"), b"four").unwrap();
+        assert_eq!(mode(&d.path().join("open/a.md")), 0o600);
     }
 }

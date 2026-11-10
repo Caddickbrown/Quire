@@ -594,18 +594,22 @@ enum QMarkdown {
         return out
     }
 
+    /// An @tag, compiled once: `inline` runs for every paragraph of a page each
+    /// time the page is drawn.
+    private static let tag = try! NSRegularExpression(pattern: "(?<![\\w@])@[\\w][\\w-]*")
+
     static func inline(_ text: String, accent: Color) -> AttributedString {
         var out = (try? AttributedString(
             markdown: text,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        // No @, no tags: most paragraphs.
+        guard text.contains("@") else { return out }
         let plain = String(out.characters)
-        if let regex = try? NSRegularExpression(pattern: "(?<![\\w@])@[\\w][\\w-]*") {
-            for match in regex.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
-                guard let r = Range(match.range, in: plain),
-                      let lower = AttributedString.Index(r.lowerBound, within: out),
-                      let upper = AttributedString.Index(r.upperBound, within: out) else { continue }
-                out[lower..<upper].foregroundColor = accent
-            }
+        for match in tag.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
+            guard let r = Range(match.range, in: plain),
+                  let lower = AttributedString.Index(r.lowerBound, within: out),
+                  let upper = AttributedString.Index(r.upperBound, within: out) else { continue }
+            out[lower..<upper].foregroundColor = accent
         }
         return out
     }

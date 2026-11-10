@@ -22,8 +22,8 @@ from pathlib import Path
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Version numbers, written once and emitted into every target's build settings
-# (app, widget, share extension, test bundle) — bump MARKETING_VERSION here on
-# release, per CHANGELOG.md's "How to update this file".
+# (app, widget, share extension, test bundle). MARKETING_VERSION is read from the
+# workspace's Cargo.toml: `make bump V=x.y.z` sets it there and regenerates this.
 MARKETING_VERSION = re.search(r'^version = "([^"]+)"', (Path(HERE).parent / 'Cargo.toml').read_text(), re.M).group(1)
 CURRENT_PROJECT_VERSION = '1'
 
@@ -159,6 +159,13 @@ test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListCon
                       'EscapeChord', 'OnThisDayYears',
                       'JournalStore', 'CoreJournal', 'AppleVault', 'QuireCore', 'QuireShared', 'Reminders', 'SpotlightIndexer']
 
+# UI tests: iOS only, driving the real app in a simulator (XCUITest). They are
+# not part of the Quire scheme (whose Test action runs hostless on a Mac); the
+# QuireUITests scheme runs them: `make uitest`.
+uitest_swift_files = [
+    ('UEditorUITests', 'UITests/EditorUITests.swift'),
+]
+
 # Allocate ids
 IDs = {k: new_id(k) for k in [
     'project', 'mainGroup', 'quireGroup', 'modelsGroup', 'viewsGroup', 'designGroup',
@@ -184,6 +191,11 @@ IDs = {k: new_id(k) for k in [
     'testsGroup', 'testsTarget', 'testsProduct',
     'testsSources', 'testsFrameworks',
     'testsTargetConfigList', 'testsDebugConfig', 'testsReleaseConfig',
+    # UI tests
+    'uitestsGroup', 'uitestsTarget', 'uitestsProduct',
+    'uitestsSources', 'uitestsFrameworks',
+    'uitestsTargetConfigList', 'uitestsDebugConfig', 'uitestsReleaseConfig',
+    'uitestsDep', 'uitestsProxy',
     # CHANGELOG.md lives at the repo root (not under Quire/), so it gets its own
     # fileRef in the project group and is copied into the app's Resources —
     # the in-app "What's New" screen renders it.
@@ -206,6 +218,9 @@ for name, _ in test_swift_files:
     IDs['bf_' + name] = new_id('bf_' + name)
 for name in test_shared_models:
     IDs['tbf_' + name] = new_id('tbf_' + name)
+for name, _ in uitest_swift_files:
+    IDs[name] = new_id(name)
+    IDs['bf_' + name] = new_id('bf_' + name)
 
 # Truncated uuid5s are unique in practice, but a duplicate would silently
 # produce a corrupt project — cheap to assert.
@@ -251,6 +266,8 @@ def pbxproj():
     for name in test_shared_models:
         fname = next(base(p) for k, p, g in swift_files if k == name)
         a(f'\t\t{IDs["tbf_"+name]} /* {fname} in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs[name]} /* {fname} */; }};')
+    for name, path in uitest_swift_files:
+        a(f'\t\t{IDs["bf_"+name]} /* {base(path)} in Sources */ = {{isa = PBXBuildFile; fileRef = {IDs[name]} /* {base(path)} */; }};')
     a(f'\t\t{IDs["bf_coreFramework"]} /* QuireCoreFFI.xcframework in Frameworks */ = {{isa = PBXBuildFile; fileRef = {IDs["coreFramework"]}; }};')
     a(f'\t\t{IDs["tbf_coreFramework"]} /* QuireCoreFFI.xcframework in Frameworks */ = {{isa = PBXBuildFile; fileRef = {IDs["coreFramework"]}; }};')
     a('/* End PBXBuildFile section */')
@@ -271,6 +288,13 @@ def pbxproj():
     a('\t\t\tproxyType = 1;')
     a(f'\t\t\tremoteGlobalIDString = {IDs["shareTarget"]};')
     a('\t\t\tremoteInfo = QuireShareExtension;')
+    a('\t\t};')
+    a(f'\t\t{IDs["uitestsProxy"]} /* PBXContainerItemProxy */ = {{')
+    a('\t\t\tisa = PBXContainerItemProxy;')
+    a(f'\t\t\tcontainerPortal = {IDs["project"]} /* Project object */;')
+    a('\t\t\tproxyType = 1;')
+    a(f'\t\t\tremoteGlobalIDString = {IDs["target"]};')
+    a('\t\t\tremoteInfo = Quire;')
     a('\t\t};')
     a('/* End PBXContainerItemProxy section */')
     a('')
@@ -320,6 +344,9 @@ def pbxproj():
     for name, path in test_swift_files:
         a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {base(path)}; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["testsProduct"]} /* QuireTests.xctest */ = {{isa = PBXFileReference; explicitFileType = "wrapper.cfbundle"; includeInIndex = 0; path = QuireTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; }};')
+    for name, path in uitest_swift_files:
+        a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {base(path)}; sourceTree = "<group>"; }};')
+    a(f'\t\t{IDs["uitestsProduct"]} /* QuireUITests.xctest */ = {{isa = PBXFileReference; explicitFileType = "wrapper.cfbundle"; includeInIndex = 0; path = QuireUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; }};')
     a(f'\t\t{IDs["coreFramework"]} /* QuireCoreFFI.xcframework */ = {{isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Frameworks/QuireCoreFFI.xcframework; sourceTree = "<group>"; }};')
     a('/* End PBXFileReference section */')
     a('')
@@ -329,7 +356,8 @@ def pbxproj():
     for fid, label in [(IDs["frameworksBuildPhase"], 'Frameworks'),
                        (IDs["widgetFrameworks"], 'Frameworks'),
                        (IDs["shareFrameworks"], 'Frameworks'),
-                       (IDs["testsFrameworks"], 'Frameworks')]:
+                       (IDs["testsFrameworks"], 'Frameworks'),
+                       (IDs["uitestsFrameworks"], 'Frameworks')]:
         a(f'\t\t{fid} /* {label} */ = {{')
         a('\t\t\tisa = PBXFrameworksBuildPhase;')
         a('\t\t\tbuildActionMask = 2147483647;')
@@ -354,6 +382,7 @@ def pbxproj():
     a(f'\t\t\t\t{IDs["widgetGroup"]} /* QuireWidget */,')
     a(f'\t\t\t\t{IDs["shareGroup"]} /* QuireShare */,')
     a(f'\t\t\t\t{IDs["testsGroup"]} /* Tests */,')
+    a(f'\t\t\t\t{IDs["uitestsGroup"]} /* UITests */,')
     a(f'\t\t\t\t{IDs["changelog"]} /* CHANGELOG.md */,')
     a(f'\t\t\t\t{IDs["coreFramework"]} /* QuireCoreFFI.xcframework */,')
     a(f'\t\t\t\t{IDs["productsGroup"]} /* Products */,')
@@ -369,6 +398,7 @@ def pbxproj():
     a(f'\t\t\t\t{IDs["widgetProduct"]} /* QuireWidgetExtension.appex */,')
     a(f'\t\t\t\t{IDs["shareProduct"]} /* QuireShareExtension.appex */,')
     a(f'\t\t\t\t{IDs["testsProduct"]} /* QuireTests.xctest */,')
+    a(f'\t\t\t\t{IDs["uitestsProduct"]} /* QuireUITests.xctest */,')
     a('\t\t\t);')
     a('\t\t\tname = Products;')
     a('\t\t\tsourceTree = "<group>";')
@@ -467,6 +497,17 @@ def pbxproj():
     a('\t\t\tsourceTree = "<group>";')
     a('\t\t};')
 
+    # UITests group
+    a(f'\t\t{IDs["uitestsGroup"]} /* UITests */ = {{')
+    a('\t\t\tisa = PBXGroup;')
+    a('\t\t\tchildren = (')
+    for n, p in uitest_swift_files:
+        a(f'\t\t\t\t{IDs[n]} /* {base(p)} */,')
+    a('\t\t\t);')
+    a('\t\t\tpath = UITests;')
+    a('\t\t\tsourceTree = "<group>";')
+    a('\t\t};')
+
     a('/* End PBXGroup section */')
     a('')
 
@@ -538,6 +579,23 @@ def pbxproj():
     a(f'\t\t\tproductReference = {IDs["testsProduct"]} /* QuireTests.xctest */;')
     a('\t\t\tproductType = "com.apple.product-type.bundle.unit-test";')
     a('\t\t};')
+    # UI-test target (iOS only): launches Quire.app in a simulator and drives it
+    a(f'\t\t{IDs["uitestsTarget"]} /* QuireUITests */ = {{')
+    a('\t\t\tisa = PBXNativeTarget;')
+    a(f'\t\t\tbuildConfigurationList = {IDs["uitestsTargetConfigList"]} /* Build configuration list for PBXNativeTarget "QuireUITests" */;')
+    a('\t\t\tbuildPhases = (')
+    a(f'\t\t\t\t{IDs["uitestsSources"]} /* Sources */,')
+    a(f'\t\t\t\t{IDs["uitestsFrameworks"]} /* Frameworks */,')
+    a('\t\t\t);')
+    a('\t\t\tbuildRules = (\n\t\t\t);')
+    a('\t\t\tdependencies = (')
+    a(f'\t\t\t\t{IDs["uitestsDep"]} /* PBXTargetDependency */,')
+    a('\t\t\t);')
+    a('\t\t\tname = QuireUITests;')
+    a('\t\t\tproductName = QuireUITests;')
+    a(f'\t\t\tproductReference = {IDs["uitestsProduct"]} /* QuireUITests.xctest */;')
+    a('\t\t\tproductType = "com.apple.product-type.bundle.ui-testing";')
+    a('\t\t};')
     a('/* End PBXNativeTarget section */')
     a('')
 
@@ -562,6 +620,10 @@ def pbxproj():
     a(f'\t\t\t\t\t{IDs["testsTarget"]} = {{')
     a('\t\t\t\t\t\tCreatedOnToolsVersion = 16.0;')
     a('\t\t\t\t\t};')
+    a(f'\t\t\t\t\t{IDs["uitestsTarget"]} = {{')
+    a('\t\t\t\t\t\tCreatedOnToolsVersion = 16.0;')
+    a(f'\t\t\t\t\t\tTestTargetID = {IDs["target"]};')
+    a('\t\t\t\t\t};')
     a('\t\t\t\t};')
     a('\t\t\t};')
     a(f'\t\t\tbuildConfigurationList = {IDs["configList"]} /* Build configuration list for PBXProject "Quire" */;')
@@ -578,6 +640,7 @@ def pbxproj():
     a(f'\t\t\t\t{IDs["widgetTarget"]} /* QuireWidgetExtension */,')
     a(f'\t\t\t\t{IDs["shareTarget"]} /* QuireShareExtension */,')
     a(f'\t\t\t\t{IDs["testsTarget"]} /* QuireTests */,')
+    a(f'\t\t\t\t{IDs["uitestsTarget"]} /* QuireUITests */,')
     a('\t\t\t);')
     a('\t\t};')
     a('/* End PBXProject section */')
@@ -654,6 +717,16 @@ def pbxproj():
     a('\t\t\t);')
     a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
     a('\t\t};')
+    # UI-test sources
+    a(f'\t\t{IDs["uitestsSources"]} /* Sources */ = {{')
+    a('\t\t\tisa = PBXSourcesBuildPhase;')
+    a('\t\t\tbuildActionMask = 2147483647;')
+    a('\t\t\tfiles = (')
+    for name, path in uitest_swift_files:
+        a(f'\t\t\t\t{IDs["bf_"+name]} /* {base(path)} in Sources */,')
+    a('\t\t\t);')
+    a('\t\t\trunOnlyForDeploymentPostprocessing = 0;')
+    a('\t\t};')
     a('/* End PBXSourcesBuildPhase section */')
     a('')
 
@@ -668,6 +741,11 @@ def pbxproj():
     a('\t\t\tisa = PBXTargetDependency;')
     a('\t\t\ttarget = ' + IDs["shareTarget"] + ' /* QuireShareExtension */;')
     a(f'\t\t\ttargetProxy = {IDs["shareProxy"]} /* PBXContainerItemProxy */;')
+    a('\t\t};')
+    a(f'\t\t{IDs["uitestsDep"]} /* PBXTargetDependency */ = {{')
+    a('\t\t\tisa = PBXTargetDependency;')
+    a('\t\t\ttarget = ' + IDs["target"] + ' /* Quire */;')
+    a(f'\t\t\ttargetProxy = {IDs["uitestsProxy"]} /* PBXContainerItemProxy */;')
     a('\t\t};')
     a('/* End PBXTargetDependency section */')
     a('')
@@ -898,6 +976,28 @@ def pbxproj():
         a(f'\t\t\tname = {name};')
         a('\t\t};')
 
+    def uitests_config(cfg_id, name):
+        a(f'\t\t{cfg_id} /* {name} */ = {{')
+        a('\t\t\tisa = XCBuildConfiguration;')
+        a('\t\t\tbuildSettings = {')
+        a('\t\t\t\tCODE_SIGN_STYLE = Automatic;')
+        a(f'\t\t\t\tCURRENT_PROJECT_VERSION = {CURRENT_PROJECT_VERSION};')
+        a('\t\t\t\tGENERATE_INFOPLIST_FILE = YES;')
+        a('\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 17.0;')
+        a(f'\t\t\t\tMARKETING_VERSION = {MARKETING_VERSION};')
+        a('\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.caddickbrown.quire.QuireUITests;')
+        a('\t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";')
+        a('\t\t\t\tSDKROOT = iphoneos;')
+        a('\t\t\t\tSUPPORTED_PLATFORMS = "iphoneos iphonesimulator";')
+        a('\t\t\t\tSUPPORTS_MACCATALYST = NO;')
+        a('\t\t\t\tSWIFT_EMIT_LOC_STRINGS = NO;')
+        a('\t\t\t\tSWIFT_VERSION = 5.0;')
+        a('\t\t\t\tTARGETED_DEVICE_FAMILY = "1,2";')
+        a('\t\t\t\tTEST_TARGET_NAME = Quire;')
+        a('\t\t\t};')
+        a(f'\t\t\tname = {name};')
+        a('\t\t};')
+
     project_config(IDs['projDebugConfig'], 'Debug', True)
     project_config(IDs['projReleaseConfig'], 'Release', False)
     target_config(IDs['debugConfig'], 'Debug')
@@ -908,6 +1008,8 @@ def pbxproj():
     share_config(IDs['shareReleaseConfig'], 'Release')
     tests_config(IDs['testsDebugConfig'], 'Debug')
     tests_config(IDs['testsReleaseConfig'], 'Release')
+    uitests_config(IDs['uitestsDebugConfig'], 'Debug')
+    uitests_config(IDs['uitestsReleaseConfig'], 'Release')
     a('/* End XCBuildConfiguration section */')
     a('')
 
@@ -954,6 +1056,15 @@ def pbxproj():
     a('\t\t\tbuildConfigurations = (')
     a(f'\t\t\t\t{IDs["testsDebugConfig"]} /* Debug */,')
     a(f'\t\t\t\t{IDs["testsReleaseConfig"]} /* Release */,')
+    a('\t\t\t);')
+    a('\t\t\tdefaultConfigurationIsVisible = 0;')
+    a('\t\t\tdefaultConfigurationName = Release;')
+    a('\t\t};')
+    a(f'\t\t{IDs["uitestsTargetConfigList"]} /* Build configuration list for PBXNativeTarget "QuireUITests" */ = {{')
+    a('\t\t\tisa = XCConfigurationList;')
+    a('\t\t\tbuildConfigurations = (')
+    a(f'\t\t\t\t{IDs["uitestsDebugConfig"]} /* Debug */,')
+    a(f'\t\t\t\t{IDs["uitestsReleaseConfig"]} /* Release */,')
     a('\t\t\t);')
     a('\t\t\tdefaultConfigurationIsVisible = 0;')
     a('\t\t\tdefaultConfigurationName = Release;')
@@ -1073,6 +1184,65 @@ def app_scheme():
 '''
 
 
+def uitests_scheme():
+    """Shared scheme for the iOS UI tests. Its own scheme, not a testable of
+    the Quire scheme: that one's Test action runs hostless on a Mac, and a UI
+    test bundle there would need a simulator. `make uitest` runs this."""
+    def ref(target, product, name):
+        return f'''<BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "{IDs[target]}"
+               BuildableName = "{product}"
+               BlueprintName = "{name}"
+               ReferencedContainer = "container:Quire.xcodeproj">
+            </BuildableReference>'''
+    app = ref('target', 'Quire.app', 'Quire')
+    tests = ref('uitestsTarget', 'QuireUITests.xctest', 'QuireUITests')
+    return f'''<?xml version="1.0" encoding="UTF-8"?>
+<Scheme LastUpgradeVersion = "{XCODE_STAMP}" version = "1.7">
+   <BuildAction parallelizeBuildables = "YES" buildImplicitDependencies = "YES">
+      <BuildActionEntries>
+         <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "NO" buildForArchiving = "NO" buildForAnalyzing = "NO">
+            {app}
+         </BuildActionEntry>
+         <BuildActionEntry buildForTesting = "YES" buildForRunning = "NO" buildForProfiling = "NO" buildForArchiving = "NO" buildForAnalyzing = "NO">
+            {tests}
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      shouldUseLaunchSchemeArgsEnv = "YES">
+      <Testables>
+         <TestableReference skipped = "NO" parallelizable = "NO">
+            {tests}
+         </TestableReference>
+      </Testables>
+   </TestAction>
+   <LaunchAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      launchStyle = "0"
+      useCustomWorkingDirectory = "NO"
+      ignoresPersistentStateOnLaunch = "NO"
+      debugDocumentVersioning = "YES"
+      debugServiceExtension = "internal"
+      allowLocationSimulation = "YES">
+      <BuildableProductRunnable runnableDebuggingMode = "0">
+         {app}
+      </BuildableProductRunnable>
+   </LaunchAction>
+   <AnalyzeAction buildConfiguration = "Debug">
+   </AnalyzeAction>
+   <ArchiveAction buildConfiguration = "Release" revealArchiveInOrganizer = "YES">
+   </ArchiveAction>
+</Scheme>
+'''
+
+
 def scheme_management():
     """Per-user scheme state (`xcuserdata/`, gitignored). Its job here is
     SuppressBuildableAutocreation: without it Xcode notices the widget target
@@ -1085,11 +1255,18 @@ def scheme_management():
              '\t\t\t<true/>',
              '\t\t\t<key>orderHint</key>',
              '\t\t\t<integer>0</integer>',
+             '\t\t</dict>',
+             '\t\t<key>QuireUITests.xcscheme_^#shared#^_</key>',
+             '\t\t<dict>',
+             '\t\t\t<key>isShown</key>',
+             '\t\t\t<false/>',
+             '\t\t\t<key>orderHint</key>',
+             '\t\t\t<integer>2</integer>',
              '\t\t</dict>']
     # The share extension and test bundle never earn a scheme of their own
     # (tests run through the Quire scheme's Test action); the widget's is
     # opt-in via GENERATE_WIDGET_SCHEME.
-    suppress_targets = [IDs["shareTarget"], IDs["testsTarget"]]
+    suppress_targets = [IDs["shareTarget"], IDs["testsTarget"], IDs["uitestsTarget"]]
     if GENERATE_WIDGET_SCHEME:
         shown += ['\t\t<key>QuireWidgetExtension.xcscheme_^#shared#^_</key>',
                   '\t\t<dict>',
@@ -1202,6 +1379,11 @@ if __name__ == '__main__':
     with open(app_path, 'w') as f:
         f.write(app_scheme())
     print(f'Wrote {app_path}')
+
+    uitests_path = os.path.join(schemes, 'QuireUITests.xcscheme')
+    with open(uitests_path, 'w') as f:
+        f.write(uitests_scheme())
+    print(f'Wrote {uitests_path}')
 
     widget_path = os.path.join(schemes, 'QuireWidgetExtension.xcscheme')
     if GENERATE_WIDGET_SCHEME:

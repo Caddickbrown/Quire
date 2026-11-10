@@ -16,3 +16,5 @@ chrono-tz.workspace = true
 tempfile.workspace = true
 dirs.workspace = true
 image.workspace = true
+# Names are compared composed (NFC): macOS lists a file in the form it was made with.
+unicode-normalization = "0.1"

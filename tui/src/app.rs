@@ -12,7 +12,7 @@ use quire_core::themes;
 use quire_core::*;
 use ratatui::layout::{Position, Rect};
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
@@ -53,23 +53,56 @@ impl Default for Browse {
     }
 }
 
+/// Where an entry is on disk and the text it had there: what every edit of
+/// it presents, so the core acts on that entry or refuses.
+pub type EntryRef = (String, usize, String);
+
+/// An entry as it stood when the composer opened it: what ^D puts back.
+#[derive(Clone)]
+pub struct Opened {
+    pub raw: String,
+    pub ts: String,
+    pub title: String,
+    pub starred: bool,
+    pub body: String,
+}
+
 pub struct Draft {
     pub ed: Editor,
     pub ts: String,
     pub starred: bool,
     /// (file, index, raw) once it is on disk.
-    pub ref_: Option<(String, usize, String)>,
+    pub ref_: Option<EntryRef>,
     /// Editing something already filed (or in a split journal).
     pub filed: bool,
     pub saved_at: Option<String>,
     /// A brand-new draft keeps its timestamp "now" until the first keystroke.
     pub floating: bool,
+    /// Set for an entry that was already on disk when it was opened; `None`
+    /// for a draft started in this session, the only kind ^D deletes.
+    pub opened: Option<Opened>,
+    /// Why the last save was refused, until one works.
+    pub save_error: Option<String>,
+}
+
+/// The entry a question is about: its reference, and a name to ask with.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Target {
+    pub at: EntryRef,
+    pub name: String,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum Confirm {
-    DeleteSelected,
+    /// Delete this entry: the one that was selected when the question was
+    /// asked, whatever is selected when it is answered.
+    DeleteSelected(EntryRef),
+    /// Delete the draft started in this session.
     DiscardDraft,
+    /// Put an existing entry back as it was when the composer opened it.
+    RestoreDraft,
+    /// Leaving an existing entry with nothing left in it: delete it.
+    DeleteEmptied,
     Cleanup,
     FileAll,
     ClearOrphans,
@@ -95,7 +128,9 @@ pub enum Ask {
 }
 
 pub enum Modal {
-    Retime(String),
+    /// The typed date and time, and the entry it is for (`None`: the
+    /// composer's own draft).
+    Retime(String, Option<Target>),
     Confirm { text: String, action: Confirm },
     Input { label: &'static str, value: String, ask: Ask },
     /// Pick a backup to restore: (names newest first, chosen).
@@ -177,11 +212,57 @@ pub struct App {
     /// Where the pointer last was, for highlighting what a click would hit.
     pub hover: Option<(u16, u16)>,
     last_check: Instant,
-    fingerprint: u64,
+    /// `None` until the folder has been read once: the first reading is where
+    /// things stand, not a change to back up.
+    fingerprint: Option<u64>,
+    /// The last strict load's failure, so it is said once and not every check.
+    load_error: Option<String>,
     pub maintenance_running: bool,
     maintenance_result: Option<mpsc::Receiver<Result<String, String>>>,
     backup_schedule: crate::backup::Schedule,
-    backup_result: Option<mpsc::Receiver<Result<String, String>>>,
+    backup_result: Option<mpsc::Receiver<BackupDone>>,
+    /// Why the last backup left every older one in place, for Settings.
+    backup_note: Option<String>,
+    /// This folder is not the settings' own journal: its backups go in a
+    /// folder of their own (`backup_dir_for`) and its last backup is recorded
+    /// under its own key, so two journals never prune each other's.
+    pub keyed_backups: bool,
+    /// Things to say that came before there was a window, or while another
+    /// toast was up: shown one after another.
+    notices: VecDeque<(String, bool)>,
+    /// A quit was refused because the composer couldn't be saved; the next
+    /// Ctrl-C goes anyway.
+    quit_refused: bool,
+    force_quit: bool,
+    /// The user moved the tag popover's selection, so ↵ and ↹ take it even
+    /// when what is typed is already a tag.
+    tag_moved: bool,
+    /// Said on the terminal after the screen is given back.
+    exit_notes: Vec<String>,
+}
+
+/// A finished backup: where it is, and what pruning did after it.
+type BackupDone = Result<(String, Result<Pruned, String>), String>;
+
+/// A staged restore this old belongs to no restore still running.
+const RESTORE_LEFTOVER_AGE: Duration = Duration::from_secs(3600);
+/// Where the last backup of each journal other than the settings' own is
+/// kept in settings.json: `{ "<journal key>": "YYYY-MM-DD HH:MM:SS" }`.
+const LAST_BACKUPS: &str = "last_backups";
+/// The composer needs a title row, a text row and its status lines.
+pub const COMPOSER_MIN_ROWS: u16 = 9;
+pub const COMPOSER_MIN_COLS: u16 = 30;
+
+/// The date, time and title of an entry, to ask about it by name.
+pub fn entry_name(e: &Entry) -> String {
+    let title = if e.title.trim().is_empty() {
+        unguard_body(&e.body).lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string()
+    } else {
+        e.title.trim().to_string()
+    };
+    let short: String = if title.chars().count() > 24 { title.chars().take(23).chain(std::iter::once('…')).collect() } else { title };
+    let when = format!("{} {}", e.date, e.ts.get(11..16).unwrap_or(&e.time));
+    if short.is_empty() { format!("{} (untitled)", when) } else { format!("{} “{}”", when, short) }
 }
 
 pub struct Sel {
@@ -230,21 +311,45 @@ impl App {
             mouse,
             hits: RefCell::new(Vec::new()),
             last_check: Instant::now(),
-            fingerprint: 0,
+            fingerprint: None,
+            load_error: None,
             maintenance_running: false,
             maintenance_result: None,
             backup_schedule: crate::backup::Schedule::default(),
             backup_result: None,
+            backup_note: None,
+            keyed_backups: false,
+            notices: VecDeque::new(),
+            quit_refused: false,
+            force_quit: false,
+            tag_moved: false,
+            exit_notes: Vec::new(),
         };
         a.reload();
         a
     }
 
+    /// Read the journal again. Strictly: a folder that can't be listed or a
+    /// file that can't be read keeps what was shown before and says so,
+    /// rather than drawing a shorter journal as if it were the whole one.
     pub fn reload(&mut self) {
-        self.entries = self.j.load_all();
+        match self.j.try_load_all() {
+            Ok(entries) => {
+                self.entries = entries;
+                self.load_error = None;
+            }
+            Err(e) => {
+                if self.load_error.as_deref() != Some(e.as_str()) {
+                    self.toast(format!("Can't read the whole journal: {}", e), true);
+                }
+                self.load_error = Some(e);
+            }
+        }
         let fingerprint = self.fingerprint_now();
-        if fingerprint != self.fingerprint { self.backup_schedule.changed(Instant::now()); }
-        self.fingerprint = fingerprint;
+        if self.fingerprint.is_some_and(|was| was != fingerprint) {
+            self.backup_schedule.changed(Instant::now());
+        }
+        self.fingerprint = Some(fingerprint);
         self.clamp();
     }
 
@@ -275,6 +380,53 @@ impl App {
 
     pub fn toast(&mut self, msg: String, error: bool) {
         self.toast = Some((msg, Instant::now(), error));
+    }
+
+    /// Say this when the toast is free: now, or after the one that is up.
+    pub fn notice(&mut self, msg: String, error: bool) {
+        self.notices.push_back((msg, error));
+    }
+
+    /// What an interrupted restore left in the journal folder: staged copies
+    /// are swept by the core; folders of what the journal held before are
+    /// only ever reported.
+    pub fn report_restore_leftovers(&mut self) {
+        let Ok(root) = self.j.local() else { return };
+        let left = restore_leftovers(root, RESTORE_LEFTOVER_AGE);
+        if left.old.is_empty() {
+            return;
+        }
+        self.notice("A restore was cut short. What the journal held before it is still in its folder:".into(), true);
+        self.notice(format!("{} — nothing was removed; look inside before you delete it", left.old.join(", ")), true);
+    }
+
+    /// The Inbox and the Journal draw the entries beside the columns only
+    /// when there is room.
+    pub fn browse_wide(&self) -> bool {
+        self.width.saturating_sub(4) >= 96
+    }
+
+    /// Is the entry that `f`, `u` and `*` would act on marked on screen?
+    fn entry_marked(&self) -> bool {
+        self.nav().col == 3 || (self.browse_wide() && self.screen == Screen::Inbox)
+    }
+
+    /// Entry keys act on the marked entry. When none is marked (the entries
+    /// are a column away, or not drawn at all in a narrow window), the key
+    /// goes to the entries instead. True when the entry is marked.
+    fn at_entries(&mut self) -> bool {
+        if self.entry_marked() {
+            return true;
+        }
+        if let Some(e) = self.browse_sel().entry {
+            self.nav_mut().col = 3;
+            self.toast(format!("On {} — press again to act on it", entry_name(&e)), false);
+        }
+        false
+    }
+
+    pub fn composer_fits(&self) -> bool {
+        self.height >= COMPOSER_MIN_ROWS && self.width >= COMPOSER_MIN_COLS
     }
 
     fn push(&mut self, s: Screen) {
@@ -447,7 +599,27 @@ impl App {
         let Some((_, prefix)) = d.ed.tag_prefix() else { return vec![] };
         let p = prefix.to_lowercase();
         let want = format!("@{}", p);
-        self.tag_counts().into_iter().filter(|(t, _)| t.to_lowercase().starts_with(&want) && t.to_lowercase() != want).map(|(t, _)| t).take(5).collect()
+        self.known_tags().into_iter().filter(|(t, _)| t.to_lowercase().starts_with(&want) && t.to_lowercase() != want).map(|(t, _)| t).take(5).collect()
+    }
+
+    /// The tags of every entry but the one in the composer. That one's own
+    /// text is saved as it is typed, so the half-typed `@gar` is on disk a
+    /// moment later: counted, it would be offered back as a tag, and would
+    /// pass for one already complete.
+    fn known_tags(&self) -> Vec<(String, usize)> {
+        stats::count_tags(self.entries.iter().filter(|e| !self.is_draft_ref(e)))
+    }
+
+    /// Will ↵ or ↹ take the popover's tag? Not when what is typed is already
+    /// a tag in its own right (`@run`, with `@running` on offer), unless the
+    /// selection was moved to say so.
+    pub fn tag_accepts(&self) -> bool {
+        if self.tag_moved {
+            return true;
+        }
+        let Some((_, prefix)) = self.draft.as_ref().and_then(|d| d.ed.tag_prefix()) else { return false };
+        let want = format!("@{}", prefix.to_lowercase());
+        !self.known_tags().iter().any(|(t, _)| t.to_lowercase() == want)
     }
 
     pub fn words_today(&self) -> usize {
@@ -478,13 +650,18 @@ impl App {
             ed.col = 0;
         }
         let empty = ed.is_empty();
-        self.draft = Some(Draft { ed, ts: now_local(), starred: false, ref_: None, filed: false, saved_at: None, floating: empty });
+        self.draft = Some(Draft { ed, ts: now_local(), starred: false, ref_: None, filed: false, saved_at: None, floating: empty, opened: None, save_error: None });
         self.focus = false;
+        self.tag_pick = 0;
+        self.tag_moved = false;
         self.push(Screen::Write);
     }
 
     pub fn edit_entry(&mut self, e: &Entry) {
-        let mut ed = Editor::new(&e.title, &e.body);
+        // As written, not as stored: a body line that looks like a header is
+        // kept with a backslash on disk, and the save puts it back.
+        let body = unguard_body(&e.body);
+        let mut ed = Editor::new(&e.title, &body);
         ed.to_end();
         self.draft = Some(Draft {
             ed,
@@ -494,51 +671,234 @@ impl App {
             filed: e.source != "inbox",
             saved_at: None,
             floating: false,
+            opened: Some(Opened { raw: e.raw.clone(), ts: e.ts.clone(), title: e.title.clone(), starred: e.starred, body }),
+            save_error: None,
         });
         self.focus = false;
+        self.tag_pick = 0;
+        self.tag_moved = false;
         self.push(Screen::Write);
     }
 
     /// Write the composer to disk if anything changed. Ok(true) when it did.
+    /// A composer with nothing in it is never written: for a new draft there
+    /// is nothing to keep, and for an entry already on disk it would leave a
+    /// bare `[timestamp]` behind (leaving asks what to do with it instead).
     pub fn save_draft(&mut self) -> Result<bool, String> {
         let Some(d) = self.draft.as_mut() else { return Ok(false) };
         if !d.ed.dirty {
             return Ok(false);
         }
         let (title, body) = (d.ed.title(), d.ed.body());
-        if title.trim().is_empty() && body.trim().is_empty() && !d.starred && d.ref_.is_none() {
+        if title.trim().is_empty() && body.trim().is_empty() {
             return Ok(false);
         }
-        let w = match &d.ref_ {
-            None => self.j.new_draft(&d.ts, &title, d.starred, &body)?,
-            Some((f, i, raw)) => self.j.update_entry(f, *i, raw, &d.ts, &title, d.starred, &body)?,
+        let written = match &d.ref_ {
+            None => self.j.new_draft(&d.ts, &title, d.starred, &body),
+            Some((f, i, raw)) => self.j.update_entry(f, *i, raw, &d.ts, &title, d.starred, &body),
+        };
+        let w = match written {
+            Ok(w) => w,
+            Err(e) => {
+                d.save_error = Some(e.clone());
+                return Err(e);
+            }
         };
         d.ref_ = Some((w.file, w.index, w.raw));
         d.ed.dirty = false;
+        d.save_error = None;
         d.saved_at = Some(stats::now_time());
         self.reload();
         Ok(true)
     }
 
+    /// A refused save, said with the way out when there is one.
+    fn save_refused(&mut self, e: String) {
+        let on_disk = self.draft.as_ref().is_some_and(|d| d.ref_.is_some());
+        self.toast(if on_disk { format!("Not saved. ^k keeps yours as a new draft. ({})", e) } else { format!("Not saved: {}", e) }, true);
+    }
+
+    /// ^K after a refused save: the composer's text becomes a new draft of
+    /// its own in the inbox, and the entry on disk is left as it is. The
+    /// composer carries on with the new draft.
+    fn keep_as_new_draft(&mut self) {
+        let Some(d) = self.draft.as_mut() else { return };
+        if d.save_error.is_none() || d.ref_.is_none() {
+            return self.toast("^k is for a save that was refused: it keeps your text as a new draft".into(), false);
+        }
+        let ts = if check_ts(&d.ts).is_ok() { d.ts.clone() } else { now_local() };
+        match self.j.new_draft(&ts, &d.ed.title(), d.starred, &d.ed.body()) {
+            Ok(w) => {
+                let file = w.file.clone();
+                d.ts = ts;
+                d.ref_ = Some((w.file, w.index, w.raw));
+                d.filed = false;
+                d.opened = None;
+                d.ed.dirty = false;
+                d.save_error = None;
+                d.saved_at = Some(stats::now_time());
+                self.quit_refused = false;
+                self.reload();
+                self.toast(format!("Yours is now a new draft in {}; the other entry is as it was", file), false);
+            }
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    /// The composer's text as a new draft of its own, when it could not be
+    /// saved where it belongs and Quire is closing anyway. If even that
+    /// fails, the text is kept to print once the terminal is given back.
+    fn rescue_draft(&mut self, why: &str) {
+        let Some(d) = self.draft.as_ref() else { return };
+        let (title, body) = (d.ed.title(), d.ed.body());
+        if title.trim().is_empty() && body.trim().is_empty() {
+            return;
+        }
+        let ts = if check_ts(&d.ts).is_ok() { d.ts.clone() } else { now_local() };
+        match self.j.new_draft(&ts, &title, d.starred, &body) {
+            Ok(w) => self.exit_notes.push(format!("  Quire couldn't save what you were writing ({}).\n  It is kept as a new draft in {}.", why, w.file)),
+            Err(e) => {
+                let text = if title.trim().is_empty() { body } else { format!("{}\n\n{}", title.trim(), body) };
+                self.exit_notes.push(format!(
+                    "  Quire couldn't save what you were writing ({}),\n  nor a recovery copy ({}). Here it is:\n\n{}\n",
+                    why, e, text
+                ));
+            }
+        }
+    }
+
+    /// Ctrl-C with the composer open. True when Quire may close: the text is
+    /// saved, or this is the second ask and a recovery copy has been tried.
+    /// A first failure cancels the quit and says why.
+    fn settle_for_quit(&mut self) -> bool {
+        if self.draft.is_none() {
+            return true;
+        }
+        match self.save_draft() {
+            Ok(_) => true,
+            Err(e) if self.force_quit => {
+                self.rescue_draft(&e);
+                true
+            }
+            Err(e) => {
+                self.quit = false;
+                self.quit_refused = true;
+                self.toast(format!("Not saved, so Quire is still open. ^c again quits and keeps your text as a new draft. ({})", e), true);
+                false
+            }
+        }
+    }
+
+    /// The loop stopped on an error: save what is in the composer, or keep it
+    /// as a recovery copy.
+    fn rescue_on_error(&mut self) {
+        if self.draft.is_some() {
+            if let Err(e) = self.save_draft() {
+                self.rescue_draft(&e);
+            }
+        }
+    }
+
     fn leave_write(&mut self) {
+        // Everything was deleted from something that is on disk.
+        if let Some(d) = self.draft.as_ref().filter(|d| d.ed.dirty && d.ed.is_empty()) {
+            match (&d.ref_, &d.opened) {
+                (Some(_), Some(_)) => {
+                    self.modal = Some(Modal::Confirm { text: "This entry is empty now. Delete it? (^d puts it back)".into(), action: Confirm::DeleteEmptied });
+                    return;
+                }
+                (Some((f, i, raw)), None) => {
+                    // A draft from this session, emptied: there is nothing to keep.
+                    return match self.j.delete_entry(f, *i, raw) {
+                        Ok(()) => {
+                            self.close_composer();
+                            self.toast("Empty draft removed".into(), false);
+                        }
+                        Err(e) => self.toast(e, true),
+                    };
+                }
+                _ => {}
+            }
+        }
         match self.save_draft() {
             Ok(_) => {
                 self.draft = None;
                 self.focus = false;
                 self.back();
             }
+            Err(e) => self.save_refused(e),
+        }
+    }
+
+    /// Drop the composer and show what is on disk now.
+    fn close_composer(&mut self) {
+        self.draft = None;
+        self.focus = false;
+        self.reload();
+        self.back();
+    }
+
+    /// ^D. A draft started in this session can be deleted; an entry that was
+    /// already there goes back to how it was when it was opened.
+    fn ask_discard(&mut self) {
+        let Some(d) = self.draft.as_ref() else { return };
+        match (&d.ref_, &d.opened) {
+            (None, _) if d.ed.is_empty() => {
+                self.draft = None;
+                self.focus = false;
+                self.back();
+            }
+            (Some((_, _, raw)), Some(o)) if !d.ed.dirty && *raw == o.raw => {
+                self.draft = None;
+                self.focus = false;
+                self.back();
+                self.toast("Nothing had changed".into(), false);
+            }
+            (Some(_), Some(_)) => {
+                self.modal = Some(Modal::Confirm { text: "Undo this visit's changes? The entry goes back as it was.".into(), action: Confirm::RestoreDraft });
+            }
+            _ => {
+                self.modal = Some(Modal::Confirm { text: "Delete this new draft? Nothing of it is kept.".into(), action: Confirm::DiscardDraft });
+            }
+        }
+    }
+
+    /// The answer to ^D's question, and to leaving an emptied entry.
+    fn discard(&mut self, action: Confirm) {
+        let Some(d) = self.draft.as_ref() else { return };
+        let (done, said) = match (action, &d.ref_, &d.opened) {
+            (Confirm::RestoreDraft, Some((f, i, raw)), Some(o)) => {
+                // Nothing was written this time: the entry is already as it was.
+                let put_back = if *raw == o.raw { Ok(()) } else { self.j.update_entry(f, *i, raw, &o.ts, &o.title, o.starred, &o.body).map(|_| ()) };
+                (put_back.map_err(|e| format!("Couldn't put it back: {}", e)), "Changes undone: the entry is as it was when you opened it")
+            }
+            (Confirm::DeleteEmptied, Some((f, i, raw)), _) => (self.j.delete_entry(f, *i, raw), "Deleted"),
+            (Confirm::DiscardDraft, Some((f, i, raw)), None) => (self.j.delete_entry(f, *i, raw), "Draft deleted"),
+            (Confirm::DiscardDraft, None, _) => (Ok(()), "Draft deleted"),
+            _ => return,
+        };
+        match done {
+            Ok(()) => {
+                self.close_composer();
+                self.toast(said.into(), false);
+            }
+            // Still in the composer, with the text.
             Err(e) => self.toast(e, true),
         }
     }
 
     fn file_from_write(&mut self) {
         if let Err(e) = self.save_draft() {
-            self.toast(e, true);
+            self.save_refused(e);
             return;
         }
         let Some(d) = &self.draft else { return };
         if d.filed {
             self.toast("Already filed — Esc to leave it".into(), false);
+            return;
+        }
+        if d.ed.is_empty() {
+            self.toast("Nothing to file".into(), false);
             return;
         }
         let Some((f, i, raw)) = d.ref_.clone() else {
@@ -584,14 +944,17 @@ impl App {
         }
     }
 
-    fn delete_selected(&mut self) {
-        let Some(e) = self.selected_entry() else { return };
-        match self.j.delete_entry(&e.file, e.index, &e.raw) {
+    /// Delete the entry the question was asked about.
+    fn delete_at(&mut self, at: &EntryRef) {
+        match self.j.delete_entry(&at.0, at.1, &at.2) {
             Ok(()) => {
                 self.reload();
                 self.toast("Deleted".into(), false);
             }
-            Err(err) => self.toast(err, true),
+            Err(err) => {
+                self.reload();
+                self.toast(err, true);
+            }
         }
     }
 
@@ -610,32 +973,45 @@ impl App {
         }
     }
 
-    fn apply_retime(&mut self, value: &str) {
+    /// Apply a typed date and time to `target`, or to the composer's draft.
+    /// False when the value is not a real date and time: the prompt stays.
+    fn apply_retime(&mut self, value: &str, target: Option<&Target>) -> bool {
         let v = value.trim();
         let ts = if v.len() == 16 { format!("{}:00", v) } else { v.to_string() };
-        if check_ts(&ts).is_err() {
+        if check_ts_shape(&ts).is_err() {
             self.toast("Use YYYY-MM-DD HH:MM".into(), true);
-            return;
+            return false;
         }
-        if self.screen == Screen::Write {
+        if check_ts(&ts).is_err() {
+            self.toast(format!("{} is not a real date and time", v), true);
+            return false;
+        }
+        let Some(target) = target else {
             if let Some(d) = self.draft.as_mut() {
                 d.ts = ts;
                 d.floating = false;
                 d.ed.dirty = true;
             }
             if let Err(e) = self.save_draft() {
-                self.toast(e, true);
+                self.save_refused(e);
             }
-            return;
-        }
-        let Some(e) = self.selected_entry() else { return };
-        match self.j.update_entry(&e.file, e.index, &e.raw, &ts, &e.title, e.starred, &e.body) {
+            return true;
+        };
+        // The entry the prompt was opened for, from its own text: whatever is
+        // selected now, and whatever a reload has done to the list.
+        let (f, i, raw) = &target.at;
+        let Some(r) = parse_entries(raw).into_iter().next() else { return true };
+        match self.j.update_entry(f, *i, raw, &ts, &strip_star(&r.suffix), has_star(&r.suffix), &r.body) {
             Ok(w) => {
                 self.reload();
                 self.toast(format!("Moved to {}", w.file), false);
             }
-            Err(err) => self.toast(err, true),
+            Err(err) => {
+                self.reload();
+                self.toast(err, true);
+            }
         }
+        true
     }
 
     pub fn random(&mut self) {
@@ -688,13 +1064,28 @@ impl App {
     pub fn tick(&mut self) {
         self.poll_backup();
         self.poll_maintenance();
-        if !self.maintenance_running && self.backup_result.is_none() && !self.quit && self.backup_schedule.due(&self.settings, Instant::now()) {
+        // A copy taken while words are still landing is a copy of half a
+        // sentence, and its own write would start the next one: wait until
+        // the composer is saved and has been still for a while.
+        let writing = self.draft.as_ref().is_some_and(|d| d.ed.dirty || d.ed.last_edit.elapsed() < crate::backup::QUIET);
+        if !self.maintenance_running && self.backup_result.is_none() && !self.quit && !writing && self.backup_schedule.due(&self.settings, self.last_backup().as_deref(), Instant::now()) {
             self.run_backup();
         }
         if let Some((_, at, err)) = &self.toast {
             if at.elapsed() > Duration::from_millis(if *err { 5000 } else { 3000 }) {
                 self.toast = None;
             }
+        }
+        if self.toast.is_none() {
+            if let Some((msg, error)) = self.notices.pop_front() {
+                self.toast(msg, error);
+            }
+        }
+        // Midnight passes in the composer too: the word count and the goal
+        // are today's.
+        let today = stats::today();
+        if today != self.today {
+            self.today = today;
         }
         if let Some(end) = self.timer_end {
             if Instant::now() >= end {
@@ -709,7 +1100,7 @@ impl App {
         let autosave_due = !self.maintenance_running && self.draft.as_ref().map(|d| d.ed.dirty && d.ed.last_edit.elapsed() > Duration::from_millis(700)).unwrap_or(false);
         if autosave_due {
             if let Err(e) = self.save_draft() {
-                self.toast(e, true);
+                self.save_refused(e);
                 if let Some(d) = self.draft.as_mut() {
                     d.ed.last_edit = Instant::now(); // try again in a while, not every tick
                 }
@@ -717,11 +1108,7 @@ impl App {
         }
         if self.screen != Screen::Write && self.last_check.elapsed() > Duration::from_secs(4) {
             self.last_check = Instant::now();
-            let today = stats::today();
-            if today != self.today {
-                self.today = today;
-            }
-            if self.fingerprint_now() != self.fingerprint {
+            if Some(self.fingerprint_now()) != self.fingerprint {
                 self.reload();
             }
         }
@@ -734,9 +1121,13 @@ impl App {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let alt = k.modifiers.contains(KeyModifiers::ALT);
         if ctrl && k.code == KeyCode::Char('c') {
+            // A quit the composer refused (its save failed) is forced by
+            // asking again; the loop then tries a recovery copy first.
+            self.force_quit = self.quit_refused;
             self.quit = true;
             return;
         }
+        self.quit_refused = false;
         if self.maintenance_running { return; }
         if k.code == KeyCode::F(2) {
             self.toggle_mouse();
@@ -822,7 +1213,7 @@ impl App {
                     self.nav_mut().filter.clear();
                     self.clamp_browse();
                 }
-                KeyCode::Enter => self.nav_mut().filtering = false,
+                KeyCode::Enter => self.keep_filtered(),
                 KeyCode::Backspace => {
                     self.nav_mut().filter.pop();
                     self.clamp_browse();
@@ -869,29 +1260,81 @@ impl App {
                 self.nav_mut().filter.clear();
             }
             KeyCode::Char('s') if !inbox => self.cycle_pick(),
-            KeyCode::Char('u') if !inbox => self.unfile_selected(),
-            KeyCode::Char('f') if inbox => self.file_selected_draft(),
-            KeyCode::Char('e') => {
-                if let Some(e) = self.selected_entry() {
-                    self.edit_entry(&e);
+            // These act at once, so only on an entry that is marked on
+            // screen; from a column away the key goes to the entries first.
+            KeyCode::Char('u') if !inbox => {
+                if self.at_entries() {
+                    self.unfile_selected();
                 }
             }
-            KeyCode::Char('*') => self.toggle_star_selected(),
+            KeyCode::Char('f') if inbox => {
+                if self.at_entries() {
+                    self.file_selected_draft();
+                }
+            }
+            KeyCode::Char('e') => {
+                if self.at_entries() {
+                    if let Some(e) = self.selected_entry() {
+                        self.edit_entry(&e);
+                    }
+                }
+            }
+            KeyCode::Char('*') => {
+                if self.at_entries() {
+                    self.toggle_star_selected();
+                }
+            }
+            // These ask first, and the question names the entry and carries
+            // its reference: it goes to the entries and asks in one press.
             KeyCode::Char('t') => {
                 if let Some(e) = self.selected_entry() {
-                    self.modal = Some(Modal::Retime(e.ts[..16].to_string()));
+                    self.nav_mut().col = 3;
+                    let target = Target { at: (e.file.clone(), e.index, e.raw.clone()), name: entry_name(&e) };
+                    self.modal = Some(Modal::Retime(e.ts[..16].to_string(), Some(target)));
                 }
             }
             KeyCode::Char('d') => {
-                if self.selected_entry().is_some() {
-                    let text = if inbox { "Delete this draft?" } else { "Delete this entry?" };
-                    self.modal = Some(Modal::Confirm { text: text.into(), action: Confirm::DeleteSelected });
+                if let Some(e) = self.selected_entry() {
+                    self.nav_mut().col = 3;
+                    let text = format!("Delete the {} {}?", if e.source == "inbox" { "draft" } else { "entry" }, entry_name(&e));
+                    self.modal = Some(Modal::Confirm { text, action: Confirm::DeleteSelected((e.file.clone(), e.index, e.raw.clone())) });
                 }
             }
             _ => {
                 self.common_nav(&k);
             }
         }
+    }
+
+    /// ↵ in a column filter: the filter goes and the row it had selected
+    /// stays selected, wherever that row is in the whole list.
+    fn keep_filtered(&mut self) {
+        let sel = self.browse_sel();
+        let col = self.nav().col;
+        self.nav_mut().filtering = false;
+        self.nav_mut().filter.clear();
+        let find = |items: Vec<(String, usize)>, key: &Option<String>| key.as_ref().and_then(|k| items.iter().position(|i| i.0 == *k));
+        match col {
+            0 => {
+                if let Some(i) = find(self.browse_years(), &sel.year) {
+                    self.nav_mut().yi = i;
+                }
+            }
+            1 => {
+                if let Some(i) = sel.year.as_deref().and_then(|y| find(self.browse_months(y), &sel.month)) {
+                    self.nav_mut().mi = i;
+                }
+            }
+            2 => {
+                if let (Some(y), Some(m)) = (sel.year.as_deref(), sel.month.as_deref()) {
+                    if let Some(i) = find(self.browse_days(y, m), &sel.date) {
+                        self.nav_mut().di = i;
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.clamp_browse();
     }
 
     fn after_browse_move(&mut self) {
@@ -931,8 +1374,22 @@ impl App {
     }
 
     fn write_key(&mut self, k: KeyEvent, ctrl: bool, alt: bool) {
+        // Too small to draw the text: take nothing that would change it.
+        if !self.composer_fits() {
+            match k.code {
+                KeyCode::Esc => self.leave_write(),
+                KeyCode::Char('s') if ctrl => {
+                    if let Err(e) = self.save_draft() {
+                        self.save_refused(e);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         let width = self.editor_width();
         let suggestions = self.tag_suggestions();
+        let accept = !suggestions.is_empty() && self.tag_accepts();
         let Some(d) = self.draft.as_mut() else { return };
         if d.floating && matches!(k.code, KeyCode::Char(_) | KeyCode::Enter) && !ctrl {
             d.ts = now_local();
@@ -949,12 +1406,13 @@ impl App {
                 KeyCode::Char('s') => match self.save_draft() {
                     Ok(true) => self.toast("Saved".into(), false),
                     Ok(false) => self.toast("Nothing new to save".into(), false),
-                    Err(e) => self.toast(e, true),
+                    Err(e) => self.save_refused(e),
                 },
                 KeyCode::Char('j') => self.file_from_write(),
+                KeyCode::Char('k') => self.keep_as_new_draft(),
                 KeyCode::Char('t') => {
                     let ts = d.ts[..16].to_string();
-                    self.modal = Some(Modal::Retime(ts));
+                    self.modal = Some(Modal::Retime(ts, None));
                 }
                 KeyCode::Char('f') => self.focus = !self.focus,
                 KeyCode::Char('v') => self.paste_clipboard(),
@@ -976,14 +1434,7 @@ impl App {
                 KeyCode::Char('e') => d.ed.end(),
                 KeyCode::Left => d.ed.word_left(),
                 KeyCode::Right => d.ed.word_right(),
-                KeyCode::Char('d') => {
-                    if d.ref_.is_none() && d.ed.is_empty() {
-                        self.draft = None;
-                        self.back();
-                    } else {
-                        self.modal = Some(Modal::Confirm { text: "Discard this draft?".into(), action: Confirm::DiscardDraft });
-                    }
-                }
+                KeyCode::Char('d') => self.ask_discard(),
                 _ => {}
             }
             return;
@@ -1001,14 +1452,16 @@ impl App {
             KeyCode::Esc => {
                 if !suggestions.is_empty() {
                     d.ed.insert_char(' ');
+                    self.tag_moved = false;
                 } else {
                     self.leave_write();
                 }
             }
             KeyCode::Tab => {
-                if let Some(t) = suggestions.get(self.tag_pick.min(suggestions.len().saturating_sub(1))) {
+                if let Some(t) = suggestions.get(self.tag_pick.min(suggestions.len().saturating_sub(1))).filter(|_| accept) {
                     d.ed.accept_tag(t);
                     self.tag_pick = 0;
+                    self.tag_moved = false;
                 } else if d.ed.row > 0 && quire_core::editing::list_continuation(&d.ed.lines[d.ed.row]).is_some() {
                     let col = d.ed.col;
                     d.ed.home();
@@ -1024,9 +1477,10 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                if let Some(t) = suggestions.get(self.tag_pick.min(suggestions.len().saturating_sub(1))) {
+                if let Some(t) = suggestions.get(self.tag_pick.min(suggestions.len().saturating_sub(1))).filter(|_| accept) {
                     d.ed.accept_tag(t);
                     self.tag_pick = 0;
+                    self.tag_moved = false;
                 } else if d.ed.row == 0 {
                     // Leaving the title: into the body, past the blank line.
                     if d.ed.lines.len() == 1 {
@@ -1040,20 +1494,32 @@ impl App {
                     d.ed.newline();
                 }
             }
-            KeyCode::Backspace => d.ed.backspace(),
+            KeyCode::Backspace => {
+                d.ed.backspace();
+                self.tag_moved = false;
+            }
             KeyCode::Delete => d.ed.delete(),
-            KeyCode::Left => d.ed.left(),
-            KeyCode::Right => d.ed.right(),
+            KeyCode::Left => {
+                d.ed.left();
+                self.tag_moved = false;
+            }
+            KeyCode::Right => {
+                d.ed.right();
+                self.tag_moved = false;
+            }
             KeyCode::Up => {
                 if !suggestions.is_empty() {
                     self.tag_pick = self.tag_pick.saturating_sub(1);
+                    self.tag_moved = true;
                 } else {
                     d.ed.up(width);
                 }
             }
             KeyCode::Down => {
                 if !suggestions.is_empty() {
-                    self.tag_pick = (self.tag_pick + 1).min(suggestions.len() - 1);
+                    // The first ↓ takes the row that is shown first.
+                    self.tag_pick = if self.tag_moved || accept { (self.tag_pick + 1).min(suggestions.len() - 1) } else { 0 };
+                    self.tag_moved = true;
                 } else {
                     d.ed.down(width);
                 }
@@ -1073,6 +1539,7 @@ impl App {
             KeyCode::Char(c) => {
                 d.ed.insert_char(c);
                 self.tag_pick = 0;
+                self.tag_moved = false;
             }
             _ => {}
         }
@@ -1143,12 +1610,14 @@ impl App {
     fn modal_key(&mut self, k: KeyEvent) {
         let Some(m) = self.modal.as_mut() else { return };
         match m {
-            Modal::Retime(v) => match k.code {
+            Modal::Retime(v, target) => match k.code {
                 KeyCode::Esc => self.modal = None,
                 KeyCode::Enter => {
-                    let v = v.clone();
-                    self.modal = None;
-                    self.apply_retime(&v);
+                    let (v, target) = (v.clone(), target.clone());
+                    // A date that doesn't exist leaves the prompt up to be put right.
+                    if self.apply_retime(&v, target.as_ref()) {
+                        self.modal = None;
+                    }
                 }
                 KeyCode::Backspace => {
                     v.pop();
@@ -1214,8 +1683,12 @@ impl App {
                                 self.start_maintenance(move |j| merge_ex_split(&j, &tags).and_then(|r| if r.errors.is_empty() { Ok(format!("Merged {} entries from {} journals", r.entries, r.journals)) } else { Err(r.errors.join("; ")) }));
                             }
                             Confirm::CompressMedia => {
+                                // Minted under the settings lock, so two
+                                // windows never give this install two ids.
+                                self.persist(|s| {
+                                    s.ensure_device_id();
+                                });
                                 let (id, _) = self.settings.ensure_device_id();
-                                self.persist(|s| s.device_id = Some(id.clone()));
                                 self.start_maintenance(move |j| {
                                     let r = media::compress_existing(j.local()?, &id, &mut |_, _| {})?;
                                     let message = format!("Compressed {} media; saved {} bytes", r.images + r.videos + r.audio, r.saved_bytes);
@@ -1237,22 +1710,8 @@ impl App {
                                 self.start_maintenance(move |j| import_transfer(&j, &now_local(), &tags).map(|n| format!("Filed {} entries from transfer.md", n)));
                             }
                             Confirm::Restore(name) => self.run_restore(&name),
-                            Confirm::DeleteSelected => self.delete_selected(),
-                            Confirm::DiscardDraft => {
-                                if let Some(d) = self.draft.take() {
-                                    if let Some((f, i, raw)) = d.ref_ {
-                                        if !d.filed {
-                                            if let Err(e) = self.j.delete_entry(&f, i, &raw) {
-                                                self.toast(e, true);
-                                            }
-                                        }
-                                    }
-                                }
-                                self.focus = false;
-                                self.reload();
-                                self.back();
-                                self.toast("Discarded".into(), false);
-                            }
+                            Confirm::DeleteSelected(at) => self.delete_at(&at),
+                            a @ (Confirm::DiscardDraft | Confirm::RestoreDraft | Confirm::DeleteEmptied) => self.discard(a),
                         }
                     }
                     _ => self.modal = None,
@@ -1267,10 +1726,12 @@ impl App {
     /// change the desktop app made meanwhile survives.
     fn persist(&mut self, f: impl Fn(&mut Settings)) {
         f(&mut self.settings);
-        let mut s = Settings::load();
-        f(&mut s);
-        if let Err(e) = s.save() {
-            self.toast(e, true);
+        // Read, changed and written under the settings lock: only this
+        // change goes in, whatever else has been saved since Quire started.
+        match Settings::update(&f) {
+            // What is on disk now, the other shell's changes included.
+            Ok(saved) => self.settings = saved,
+            Err(e) => self.toast(e, true),
         }
     }
 
@@ -1310,7 +1771,10 @@ impl App {
                 "change" => "on change (30s idle)", _ => "off",
             }.into()),
             8 => ("Keep backups", format!("{} copies", self.settings.keep())),
-            9 => ("Back up now", if self.backup_result.is_some() { "running…".into() } else { self.settings.last_backup.as_ref().map(|t| format!("last {}", &t[..t.len().min(16)])).unwrap_or_else(go) }),
+            9 => ("Back up now", if self.backup_result.is_some() { "running…".into() } else {
+                let last = self.last_backup().map(|t| format!("last {}", &t[..t.len().min(16)])).unwrap_or_else(go);
+                match &self.backup_note { Some(note) => format!("{} · {}", last, note), None => last }
+            }),
             10 => ("Restore a backup", go()),
             11 => ("Clean up", go()),
             12 => ("Sort inbox", go()),
@@ -1380,18 +1844,11 @@ impl App {
             9 => self.run_backup(),
             10 => self.open_restore(),
             11 => self.modal = Some(Modal::Confirm { text: "Standardise punctuation, reorder and dedupe every day file?".into(), action: Confirm::Cleanup }),
-            12 => match sort_inbox(&self.j) {
-                Ok(true) => {
-                    self.reload();
-                    self.toast("Inbox sorted by time".into(), false);
-                }
-                Ok(false) => self.toast("Inbox was already in order".into(), false),
-                Err(e) => self.toast(e, true),
-            },
+            12 => self.run_sort_inbox(),
             13 => self.modal = Some(Modal::Confirm { text: "File every draft to its day?".into(), action: Confirm::FileAll }),
             14 => self.modal = Some(Modal::Confirm { text: "Delete media no entry links to?".into(), action: Confirm::ClearOrphans }),
             16 => self.modal = Some(Modal::Confirm { text: "Merge journals whose split tags are no longer configured?".into(), action: Confirm::MergeSplits }),
-            17 => self.modal = Some(Modal::Confirm { text: "Compress existing media and convert HEIC? Originals are replaced; back up first.".into(), action: Confirm::CompressMedia }),
+            17 => self.modal = Some(Modal::Confirm { text: format!("Compress existing media and convert HEIC? Originals are kept {} days.", RECOVERY_DAYS), action: Confirm::CompressMedia }),
             18 => {
                 let groups = tag_review(&self.j);
                 if groups.is_empty() { self.toast("No similar tags found".into(), false); }
@@ -1456,11 +1913,64 @@ impl App {
         }
     }
 
+    /// Where this journal's backups go: the backup folder itself for the
+    /// settings' own journal, a folder of its own inside it for any other.
     fn backup_dir(&mut self) -> Option<PathBuf> {
-        match self.settings.backup_dir.clone() {
-            Some(d) => Some(PathBuf::from(d)),
-            None => {
-                self.toast("Set a backup folder first".into(), true);
+        let Some(dir) = self.settings.backup_dir.clone().map(PathBuf::from) else {
+            self.toast("Set a backup folder first".into(), true);
+            return None;
+        };
+        if !self.keyed_backups {
+            return Some(dir);
+        }
+        match self.j.local() {
+            Ok(root) => Some(backup_dir_for(&dir, root)),
+            Err(e) => {
+                self.toast(e, true);
+                None
+            }
+        }
+    }
+
+    /// When this journal was last backed up. The settings' own journal uses
+    /// `last_backup`, as every version has; another folder has its own time
+    /// under `last_backups.<journal key>`, which older versions carry along
+    /// untouched and the desktop app never reads.
+    pub fn last_backup(&self) -> Option<String> {
+        if !self.keyed_backups {
+            return self.settings.last_backup.clone();
+        }
+        let key = journal_key(self.j.root());
+        self.settings.extra.get(LAST_BACKUPS)?.get(&key)?.as_str().map(str::to_string)
+    }
+
+    fn record_backup(&mut self, when: String) {
+        if !self.keyed_backups {
+            return self.persist(|s| s.last_backup = Some(when.clone()));
+        }
+        let key = journal_key(self.j.root());
+        self.persist(|s| {
+            let all = s.extra.entry(LAST_BACKUPS.to_string()).or_insert_with(|| serde_json::json!({}));
+            if !all.is_object() {
+                *all = serde_json::json!({});
+            }
+            if let Some(map) = all.as_object_mut() {
+                map.insert(key.clone(), serde_json::Value::String(when.clone()));
+            }
+        });
+    }
+
+    /// One at a time with a backup or restore, which copy the folder file by
+    /// file: a job that rewrites day files meanwhile would be half in the copy.
+    fn guard(&mut self) -> Option<BackupGuard> {
+        if self.backup_result.is_some() {
+            self.toast("A backup is running — try again when it has finished".into(), true);
+            return None;
+        }
+        match BackupGuard::acquire() {
+            Ok(g) => Some(g),
+            Err(e) => {
+                self.toast(format!("{} — try again when it has finished", e), true);
                 None
             }
         }
@@ -1480,20 +1990,41 @@ impl App {
         self.backup_schedule.started();
         std::thread::spawn(move || {
             let _guard = guard;
-            let result = backup(&journal, &dir).and_then(|made| prune_backups(&dir, keep).map(|_| made));
+            // The copy is the backup; pruning comes after and is reported apart,
+            // so a prune that fails or holds back never unmakes a good copy.
+            let result: BackupDone = backup(&journal, &dir).map(|made| (made, prune_backups_checked(&dir, keep)));
             let _ = sender.send(result);
         });
     }
 
-    fn backup_finished(&mut self, result: Result<String, String>) {
+    fn backup_finished(&mut self, result: BackupDone) {
         match result {
-            Ok(made) => {
-                let now = now_local();
-                self.persist(|s| s.last_backup = Some(now.clone()));
-                self.toast(format!("Backed up to {}", made), false);
+            Ok((made, pruned)) => {
+                self.backup_schedule.succeeded();
+                self.record_backup(now_local());
+                match pruned {
+                    Ok(Pruned { held: Some(_), .. }) => {
+                        self.backup_note = Some("older backups all kept: the new one is much smaller".into());
+                        self.toast("Backed up, but no older backup was removed: the new one is much smaller than the last".into(), true);
+                        self.notice("Check the journal folder is the right one and complete".into(), true);
+                    }
+                    Ok(_) => {
+                        self.backup_note = None;
+                        self.toast(format!("Backed up to {}", made), false);
+                    }
+                    Err(e) => {
+                        self.backup_note = Some("older backups could not be removed".into());
+                        self.toast(format!("Backed up, but older backups couldn't be removed: {}", e), true);
+                    }
+                }
             }
-            Err(error) => { self.backup_schedule.failed(Instant::now()); self.toast(error, true); }
+            // Each failure in a row waits twice as long before the next try.
+            Err(error) => { self.backup_schedule.failed(Instant::now()); self.toast(format!("Backup failed: {}", error), true); }
         }
+    }
+
+    pub fn backup_running(&self) -> bool {
+        self.backup_result.is_some()
     }
 
     fn poll_backup(&mut self) {
@@ -1554,10 +2085,7 @@ impl App {
 
     fn run_restore(&mut self, name: &str) {
         let Some(dir) = self.backup_dir() else { return };
-        let _g = match BackupGuard::acquire() {
-            Ok(g) => g,
-            Err(e) => return self.toast(e, true),
-        };
+        let Some(_guard) = self.guard() else { return };
         match restore(&self.j, &dir, name) {
             Ok(safety) => {
                 self.draft = None;
@@ -1568,7 +2096,20 @@ impl App {
         }
     }
 
+    fn run_sort_inbox(&mut self) {
+        let Some(_guard) = self.guard() else { return };
+        match sort_inbox(&self.j) {
+            Ok(true) => {
+                self.reload();
+                self.toast("Inbox sorted by time".into(), false);
+            }
+            Ok(false) => self.toast("Inbox was already in order".into(), false),
+            Err(e) => self.toast(e, true),
+        }
+    }
+
     fn run_cleanup(&mut self) {
+        let Some(_guard) = self.guard() else { return };
         match cleanup(&self.j, &self.split_tags) {
             Ok(r) => {
                 self.reload();
@@ -1583,6 +2124,7 @@ impl App {
     }
 
     fn run_file_all(&mut self) {
+        let Some(_guard) = self.guard() else { return };
         match file_all(&self.j, &self.split_tags) {
             Ok(r) => {
                 self.reload();
@@ -1597,6 +2139,7 @@ impl App {
     }
 
     fn run_clear_orphans(&mut self) {
+        let Some(_guard) = self.guard() else { return };
         match delete_orphans(&self.j) {
             Ok(n) => { self.backup_schedule.changed(Instant::now()); self.toast(format!("Removed {} unlinked file(s)", n), false); }
             Err(e) => self.toast(e, true),
@@ -1785,7 +2328,7 @@ impl App {
         let s = s.replace("\r\n", "\n").replace('\r', "\n");
         let line = s.split_whitespace().collect::<Vec<_>>().join(" ");
         match self.modal.as_mut() {
-            Some(Modal::Retime(v)) => {
+            Some(Modal::Retime(v, _)) => {
                 for c in line.chars().filter(|c| c.is_ascii_digit() || matches!(c, '-' | ':' | ' ')) {
                     if v.len() < 19 {
                         v.push(c);
@@ -1801,6 +2344,7 @@ impl App {
             None => {}
         }
         match self.screen {
+            Screen::Write if !self.composer_fits() => {}
             Screen::Write => self.paste_text(&s),
             Screen::Search => {
                 self.query.push_str(&line);
@@ -1826,6 +2370,7 @@ impl App {
         }
         d.ed.insert_str(s);
         self.tag_pick = 0;
+        self.tag_moved = false;
     }
 
     /// ^V in the composer: an image on the clipboard is attached; text is
@@ -1848,14 +2393,21 @@ impl App {
             d.floating = false;
         }
         let ts = d.ts.clone();
-        // Fresh from disk: Data Saver is switched in the desktop app.
-        let mut s = Settings::load();
+        // Fresh from disk: Data Saver is switched in the desktop app. If the
+        // file can't be read just now, what this session started with.
+        let mut s = Settings::try_load().unwrap_or_else(|_| self.settings.clone());
         let device = if s.data_saver {
-            let (id, new) = s.ensure_device_id();
-            if new {
-                let _ = s.save();
+            if s.device_id.is_none() {
+                // Minted and written under the settings lock, so the desktop
+                // app and this one never end up with an id each.
+                match Settings::update(|s| {
+                    s.ensure_device_id();
+                }) {
+                    Ok(saved) => s = saved,
+                    Err(e) => self.toast(e, true),
+                }
             }
-            id
+            s.ensure_device_id().0
         } else {
             String::new()
         };
@@ -1892,7 +2444,8 @@ fn compress_in_background(root: PathBuf, rel: String, device: String) {
         static QUEUE: Mutex<()> = Mutex::new(());
         let _g = QUEUE.lock().unwrap_or_else(|p| p.into_inner());
         let path = root.join(&rel);
-        if let Ok(res) = media::compress_file_in_place(&path) {
+        // The original is parked in the journal's recovery folder first.
+        if let Ok(res) = media::compress_asset(&root, &path) {
             media::record_saving(&root, &device, &path, res.unwrap_or(0));
         }
     });
@@ -1917,56 +2470,498 @@ pub fn run(mut app: App) -> std::io::Result<()> {
         let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
         restore_hook(info);
     }));
-    crossterm::execute!(std::io::stdout(), EnableBracketedPaste)?;
+    if let Err(e) = crossterm::execute!(std::io::stdout(), EnableBracketedPaste) {
+        // The screen was already taken: give it back before saying why.
+        ratatui::restore();
+        return Err(e);
+    }
     let mut mouse_on = false;
-    let result = (|| -> std::io::Result<()> {
-        let mut redraw = true;
-        loop {
-            if app.mouse != mouse_on {
-                set_mouse(app.mouse)?;
-                mouse_on = app.mouse;
-            }
-            if redraw {
-                let size = terminal.size()?;
-                app.width = size.width;
-                app.height = size.height;
-                terminal.draw(|f| crate::ui::draw(f, &mut app))?;
-            }
-            redraw = true;
-            if event::poll(Duration::from_millis(200))? {
-                match event::read()? {
-                    Event::Key(k) => app.handle_key(k),
-                    Event::Paste(s) => app.handle_paste(s),
-                    // Bare movement only matters if it lands on something else clickable.
-                    Event::Mouse(m) if m.kind == MouseEventKind::Moved => {
-                        let before = app.hover.and_then(|(x, y)| app.hit_rect_at(x, y));
-                        app.handle_mouse(m);
-                        redraw = before != app.hit_rect_at(m.column, m.row);
-                    }
-                    Event::Mouse(m) => app.handle_mouse(m),
-                    Event::Resize(w, h) => {
-                        app.width = w;
-                        app.height = h;
-                    }
-                    _ => {}
+    let mut step = |app: &mut App, terminal: &mut ratatui::DefaultTerminal, redraw: &mut bool| -> std::io::Result<bool> {
+        if app.mouse != mouse_on {
+            set_mouse(app.mouse)?;
+            mouse_on = app.mouse;
+        }
+        if *redraw {
+            let size = terminal.size()?;
+            app.width = size.width;
+            app.height = size.height;
+            terminal.draw(|f| crate::ui::draw(f, app))?;
+        }
+        *redraw = true;
+        if event::poll(Duration::from_millis(200))? {
+            match event::read()? {
+                Event::Key(k) => app.handle_key(k),
+                Event::Paste(s) => app.handle_paste(s),
+                // Bare movement only matters if it lands on something else clickable.
+                Event::Mouse(m) if m.kind == MouseEventKind::Moved => {
+                    let before = app.hover.and_then(|(x, y)| app.hit_rect_at(x, y));
+                    app.handle_mouse(m);
+                    *redraw = before != app.hit_rect_at(m.column, m.row);
                 }
-            }
-            app.tick();
-            if app.quit {
-                app.finish_maintenance();
-                if app.draft.is_some() {
-                    if let Err(e) = app.save_draft() {
-                        eprintln!("  {}", e);
-                    }
+                Event::Mouse(m) => app.handle_mouse(m),
+                Event::Resize(w, h) => {
+                    app.width = w;
+                    app.height = h;
                 }
-                break;
+                _ => {}
             }
         }
-        Ok(())
-    })();
+        app.tick();
+        if app.quit {
+            if app.maintenance_running {
+                // The wait below can be long: say what it is for first.
+                app.toast("Finishing the maintenance job before closing…".into(), false);
+                terminal.draw(|f| crate::ui::draw(f, app))?;
+            }
+            app.finish_maintenance();
+            // A save that fails cancels the quit and says why; asked again,
+            // it goes, with the text kept as a new draft.
+            return Ok(app.settle_for_quit());
+        }
+        Ok(false)
+    };
+    let mut redraw = true;
+    let result = loop {
+        match step(&mut app, &mut terminal, &mut redraw) {
+            Ok(false) => {}
+            Ok(true) => break Ok(()),
+            Err(e) => break Err(e),
+        }
+    };
+    if result.is_err() {
+        // The terminal went away under the loop, not the journal: what is in
+        // the composer is saved, or kept as a recovery copy.
+        app.finish_maintenance();
+        app.rescue_on_error();
+    }
+    if app.maintenance_running || app.backup_running() {
+        app.toast(if app.backup_running() { "Finishing the backup before closing…" } else { "Finishing the maintenance job before closing…" }.into(), false);
+        let _ = terminal.draw(|f| crate::ui::draw(f, &mut app));
+    }
     app.finish_maintenance();
     app.finish_backup();
     let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
+    // Only now can anything printed be read.
+    for note in &app.exit_notes {
+        eprintln!("{}", note);
+    }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app_in(dir: &std::path::Path, settings: Settings) -> App {
+        let mut a = App::new(Journal::open(dir), settings, vec![], "almanac");
+        a.width = 80;
+        a.height = 24;
+        a
+    }
+
+    fn press(a: &mut App, code: KeyCode) {
+        a.handle_key(KeyEvent::from(code));
+    }
+
+    fn ctrl(a: &mut App, c: char) {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
+    }
+
+    fn type_in(a: &mut App, s: &str) {
+        for c in s.chars() {
+            press(a, KeyCode::Char(c));
+        }
+    }
+
+    fn inbox_text(a: &App) -> String {
+        a.j.walk_md(INBOX_DIR).iter().map(|f| a.j.read(f)).collect::<Vec<_>>().join("\n")
+    }
+
+    fn confirm_text(a: &App) -> String {
+        match &a.modal {
+            Some(Modal::Confirm { text, .. }) => text.clone(),
+            _ => String::new(),
+        }
+    }
+
+    /// Someone else rewrites the entry the composer has open.
+    fn change_on_disk(a: &App, file: &str, from: &str, to: &str) {
+        let path = a.j.root().join(file);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(from));
+        std::fs::write(&path, text.replace(from, to)).unwrap();
+    }
+
+    /// T1: a quit with a failing save is refused and says so; asked again it
+    /// goes, and the text is in the inbox as a draft of its own.
+    #[test]
+    fn a_failing_save_cancels_the_quit_and_the_second_ask_keeps_a_copy() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        let w = j.new_draft("2026-03-04 10:00:00", "Mine", false, "first words").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        let e = a.entries[0].clone();
+        a.edit_entry(&e);
+        type_in(&mut a, " and more");
+        change_on_disk(&a, &w.file, "first words", "the phone's words");
+        ctrl(&mut a, 'c');
+        assert!(a.quit);
+        assert!(!a.settle_for_quit(), "the save failed, so Quire stays");
+        assert!(!a.quit && a.draft.is_some());
+        let said = a.toast.as_ref().unwrap().0.clone();
+        assert!(said.contains("^c again"), "{said}");
+        assert!(a.exit_notes.is_empty());
+        // Any other key in between means the next ^c is a first ask again.
+        press(&mut a, KeyCode::Char('!'));
+        ctrl(&mut a, 'c');
+        assert!(!a.settle_for_quit());
+        ctrl(&mut a, 'c');
+        assert!(a.settle_for_quit(), "the second ask goes");
+        let inbox = inbox_text(&a);
+        assert!(inbox.contains("the phone's words"), "the other version is untouched: {inbox}");
+        assert!(inbox.contains("first words and more!"), "and mine is a draft of its own: {inbox}");
+        assert!(a.exit_notes[0].contains("kept as a new draft"), "{:?}", a.exit_notes);
+    }
+
+    #[test]
+    fn a_lost_terminal_and_a_folder_that_is_gone_still_hand_back_the_text() {
+        let d = tempfile::tempdir().unwrap();
+        let journal = d.path().join("j");
+        std::fs::create_dir(&journal).unwrap();
+        let mut a = app_in(&journal, Settings::default());
+        a.start_draft("Title", "");
+        type_in(&mut a, " and a thought");
+        // Nowhere to write: a file where the folder was.
+        std::fs::remove_dir_all(&journal).unwrap();
+        std::fs::write(&journal, "not a folder").unwrap();
+        a.rescue_on_error();
+        assert_eq!(a.exit_notes.len(), 1);
+        assert!(a.exit_notes[0].contains("Title and a thought"), "{:?}", a.exit_notes);
+    }
+
+    #[test]
+    fn ctrl_k_keeps_a_refused_save_as_a_new_draft() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        let w = j.new_draft("2026-03-04 10:00:00", "Mine", false, "first words").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        let e = a.entries[0].clone();
+        a.edit_entry(&e);
+        ctrl(&mut a, 'k');
+        assert!(a.toast.as_ref().unwrap().0.contains("refused"), "nothing to keep while saves work");
+        type_in(&mut a, " plus mine");
+        change_on_disk(&a, &w.file, "first words", "theirs");
+        ctrl(&mut a, 's');
+        assert!(a.toast.as_ref().unwrap().0.contains("^k"));
+        ctrl(&mut a, 'k');
+        let inbox = inbox_text(&a);
+        assert!(inbox.contains("theirs") && inbox.contains("first words plus mine"), "{inbox}");
+        let dr = a.draft.as_ref().unwrap();
+        assert!(!dr.ed.dirty && dr.save_error.is_none() && dr.opened.is_none());
+        // The composer now edits the copy: the next save goes through.
+        type_in(&mut a, "!");
+        assert_eq!(a.save_draft(), Ok(true));
+        assert_eq!(a.entries.len(), 2);
+    }
+
+    /// T2: at 80 columns the drafts are a column away and not drawn.
+    #[test]
+    fn entry_keys_go_to_the_entries_before_they_act() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        j.new_draft("2026-03-04 10:00:00", "Hidden", false, "body").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.screen = Screen::Inbox;
+        assert_eq!(a.nav().col, 2);
+        for key in ['f', '*', 'e'] {
+            a.inbox.col = 2;
+            press(&mut a, KeyCode::Char(key));
+            assert_eq!((a.nav().col, a.screen), (3, Screen::Inbox), "{key} only moved");
+            assert_eq!(a.entries.iter().filter(|e| e.source == "inbox" && !e.starred).count(), 1, "{key} changed nothing");
+            assert!(a.toast.as_ref().unwrap().0.contains("“Hidden”"));
+        }
+        press(&mut a, KeyCode::Char('f'));
+        assert!(a.entries.iter().all(|e| e.source == "journal"), "the second press files it");
+        // In the journal the same holds for `u`, wide or narrow.
+        a.screen = Screen::Browse;
+        a.width = 120;
+        a.browse.col = 2;
+        press(&mut a, KeyCode::Char('u'));
+        assert!(a.entries.iter().all(|e| e.source == "journal"));
+        press(&mut a, KeyCode::Char('u'));
+        assert!(a.entries.iter().all(|e| e.source == "inbox"));
+        // A wide inbox marks the selected draft from any column: `f` acts.
+        a.screen = Screen::Inbox;
+        a.inbox.col = 0;
+        press(&mut a, KeyCode::Char('f'));
+        assert!(a.entries.iter().all(|e| e.source == "journal"));
+    }
+
+    /// T3: the answer is about the entry the question named.
+    #[test]
+    fn delete_and_retime_act_on_the_entry_they_asked_about() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        j.new_draft("2026-03-04 10:00:00", "First", false, "a").unwrap();
+        j.new_draft("2026-03-04 11:00:00", "Second", false, "b").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.screen = Screen::Inbox;
+        press(&mut a, KeyCode::Char('d'));
+        assert_eq!(a.nav().col, 3, "the question brings the entries up");
+        assert!(confirm_text(&a).contains("draft 2026-03-04 10:00 “First”"), "{}", confirm_text(&a));
+        // A sync lands behind the question and the selection is elsewhere.
+        j.new_draft("2026-03-04 09:00:00", "Synced in", false, "c").unwrap();
+        a.reload();
+        a.inbox.ei = 2;
+        press(&mut a, KeyCode::Char('y'));
+        let titles: Vec<&str> = a.entries.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(titles, ["Synced in", "Second"]);
+        // Retime: the prompt names it, refuses a date that isn't one, and
+        // moves the entry it was opened for.
+        a.inbox.ei = 1;
+        press(&mut a, KeyCode::Char('t'));
+        let Some(Modal::Retime(v, Some(t))) = a.modal.as_mut() else { panic!("no prompt") };
+        assert!(t.name.contains("“Second”"));
+        *v = "2026-02-31 25:99".into();
+        press(&mut a, KeyCode::Enter);
+        assert!(a.modal.is_some(), "an impossible date keeps the prompt up");
+        assert!(a.toast.as_ref().unwrap().0.contains("not a real date"));
+        let Some(Modal::Retime(v, _)) = a.modal.as_mut() else { panic!("no prompt") };
+        *v = "2026-03-05 08:30".into();
+        a.inbox.ei = 0;
+        press(&mut a, KeyCode::Enter);
+        assert!(a.modal.is_none());
+        let moved = a.entries.iter().find(|e| e.title == "Second").unwrap();
+        assert_eq!((moved.ts.as_str(), moved.file.as_str()), ("2026-03-05 08:30:00", "inbox/2026/03/05.md"));
+        assert_eq!(a.entries.iter().find(|e| e.title == "Synced in").unwrap().ts, "2026-03-04 09:00:00");
+    }
+
+    /// T5.
+    #[test]
+    fn keeping_a_filter_keeps_the_row_it_selected() {
+        let d = tempfile::tempdir().unwrap();
+        for (day, text) in [("2026/01/02", "[2026-01-02 10:00:00] new\nx\n"), ("2023/05/06", "[2023-05-06 10:00:00] old\nx\n"), ("2023/07/08", "[2023-07-08 10:00:00] older\nx\n")] {
+            let p = d.path().join("journal").join(format!("{day}.md"));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        let mut a = app_in(d.path(), Settings::default());
+        a.screen = Screen::Browse;
+        a.browse.col = 0;
+        press(&mut a, KeyCode::Char('/'));
+        type_in(&mut a, "2023");
+        assert_eq!(a.browse_years().len(), 1);
+        press(&mut a, KeyCode::Enter);
+        assert!(!a.nav().filtering);
+        assert_eq!(a.browse_years().len(), 2);
+        assert_eq!(a.browse_sel().year.as_deref(), Some("2023"), "not the first year of the whole list");
+        // The same a column on: May, by name.
+        a.browse.col = 1;
+        press(&mut a, KeyCode::Char('/'));
+        type_in(&mut a, "may");
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.browse_sel().date.as_deref(), Some("2023-05-06"));
+    }
+
+    /// T6, decision D3.
+    #[test]
+    fn discard_undoes_this_visit_and_only_deletes_a_draft_made_in_it() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        let w = j.new_draft("2026-03-04 10:00:00", "Kept", false, "from before").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        let e = a.entries[0].clone();
+        a.edit_entry(&e);
+        ctrl(&mut a, 'd');
+        assert!(a.modal.is_none() && a.draft.is_none(), "nothing changed: nothing to ask");
+        a.edit_entry(&e);
+        type_in(&mut a, " and today's");
+        assert_eq!(a.save_draft(), Ok(true));
+        type_in(&mut a, " and unsaved");
+        ctrl(&mut a, 'd');
+        assert!(confirm_text(&a).starts_with("Undo"), "{}", confirm_text(&a));
+        press(&mut a, KeyCode::Char('y'));
+        assert!(a.draft.is_none());
+        assert_eq!(a.entries.len(), 1);
+        assert_eq!(a.entries[0].raw.trim_end(), w.raw, "as it was when opened");
+        assert!(a.toast.as_ref().unwrap().0.contains("as it was"));
+        // A draft made in this visit is deleted, and asked about as that.
+        a.start_draft("Fresh", "");
+        type_in(&mut a, " words");
+        assert_eq!(a.save_draft(), Ok(true));
+        assert_eq!(a.entries.len(), 2);
+        ctrl(&mut a, 'd');
+        assert!(confirm_text(&a).starts_with("Delete this new draft"), "{}", confirm_text(&a));
+        press(&mut a, KeyCode::Char('n'));
+        assert!(a.draft.is_some() && a.entries.len() == 2, "n keeps it");
+        ctrl(&mut a, 'd');
+        press(&mut a, KeyCode::Char('y'));
+        assert_eq!(a.entries.iter().map(|e| e.title.as_str()).collect::<Vec<_>>(), ["Kept"]);
+    }
+
+    #[test]
+    fn an_emptied_entry_is_never_left_as_a_bare_timestamp() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        let w = j.new_draft("2026-03-04 10:00:00", "Was here", false, "text").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        let empty = |a: &mut App| {
+            let ed = &mut a.draft.as_mut().unwrap().ed;
+            ed.lines = vec![String::new()];
+            ed.row = 0;
+            ed.col = 0;
+            ed.dirty = true;
+        };
+        let e = a.entries[0].clone();
+        a.edit_entry(&e);
+        empty(&mut a);
+        assert_eq!(a.save_draft(), Ok(false), "an autosave writes nothing");
+        assert_eq!(a.j.read(&w.file).trim(), w.raw);
+        press(&mut a, KeyCode::Esc);
+        assert!(confirm_text(&a).contains("empty"), "leaving asks");
+        press(&mut a, KeyCode::Char('n'));
+        assert!(a.draft.is_some() && a.screen == Screen::Write);
+        assert_eq!(a.j.read(&w.file).trim(), w.raw, "and n changes nothing");
+        press(&mut a, KeyCode::Esc);
+        press(&mut a, KeyCode::Char('y'));
+        assert!(a.draft.is_none() && a.entries.is_empty());
+        assert!(a.j.walk_md(INBOX_DIR).is_empty(), "the emptied day file is gone");
+        // A draft from this visit, emptied: removed without a question.
+        a.start_draft("", "");
+        type_in(&mut a, "x");
+        assert_eq!(a.save_draft(), Ok(true));
+        press(&mut a, KeyCode::Backspace);
+        press(&mut a, KeyCode::Esc);
+        assert!(a.modal.is_none() && a.draft.is_none() && a.entries.is_empty());
+        assert!(a.j.walk_md(INBOX_DIR).is_empty());
+    }
+
+    #[test]
+    fn a_complete_tag_is_not_swapped_for_a_longer_one() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        j.new_draft("2026-03-04 10:00:00", "a", false, "@run @running @running").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.start_draft("", "");
+        type_in(&mut a, "@run");
+        assert_eq!(a.tag_suggestions(), ["@running"]);
+        assert!(!a.tag_accepts());
+        press(&mut a, KeyCode::Tab);
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.draft.as_ref().unwrap().ed.lines[0], "@run", "↹ and ↵ left it alone");
+        // Asked for with ↓, it is taken.
+        a.start_draft("", "");
+        type_in(&mut a, "@run");
+        press(&mut a, KeyCode::Down);
+        assert!(a.tag_accepts());
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.draft.as_ref().unwrap().ed.lines[0], "@running ");
+        // A prefix that is not itself a tag completes as before.
+        a.start_draft("", "");
+        type_in(&mut a, "@runn");
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.draft.as_ref().unwrap().ed.lines[0], "@running ");
+        // And still does once the autosave has put the half-typed tag on
+        // disk: the composer's own entry is not where tags are looked up.
+        a.start_draft("", "");
+        type_in(&mut a, "x @runn");
+        assert_eq!(a.save_draft(), Ok(true));
+        assert!(a.tag_accepts() && a.tag_suggestions() == ["@running"]);
+        press(&mut a, KeyCode::Tab);
+        assert_eq!(a.draft.as_ref().unwrap().ed.lines[0], "x @running ");
+    }
+
+    #[test]
+    fn a_guarded_line_is_edited_as_written_and_saved_as_stored() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        let w = j.new_draft("2026-03-04 10:00:00", "Quote", false, "said:\n[2026-10-01 09:00:00] note").unwrap();
+        assert!(w.raw.contains("\\[2026-10-01"));
+        let mut a = app_in(d.path(), Settings::default());
+        let e = a.entries[0].clone();
+        a.edit_entry(&e);
+        assert_eq!(a.draft.as_ref().unwrap().ed.body(), "said:\n[2026-10-01 09:00:00] note");
+        type_in(&mut a, "d");
+        assert_eq!(a.save_draft(), Ok(true), "the reference still matches what is on disk");
+        assert_eq!(a.entries.len(), 1);
+        assert_eq!(a.entries[0].raw.trim_end(), format!("{}d", w.raw));
+    }
+
+    /// B4: opening a journal is not a change to it.
+    #[test]
+    fn the_first_reading_of_the_folder_is_not_a_change_to_back_up() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        j.new_draft("2026-03-04 10:00:00", "a", false, "b").unwrap();
+        let settings = Settings { backup_dir: Some("/nowhere".into()), backup_interval: Some("change".into()), ..Settings::default() };
+        let mut a = app_in(d.path(), settings);
+        let later = Instant::now() + Duration::from_secs(120);
+        assert!(!a.backup_schedule.due(&a.settings, None, later), "a read-only session makes no backup");
+        a.reload();
+        assert!(!a.backup_schedule.due(&a.settings, None, later));
+        j.new_draft("2026-03-04 11:00:00", "c", false, "d").unwrap();
+        a.reload();
+        assert!(a.backup_schedule.due(&a.settings, None, later), "a change does");
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_read_keeps_what_was_shown() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        let w = j.new_draft("2026-03-04 10:00:00", "a", false, "b").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        assert_eq!(a.entries.len(), 1);
+        std::fs::write(d.path().join(&w.file), [0xff, 0xfe, 0x00, 0xc3]).unwrap();
+        a.reload();
+        assert_eq!(a.entries.len(), 1, "not an empty journal");
+        assert!(a.toast.as_ref().unwrap().0.contains("Can't read"));
+    }
+
+    #[test]
+    fn a_small_window_takes_no_typing_it_cannot_show() {
+        let d = tempfile::tempdir().unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.start_draft("", "");
+        a.height = COMPOSER_MIN_ROWS - 1;
+        type_in(&mut a, "lost?");
+        a.handle_paste("pasted".into());
+        assert!(a.draft.as_ref().unwrap().ed.is_empty());
+        a.height = COMPOSER_MIN_ROWS;
+        type_in(&mut a, "seen");
+        assert_eq!(a.draft.as_ref().unwrap().ed.lines[0], "seen");
+        a.height = COMPOSER_MIN_ROWS - 1;
+        press(&mut a, KeyCode::Esc);
+        assert!(a.draft.is_none() && a.entries.len() == 1, "esc still saves and leaves");
+    }
+
+    /// B4: a journal opened with --folder keeps its own backup folder and
+    /// its own "last backup", and never touches the settings' journal's.
+    #[test]
+    fn another_journal_has_its_own_backup_folder_and_time() {
+        static CONFIG: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+        let config = CONFIG.get_or_init(|| {
+            let dir = tempfile::tempdir().unwrap();
+            // Never the real settings, however the tests were started.
+            std::env::set_var(CONFIG_DIR_ENV, dir.path());
+            dir
+        });
+        let d = tempfile::tempdir().unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let settings = Settings { backup_dir: Some(backups.path().display().to_string()), last_backup: Some("2026-01-01 00:00:00".into()), ..Settings::default() };
+        std::fs::write(config.path().join("settings.json"), serde_json::to_string(&settings).unwrap()).unwrap();
+        let mut a = app_in(d.path(), settings);
+        assert_eq!(a.backup_dir().unwrap(), backups.path());
+        assert_eq!(a.last_backup().as_deref(), Some("2026-01-01 00:00:00"));
+        a.keyed_backups = true;
+        let own = a.backup_dir().unwrap();
+        assert_eq!(own.parent().unwrap(), backups.path());
+        assert_eq!(own, backup_dir_for(backups.path(), d.path()));
+        assert_eq!(a.last_backup(), None, "never backed up, whatever the other journal's time says");
+        a.record_backup("2026-03-04 05:06:07".into());
+        assert_eq!(a.last_backup().as_deref(), Some("2026-03-04 05:06:07"));
+        let on_disk = Settings::try_load().unwrap();
+        assert_eq!(on_disk.last_backup.as_deref(), Some("2026-01-01 00:00:00"), "the settings' journal's time is untouched");
+        assert_eq!(on_disk.extra[LAST_BACKUPS][journal_key(d.path())], "2026-03-04 05:06:07");
+    }
 }

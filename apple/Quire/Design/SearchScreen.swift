@@ -18,6 +18,7 @@ struct SearchScreen: View {
     @EnvironmentObject private var nav: NavigationModel
     @Environment(\.quire) private var q
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var onOpen: (EntryRef) -> Void
 
@@ -56,7 +57,7 @@ struct SearchScreen: View {
         }
         .background(q.pageColor.ignoresSafeArea())
         .onChange(of: selectedID) { _, id in
-            if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+            if let id { withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(id, anchor: .center) } }
         }
         .qKeyList(entries: shownResults.map(\.entry), index: $selected, listTitle: "Search", autoSelect: true,
                   onOpen: { entry in if let ref = shownResults.first(where: { $0.entry.id == entry.id }) { onOpen(ref) } },

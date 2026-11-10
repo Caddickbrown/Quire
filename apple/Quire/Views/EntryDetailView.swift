@@ -84,7 +84,7 @@ struct EntryDetailView: View {
         let opened = JournalStore.date(from: entry.ts) ?? Date()
         _title = State(initialValue: entry.suffix)
         _date = State(initialValue: opened)
-        _text = State(initialValue: entry.body)
+        _text = State(initialValue: entry.shownBody)
         // Baseline from what this editor *would* compose, not from the file's
         // raw text: a non-canonical entry (extra blank lines, a hand-edited
         // header) used to read as dirty and be rewritten the moment it opened.
@@ -476,7 +476,7 @@ struct EntryDetailView: View {
         // the lookup key current and leave the fields — and the cursor — alone.
         guard incoming != baselineRaw else { current = e; return }
         title = e.suffix
-        text = e.body
+        text = e.shownBody
         date = opened
         current = e
         baselineRaw = incoming
@@ -594,7 +594,9 @@ struct EntryDetailView: View {
     /// then hand the entry back to the inbox and leave.
     private func returnToInbox() {
         flush()
-        guard store.returnToInbox(currentEntry, source: source) else { return }
+        // `current` is what the flush wrote, with its place in the file; an entry
+        // composed from the fields has none and the store refuses it.
+        guard store.returnToInbox(current, source: currentSource) else { return }
         // A sheet or push closes itself; a side pane (no presentation to
         // dismiss — dismiss() there would pop the enclosing stack) asks its host.
         if let onReturnedToInbox { onReturnedToInbox() } else { dismiss() }

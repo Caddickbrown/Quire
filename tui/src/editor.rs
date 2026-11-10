@@ -4,7 +4,65 @@
 
 use quire_core::editing::{list_continuation, toggle_wrap, word_at, ListStep};
 use std::time::Instant;
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+/// What a tab becomes when it is typed or pasted: a terminal draws no tab, so
+/// one kept in the text would be counted but never seen.
+pub const TAB: &str = "    ";
+
+/// One grapheme cluster of a line: chars `[start, start + len)`, `width`
+/// cells wide. The caret, the wrap and backspace all move a cluster at a
+/// time, so a flag or a family emoji (several code points, two cells) is one
+/// step and the caret stays where the terminal draws it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cluster {
+    pub start: usize,
+    pub len: usize,
+    pub width: usize,
+}
+
+/// The cells a cluster takes, as ratatui draws it. A control character (a tab
+/// already in an entry) is drawn as one space by the composer.
+fn cluster_width(g: &str) -> usize {
+    if g.chars().any(char::is_control) {
+        g.chars().count()
+    } else {
+        g.width()
+    }
+}
+
+pub fn clusters(line: &str) -> Vec<Cluster> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    for g in line.graphemes(true) {
+        let len = g.chars().count();
+        out.push(Cluster { start: at, len, width: cluster_width(g) });
+        at += len;
+    }
+    out
+}
+
+/// Text as the buffer keeps it: LF line ends, a tab as spaces, no other
+/// control characters (they would be counted and never drawn).
+fn clean(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() != Some(&'\n') {
+                    out.push('\n');
+                }
+            }
+            '\n' => out.push('\n'),
+            '\t' => out.push_str(TAB),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
 
 pub struct Editor {
     pub lines: Vec<String>,
@@ -78,6 +136,12 @@ impl Editor {
     }
 
     pub fn insert_char(&mut self, ch: char) {
+        if ch == '\t' {
+            return self.insert_str(TAB);
+        }
+        if ch.is_control() {
+            return;
+        }
         let line = &mut self.lines[self.row];
         let b = Self::byte_at(line, self.col);
         line.insert(b, ch);
@@ -85,14 +149,48 @@ impl Editor {
         self.touched();
     }
 
+    /// Insert text at the caret, a whole line at a time: the caret's line is
+    /// cut once and each pasted line goes in as one piece, so a long paste
+    /// costs its own length and not that times the line's.
     pub fn insert_str(&mut self, s: &str) {
-        for ch in s.chars() {
-            if ch == '\n' {
-                self.split_line();
-            } else {
-                self.insert_char(ch);
-            }
+        let text = clean(s);
+        if text.is_empty() {
+            return;
         }
+        let b = Self::byte_at(&self.lines[self.row], self.col);
+        let tail = self.lines[self.row].split_off(b);
+        let mut parts = text.split('\n');
+        let first = parts.next().unwrap_or("");
+        self.lines[self.row].push_str(first);
+        self.col += first.chars().count();
+        let mut more: Vec<String> = parts.map(str::to_string).collect();
+        match more.last_mut() {
+            Some(last) => {
+                self.col = last.chars().count();
+                last.push_str(&tail);
+                let n = more.len();
+                self.lines.splice(self.row + 1..self.row + 1, more);
+                self.row += n;
+            }
+            None => self.lines[self.row].push_str(&tail),
+        }
+        self.touched();
+    }
+
+    /// The cluster that ends at, or holds, char `col` of the caret's line,
+    /// and the one that starts at (or holds) it.
+    fn cluster_before(&self, col: usize) -> Option<Cluster> {
+        clusters(&self.lines[self.row]).into_iter().rev().find(|c| c.start < col)
+    }
+
+    fn cluster_at(&self, col: usize) -> Option<Cluster> {
+        clusters(&self.lines[self.row]).into_iter().find(|c| c.start + c.len > col)
+    }
+
+    fn remove_chars(&mut self, start: usize, end: usize) {
+        let line = &mut self.lines[self.row];
+        let (a, b) = (Self::byte_at(line, start), Self::byte_at(line, end));
+        line.replace_range(a..b, "");
     }
 
     fn split_line(&mut self) {
@@ -129,11 +227,9 @@ impl Editor {
     }
 
     pub fn backspace(&mut self) {
-        if self.col > 0 {
-            let line = &mut self.lines[self.row];
-            let b = Self::byte_at(line, self.col - 1);
-            line.remove(b);
-            self.col -= 1;
+        if let Some(c) = self.cluster_before(self.col) {
+            self.remove_chars(c.start, self.col);
+            self.col = c.start;
             self.touched();
         } else if self.row > 0 {
             let cur = self.lines.remove(self.row);
@@ -145,10 +241,8 @@ impl Editor {
     }
 
     pub fn delete(&mut self) {
-        if self.col < self.cur_len() {
-            let line = &mut self.lines[self.row];
-            let b = Self::byte_at(line, self.col);
-            line.remove(b);
+        if let Some(c) = self.cluster_at(self.col) {
+            self.remove_chars(self.col, c.start + c.len);
             self.touched();
         } else if self.row + 1 < self.lines.len() {
             let next = self.lines.remove(self.row + 1);
@@ -178,8 +272,8 @@ impl Editor {
     }
 
     pub fn left(&mut self) {
-        if self.col > 0 {
-            self.col -= 1;
+        if let Some(c) = self.cluster_before(self.col) {
+            self.col = c.start;
         } else if self.row > 0 {
             self.row -= 1;
             self.col = self.cur_len();
@@ -188,8 +282,8 @@ impl Editor {
     }
 
     pub fn right(&mut self) {
-        if self.col < self.cur_len() {
-            self.col += 1;
+        if let Some(c) = self.cluster_at(self.col) {
+            self.col = c.start + c.len;
         } else if self.row + 1 < self.lines.len() {
             self.row += 1;
             self.col = 0;
@@ -265,35 +359,44 @@ impl Editor {
             return;
         }
         let r = rows[j as usize];
+        let last = self.is_last_segment(&rows, &r);
         self.row = r.row;
-        self.col = (r.start + want).min(r.end);
-        if r.end < self.lines[r.row].chars().count() && self.col == r.end && self.col > r.start {
-            // Not past the trailing space of a wrapped row.
-            self.col = r.end;
-        }
+        self.col = self.col_at(&r, want, last);
         self.want_col = Some(want);
+    }
+
+    /// The char `dx` cells into visual row `r`, walking cluster widths (a
+    /// wide character is two cells and one step). On a row that wraps on, the
+    /// row's end belongs to the row below, so the caret stops before the
+    /// row's last cluster (its trailing space) instead.
+    fn col_at(&self, r: &VisualRow, dx: usize, last: bool) -> usize {
+        let Some(line) = self.lines.get(r.row) else { return 0 };
+        let in_row: Vec<Cluster> = clusters(line).into_iter().filter(|c| c.start >= r.start && c.start < r.end).collect();
+        let (mut col, mut w) = (r.start, 0);
+        for c in &in_row {
+            if w + c.width > dx {
+                break;
+            }
+            w += c.width;
+            col = c.start + c.len;
+        }
+        if col >= r.end && !last {
+            if let Some(c) = in_row.last() {
+                col = c.start;
+            }
+        }
+        col
     }
 
     /// A click `dx` cells into visual row `r`: the caret goes before the
     /// character there, or to the row's end. `last` says `r` is the line's
     /// last segment; otherwise its end belongs to the row below.
     pub fn place(&mut self, r: VisualRow, dx: usize, last: bool) {
-        let Some(line) = self.lines.get(r.row) else { return };
-        let chars: Vec<char> = line.chars().collect();
-        let (mut col, mut w) = (r.start, 0);
-        while col < r.end.min(chars.len()) {
-            let cw = chars[col].width().unwrap_or(1);
-            if w + cw > dx {
-                break;
-            }
-            w += cw;
-            col += 1;
-        }
-        if col == r.end && !last && r.end > r.start {
-            col = r.end - 1;
+        if self.lines.get(r.row).is_none() {
+            return;
         }
         self.row = r.row;
-        self.col = col;
+        self.col = self.col_at(&r, dx, last);
         self.want_col = None;
     }
 
@@ -389,41 +492,46 @@ impl Editor {
 
     // ----- wrapping -----
 
-    /// Soft-wrap every line to `width` cells, breaking at spaces.
+    /// Soft-wrap every line to `width` cells, breaking at spaces and never
+    /// inside a grapheme cluster.
     pub fn layout(&self, width: usize) -> Vec<VisualRow> {
         let width = width.max(8);
         let mut out = Vec::new();
         for (row, line) in self.lines.iter().enumerate() {
-            let chars: Vec<char> = line.chars().collect();
-            if chars.is_empty() {
+            let cs = clusters(line);
+            if cs.is_empty() {
                 out.push(VisualRow { row, start: 0, end: 0 });
                 continue;
             }
-            let mut start = 0;
-            while start < chars.len() {
+            let total = cs.last().map(|c| c.start + c.len).unwrap_or(0);
+            let spaces: Vec<bool> = line.graphemes(true).map(|g| g == " ").collect();
+            let mut i = 0;
+            while i < cs.len() {
+                let start = cs[i].start;
                 let mut w = 0;
-                let mut end = start;
+                let mut k = i;
                 let mut last_space: Option<usize> = None;
-                while end < chars.len() {
-                    let cw = chars[end].width().unwrap_or(1);
-                    if w + cw > width {
+                while k < cs.len() {
+                    // A cluster wider than the whole row still has to go somewhere.
+                    if w + cs[k].width > width && k > i {
                         break;
                     }
-                    w += cw;
-                    if chars[end] == ' ' {
-                        last_space = Some(end);
+                    w += cs[k].width;
+                    if spaces[k] {
+                        last_space = Some(k);
                     }
-                    end += 1;
+                    k += 1;
                 }
-                if end < chars.len() {
+                if k < cs.len() {
                     if let Some(sp) = last_space {
-                        if sp > start {
-                            end = sp + 1;
+                        if sp > i {
+                            k = sp + 1;
                         }
                     }
                 }
+                let end = cs.get(k).map(|c| c.start).unwrap_or(total);
                 out.push(VisualRow { row, start, end });
-                start = end;
+                i = k;
             }
         }
         out
@@ -440,15 +548,17 @@ impl Editor {
 
     /// The caret's x within its visual row.
     pub fn visual_x(&self, r: &VisualRow) -> usize {
-        self.lines[r.row].chars().skip(r.start).take(self.col.saturating_sub(r.start)).map(|c| c.width().unwrap_or(1)).sum()
+        clusters(&self.lines[r.row]).iter().filter(|c| c.start >= r.start && c.start + c.len <= self.col).map(|c| c.width).sum()
     }
 
     /// Keep the caret on screen: scroll only once it leaves a band near the
     /// top or bottom, then settle it a little above centre.
     pub fn ensure_visible(&mut self, rows: &[VisualRow], height: usize) {
         let Some(i) = self.visual_index(rows) else { return };
-        let height = height.max(3);
-        let band = (height / 5).clamp(1, 4);
+        // The real height, however small: pretending a one-row window has
+        // three leaves the caret on a row that is not drawn.
+        let height = height.max(1);
+        let band = if height < 5 { 0 } else { (height / 5).clamp(1, 4) };
         if i < self.scroll + band || i + band >= self.scroll + height {
             let target = (height as f32 * 0.42) as usize;
             self.scroll = i.saturating_sub(target);
@@ -518,6 +628,101 @@ mod tests {
         assert_eq!((e.row, e.col), (2, 19), "past the last row: the line's end");
         e.place(rows[0], 0, true);
         assert_eq!((e.row, e.col), (0, 0));
+    }
+
+    /// T4: Up onto a wrapped row shorter than the caret's column used to put
+    /// the caret at that row's end, which is the start of the row it came
+    /// from, and every further Up stayed there.
+    #[test]
+    fn up_crosses_a_wrapped_row_shorter_than_the_caret_column() {
+        let mut e = Editor::new("t", "aaaa bb cccccccccc");
+        let rows = e.layout(10);
+        let segs: Vec<String> = rows.iter().map(|r| e.lines[r.row].chars().skip(r.start).take(r.end - r.start).collect()).collect();
+        assert_eq!(segs, vec!["t", "", "aaaa bb ", "cccccccccc"]);
+        e.to_end();
+        e.left(); // nine cells in: past the end of "aaaa bb "
+        assert_eq!((e.row, e.col), (2, 17));
+        e.up(10);
+        assert_eq!((e.row, e.col), (2, 7), "before the wrapped row's trailing space, not at the next row's start");
+        assert_eq!(e.visual_index(&e.layout(10)), Some(2));
+        e.up(10);
+        assert_eq!((e.row, e.col), (1, 0), "and Up keeps going");
+        e.up(10);
+        assert_eq!((e.row, e.col), (0, 1));
+        // Back down: the column it started from is remembered.
+        e.down(10);
+        e.down(10);
+        e.down(10);
+        assert_eq!((e.row, e.col), (2, 17));
+    }
+
+    #[test]
+    fn up_and_down_count_cells_not_chars() {
+        // Row one is five wide characters (ten cells); row two is ASCII.
+        let mut e = Editor::new("", "日本語日本\nabcdefgh");
+        e.row = 3;
+        e.col = 6;
+        e.up(20);
+        assert_eq!((e.row, e.col), (2, 3), "six cells in is three wide characters in");
+        e.down(20);
+        assert_eq!((e.row, e.col), (3, 6));
+    }
+
+    #[test]
+    fn the_caret_and_backspace_move_a_cluster_at_a_time() {
+        let family = "👨\u{200d}👩\u{200d}👧"; // five code points, one cluster, two cells
+        let flag = "🇬🇧"; // two code points
+        let mut e = Editor::new("", &format!("a{family}b{flag}e\u{301}"));
+        e.row = 2;
+        e.col = 0;
+        let stops: Vec<usize> = (0..5).map(|_| { e.right(); e.col }).collect();
+        assert_eq!(stops, vec![1, 6, 7, 9, 11]);
+        let rows = e.layout(40);
+        e.col = 6;
+        assert_eq!(e.visual_x(&rows[2]), 3, "the family is two cells");
+        e.left();
+        assert_eq!(e.col, 1);
+        e.col = 6;
+        e.backspace();
+        assert_eq!(e.lines[2], format!("ab{flag}e\u{301}"));
+        e.delete(); // b
+        e.delete(); // the flag, whole
+        assert_eq!(e.lines[2], "ae\u{301}");
+        // A wrap never lands inside a cluster.
+        let e = Editor::new("", &family.repeat(6));
+        for r in e.layout(8) {
+            assert_eq!(r.start % 5, 0, "{r:?}");
+        }
+    }
+
+    #[test]
+    fn tabs_become_spaces_and_a_paste_goes_in_by_the_line() {
+        let mut e = Editor::new("", "");
+        e.insert_str("Title\n\nhead tail");
+        e.col = 4;
+        e.insert_str("\tone\r\ntwo\rthree\u{7}");
+        assert_eq!(e.lines, vec!["Title", "", "head    one", "two", "three tail"]);
+        assert_eq!((e.row, e.col), (4, 5));
+        e.insert_char('\t');
+        assert_eq!(e.lines[4], "three     tail");
+        assert_eq!(e.col, 9);
+        // A tab already in an entry is one cell, drawn as a space.
+        let mut old = Editor::new("", "a\tb");
+        old.to_end();
+        assert_eq!(old.visual_x(&old.layout(20)[2]), 3);
+        assert!(!old.dirty);
+    }
+
+    #[test]
+    fn a_short_window_keeps_the_caret_on_a_drawn_row() {
+        let mut e = Editor::new("t", "one\ntwo\nthree\nfour");
+        e.to_end();
+        for height in 1..4 {
+            let rows = e.layout(20);
+            e.ensure_visible(&rows, height);
+            let i = e.visual_index(&rows).unwrap();
+            assert!(i >= e.scroll && i < e.scroll + height, "height {height}: row {i}, scroll {}", e.scroll);
+        }
     }
 
     #[test]

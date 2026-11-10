@@ -240,10 +240,10 @@ impl NativeJournal {
         })
     }
     pub fn execute(&self, request: String) -> Result<String> {
-        let _guard = self
-            .gate
-            .lock()
-            .map_err(|_| BridgeError::from("Journal lock poisoned".to_string()))?;
+        // The gate guards nothing but turn-taking, so a request that panicked
+        // while holding it leaves nothing half-done behind it: carry on rather
+        // than refuse every request until the app is restarted.
+        let _guard = self.gate.lock().unwrap_or_else(|e| e.into_inner());
         self.dispatch(serde_json::from_str(&request).map_err(|e| BridgeError::from(e.to_string()))?)
             .map_err(Into::into)
     }
@@ -253,10 +253,11 @@ impl NativeJournal {
         let j = &self.journal;
         // Journal's convenience listing API tolerates unreadable directories.
         // Native snapshots and migrations must fail instead of mistaking an
-        // evicted iCloud folder for an empty one.
+        // evicted iCloud folder for an empty one. `load` and `inbox` are
+        // strict about listings themselves (try_load_all, try_inbox_files), so
+        // the trees are walked once for them, not twice.
         match &request {
-            Request::Load
-            | Request::Conflicts
+            Request::Conflicts
             | Request::Migrate
             | Request::Files
             | Request::FileAll { .. }
@@ -270,7 +271,7 @@ impl NativeJournal {
                     strict_tree(j.vault(), directory)?;
                 }
             }
-            Request::Inbox | Request::Sort => {
+            Request::Sort => {
                 strict_tree(j.vault(), "inbox")?;
             }
             _ => {}
@@ -279,7 +280,7 @@ impl NativeJournal {
             Request::Load => json(j.try_load_all()?),
             Request::Inbox => {
                 let mut entries = Vec::new();
-                for file in j.inbox_files() {
+                for file in j.try_inbox_files()? {
                     entries.extend(j.try_load_file(&file)?);
                 }
                 json(entries)
@@ -340,7 +341,14 @@ impl NativeJournal {
             Request::Files => json(j.entry_files().into_iter().map(|f| f.0).collect::<Vec<_>>()),
             Request::Read { file } => json(j.try_read(&core::check_rel(&file)?)?),
             Request::Write { file, content } => {
-                j.write(&core::check_rel(&file)?, &content)?;
+                // Whole-file writes are for Quire's own sidecar records only.
+                // An entry file is never replaced blind: it goes through
+                // `rewrite` (which checks what is there) or the entry requests.
+                let file = core::check_rel(&file)?;
+                if !file.starts_with(&format!("{}/", core::SIDECAR)) {
+                    return Err(format!("{:?} is not a sidecar file; only {}/ can be written whole", file, core::SIDECAR));
+                }
+                j.write(&file, &content)?;
                 json(true)
             }
             Request::Rewrite {
@@ -385,19 +393,7 @@ impl NativeJournal {
             }
             Request::Orphans => json(core::orphan_media(j)?),
             Request::DeleteOrphans => json(core::delete_orphans(j)?),
-            Request::MergeContent { file, content } => {
-                let file = core::check_entry_rel(&file)?;
-                let raws = core::parse_entries(&content)
-                    .into_iter()
-                    .map(|e| e.raw)
-                    .collect::<Vec<_>>();
-                json(
-                    j.insert_entries(&file, &raws, true)?
-                        .iter()
-                        .filter(|i| i.is_some())
-                        .count(),
-                )
-            }
+            Request::MergeContent { file, content } => json(j.merge_text(&file, &content)?),
         }
     }
 }
@@ -434,6 +430,14 @@ pub fn make_text(ts: String, title: String, body: String) -> String {
         core::has_star(&title),
         &body,
     )
+}
+/// A body as it should be shown or edited: the backslash `make_text` puts in
+/// front of a line that looks like an entry header is taken off again. Saving
+/// the result through `make_text` or an entry request writes back what was
+/// there, so the raw text an edit presents still matches.
+#[uniffi::export]
+pub fn unguard_text(body: String) -> String {
+    core::unguard_body(&body)
 }
 #[uniffi::export]
 pub fn punctuation(text: String) -> String {
@@ -718,5 +722,109 @@ mod tests {
             .len(),
             1
         );
+    }
+    // ----- fixes from the 2026-11-09 review -----
+
+    #[test]
+    fn write_is_for_sidecar_records_only() {
+        let d = tempfile::tempdir().unwrap();
+        let j = journal(&d);
+        let entry = "[2026-10-15 08:00:00] kept\nbody\n";
+        core::FsVault::new(d.path())
+            .write("journal/2026/10/15.md", entry.as_bytes())
+            .unwrap();
+        for file in [
+            "journal/2026/10/15.md",
+            "inbox.md",
+            "transfer.md",
+            ".nook/datasaver-x.json",
+            ".quire",
+            "assets/a.jpg",
+        ] {
+            let e = j
+                .execute(json!({"op":"write","file":file,"content":"gone"}).to_string())
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("not a sidecar file"), "{file}: {e}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("journal/2026/10/15.md")).unwrap(),
+            entry
+        );
+        // What the Swift shell does: ask for the sidecar, write a record into it.
+        let sidecar = call(&j, json!({"op":"sidecar","write":true}));
+        let name = format!("{}/datasaver-phone.json", sidecar.as_str().unwrap());
+        assert_eq!(
+            call(&j, json!({"op":"write","file":name,"content":"{}"})),
+            true
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.path().join(".quire/datasaver-phone.json")).unwrap(),
+            "{}"
+        );
+    }
+
+    #[test]
+    fn merge_content_reads_a_bom_and_crlf_copy_as_the_same_entries() {
+        let d = tempfile::tempdir().unwrap();
+        let j = journal(&d);
+        core::FsVault::new(d.path())
+            .write(
+                "journal/2026/10/15.md",
+                b"[2026-10-15 08:00:00] here\none\ntwo\n",
+            )
+            .unwrap();
+        let copy = "\u{feff}[2026-10-15 08:00:00] here\r\none\r\ntwo\r\n\r\n[2026-10-15 09:00:00] theirs\r\nthree\r\nfour\r\n";
+        let merge =
+            json!({"op":"merge_content","file":"journal/2026/10/15.md","content":copy});
+        assert_eq!(call(&j, merge.clone()), 1);
+        assert_eq!(call(&j, merge), 0);
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("journal/2026/10/15.md")).unwrap(),
+            "[2026-10-15 08:00:00] here\none\ntwo\n\n[2026-10-15 09:00:00] theirs\nthree\nfour\n"
+        );
+    }
+
+    #[test]
+    fn a_request_that_panicked_does_not_lock_the_journal_for_good() {
+        let d = tempfile::tempdir().unwrap();
+        let j = journal(&d);
+        let held = j.clone();
+        let _ = std::thread::spawn(move || {
+            let _gate = held.gate.lock().unwrap();
+            panic!("a request panics while it holds the gate");
+        })
+        .join();
+        assert!(j.gate.is_poisoned());
+        let w = call(
+            &j,
+            json!({"op":"new","ts":"2026-10-15 08:00:00","title":"after","body":"still works"}),
+        );
+        assert_eq!(w["file"], "inbox/2026/10/15.md");
+    }
+
+    #[test]
+    fn inbox_fails_rather_than_come_back_short_and_bodies_unguard() {
+        let d = tempfile::tempdir().unwrap();
+        let fs = core::FsVault::new(d.path());
+        fs.write("inbox/2026/10/15.md", b"[2026-10-15 08:00:00] a\n")
+            .unwrap();
+        let j = NativeJournal::new(Box::new(TestVault {
+            fs,
+            fail_list: true,
+        }));
+        assert!(j
+            .execute(json!({"op":"inbox"}).to_string())
+            .unwrap_err()
+            .to_string()
+            .contains("Cloud folder unavailable"));
+        let stored = make_text(
+            "2026-10-15 08:00:00".into(),
+            "Title".into(),
+            "body\n[2026-10-16 08:00:00] pasted".into(),
+        );
+        let body = core::parse_entries(&stored).remove(0).body;
+        assert_eq!(body, "body\n\\[2026-10-16 08:00:00] pasted");
+        assert_eq!(unguard_text(body), "body\n[2026-10-16 08:00:00] pasted");
     }
 }

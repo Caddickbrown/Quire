@@ -65,6 +65,35 @@ pub fn resolve_folder(opts: &Opts, settings: &Settings) -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join("notes")
 }
 
+/// The journal the settings mean when no `--folder` is given: Quire's own
+/// folder when it has one, else whatever jnl's rules resolve to. Backups of
+/// any other folder are kept apart from this one's.
+fn home_folder(settings: &Settings) -> PathBuf {
+    match &settings.folder {
+        Some(f) if !Settings::is_sample_folder(f) && std::path::Path::new(f).is_dir() => PathBuf::from(f),
+        _ => resolve_folder(&Opts { folder: None, theme: None, args: Vec::new() }, settings),
+    }
+}
+
+fn same_folder(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let real = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    real(a) == real(b)
+}
+
+/// A settings file that was set aside because it didn't parse, when there is
+/// no settings file now: the defaults in use are not the person's choices.
+fn set_aside_settings() -> Option<PathBuf> {
+    let path = Settings::path();
+    if path.exists() {
+        return None;
+    }
+    let mut bad: Vec<PathBuf> = std::fs::read_dir(path.parent()?).ok()?.flatten().map(|e| e.path())
+        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("settings.json.bad-")))
+        .collect();
+    bad.sort();
+    bad.pop()
+}
+
 pub fn run(name: &str) {
     let opts = parse_opts(std::env::args().skip(1).collect());
     if opts.args.iter().any(|a| a == "--version" || a == "-V") {
@@ -75,9 +104,42 @@ pub fn run(name: &str) {
     if opts.args.first().map(|s| s.as_str()) == Some("update") {
         std::process::exit(update::run(&opts.args[1..]));
     }
-    let settings = Settings::load();
+    // Settings that can't be used are never quietly replaced by defaults: the
+    // folder would then be a guess (jnl's config, or a new ~/notes), and the
+    // real journal would look empty or gone.
+    let named = opts.folder.is_some() || std::env::var("JNL_DIR").is_ok_and(|d| !d.trim().is_empty());
+    let mut warning: Option<String> = None;
+    let settings = match Settings::try_load() {
+        Ok(s) => s,
+        Err(e) => {
+            if !named {
+                eprintln!("  {}", e);
+                eprintln!("  Without its settings Quire would be guessing at the journal folder, so it has stopped.");
+                eprintln!("  Put the settings file right, or name the folder: {} --folder PATH", name);
+                std::process::exit(2);
+            }
+            eprintln!("  note: {}", e);
+            warning = Some(e);
+            // Defaults that `save` refuses to write over a file it couldn't read.
+            let s = Settings::load();
+            let _ = Settings::take_load_warning();
+            s
+        }
+    };
+    if warning.is_none() && settings.folder.is_none() {
+        if let Some(bad) = set_aside_settings() {
+            let w = format!("Settings are at their defaults: the last settings file couldn't be read and is kept as {} (delete it once you have what you need from it)", bad.display());
+            eprintln!("  note: {}", w);
+            warning = Some(w);
+        }
+    }
     let folder = resolve_folder(&opts, &settings);
     if !folder.is_dir() {
+        if warning.is_some() && !named {
+            eprintln!("  {} isn't there, and Quire won't start a new journal while its settings are in doubt.", folder.display());
+            eprintln!("  Name the folder: {} --folder PATH", name);
+            std::process::exit(2);
+        }
         if let Err(e) = std::fs::create_dir_all(&folder) {
             eprintln!("  Can't use {}: {}", folder.display(), e);
             std::process::exit(2);
@@ -107,17 +169,31 @@ pub fn run(name: &str) {
         }
     };
 
+    // Another journal than the settings' own keeps its backups, and the time
+    // of its last one, to itself.
+    let keyed = !same_folder(&folder, &home_folder(&settings));
+    // The app, with what happened before it had a window to say it in.
+    let make_app = || {
+        let mut a = app::App::new(j.clone(), settings.clone(), split_tags.clone(), &theme_id);
+        a.keyed_backups = keyed;
+        if let Some(w) = &warning {
+            a.notice(w.clone(), true);
+        }
+        a.report_restore_leftovers();
+        if let Some(m) = &migrated {
+            a.notice(format!("inbox.md folded into inbox/: {} moved, {} already there; original in {}", m.moved, m.skipped, m.backup), false);
+        }
+        if let Some(m) = &split_migrated {
+            a.notice(format!("{} split journal(s) folded into split/: {} moved, {} already there; originals in .quire/migration/", m.journals, m.moved, m.skipped), false);
+        }
+        a
+    };
     let open = |screen: app::Screen, draft_title: Option<String>| {
         if !tty {
             eprintln!("  {} {} needs a terminal", name, cmd);
             std::process::exit(1);
         }
-        let mut a = app::App::new(j.clone(), settings.clone(), split_tags.clone(), &theme_id);
-        if let Some(m) = &migrated {
-            a.toast(format!("inbox.md folded into inbox/: {} moved, {} already there; original in {}", m.moved, m.skipped, m.backup), false);
-        } else if let Some(m) = &split_migrated {
-            a.toast(format!("{} split journal(s) folded into split/: {} moved, {} already there; originals in .quire/migration/", m.journals, m.moved, m.skipped), false);
-        }
+        let mut a = make_app();
         if let Some(t) = draft_title {
             a.start_draft(&t, "");
         } else {
@@ -176,7 +252,7 @@ pub fn run(name: &str) {
         "tag" => cli::tag(&j, rest.first().map(|s| s.as_str()).unwrap_or("")),
         "random" => {
             if tty {
-                let mut a = app::App::new(j.clone(), settings.clone(), split_tags.clone(), &theme_id);
+                let mut a = make_app();
                 a.random();
                 if let Err(e) = app::run(a) {
                     eprintln!("  error: {}", e);

@@ -36,9 +36,32 @@ struct PhoneRoot: View {
     @State private var rootKeyID = UUID()
     /// ⌘K, Jump to a date: the day for the Journal to go to.
     @State private var journalJump: String?
-    /// Chosen from ⌘K over the composer: done once it has closed, through its save.
-    @State private var afterComposer: CommandAction?
+    /// What waits for the composer to close through its own save: a choice
+    /// from ⌘K, a new page asked for from outside (widget, reminder, quick
+    /// action, quire://write), or an entry to open (Spotlight, a notification).
+    /// The composer is never taken down from here: its last words, a recording
+    /// in progress and a save that is failing are all its own to deal with.
+    private enum AfterComposer { case command(CommandAction), open(NavigationModel.OpenRequest) }
+    @State private var afterComposer: AfterComposer?
+    /// The composer's entry as its saves move it (a new date, a recovery copy):
+    /// the open page follows it only while it is that entry's page.
+    @State private var composerRef: EntryRef?
+    /// A page the composer was about to write when Quire last closed, and the
+    /// journal doesn't hold (`ComposerRecovery`): asked about once it is safe to.
+    @State private var recovery: ComposerRecovery?
+    @State private var recoveryNote: String?
+    /// The faces' own state, kept here: the face is built in a different place
+    /// for the phone, the sidebar and the sidebar with a page beside it, so a
+    /// rotation or a resized window would otherwise start each one afresh.
+    @State private var journalStarred = false
+    @State private var journalSplit: String?
+    @State private var journalSelected: Int?
+    @State private var inboxSelected: Int?
+    @State private var lookBackSelected: Int?
+    /// Today's "Write a line", not yet saved.
+    @State private var todayLine = ""
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The page sits beside the list rather than over it.
     @State private var splitActive = false
     /// The sidebar folded to a strip; remembered across launches.
@@ -61,19 +84,36 @@ struct PhoneRoot: View {
     }
 
     var body: some View {
-        shell
+        shellAsking
         .background(KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false))
         .background(CommandMenuShortcut())
         .qKeyBlocker(active: composing != nil || retiming != nil || showSearch || showSettings || showMedia,
                      onEscape: { closeSheet() })
         .fullScreenCover(item: $composing, onDismiss: {
             restoreMonitorPage()
-            if let action = afterComposer { afterComposer = nil; runCommand(action) }
+            // A page taken down with a save that never landed is offered at once.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { checkRecovery() }
+            if let next = afterComposer {
+                afterComposer = nil
+                switch next {
+                case .command(let action): runCommand(action)
+                case .open(let request): show(request)
+                }
+            }
         }) { target in
+            // The open page follows a save, and closes on a file or a discard,
+            // only when it is the page of the entry being edited: `e` on a list
+            // row edits an entry that is not the one open beside the list.
             ComposerScreen(target: target, onUpdate: { updated in
-                if target.ref != nil, !path.isEmpty { path[path.count - 1] = updated }
+                let was = composerRef ?? target.ref
+                composerRef = updated
+                if target.ref != nil, let was, let last = path.last, last.id == was.id {
+                    path[path.count - 1] = updated
+                }
             }, onRemove: {
-                if target.ref != nil, !path.isEmpty { path.removeLast() }
+                if target.ref != nil, let was = composerRef ?? target.ref, let last = path.last, last.id == was.id {
+                    path.removeLast()
+                }
             })
             // The composer paints its own page; clear behind it, so a page
             // turning over as it is filed shows the day it lands on.
@@ -117,18 +157,35 @@ struct PhoneRoot: View {
         }
         // The widget, the reminder and the home-screen action all ask for the
         // composer through the shared navigation model.
-        .onChange(of: nav.newEntrySignal) { _, _ in composing = ComposeTarget(ref: nil) }
+        // With a page already being written, that page closes first, through its
+        // own save, as it does for ⌘K: never by being replaced.
+        .onChange(of: nav.newEntrySignal) { _, _ in runCommand(.newDraft) }
+        .onChange(of: composing?.id) { _, _ in composerRef = nil }
         // Spotlight, notifications and the widget open entries through the shared
         // model; this shell has its own stack, so it takes the request from there.
         .onChange(of: nav.openRequest) { _, _ in takeOpenRequest() }
         .onAppear(perform: takeOpenRequest)
+        // An entry link that arrived before the journal was read (a cold launch
+        // from a widget or a notification) waits for the index, then opens.
+        .onChange(of: nav.pendingLink) { _, _ in nav.resolvePendingLink(in: store) }
+        .onChange(of: store.indexed) { _, _ in nav.resolvePendingLink(in: store) }
+        .onAppear { nav.resolvePendingLink(in: store) }
+        // Back at compact width nothing sits beside the list, so opening pushes.
+        .onChange(of: sizeClass) { _, now in if now != .regular { splitActive = false } }
         // The widgets' Today and Inbox links, and the "Write a line" control.
         .onChange(of: nav.phoneRequest) { _, _ in takePhoneRequest() }
         .onAppear(perform: takePhoneRequest)
         // App Lock: the veil is a window of its own (AppLockVeilWindow), above any
         // sheet or the composer, so nothing stays readable while locked.
         .onAppear { AppLockVeilWindow.shared.setVisible(appLock.showsVeil) }
-        .onChange(of: appLock.showsVeil) { _, show in AppLockVeilWindow.shared.setVisible(show) }
+        .onChange(of: appLock.showsVeil) { _, show in
+            AppLockVeilWindow.shared.setVisible(show)
+            // Unlocked: a page that never reached the journal can be asked about.
+            if !show { checkRecovery() }
+            // Something asked the composer to close while the lock was up, when no
+            // key reaches it: asked again now.
+            if !show, composing != nil, afterComposer != nil { askComposerToClose() }
+        }
         // `QUIRE_OPEN=settings|search|media|write|entry` in the launch environment opens that first (screenshots).
         // The external display scene is built by UIKit and can't reach this environment.
         .onAppear {
@@ -174,6 +231,26 @@ struct PhoneRoot: View {
         .task { if let mode = Self.deskPreview { await previewDesk(mode) } }
     }
 
+    /// The shell, and the question about a page that never reached the journal.
+    private var shellAsking: some View {
+        shell
+        // A page Quire closed on before it was saved: once there is a journal to
+        // compare it with and to save it to, and never over the lock.
+        .onAppear(perform: checkRecovery)
+        .onChange(of: store.indexed) { _, _ in checkRecovery() }
+        .onChange(of: store.baseURL) { _, _ in checkRecovery() }
+        .alert("Quire closed before this page was saved.",
+               isPresented: Binding(get: { recovery != nil && !appLock.showsVeil },
+                                    set: { if !$0 { recovery = nil } }),
+               presenting: recovery) { record in
+            Button("Save to Inbox") { saveRecovered(record) }
+            Button("Copy text") { copyRecovered(record) }
+            Button("Discard", role: .destructive) { ComposerRecovery.remove(record.id); checkRecoverySoon() }
+        } message: { record in
+            Text(recoveryNote ?? Self.recoveryDescription(record))
+        }
+    }
+
     private static var deskPreview: String? { ProcessInfo.processInfo.environment["QUIRE_DESK"] }
 
     private func previewDesk(_ mode: String) async {
@@ -188,8 +265,8 @@ struct PhoneRoot: View {
         switch mode {
         case "entry":
             guard let e = entries.first(where: { $0.body.count > 400 }) ?? entries.first else { return }
-            model.present(.editing(title: e.suffix, date: stamp.date(from: e.ts) ?? .now, text: e.body,
-                                   caret: Int(ProcessInfo.processInfo.environment["QUIRE_DESK_CARET"] ?? "") ?? e.body.utf16.count,
+            model.present(.editing(title: e.suffix, date: stamp.date(from: e.ts) ?? .now, text: e.shownBody,
+                                   caret: Int(ProcessInfo.processInfo.environment["QUIRE_DESK_CARET"] ?? "") ?? e.shownBody.utf16.count,
                                    isStarred: e.isStarred), owner: UUID())
             // "location,length": shade a selection as the composer would.
             let sel = (ProcessInfo.processInfo.environment["QUIRE_DESK_SELECT"] ?? "").split(separator: ",").compactMap { Int($0) }
@@ -202,13 +279,13 @@ struct PhoneRoot: View {
             let e = entries.first
             let when = e.flatMap { stamp.date(from: $0.ts) } ?? .now
             if let e {
-                model.present(.reading(title: e.displayTitle, date: when, text: e.body, isStarred: e.isStarred), owner: UUID())
+                model.present(.reading(title: e.displayTitle, date: when, text: e.shownBody, isStarred: e.isStarred), owner: UUID())
             }
             DeskDatePicker.shared.open(date: when, title: e?.qTitle ?? "") { _ in nil }
         case "confirm":
             // The question over an entry; ↵ writes nothing here.
             guard let e = entries.first else { return }
-            model.present(.reading(title: e.displayTitle, date: stamp.date(from: e.ts) ?? .now, text: e.body,
+            model.present(.reading(title: e.displayTitle, date: stamp.date(from: e.ts) ?? .now, text: e.shownBody,
                                    isStarred: e.isStarred), owner: UUID())
             DeskConfirm.shared.open(.init(kicker: "Journal", question: "Delete this entry?",
                                           detail: DeskConfirm.describe(e), when: DeskConfirm.when(e),
@@ -246,13 +323,13 @@ struct PhoneRoot: View {
             HStack(spacing: 0) {
                 if sidebarCollapsed {
                     QSideRail(onNew: { composing = ComposeTarget(ref: nil) },
-                              onExpand: { withAnimation(.easeInOut(duration: 0.2)) { sidebarCollapsed = false } },
+                              onExpand: { withAnimation(foldAnimation) { sidebarCollapsed = false } },
                               onMedia: { showMedia = true }, onSearch: { showSearch = true },
                               onSettings: { showSettings = true })
                 } else {
-                    QSideBar(tab: $tab, inboxCount: store.inboxDrafts.count,
+                    QSideBar(tab: tabChoice, inboxCount: store.inboxDrafts.count,
                              onNew: { composing = ComposeTarget(ref: nil) },
-                             onCollapse: { withAnimation(.easeInOut(duration: 0.2)) { sidebarCollapsed = true } },
+                             onCollapse: { withAnimation(foldAnimation) { sidebarCollapsed = true } },
                              onMedia: { showMedia = true }, onSearch: { showSearch = true },
                              onSettings: { showSettings = true })
                 }
@@ -275,13 +352,24 @@ struct PhoneRoot: View {
                 .environment(\.qBesideSidebar, true)
             }
             .background(q.pageColor)
-            // The sidebar stays in reach while a page is open; choosing another
-            // face closes the page, as the phone's tab bar never shows over one.
-            .onChange(of: tab) { _, _ in path.removeAll() }
         } else {
             stack(withChrome: true)
         }
     }
+
+    /// The sidebar stays in reach while a page is open; choosing another face
+    /// closes the page, as the phone's tab bar never shows over one. Done where
+    /// the face is chosen, not by watching `tab`: an entry link sets the face and
+    /// the page together, and a watcher then closed the page it had just opened.
+    private func select(_ new: PhoneTab) {
+        if new != tab { path.removeAll() }
+        tab = new
+    }
+
+    private var tabChoice: Binding<PhoneTab> { Binding(get: { tab }, set: { select($0) }) }
+
+    /// The sidebar folding to its strip and back; at once with Reduce Motion on.
+    private var foldAnimation: Animation? { reduceMotion ? nil : .easeInOut(duration: 0.2) }
 
     /// The list with pages pushed over it; on the phone it carries the notice
     /// and the tab bar, beside the sidebar it doesn't.
@@ -293,7 +381,7 @@ struct PhoneRoot: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .qArrivalRoot(key: tab)
                 if withChrome {
-                    QTabBar(tab: $tab, inboxCount: store.inboxDrafts.count) {
+                    QTabBar(tab: tabChoice, inboxCount: store.inboxDrafts.count) {
                         composing = ComposeTarget(ref: nil)
                     }
                 }
@@ -322,6 +410,10 @@ struct PhoneRoot: View {
                                  onRetime: { retiming = $0 }, onRetimeKey: retimeFromKeys,
                                  onClose: { path.removeAll(); ExternalDisplayModel.shared.relist() })
                         .qArrivalRoot(key: ref.id)
+                        // One reader per entry: its keys, its question and what
+                        // is playing belong to the entry it opened with, so
+                        // another entry gets another reader, not this one re-aimed.
+                        .id(ref.id)
                 } else {
                     emptyPage
                 }
@@ -351,18 +443,21 @@ struct PhoneRoot: View {
         switch tab {
         case .today:
             TodayScreen(open: open, compose: { composing = ComposeTarget(ref: nil) },
-                        showInbox: { tab = .inbox }, search: { showSearch = true }, settings: { showSettings = true },
-                        media: { showMedia = true })
+                        showInbox: { select(.inbox) }, search: { showSearch = true }, settings: { showSettings = true },
+                        media: { showMedia = true }, line: $todayLine)
                 .onAppear { ExternalDisplayModel.shared.present(.idle) }
         case .inbox:
             InboxScreen(open: open, edit: { composing = ComposeTarget(ref: $0) }, retime: retimeFromKeys,
-                        search: { showSearch = true }, settings: { showSettings = true })
+                        search: { showSearch = true }, settings: { showSettings = true },
+                        selected: $inboxSelected)
         case .journal:
             JournalScreen(open: open, edit: { composing = ComposeTarget(ref: $0) }, retime: retimeFromKeys,
                           search: { showSearch = true }, settings: { showSettings = true }, media: { showMedia = true },
-                          jump: $journalJump)
+                          jump: $journalJump, starredOnly: $journalStarred, splitName: $journalSplit,
+                          selected: $journalSelected)
         case .lookBack:
-            LookBackScreen(open: open, search: { showSearch = true }, settings: { showSettings = true })
+            LookBackScreen(open: open, search: { showSearch = true }, settings: { showSettings = true },
+                           selected: $lookBackSelected)
         }
     }
 
@@ -394,10 +489,91 @@ struct PhoneRoot: View {
         }
     }
 
+    // MARK: A page that never reached the journal
+
+    /// Look for pages the composer kept just before a write that Quire didn't
+    /// live to see land. One the journal already holds, word for word, did
+    /// land: its file goes, silently. The first that didn't is asked about,
+    /// once; nothing is ever written without the answer. Waits for a journal
+    /// that has been read (there is nothing to compare with before), and for
+    /// the lock, a sheet or the composer to be out of the way.
+    private func checkRecovery() {
+        guard recovery == nil, store.baseURL != nil, store.indexed, !appLock.showsVeil,
+              composing == nil, retiming == nil, !showSearch, !showSettings, !showMedia else { return }
+        for record in ComposerRecovery.all() {
+            if journalHolds(record) { ComposerRecovery.remove(record.id); continue }
+            recoveryNote = nil
+            recovery = record
+            return
+        }
+    }
+
+    /// After an answer, once its alert has gone: the next one, if there is one.
+    private func checkRecoverySoon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { checkRecovery() }
+    }
+
+    /// Whether the entry as it was about to be written is in the journal: among
+    /// the drafts, on the day it was stamped for, or where the entry it edited
+    /// lives. `composed` and an entry's `raw` are both the core's own text
+    /// (guards and all), so this compares like with like; an entry read from
+    /// its file also carries the blank line after it, which is taken off.
+    private func journalHolds(_ record: ComposerRecovery) -> Bool {
+        let wanted = JournalParser.trimRightNewlines(record.composed)
+        func holds(_ entries: [Entry]) -> Bool {
+            entries.contains { JournalParser.trimRightNewlines($0.raw) == wanted }
+        }
+        if holds(store.inboxDrafts) { return true }
+        var days = [String(record.stamp.prefix(10))]
+        if let source = record.source {
+            if source.hasPrefix("archive:") { days.append(String(source.dropFirst("archive:".count))) }
+            if source.hasPrefix("journal:"), holds(store.entries(inJournal: String(source.dropFirst("journal:".count)))) {
+                return true
+            }
+        }
+        // From the index, not a fresh read of the journal on the main thread.
+        return days.contains { day in holds(store.archiveEntries.first { $0.date == day }?.entries ?? []) }
+    }
+
+    /// "9 Nov, 14:02 · the title or the first words", so the page can be told.
+    private static func recoveryDescription(_ record: ComposerRecovery) -> String {
+        let firstLine = record.text.split(separator: "\n").lazy
+            .map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
+        let title = record.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = (title.isEmpty ? firstLine : title).qClamped(80)
+        let when = "\(QDate.shortDay(String(record.stamp.prefix(10)))), \(QDate.time(record.stamp))"
+        return name.isEmpty ? when : "\(when) · \(name)"
+    }
+
+    /// A new, distinct Inbox draft through the composer's own create path. The
+    /// kept file goes only when the draft is in the journal; if the write
+    /// fails it stays, the notice says why, and it is offered again next time.
+    private func saveRecovered(_ record: ComposerRecovery) {
+        // Still there: a second window may have answered for it already.
+        guard ComposerRecovery.all().contains(where: { $0.id == record.id }) else { return }
+        let title = ComposerScreen.headerTitle(record.title, starred: record.starred)
+        guard store.createEditorDraft(timestamp: record.stamp, title: title, body: record.text) != nil else { return }
+        ComposerRecovery.remove(record.id)
+        checkRecoverySoon()
+    }
+
+    /// The words on the clipboard; the file stays and the question comes back,
+    /// since a clipboard is no place to leave the only copy.
+    private func copyRecovered(_ record: ComposerRecovery) {
+        let title = record.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        UIPasteboard.general.string = title.isEmpty ? record.text : title + "\n\n" + record.text
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            guard recovery == nil, !appLock.showsVeil, composing == nil,
+                  ComposerRecovery.all().contains(where: { $0.id == record.id }) else { return }
+            recoveryNote = "Copied. " + Self.recoveryDescription(record)
+            recovery = record
+        }
+    }
+
     private func restoreMonitorPage() {
         if let ref = path.last {
             ExternalDisplayModel.shared.present(.reading(title: ref.entry.displayTitle,
-                date: QDate.date(ref.entry.ts) ?? Date(), text: ref.entry.body, isStarred: ref.entry.isStarred,
+                date: QDate.date(ref.entry.ts) ?? Date(), text: ref.entry.shownBody, isStarred: ref.entry.isStarred,
                 isDraft: ref.source == .inbox))
         } else if tab == .today { ExternalDisplayModel.shared.present(.idle) }
         else { ExternalDisplayModel.shared.relist() }
@@ -424,34 +600,58 @@ struct PhoneRoot: View {
     }
 
     /// Open what Spotlight, a notification or the widget asked for: close whatever
-    /// is presented, go to the entry's face, and push it.
+    /// is presented, go to the entry's face, and push it. The composer closes
+    /// itself first, through its own save; if that save fails the page being
+    /// written stays and the request is dropped.
     private func takeOpenRequest() {
         guard let request = nav.openRequest else { return }
         nav.openRequest = nil
-        let presented = composing != nil || retiming != nil || showSearch || showSettings || showMedia
-        composing = nil; retiming = nil; showSearch = false; showSettings = false; showMedia = false
+        if composing != nil { closeComposer(then: .open(request)); return }
+        show(request)
+    }
+
+    private func show(_ request: NavigationModel.OpenRequest) {
+        let presented = retiming != nil || showSearch || showSettings || showMedia
+        retiming = nil; showSearch = false; showSettings = false; showMedia = false
         let ref = EntryRef(entry: request.entry, source: request.source)
         let push = {
-            if case .inbox = request.source { tab = .inbox } else { tab = .journal }
+            // A split journal is read from the Journal's title, so its entry
+            // opens with that journal chosen behind it.
+            switch request.source {
+            case .inbox: tab = .inbox
+            case .archive: tab = .journal
+            case .journal(let name): tab = .journal; journalSplit = name
+            }
             path = [ref]
         }
-        // Let a sheet or the composer finish leaving before the page is pushed.
+        // Let a sheet finish leaving before the page is pushed.
         if presented { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: push) } else { push() }
+    }
+
+    /// Ask the composer to close, as Esc does: it saves, and leaves only if the
+    /// save landed. `next` is done once it has gone (the cover's `onDismiss`).
+    private func closeComposer(then next: AfterComposer) {
+        afterComposer = next
+        // Behind App Lock no key reaches the composer; it is asked when the lock lifts.
+        guard !appLock.showsVeil else { return }
+        askComposerToClose()
+    }
+
+    private func askComposerToClose() {
+        KeyCommandRouter.shared.clear()
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            // Still open: the save failed, or something over the page took the
+            // Esc. The page stays and what was asked is dropped.
+            if composing != nil, !appLock.showsVeil { afterComposer = nil }
+        }
     }
 
     /// What ⌘K chose. Over the composer it closes the composer first, through its
     /// own save, and carries on from there; if that save fails the page stays and
     /// the choice is dropped. Sheets are closed before anything is shown.
     private func runCommand(_ action: CommandAction) {
-        if composing != nil {
-            afterComposer = action
-            KeyCommandRouter.shared.clear()
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(2))
-                if composing != nil { afterComposer = nil }
-            }
-            return
-        }
+        if composing != nil { closeComposer(then: .command(action)); return }
         let keepsSearch = action == .search && showSearch
         let keepsSettings = action == .settings && showSettings
         let wasUp = retiming != nil || showMedia || (showSearch && !keepsSearch) || (showSettings && !keepsSettings)
@@ -499,7 +699,7 @@ struct PhoneRoot: View {
         KeyCommandRouter.shared.register(rootKeyID, QuireKeyHandlers(
             moveUp: { jumpToJournal(up: true) },
             moveDown: { jumpToJournal(up: false) },
-            open: { if tab == .today { composing = ComposeTarget(ref: nil) } },
+            open: { if tab == .today || idleOnMonitor { composing = ComposeTarget(ref: nil) } },
             clear: { if tab != .today { path.removeAll(); tab = .today } },
             key: { k in
                 switch k {
@@ -510,8 +710,8 @@ struct PhoneRoot: View {
                 case "/": openSearch()
                 case ",": openSettings()
                 case "p":
-                    // The prompt is on Today.
-                    guard tab == .today, path.isEmpty else { return false }
+                    // The prompt is on Today, and on the monitor's Today page.
+                    guard (tab == .today && path.isEmpty) || idleOnMonitor else { return false }
                     QuirePrompts.next()
                 case "r":
                     // Another random entry takes the open page's place rather than
@@ -524,6 +724,14 @@ struct PhoneRoot: View {
                 }
                 return true
             }))
+    }
+
+    /// Look back with nothing on this day leaves the monitor on its Today page,
+    /// whose "begin a new entry" and prompt then answer to ↵ and `p` as its
+    /// hint bar says.
+    private var idleOnMonitor: Bool {
+        let monitor = ExternalDisplayModel.shared
+        return tab == .lookBack && path.isEmpty && monitor.isConnected && !monitor.isPaused && monitor.content == .idle
     }
 
     /// Esc over a sheet closes it and goes no further, whatever is beneath. Not the

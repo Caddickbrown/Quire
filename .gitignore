@@ -1,6 +1,5 @@
 # Dependencies and build output
 node_modules/
-linux/src-tauri/target/
 linux/src-tauri/gen/schemas/
 
 # Editors and OS

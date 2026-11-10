@@ -11,6 +11,10 @@
 //! - Ledger: `root/.quire/datasaver-<device_id>.json` (read from `.nook/` too) =
 //!   `{"savedBytes": i64, "assets": [String]}`; each device writes only its own.
 
+use crate::journal::Journal;
+use crate::media_cleanup::{new_recovery_run, park_file};
+use crate::vault::FolderLock;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
@@ -40,6 +44,9 @@ pub const FFMPEG_MISSING: &str = "Video and audio compression needs ffmpeg";
 
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "tiff", "tif", "bmp"];
 const VIDEO_EXTS: &[&str] = &["mov", "mp4", "m4v"];
+/// `webm` and `ogg` are here for the recordings browsers and phones make, but
+/// either can hold a picture too: `compress_av` looks inside before it treats
+/// one as sound (see `may_hold_video`).
 const AUDIO_EXTS: &[&str] = &["m4a", "weba", "webm", "ogg", "opus"];
 const HEIC_EXTS: &[&str] = &["heic", "heif"];
 const EXCLUDED_ROOT_MD: &[&str] = &["export.md", "nook-export.md", "transfer.md", "readme.md"];
@@ -68,6 +75,10 @@ pub struct CompressReport {
     pub saved_bytes: i64,
     pub skipped_missing_tools: Vec<String>,
     pub errors: Vec<String>,
+    /// The recovery folder (root-relative) holding the originals this run
+    /// replaced, kept for `RECOVERY_DAYS`. None when nothing was replaced.
+    #[serde(default)]
+    pub recovery: Option<String>,
 }
 
 /// On-disk ledger, byte-compatible with Nook's `datasaver-<device>.json`.
@@ -230,16 +241,51 @@ fn encode(img: &DynamicImage, format: ImageFormat) -> Option<Vec<u8>> {
 /// (JPEG q70, PNG best+adaptive, TIFF/BMP default).
 ///
 /// Returns `Some` only if the result is strictly smaller than `bytes`.
-/// Non-compressible extensions (gif, webp, svg, ...) and undecodable input
-/// return `None`.
+/// Non-compressible extensions (gif, webp, svg, ...), undecodable input and
+/// files with more than one frame (animated PNG, multi-page TIFF) return
+/// `None`.
 pub fn compress_image_bytes(bytes: &[u8], ext: &str) -> Option<Vec<u8>> {
     recompress(bytes, ext, false)
+}
+
+/// True for a file holding more than one picture: an animated PNG, or a TIFF
+/// with more than one page. Re-encoding keeps only the first, so these are
+/// never recompressed. A TIFF whose layout can't be followed counts as one.
+fn has_many_frames(bytes: &[u8], fallback: ImageFormat) -> bool {
+    match image::guess_format(bytes).unwrap_or(fallback) {
+        ImageFormat::Png => image::codecs::png::PngDecoder::new(Cursor::new(bytes)).map(|d| d.is_apng().unwrap_or(true)).unwrap_or(false),
+        ImageFormat::Tiff => tiff_has_more_pages(bytes).unwrap_or(true),
+        _ => false,
+    }
+}
+
+/// Follow a TIFF's first directory to its "next directory" offset: non-zero
+/// means a second page (or a second resolution of the first, which a
+/// re-encode would drop just the same). None when the header isn't one this
+/// reads (BigTIFF, truncated).
+fn tiff_has_more_pages(b: &[u8]) -> Option<bool> {
+    let le = match b.get(..2)? {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let u16_at = |i: usize| b.get(i..i + 2).map(|x| if le { u16::from_le_bytes([x[0], x[1]]) } else { u16::from_be_bytes([x[0], x[1]]) });
+    let u32_at = |i: usize| b.get(i..i + 4).map(|x| if le { u32::from_le_bytes([x[0], x[1], x[2], x[3]]) } else { u32::from_be_bytes([x[0], x[1], x[2], x[3]]) });
+    if u16_at(2)? != 42 {
+        return None;
+    }
+    let ifd = u32_at(4)? as usize;
+    let entries = u16_at(ifd)? as usize;
+    Some(u32_at(ifd.checked_add(2)?.checked_add(entries.checked_mul(12)?)?)? != 0)
 }
 
 /// `cap_edge`: also accept a not-smaller result when the source exceeded the
 /// edge limit (used for HEIC-derived JPEGs, whose size must be capped).
 fn recompress(bytes: &[u8], ext: &str, cap_edge: bool) -> Option<Vec<u8>> {
     let format = image_format_for(ext)?;
+    if has_many_frames(bytes, format) {
+        return None;
+    }
     let mut img = decode_oriented(bytes, format)?;
     let oversized = img.width().max(img.height()) > MAX_IMAGE_EDGE;
     if oversized {
@@ -462,7 +508,9 @@ fn ffmpeg_args(ext: &str, input: &Path, output: &Path) -> Option<Vec<String>> {
         "mov" | "mp4" | "m4v" => {
             let fmt = if e == "mov" { "mov" } else { "mp4" };
             vec![
-                "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                // yuv420p: a 10-bit or 4:4:4 source would otherwise come out
+                // in a profile most players and every phone refuse.
+                "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p",
                 "-vf", VIDEO_SCALE, "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "-f", fmt,
             ]
         }
@@ -476,10 +524,93 @@ fn ffmpeg_args(ext: &str, input: &Path, output: &Path) -> Option<Vec<String>> {
     Some(a)
 }
 
-/// Returns Ok(Some(saved)) if replaced, Ok(None) if the result wasn't smaller.
-fn compress_av(path: &Path) -> Result<Option<i64>, MediaError> {
+/// Containers whose name doesn't say whether there is a picture inside.
+fn may_hold_video(ext: &str) -> bool {
+    matches!(norm_ext(ext).as_str(), "webm" | "ogg")
+}
+
+/// Does ffmpeg's description of a file (what `ffmpeg -i file` prints) list a
+/// video stream? None when it lists no streams at all, which means the file
+/// couldn't be read rather than that it has no picture.
+fn listing_has_video(listing: &str) -> Option<bool> {
+    let streams: Vec<&str> = listing.lines().map(str::trim_start).filter(|l| l.starts_with("Stream #")).collect();
+    if streams.is_empty() {
+        return None;
+    }
+    Some(streams.iter().any(|l| l.contains(": Video:")))
+}
+
+fn has_video_stream(ffmpeg: &Path, path: &Path) -> Result<bool, String> {
+    // With no output file ffmpeg describes the input on stderr and exits
+    // non-zero; the description is all that is wanted.
+    let out = Command::new(ffmpeg)
+        .args(["-hide_banner", "-nostdin", "-i"])
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    listing_has_video(&String::from_utf8_lossy(&out.stderr)).ok_or_else(|| format!("ffmpeg couldn't read {}", path.display()))
+}
+
+/// Where the original of a file Data Saver is about to replace is kept: this
+/// run's folder under `<sidecar>/media-cleanup/`, pruned after
+/// `RECOVERY_DAYS` like media cleanup's. The folder is only made (and a
+/// journal's `.nook/` only renamed) when something is actually replaced.
+struct Park<'a> {
+    j: &'a Journal,
+    run: RefCell<Option<String>>,
+}
+
+impl<'a> Park<'a> {
+    fn new(j: &'a Journal) -> Park<'a> {
+        Park { j, run: RefCell::new(None) }
+    }
+
+    fn run(&self) -> Result<String, String> {
+        if let Some(r) = self.run.borrow().as_ref() {
+            return Ok(r.clone());
+        }
+        let r = new_recovery_run(self.j)?;
+        *self.run.borrow_mut() = Some(r.clone());
+        Ok(r)
+    }
+
+    /// The run's folder, if anything was put in it.
+    fn used(&self) -> Option<String> {
+        self.run.borrow().clone()
+    }
+
+    fn rel(&self, path: &Path) -> Result<String, String> {
+        let root = self.j.local()?;
+        let rel = path.strip_prefix(root).map_err(|_| format!("{} is not in the journal folder", path.display()))?;
+        crate::journal::check_rel(&rel.to_string_lossy().replace('\\', "/"))
+    }
+
+    /// Keep the file at `path` as it is now, leaving it in place to be replaced.
+    fn keep(&self, path: &Path) -> Result<(), String> {
+        park_file(self.j, &self.run()?, PARK_SECTION, &self.rel(path)?, false).map(|_| ())
+    }
+
+    /// Move the file at `path` into the recovery folder.
+    fn take(&self, path: &Path) -> Result<(), String> {
+        park_file(self.j, &self.run()?, PARK_SECTION, &self.rel(path)?, true).map(|_| ())
+    }
+}
+
+/// The folder inside a recovery run that Data Saver's originals go under.
+const PARK_SECTION: &str = "datasaver";
+
+/// Returns Ok(Some(saved)) if replaced, Ok(None) if the result wasn't smaller
+/// (or the file is a webm/ogg with a picture, which is left alone: the sound
+/// recipes those names get would drop it).
+fn compress_av(path: &Path, park: Option<&Park>) -> Result<Option<i64>, MediaError> {
     let ext = ext_of(path);
     let ffmpeg = find_in_path("ffmpeg").ok_or(MediaError::MissingTool(FFMPEG_MISSING))?;
+    if may_hold_video(&ext) && has_video_stream(&ffmpeg, path).map_err(MediaError::Failed)? {
+        return Ok(None);
+    }
     let dir = parent_dir(path);
     let tmp = tempfile::Builder::new()
         .prefix(TMP_PREFIX)
@@ -494,6 +625,9 @@ fn compress_av(path: &Path) -> Result<Option<i64>, MediaError> {
     let before = file_len(path);
     let after = file_len(&tmp);
     if after > 0 && after < before {
+        if let Some(park) = park {
+            park.keep(path).map_err(MediaError::Failed)?;
+        }
         keep_mode(&tmp, path);
         tmp.persist(path).map_err(|e| MediaError::Failed(format!("{}: {}", path.display(), e.error)))?;
         Ok(Some(before - after))
@@ -503,10 +637,13 @@ fn compress_av(path: &Path) -> Result<Option<i64>, MediaError> {
     }
 }
 
-fn compress_image_file(path: &Path) -> Result<Option<i64>, MediaError> {
+fn compress_image_file(path: &Path, park: Option<&Park>) -> Result<Option<i64>, MediaError> {
     let bytes = fs::read(path).map_err(|e| MediaError::Failed(format!("{}: {e}", path.display())))?;
     match compress_image_bytes(&bytes, &ext_of(path)) {
         Some(out) => {
+            if let Some(park) = park {
+                park.keep(path).map_err(MediaError::Failed)?;
+            }
             write_atomic(path, &out).map_err(MediaError::Failed)?;
             Ok(Some(bytes.len() as i64 - out.len() as i64))
         }
@@ -514,10 +651,10 @@ fn compress_image_file(path: &Path) -> Result<Option<i64>, MediaError> {
     }
 }
 
-fn compress_path(path: &Path) -> Result<Option<i64>, MediaError> {
+fn compress_path(path: &Path, park: Option<&Park>) -> Result<Option<i64>, MediaError> {
     match kind_of(&ext_of(path)) {
-        Some(Kind::Image) => compress_image_file(path),
-        Some(Kind::Video) | Some(Kind::Audio) => compress_av(path),
+        Some(Kind::Image) => compress_image_file(path, park),
+        Some(Kind::Video) | Some(Kind::Audio) => compress_av(path, park),
         None => Ok(None),
     }
 }
@@ -526,8 +663,28 @@ fn compress_path(path: &Path) -> Result<Option<i64>, MediaError> {
 /// after attach; compressible images work too). Ok(Some(saved_bytes)) when
 /// replaced, Ok(None) when not smaller or not a compressible type, Err when
 /// ffmpeg is missing or fails.
+///
+/// A file under a journal's `assets/` has its original kept in that journal's
+/// recovery folder first, as `compress_asset` does; the journal is taken to be
+/// the folder holding the nearest `assets` folder above the file. Prefer
+/// `compress_asset`, which is told the journal. A file anywhere else is simply
+/// replaced.
 pub fn compress_file_in_place(path: &Path) -> Result<Option<i64>, String> {
-    compress_path(path).map_err(MediaError::into_string)
+    let root = path.ancestors().skip(1).find(|a| a.file_name() == Some(OsStr::new("assets"))).and_then(Path::parent);
+    match root {
+        Some(root) => compress_asset(root, path),
+        None => compress_path(path, None).map_err(MediaError::into_string),
+    }
+}
+
+/// Compress one file of the journal at `root` in place. The original is kept
+/// in `<sidecar>/media-cleanup/<run>/datasaver/<its path>` before it is
+/// replaced, and stays there for `RECOVERY_DAYS`: Data Saver's re-encode drops
+/// things a person may want back (a photo's EXIF, stereo sound, full size).
+/// Results as for `compress_file_in_place`.
+pub fn compress_asset(root: &Path, path: &Path) -> Result<Option<i64>, String> {
+    let j = Journal::open(root);
+    compress_path(path, Some(&Park::new(&j))).map_err(MediaError::into_string)
 }
 
 // ---------------------------------------------------------------------------
@@ -605,49 +762,91 @@ pub fn ledger_path(root: &Path, device_id: &str) -> PathBuf {
     ledger_dir(root).join(format!("datasaver-{}.json", safe_device_id(device_id)))
 }
 
-/// This device's ledger (empty if missing or unreadable).
+/// This device's ledger (empty if missing or unreadable): for showing
+/// figures. Anything that goes on to write the ledger uses `try_read_ledger`.
 pub fn read_ledger(root: &Path, device_id: &str) -> Ledger {
-    let name = format!("datasaver-{}.json", safe_device_id(device_id));
-    ledger_dirs(root)
-        .iter()
-        .find_map(|d| fs::read(d.join(&name)).ok())
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    try_read_ledger(root, device_id).unwrap_or_default()
 }
 
-/// Atomically write this device's ledger.
+/// This device's ledger: empty when there is none, an error when there is one
+/// that can't be read or parsed. A ledger mistaken for empty would be written
+/// back empty, and every asset it listed re-encoded a second time.
+pub fn try_read_ledger(root: &Path, device_id: &str) -> Result<Ledger, String> {
+    let name = format!("datasaver-{}.json", safe_device_id(device_id));
+    for dir in ledger_dirs(root) {
+        let path = dir.join(&name);
+        match fs::read(&path) {
+            Ok(bytes) => return parse_ledger(&path, &bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Can't read {}: {e}", path.display())),
+        }
+    }
+    Ok(Ledger::default())
+}
+
+fn parse_ledger(path: &Path, bytes: &[u8]) -> Result<Ledger, String> {
+    serde_json::from_slice(bytes).map_err(|e| format!("The Data Saver record {} can't be read ({e}); nothing was compressed", path.display()))
+}
+
+/// Atomically write this device's ledger, replacing what is there. Code that
+/// adds to a ledger uses `ledger_add`, which merges under a lock instead.
 pub fn write_ledger(root: &Path, device_id: &str, ledger: &Ledger) -> Result<(), String> {
     fs::create_dir_all(ledger_dir(root)).map_err(|e| e.to_string())?;
     let json = serde_json::to_vec_pretty(ledger).map_err(|e| e.to_string())?;
     write_atomic(&ledger_path(root, device_id), &json)
 }
 
-/// Count one asset's saving in this device's ledger, once.
-pub fn record_saving(root: &Path, device_id: &str, path: &Path, saved: i64) {
-    let Some(id) = asset_id(root, path) else { return };
-    let mut l = read_ledger(root, device_id);
-    if !l.assets.contains(&id) {
-        l.assets.push(id);
-        l.saved_bytes += saved.max(0);
-        let _ = write_ledger(root, device_id, &l);
+/// Add assets to this device's ledger: each `(path, bytes saved)` is counted
+/// once. The ledger is read again and written under a lock on the sidecar
+/// folder, so the app and the terminal app sharing one device id (or two
+/// attachments compressing at once) add to each other's entries instead of
+/// writing over them. An unparsable ledger is an error and is left alone.
+pub fn ledger_add(root: &Path, device_id: &str, items: &[(PathBuf, i64)]) -> Result<(), String> {
+    let dir = ledger_dir(root);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let _lock = FolderLock::take(&dir);
+    let mut ledger = try_read_ledger(root, device_id)?;
+    let mut changed = false;
+    for (path, saved) in items {
+        let (Some(key), Some(id)) = (asset_key(root, path), asset_id(root, path)) else { continue };
+        if !ledger.assets.contains(&key) {
+            ledger.assets.push(key);
+            ledger.saved_bytes += (*saved).max(0);
+            changed = true;
+        }
+        // The id without its extension as well: it is what Nook and earlier
+        // Quires look for, so they don't compress this file again.
+        if !ledger.assets.contains(&id) {
+            ledger.assets.push(id);
+            changed = true;
+        }
     }
+    if changed {
+        write_ledger(root, device_id, &ledger)?;
+    }
+    Ok(())
 }
 
-fn all_ledgers(root: &Path) -> Vec<Ledger> {
+/// Count one asset's saving in this device's ledger, once.
+pub fn record_saving(root: &Path, device_id: &str, path: &Path, saved: i64) {
+    let _ = ledger_add(root, device_id, &[(path.to_path_buf(), saved)]);
+}
+
+fn ledger_files(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for dir in ledger_dirs(root) {
         let Ok(rd) = fs::read_dir(&dir) else { continue };
-        out.extend(
-            rd.flatten()
-                .filter(|e| {
-                    let n = e.file_name().to_string_lossy().into_owned();
-                    n.starts_with("datasaver-") && n.ends_with(".json")
-                })
-                .filter_map(|e| fs::read(e.path()).ok())
-                .filter_map(|b| serde_json::from_slice::<Ledger>(&b).ok()),
-        );
+        out.extend(rd.flatten().map(|e| e.path()).filter(|p| {
+            let n = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            n.starts_with("datasaver-") && n.ends_with(".json")
+        }));
     }
+    out.sort();
     out
+}
+
+fn all_ledgers(root: &Path) -> Vec<Ledger> {
+    ledger_files(root).iter().filter_map(|p| fs::read(p).ok()).filter_map(|b| serde_json::from_slice::<Ledger>(&b).ok()).collect()
 }
 
 /// Sum of `savedBytes` across every device's ledger.
@@ -655,13 +854,54 @@ pub fn data_saved_total(root: &Path) -> i64 {
     all_ledgers(root).iter().map(|l| l.saved_bytes).sum()
 }
 
-/// Union of asset IDs across every device's ledger.
+/// Union of asset IDs across every device's ledger (unreadable ones skipped).
 pub fn handled_assets(root: &Path) -> HashSet<String> {
     all_ledgers(root).into_iter().flat_map(|l| l.assets).collect()
 }
 
+/// What every device's ledger says is already compressed. Fails if any ledger
+/// can't be read or parsed (one still arriving by sync, say): going ahead
+/// would re-encode everything that device had done.
+pub fn try_handled(root: &Path) -> Result<Handled, String> {
+    let mut ids = HashSet::new();
+    for path in ledger_files(root) {
+        let bytes = fs::read(&path).map_err(|e| format!("Can't read {}: {e}", path.display()))?;
+        ids.extend(parse_ledger(&path, &bytes)?.assets);
+    }
+    Ok(Handled::new(ids))
+}
+
+/// The assets ledgers list as done. Two forms of id are in use: the path under
+/// `assets/` with its extension (`2026/09/x.jpg`, written since Quire 0.12)
+/// and without (`2026/09/x`, what Nook and earlier Quires write). The short
+/// form can't tell `x.jpg` from `x.mp4`, so it only counts for a file when no
+/// long form explains it: a ledger holding `x` and `x.jpg` says the photo is
+/// done and nothing about a video of the same name.
+pub struct Handled {
+    ids: HashSet<String>,
+    explained: HashSet<String>,
+}
+
+impl Handled {
+    fn new(ids: HashSet<String>) -> Handled {
+        let explained = ids
+            .iter()
+            .filter_map(|id| id.rsplit_once('.'))
+            .filter(|(_, ext)| kind_of(ext).is_some() || is_heic(ext))
+            .map(|(stem, _)| stem.to_string())
+            .collect();
+        Handled { ids, explained }
+    }
+
+    pub fn has(&self, root: &Path, path: &Path) -> bool {
+        let (Some(key), Some(id)) = (asset_key(root, path), asset_id(root, path)) else { return false };
+        self.ids.contains(&key) || (self.ids.contains(&id) && !self.explained.contains(&id))
+    }
+}
+
 /// Asset ID: path under `assets/` without extension, `/`-separated
 /// (flat `assets/<UUID>.jpg` -> `<UUID>`; nested -> `2026/09/30-080000`).
+/// Nook's form; see `Handled` for why `asset_key` is recorded beside it.
 pub fn asset_id(root: &Path, path: &Path) -> Option<String> {
     let rel = path.strip_prefix(root.join("assets")).ok()?;
     let mut parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
@@ -674,13 +914,12 @@ pub fn asset_id(root: &Path, path: &Path) -> Option<String> {
     Some(parts.join("/"))
 }
 
-fn ledger_mark(ledger: &mut Ledger, id: String, saved: i64) {
-    if saved > 0 {
-        ledger.saved_bytes += saved;
-    }
-    if !ledger.assets.contains(&id) {
-        ledger.assets.push(id);
-    }
+/// The path under `assets/` with its extension, `/`-separated
+/// (`2026/09/30-080000.mov`): an id that tells `x.jpg` from `x.mp4`.
+pub fn asset_key(root: &Path, path: &Path) -> Option<String> {
+    let rel = path.strip_prefix(root.join("assets")).ok()?;
+    let parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 // ---------------------------------------------------------------------------
@@ -738,8 +977,9 @@ pub fn content_files(root: &Path) -> Vec<PathBuf> {
 // Relinking
 // ---------------------------------------------------------------------------
 
+// A bare target may hold balanced brackets, as journal::LINK_TARGET_RE allows.
 static IMG_LINK: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"!\[[^\]\n]*\]\(\s*(<[^>\n]*>|[^)\s]+)(?:\s+"[^"\n]*")?\s*\)"#).unwrap());
+    Lazy::new(|| Regex::new(r#"!\[[^\]\n]*\]\(\s*(<[^>\n]*>|(?:[^()\s]|\([^()\s]*\))+)(?:\s+"[^"\n]*")?\s*\)"#).unwrap());
 
 fn lexical_normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
@@ -825,16 +1065,51 @@ fn relink_text(
     (new, hits)
 }
 
+/// The files `relink_heics` rewrites, as root-relative paths: the same set as
+/// `content_files`, listed through the journal and strictly (a folder that
+/// can't be listed is an error, not an empty folder).
+fn content_rels(j: &Journal) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for it in j.vault().list("")? {
+        let name = it.name.to_ascii_lowercase();
+        if it.is_file && !name.starts_with('.') && name.ends_with(".md") && !EXCLUDED_ROOT_MD.contains(&name.as_str()) {
+            out.push(it.name);
+        }
+    }
+    for dir in ["inbox", "journal", "split"] {
+        out.extend(j.try_walk_files(dir)?.into_iter().filter(|rel| rel.to_ascii_lowercase().ends_with(".md") && !rel.split('/').any(|part| part.starts_with('.'))));
+    }
+    out.sort();
+    Ok(out)
+}
+
 /// Relink all content files from each HEIC to its converted JPEG.
-/// `conversions` = (heic path, jpg path) pairs, both under `root`.
-/// Every content file is read strictly; changed files are written atomically.
-/// Returns the HEICs that are safe to delete: all only if every content file
-/// was read OK, minus any HEIC referenced by a file whose write failed.
-pub fn relink_heics(
-    root: &Path,
-    conversions: &[(PathBuf, PathBuf)],
-    errors: &mut Vec<String>,
-) -> Vec<PathBuf> {
+/// `conversions` = (heic path, jpg path) pairs, both under the journal's root.
+///
+/// Every file is rewritten through `Journal::edit_file`, the same
+/// compare-and-swap every other edit of a journal file uses, so a save that
+/// lands while this runs is kept and the rewrite is redone on top of it.
+///
+/// Returns the HEICs nothing points at any more. A HEIC is left out when a
+/// file that links it could not be rewritten, and when anything Quire scans
+/// still mentions it: `transfer.md`, a template, a plain `[x](…)` link, an
+/// `<img>` and so on are not rewritten here, and their file must stay. If any
+/// file or folder could not be read, none are returned.
+pub fn relink_heics(j: &Journal, conversions: &[(PathBuf, PathBuf)], errors: &mut Vec<String>) -> Vec<PathBuf> {
+    relink_heics_sorted(j, conversions, errors).0
+}
+
+/// `relink_heics`, also returning the HEICs that were kept because something
+/// still mentions them (as opposed to a failure, which a later run retries).
+fn relink_heics_sorted(j: &Journal, conversions: &[(PathBuf, PathBuf)], errors: &mut Vec<String>) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let none = (Vec::new(), Vec::new());
+    let root = match j.local() {
+        Ok(r) => r.to_path_buf(),
+        Err(e) => {
+            errors.push(e);
+            return none;
+        }
+    };
     let mut swaps: HashMap<PathBuf, String> = HashMap::new();
     let mut by_key: HashMap<PathBuf, PathBuf> = HashMap::new();
     for (heic, jpg) in conversions {
@@ -846,31 +1121,63 @@ pub fn relink_heics(
         by_key.insert(key, heic.clone());
     }
     if swaps.is_empty() {
-        return Vec::new();
+        return none;
     }
+    let files = match content_rels(j) {
+        Ok(f) => f,
+        Err(e) => {
+            errors.push(e);
+            return none;
+        }
+    };
     let mut read_failed = false;
     let mut blocked: HashSet<PathBuf> = HashSet::new();
-    for md in content_files(root) {
-        let text = match fs::read_to_string(&md) {
-            Ok(t) => t,
-            Err(e) => {
+    for rel in files {
+        let md = root.join(&rel);
+        let mut hits: HashSet<PathBuf> = HashSet::new();
+        let edited = j.edit_file(&rel, |content| {
+            let (new, found) = relink_text(content, &md, &root, &swaps);
+            hits = found;
+            Ok((new, ()))
+        });
+        if let Err(e) = edited {
+            if hits.is_empty() {
+                // It never got as far as finding links: the file couldn't be read.
                 read_failed = true;
-                errors.push(format!("Couldn't read {}: {e}", md.display()));
-                continue;
-            }
-        };
-        let (new, hits) = relink_text(&text, &md, root, &swaps);
-        if let Some(new) = new {
-            if let Err(e) = write_atomic(&md, new.as_bytes()) {
-                errors.push(format!("Couldn't update links in {}: {e}", md.display()));
+                errors.push(format!("Couldn't read {rel}: {e}"));
+            } else {
+                errors.push(format!("Couldn't update links in {rel}: {e}"));
                 blocked.extend(hits);
             }
         }
     }
     if read_failed {
-        return Vec::new();
+        return none;
     }
-    by_key.into_iter().filter(|(k, _)| !blocked.contains(k)).map(|(_, h)| h).collect()
+    // Whatever still mentions a HEIC, in any syntax and any markdown file
+    // (templates, transfer.md, exports and conflict copies included), keeps it.
+    let unused: HashSet<String> = match crate::orphan_media(j) {
+        Ok(v) => v.into_iter().collect(),
+        Err(e) => {
+            errors.push(e);
+            return none;
+        }
+    };
+    let (mut free, mut mentioned) = (Vec::new(), Vec::new());
+    for (key, heic) in by_key {
+        if blocked.contains(&key) {
+            continue;
+        }
+        let rel = crate::journal::rel_of(&root, &heic);
+        if unused.contains(&rel) {
+            free.push(heic);
+        } else {
+            errors.push(format!("{rel} is still mentioned in the journal, so it was kept beside its JPEG"));
+            mentioned.push(heic);
+        }
+    }
+    free.sort();
+    (free, mentioned)
 }
 
 // ---------------------------------------------------------------------------
@@ -885,11 +1192,18 @@ fn push_unique(v: &mut Vec<String>, s: &str) {
 
 /// Data Saver over the whole journal.
 ///
-/// (a) Every `assets/**/*.heic|heif` (not ledger-filtered) is converted to
-/// JPEG, content links are rewritten, and the HEIC is deleted when safe.
-/// (b) Every compressible image/video/audio under `assets/**` whose ID is in
-/// no device's ledger is compressed serially. Results go to this device's
-/// ledger. Progress covers both passes: `progress(done, total)`.
+/// (a) Every `assets/**/*.heic|heif` not already dealt with is converted to
+/// JPEG and content links are rewritten (`relink_heics`). A HEIC nothing
+/// mentions any more is moved to the recovery folder; one that is still
+/// mentioned stays where it is.
+/// (b) Every compressible image/video/audio under `assets/**` that no device's
+/// ledger lists is compressed serially, its original kept in the recovery
+/// folder first. Results go to this device's ledger. Progress covers both
+/// passes: `progress(done, total)`.
+///
+/// Originals stay in `<sidecar>/media-cleanup/<run>/datasaver/` for
+/// `RECOVERY_DAYS`; older recovery folders are pruned when this starts.
+/// Stops before touching anything if a ledger can't be read.
 pub fn compress_existing(
     root: &Path,
     device_id: &str,
@@ -899,26 +1213,33 @@ pub fn compress_existing(
     if !root.is_dir() {
         return Err(format!("Journal folder not found: {}", root.display()));
     }
+    let j = Journal::open(root);
     let mut report = CompressReport::default();
-    let mut ledger = read_ledger(root, device_id);
-    let handled = handled_assets(root);
+    try_read_ledger(root, device_id)?;
+    let handled = try_handled(root)?;
+    if let Err(e) = crate::prune_media_recovery(&j, crate::RECOVERY_DAYS) {
+        report.errors.push(e);
+    }
+    let park = Park::new(&j);
 
     let files: Vec<PathBuf> = walk_files(&assets)
         .into_iter()
         .filter(|p| !p.file_name().map(|n| n.to_string_lossy().starts_with(TMP_PREFIX)).unwrap_or(true))
         .collect();
-    let heics: Vec<PathBuf> = files.iter().filter(|p| is_heic(&ext_of(p))).cloned().collect();
+    // A HEIC is listed in a ledger only when an earlier run converted it and
+    // had to leave it in place; converting it again would add another JPEG.
+    let heics: Vec<PathBuf> = files.iter().filter(|p| is_heic(&ext_of(p)) && !handled.has(root, p)).cloned().collect();
     // Candidates are listed before the HEIC pass, so freshly converted JPEGs
     // (already compressed) are not recompressed.
-    let candidates: Vec<PathBuf> = files
-        .iter()
-        .filter(|p| kind_of(&ext_of(p)).is_some())
-        .filter(|p| asset_id(root, p).map(|id| !handled.contains(&id)).unwrap_or(false))
-        .cloned()
-        .collect();
+    let candidates: Vec<PathBuf> = files.iter().filter(|p| kind_of(&ext_of(p)).is_some()).filter(|p| !handled.has(root, p)).cloned().collect();
     let total = heics.len() + candidates.len();
     let mut done = 0usize;
     progress(0, total);
+    let note = |report: &mut CompressReport, path: &Path, saved: i64| {
+        if let Err(e) = ledger_add(root, device_id, &[(path.to_path_buf(), saved)]) {
+            report.errors.push(format!("Couldn't write ledger: {e}"));
+        }
+    };
 
     // (a) HEIC pass
     let mut conversions: Vec<(PathBuf, PathBuf)> = Vec::new();
@@ -926,9 +1247,7 @@ pub fn compress_existing(
         match heic_to_jpeg_inner(heic, true) {
             Ok(jpg) => {
                 let saved = file_len(heic) - file_len(&jpg);
-                if let Some(id) = asset_id(root, &jpg) {
-                    ledger_mark(&mut ledger, id, saved);
-                }
+                note(&mut report, &jpg, saved);
                 if saved > 0 {
                     report.saved_bytes += saved;
                 }
@@ -941,23 +1260,23 @@ pub fn compress_existing(
         progress(done, total);
     }
     if !conversions.is_empty() {
-        for heic in relink_heics(root, &conversions, &mut report.errors) {
-            match fs::remove_file(&heic) {
+        let (free, mentioned) = relink_heics_sorted(&j, &conversions, &mut report.errors);
+        for heic in &free {
+            match park.take(heic) {
                 Ok(()) => report.heic_converted += 1,
-                Err(e) => report.errors.push(format!("Couldn't delete {}: {e}", heic.display())),
+                Err(e) => report.errors.push(e),
             }
         }
-        if let Err(e) = write_ledger(root, device_id, &ledger) {
-            report.errors.push(format!("Couldn't write ledger: {e}"));
+        for heic in &mentioned {
+            // Staying for good: don't make another JPEG of it next time.
+            note(&mut report, heic, 0);
         }
     }
 
     // (b) compression pass
     for path in &candidates {
         let kind = kind_of(&ext_of(path)).expect("filtered above");
-        let id = asset_id(root, path).expect("filtered above");
-        let mut dirty = false;
-        match compress_path(path) {
+        match compress_path(path, Some(&park)) {
             Ok(Some(saved)) => {
                 report.saved_bytes += saved;
                 match kind {
@@ -965,25 +1284,17 @@ pub fn compress_existing(
                     Kind::Video => report.videos += 1,
                     Kind::Audio => report.audio += 1,
                 }
-                ledger_mark(&mut ledger, id, saved);
-                dirty = true;
+                note(&mut report, path, saved);
             }
-            Ok(None) => {
-                ledger_mark(&mut ledger, id, 0);
-                dirty = true;
-            }
+            Ok(None) => note(&mut report, path, 0),
             // Not marked handled: retried on a later run.
             Err(MediaError::MissingTool(t)) => push_unique(&mut report.skipped_missing_tools, t),
             Err(MediaError::Failed(e)) => report.errors.push(e),
         }
-        if dirty {
-            if let Err(e) = write_ledger(root, device_id, &ledger) {
-                report.errors.push(format!("Couldn't write ledger: {e}"));
-            }
-        }
         done += 1;
         progress(done, total);
     }
+    report.recovery = park.used();
     Ok(report)
 }
 
@@ -1180,10 +1491,11 @@ mod tests {
         fs::write(root.join("Ideas.md"), "![](assets/UUID-1.HEIC)").unwrap();
 
         let mut errors = Vec::new();
-        let mut del = relink_heics(root, &[(heic.clone(), jpg), (flat.clone(), flat_jpg)], &mut errors);
-        del.sort();
-        assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(del.len(), 2);
+        let del = relink_heics(&Journal::open(root), &[(heic.clone(), jpg), (flat.clone(), flat_jpg)], &mut errors);
+        // export.md isn't rewritten and still shows x.heic: that file stays.
+        assert_eq!(del, vec![flat.clone()]);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("assets/2026/09/x.heic") && errors[0].contains("still mentioned"), "{errors:?}");
         assert_eq!(
             fs::read_to_string(root.join("journal/2026/09/30.md")).unwrap(),
             "![](../../../assets/2026/09/x-1.jpg)\n![](assets/UUID-1.jpg)\n"
@@ -1207,7 +1519,7 @@ mod tests {
         fs::write(root.join("bad.md"), [0xff, 0xfe, 0x00]).unwrap();
         fs::write(root.join("inbox.md"), "![](assets/a.heic)").unwrap();
         let mut errors = Vec::new();
-        let del = relink_heics(root, &[(heic, jpg)], &mut errors);
+        let del = relink_heics(&Journal::open(root), &[(heic, jpg)], &mut errors);
         assert!(del.is_empty());
         assert_eq!(errors.len(), 1);
         // readable file still got relinked
@@ -1256,7 +1568,14 @@ mod tests {
         assert_eq!(l.saved_bytes, rep.saved_bytes);
         let mut ids = l.assets.clone();
         ids.sort();
-        assert_eq!(ids, vec!["2026/09/a", "FLAT-UUID", "tiny"]);
+        assert_eq!(ids, vec!["2026/09/a", "2026/09/a.jpg", "FLAT-UUID", "FLAT-UUID.jpg", "tiny", "tiny.png"]);
+        // The originals of the two that shrank are kept, byte for byte.
+        let recovery = rep.recovery.clone().expect("a recovery folder");
+        assert!(recovery.starts_with(".quire/media-cleanup/"), "{recovery}");
+        assert_eq!(fs::read(root.join(&recovery).join("datasaver/assets/2026/09/a.jpg")).unwrap(), big);
+        assert_eq!(fs::read(root.join(&recovery).join("datasaver/assets/FLAT-UUID.jpg")).unwrap(), big);
+        assert!(!root.join(&recovery).join("datasaver/assets/tiny.png").exists(), "nothing replaced, nothing kept");
+        assert!(!root.join(".nook").exists(), "the sidecar was renamed on the first write, not doubled");
         assert_eq!(data_saved_total(root), rep.saved_bytes + 5);
         // second run: nothing to do
         let rep2 = compress_existing(root, "desk", &mut |_, _| {}).unwrap();
@@ -1419,6 +1738,8 @@ mod tests {
         assert!(read_ledger(root, "d").assets.contains(&"2026/09/p".to_string()));
         let leftovers = fs::read_dir(root.join("assets/2026/09")).unwrap().count();
         assert_eq!(leftovers, 1);
+        let kept = root.join(rep.recovery.unwrap()).join("datasaver/assets/2026/09/p.heic");
+        assert_eq!(fs::read(kept).unwrap(), bytes, "the HEIC is parked, not deleted");
     }
 
     #[test]
@@ -1433,6 +1754,213 @@ mod tests {
         let rep = compress_existing(root, "d", &mut |_, _| {}).unwrap();
         assert_eq!(rep.videos, 1, "{rep:?}");
         assert!(read_ledger(root, "d").assets.contains(&"2026/09/clip".to_string()));
+    }
+    // ----- fixes from the 2026-11-09 review -----
+
+    // C1
+    #[test]
+    fn ffmpeg_listing_tells_sound_from_picture() {
+        let both = "Input #0, matroska,webm, from 'c.webm':\n  Duration: 00:00:02.00\n  Stream #0:0: Video: vp9 (Profile 0), yuv420p(tv), 640x360, 30 fps\n  Stream #0:1(eng): Audio: opus, 48000 Hz, stereo\nAt least one output file must be specified\n";
+        let sound = "Input #0, matroska,webm, from 'a.webm':\n  Stream #0:0: Audio: opus, 48000 Hz, mono, fltp (default)\n";
+        assert_eq!(listing_has_video(both), Some(true));
+        assert_eq!(listing_has_video(sound), Some(false));
+        assert_eq!(listing_has_video("c.webm: Invalid data found when processing input\n"), None, "unreadable is not 'no picture'");
+        assert!(may_hold_video("WEBM") && may_hold_video(".ogg") && !may_hold_video("weba") && !may_hold_video("m4a"));
+        let args = ffmpeg_args("mp4", Path::new("in.mp4"), Path::new("out.mp4")).unwrap();
+        let at = args.iter().position(|a| a == "-pix_fmt").expect("the video recipe names a pixel format");
+        assert_eq!(args[at + 1], "yuv420p");
+    }
+
+    #[test]
+    fn a_webm_with_a_picture_is_left_alone() {
+        if ffmpeg().is_none() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        // Picture and sound in a Matroska container under the .webm name (the
+        // name is all the old code went by; it then kept only the sound).
+        let webm = dir.path().join("clip.webm");
+        gen(&[
+            "-f", "lavfi", "-i", "testsrc=duration=2:size=640x360:rate=30",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+            "-c:v", "mpeg4", "-q:v", "1", "-c:a", "libopus", "-b:a", "256k", "-ac", "2", "-shortest", "-f", "matroska", webm.to_str().unwrap(),
+        ]);
+        let before = fs::read(&webm).unwrap();
+        assert!(has_video_stream(&ffmpeg().unwrap(), &webm).unwrap());
+        assert_eq!(compress_file_in_place(&webm).unwrap(), None);
+        assert_eq!(fs::read(&webm).unwrap(), before, "byte for byte");
+        // In a journal: counted as dealt with, and still whole.
+        let root = dir.path().join("journal");
+        fs::create_dir_all(root.join("assets/2026/11")).unwrap();
+        fs::copy(&webm, root.join("assets/2026/11/clip.webm")).unwrap();
+        let rep = compress_existing(&root, "d", &mut |_, _| {}).unwrap();
+        assert_eq!((rep.audio, rep.videos, rep.errors.len(), rep.recovery.is_none()), (0, 0, 0, true), "{rep:?}");
+        assert_eq!(fs::read(root.join("assets/2026/11/clip.webm")).unwrap(), before);
+        assert!(has_video_stream(&ffmpeg().unwrap(), &root.join("assets/2026/11/clip.webm")).unwrap());
+    }
+
+    // C7
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for b in bytes {
+            crc ^= *b as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    }
+
+    #[test]
+    fn images_with_more_than_one_frame_are_not_recompressed() {
+        let img = photo_like(2500, 1000);
+        // An animated PNG: the same file with an animation-control chunk
+        // (two frames, loop forever) after the header.
+        let png = encode_png_default(&img);
+        assert!(compress_image_bytes(&png, "png").is_some());
+        let mut chunk = b"acTL".to_vec();
+        chunk.extend([0, 0, 0, 2, 0, 0, 0, 0]);
+        let mut apng = png[..33].to_vec(); // signature + IHDR
+        apng.extend(8u32.to_be_bytes());
+        apng.extend(&chunk);
+        apng.extend(crc32(&chunk).to_be_bytes());
+        apng.extend(&png[33..]);
+        assert!(has_many_frames(&apng, ImageFormat::Png) && !has_many_frames(&png, ImageFormat::Png));
+        assert!(compress_image_bytes(&apng, "png").is_none());
+        assert_eq!(on_attach(&apng, "png", true).0, apng, "attached as it is");
+
+        // A TIFF whose first directory points on to a second one.
+        let mut c = Cursor::new(Vec::new());
+        img.write_to(&mut c, ImageFormat::Tiff).unwrap();
+        let tiff = c.into_inner();
+        assert_eq!(tiff_has_more_pages(&tiff), Some(false));
+        assert!(compress_image_bytes(&tiff, "tiff").is_some());
+        let le = &tiff[..2] == b"II";
+        let rd32 = |i: usize| if le { u32::from_le_bytes(tiff[i..i + 4].try_into().unwrap()) } else { u32::from_be_bytes(tiff[i..i + 4].try_into().unwrap()) } as usize;
+        let rd16 = |i: usize| if le { u16::from_le_bytes(tiff[i..i + 2].try_into().unwrap()) } else { u16::from_be_bytes(tiff[i..i + 2].try_into().unwrap()) } as usize;
+        let ifd = rd32(4);
+        let next = ifd + 2 + rd16(ifd) * 12;
+        let mut paged = tiff.clone();
+        paged[next..next + 4].copy_from_slice(&[8, 8, 8, 8]);
+        assert_eq!(tiff_has_more_pages(&paged), Some(true));
+        assert!(compress_image_bytes(&paged, "tif").is_none());
+        assert_eq!(tiff_has_more_pages(b"II+\0"), None, "BigTIFF isn't followed, so it counts as many");
+        assert!(has_many_frames(b"II+\0\x08\0\0\0", ImageFormat::Tiff));
+    }
+
+    #[test]
+    fn a_compressed_asset_keeps_its_original_for_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("j");
+        fs::create_dir_all(root.join("assets/2026/11")).unwrap();
+        let big = encode_jpeg_q(&photo_like(3000, 2000), 95);
+        let photo = root.join("assets/2026/11/09-080000.jpg");
+        fs::write(&photo, &big).unwrap();
+        // Both ways in: told the journal, or left to find it from the path.
+        let saved = compress_asset(&root, &photo).unwrap().unwrap();
+        assert_eq!(fs::read(&photo).unwrap().len() as i64, big.len() as i64 - saved);
+        let j = Journal::open(&root);
+        let kept: Vec<String> = j.walk_files(".quire/media-cleanup").into_iter().filter(|p| p.ends_with("/datasaver/assets/2026/11/09-080000.jpg")).collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(fs::read(root.join(&kept[0])).unwrap(), big);
+        let second = root.join("assets/2026/11/09-090000.jpg");
+        fs::write(&second, &big).unwrap();
+        assert!(compress_file_in_place(&second).unwrap().is_some());
+        assert_eq!(j.walk_files(".quire/media-cleanup").iter().filter(|p| p.ends_with("09-090000.jpg")).count(), 1);
+        assert!(compress_asset(&root, &dir.path().join("elsewhere.jpg")).is_err());
+        // The recovery copies go when they are old enough, like media cleanup's.
+        assert_eq!(crate::prune_media_recovery(&j, crate::RECOVERY_DAYS).unwrap(), 0);
+        assert_eq!(crate::prune_media_recovery(&j, -1).unwrap(), 2);
+        assert!(j.walk_files(".quire/media-cleanup").is_empty());
+    }
+
+    // C2
+    #[test]
+    fn relinking_goes_through_the_journal_and_keeps_what_is_still_mentioned() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let j = Journal::open(root);
+        let w = |rel: &str, text: &str| j.write(rel, text).unwrap();
+        let mut pairs = Vec::new();
+        for name in ["linked", "in-transfer", "in-template", "plain-link", "html", "image(1)"] {
+            let (heic, jpg) = (root.join(format!("assets/{name}.heic")), root.join(format!("assets/{name}.jpg")));
+            j.vault().write(&format!("assets/{name}.heic"), b"heic").unwrap();
+            j.vault().write(&format!("assets/{name}.jpg"), b"jpeg").unwrap();
+            pairs.push((heic, jpg));
+        }
+        w("journal/2026/11/09.md", "[2026-11-09 08:00:00]\r\n![](assets/linked.heic) ![](assets/image(1).heic)\r\n[the file](assets/plain-link.heic)\r\n<img src=\"assets/html.heic\">\r\n");
+        w("transfer.md", "![](assets/in-transfer.heic)\n");
+        w(".quire/templates/photo.md", "![](assets/in-template.heic)\n");
+        let mut errors = Vec::new();
+        let free = relink_heics(&j, &pairs, &mut errors);
+        let names: Vec<String> = free.iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect();
+        assert_eq!(names, vec!["image(1).heic", "linked.heic"], "{errors:?}");
+        assert_eq!(errors.len(), 4, "{errors:?}");
+        assert!(errors.iter().all(|e| e.contains("still mentioned")));
+        assert_eq!(
+            j.read("journal/2026/11/09.md"),
+            "[2026-11-09 08:00:00]\n![](assets/linked.jpg) ![](assets/image(1).jpg)\n[the file](assets/plain-link.heic)\n<img src=\"assets/html.heic\">\n"
+        );
+        assert_eq!(j.read("transfer.md"), "![](assets/in-transfer.heic)\n");
+    }
+
+    // C14
+    #[test]
+    fn a_ledger_that_cannot_be_parsed_stops_the_run_and_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("assets")).unwrap();
+        fs::create_dir_all(root.join(".quire")).unwrap();
+        let big = encode_jpeg_q(&photo_like(3000, 2000), 95);
+        fs::write(root.join("assets/a.jpg"), &big).unwrap();
+        let cut_short = r#"{"savedBytes":1000,"assets":["a","b","#;
+        for (device, mine) in [("desk", true), ("phone", false)] {
+            let ledger = root.join(format!(".quire/datasaver-{device}.json"));
+            fs::write(&ledger, cut_short).unwrap();
+            let e = compress_existing(root, "desk", &mut |_, _| {}).unwrap_err();
+            assert!(e.contains("can't be read"), "{e}");
+            assert_eq!(fs::read(root.join("assets/a.jpg")).unwrap(), big, "nothing re-encoded");
+            assert_eq!(fs::read_to_string(&ledger).unwrap(), cut_short, "and the ledger is not replaced");
+            if mine {
+                assert!(try_read_ledger(root, "desk").is_err());
+                assert!(ledger_add(root, "desk", &[(root.join("assets/a.jpg"), 5)]).is_err());
+                record_saving(root, "desk", &root.join("assets/a.jpg"), 5);
+                assert_eq!(fs::read_to_string(&ledger).unwrap(), cut_short);
+                assert_eq!(read_ledger(root, "desk"), Ledger::default(), "the lenient read is only for showing figures");
+            }
+            fs::remove_file(&ledger).unwrap();
+        }
+    }
+
+    #[test]
+    fn ledger_entries_merge_and_tell_a_photo_from_a_video_of_the_same_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let at = |name: &str| root.join("assets/2026/11").join(name);
+        // Nook's ledger: the short id only. It can't say which file it meant,
+        // so both count as done, as they always have.
+        fs::create_dir_all(root.join(".quire")).unwrap();
+        fs::write(root.join(".quire/datasaver-phone.json"), r#"{"savedBytes":10,"assets":["2026/11/old"]}"#).unwrap();
+        let h = try_handled(root).unwrap();
+        assert!(h.has(root, &at("old.jpg")) && h.has(root, &at("old.mp4")) && !h.has(root, &at("x.jpg")));
+        // Quire records the photo: the video of the same name is still to do.
+        ledger_add(root, "desk", &[(at("x.jpg"), 100)]).unwrap();
+        let h = try_handled(root).unwrap();
+        assert!(h.has(root, &at("x.jpg")) && !h.has(root, &at("x.mp4")));
+        // Another process with the same device id added an entry in between:
+        // adding to the ledger keeps it.
+        let mut theirs = read_ledger(root, "desk");
+        theirs.assets.push("2026/11/theirs.mov".into());
+        theirs.saved_bytes += 7;
+        write_ledger(root, "desk", &theirs).unwrap();
+        ledger_add(root, "desk", &[(at("x.mp4"), 50), (at("x.jpg"), 999)]).unwrap();
+        let l = read_ledger(root, "desk");
+        assert_eq!(l.saved_bytes, 157, "each asset counted once");
+        assert_eq!(l.assets, vec!["2026/11/x.jpg", "2026/11/x", "2026/11/theirs.mov", "2026/11/x.mp4"]);
+        let h = try_handled(root).unwrap();
+        assert!(h.has(root, &at("x.mp4")) && h.has(root, &at("theirs.mov")));
+        assert_eq!(asset_key(root, &at("x.mp4")).unwrap(), "2026/11/x.mp4");
+        assert_eq!(data_saved_total(root), 167);
     }
 }
 

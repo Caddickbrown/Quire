@@ -1,6 +1,9 @@
 name: CI
-# The checks CLAUDE.md asks for before a push, on every push to main, and for
-# release.yml, which runs them on the tag and publishes nothing if they fail.
+# The checks CLAUDE.md asks for before a push: make test, make check and
+# make smoke. It does not run on a push. It runs when asked (Actions → CI →
+# Run workflow, or `gh workflow run ci.yml`), and release.yml calls it on a
+# release tag and publishes nothing if it fails. Between releases the three
+# commands are run by hand.
 on:
   workflow_dispatch:
   workflow_call:
@@ -22,7 +25,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # the stable branch, 2026-11-09
         with:
           components: clippy
       - run: make test

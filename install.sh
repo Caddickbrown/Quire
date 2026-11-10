@@ -111,7 +111,27 @@ else
   B=""; D=""; R=""; A=""; W=""
 fi
 
-log() { [ $DRY -eq 1 ] && return 0; mkdir -p "$STATE_DIR" && printf '%s\n' "$*" >>"$LOG"; }
+# The log names your folders and holds build output: it and its folder are
+# made for you alone (0700 / 0600).
+log() {
+  [ $DRY -eq 1 ] && return 0
+  if [ ! -f "$LOG" ]; then
+    (umask 077; mkdir -p "$STATE_DIR" && : >>"$LOG") || return 0
+    chmod 700 "$STATE_DIR" 2>/dev/null
+    chmod 600 "$LOG" 2>/dev/null
+  fi
+  printf '%s\n' "$*" >>"$LOG"
+}
+
+# Scratch folders (the download, the probe) go when the script ends, however
+# it ends.
+DL=""; PROBE=""
+cleanup() {
+  [ -n "$DL" ] && [ $DRY -eq 0 ] && rm -rf "$DL"
+  [ -n "$PROBE" ] && rm -rf "$PROBE"
+  return 0
+}
+trap cleanup EXIT
 say() { printf '%s\n' "$*"; log "$*"; }
 head1() { printf '\n%s%s%s\n' "$B$A" "$*" "$R"; log "== $*"; }
 warn() { printf '%s! %s%s\n' "$W" "$*" "$R"; log "! $*"; }
@@ -369,12 +389,20 @@ EOF
   [ -d "$HOME/notes" ] && looks_like_journal "$HOME/notes" && add_journal "$HOME/notes" "jnl default"
 }
 
+# An AppImage is offered for removal by default only when the file itself
+# carries the app's bundle id; a matching filename alone is asked about with
+# the default no.
 detect_appimages() {
-  local app=$1 glob=$2 dir f
+  local app=$1 glob=$2 id=$3 dir f
   for dir in "$HOME/Applications" "$HOME/Downloads" "$HOME/Desktop" "$HOME/.local/bin" "$HOME/bin" /opt; do
     [ -d "$dir" ] || continue
     while IFS= read -r f; do
-      [ -n "$f" ] && add_item "$app" file "$f" "$app AppImage — $f" y
+      [ -n "$f" ] || continue
+      if grep -a -q -F "$id" "$f" 2>/dev/null; then
+        add_item "$app" file "$f" "$app AppImage — $f" y
+      else
+        add_item "$app" file "$f" "an AppImage named like $app — $f" n
+      fi
     done <<EOF
 $(find "$dir" -maxdepth 2 -type f -iname "$glob" 2>/dev/null)
 EOF
@@ -407,7 +435,7 @@ detect_nook() {
   if [ $OS = linux ]; then
     kind=$(pkg_installed nook /usr/bin/nook)
     [ -n "$kind" ] && add_item Nook "$kind" nook "Nook (.$( [ "$kind" = dpkg ] && echo deb || echo rpm) package 'nook')" y
-    detect_appimages Nook 'nook*.appimage'
+    detect_appimages Nook 'nook*.appimage' com.caddickbrown.nook
     local cfg=${XDG_CONFIG_HOME:-$HOME/.config}/Nook
     [ -f "$cfg/settings.json" ] && add_journal "$(json_str "$cfg/settings.json" customFolder)" "Nook"
     add_cfg Nook "$cfg"
@@ -431,7 +459,7 @@ detect_wander() {
   if [ $OS = linux ]; then
     kind=$(pkg_installed wander /usr/bin/wander)
     [ -n "$kind" ] && add_item Wander "$kind" wander "Wander (.$( [ "$kind" = dpkg ] && echo deb || echo rpm) package 'wander')" y
-    detect_appimages Wander 'wander*.appimage'
+    detect_appimages Wander 'wander*.appimage' com.caddickbrown.wander
     f=${XDG_CONFIG_HOME:-$HOME/.config}/wander
     [ -f "$f/folder" ] && add_journal "$(head -n 1 "$f/folder")" "Wander"
     add_cfg Wander "$f"
@@ -469,17 +497,23 @@ detect_quire() {
   f=$(json_str "$QUIRE_SETTINGS" folder)
   case "$f" in */sample-journal|*/sample-journal/) f="" ;; esac
   [ -n "$f" ] && add_journal "$f" "Quire"
-  if [ -x "$BIN/quire" ] || { [ -x "$BIN/jnl" ] && [ "$(classify_jnl "$BIN/jnl")" = quire ]; }; then
-    add_q cargo quire-tui "the terminal app — $BIN/quire and $BIN/jnl"
+  local q_ok=0 j_ok=0
+  [ -x "$BIN/quire" ] && [ "$(classify_jnl "$BIN/quire")" = quire ] && q_ok=1
+  [ -x "$BIN/jnl" ] && [ "$(classify_jnl "$BIN/jnl")" = quire ] && j_ok=1
+  if [ $q_ok -eq 1 ] || [ $j_ok -eq 1 ]; then
+    if [ $q_ok -eq 1 ] && [ $j_ok -eq 1 ]; then add_q cargo quire-tui "the terminal app — $BIN/quire and $BIN/jnl"
+    elif [ $q_ok -eq 1 ]; then add_q cargo quire-tui "the terminal app — $BIN/quire"
+    else add_q cargo quire-tui "the terminal app — $BIN/jnl"
+    fi
     HAVE_TUI=1
-    if [ -x "$BIN/quire" ]; then QUIRE_CLI="$BIN/quire"; else QUIRE_CLI="$BIN/jnl"; fi
+    if [ $q_ok -eq 1 ]; then QUIRE_CLI="$BIN/quire"; else QUIRE_CLI="$BIN/jnl"; fi
   fi
   # Quire's jnl copied somewhere else (a release binary on PATH, say).
   while IFS= read -r p; do
     [ -n "$p" ] && [ -f "$p" ] || continue
     case "$p" in "$BIN"/*) continue ;; esac
     [ "$(classify_jnl "$p")" = quire ] || continue
-    add_q file "$p" "Quire's jnl — $p"
+    add_q file "$p" "Quire's $(basename "$p") — $p"
     HAVE_TUI=1
     [ -z "$QUIRE_CLI" ] && QUIRE_CLI="$p"
   done <<EOF
@@ -585,6 +619,10 @@ choose_from() {
   elif [ -z "$ARCH" ]; then WHY_BUILD="there's no release build for $(uname -m)"
   elif [ -z "$RELEASE_REPO" ]; then WHY_BUILD="QUIRE_REPO isn't a GitHub repository"
   elif ! have curl; then WHY_BUILD="curl is needed to download"
+  elif [ $DRY -eq 1 ]; then
+    # A dry run changes nothing and asks the network nothing: the release
+    # isn't looked up, so its number is shown as a placeholder.
+    FROM=release; WHY_BUILD=""; REL_TAG="vX.Y.Z"; REL_VER="X.Y.Z"
   elif ! latest_release; then WHY_BUILD="$RELEASE_REPO's releases couldn't be reached"
   else FROM=release; WHY_BUILD=""
   fi
@@ -632,6 +670,31 @@ install_tui_release() {
     || die "couldn't install into $TUI_DIR"
 }
 
+# An older jnl (or anything else called quire or jnl) sitting where Quire's
+# binaries are about to go is moved aside first, never written over; its
+# entry in the removal list is marked done, so the removal step can't take
+# the new one for it.
+clear_tui_dir() {
+  local name p i
+  for name in quire jnl; do
+    p="$TUI_DIR/$name"
+    [ -f "$p" ] || [ -L "$p" ] || continue
+    [ "$(classify_jnl "$p")" = quire ] && continue
+    say "  $p isn't Quire's; moving it aside before Quire's goes there."
+    move_aside "$p" || die "couldn't move $p out of the way — nothing was installed over it"
+    if [ $DRY -eq 0 ] && { [ -e "$p" ] || [ -L "$p" ]; }; then
+      die "couldn't move $p out of the way — nothing was installed over it"
+    fi
+    MOVED_OLD=$((MOVED_OLD + 1))
+    i=0
+    while [ $i -lt ${#ITEM_APP[@]} ]; do
+      [ "${ITEM_KIND[$i]}" = file ] && [ "${ITEM_WHAT[$i]}" = "$p" ] && ITEM_PICK[$i]=moved
+      i=$((i + 1))
+    done
+  done
+}
+MOVED_OLD=0
+
 # ---------- the source ----------
 
 find_source() {
@@ -664,8 +727,10 @@ fetch_source() {
 uninstall_main() {
   head1 "Quire's pieces"
   detect_quire
+  local clone="${XDG_DATA_HOME:-$HOME/.local/share}/quire/src"
+  [ -d "$clone/.git" ] && add_q file "$clone" "the source this installer cloned to build from — $clone"
   if [ ${#Q_KIND[@]} -eq 0 ]; then say "  Quire isn't installed."; return 0; fi
-  local i=0 picks=()
+  local i=0 picks=() p
   while [ $i -lt ${#Q_KIND[@]} ]; do
     if ask "Remove ${Q_DESC[$i]}?" y; then picks+=(y); else picks+=(n); fi
     i=$((i + 1))
@@ -682,10 +747,22 @@ uninstall_main() {
     if [ "${picks[$i]}" = y ]; then
       case "${Q_KIND[$i]}" in
         cargo) if have cargo && cargo install --list 2>/dev/null | grep -q '^quire-tui '; then run cargo uninstall quire-tui
-               else move_aside "$BIN/quire"; move_aside "$BIN/jnl"; fi ;;
+               else
+                 # Only what is Quire's: a jnl or quire of another make stays.
+                 for p in "$BIN/quire" "$BIN/jnl"; do
+                   [ -f "$p" ] || continue
+                   if [ "$(classify_jnl "$p")" = quire ]; then move_aside "$p"
+                   else say "  ${D}leaving $p — it isn't Quire's${R}"; fi
+                 done
+               fi ;;
         dpkg) sudo_run apt-get remove -y quire ;;
         rpm) if have dnf; then sudo_run dnf remove -y quire; else sudo_run rpm -e quire; fi ;;
-        file) move_aside "${Q_WHAT[$i]}" ;;
+        file) # Looked at again now: a jnl is moved only while it is still Quire's.
+              case "$(basename "${Q_WHAT[$i]}")" in
+                jnl|quire) if [ "$(classify_jnl "${Q_WHAT[$i]}")" = quire ]; then move_aside "${Q_WHAT[$i]}"
+                           else say "  ${D}leaving ${Q_WHAT[$i]} — it isn't Quire's${R}"; fi ;;
+                *) move_aside "${Q_WHAT[$i]}" ;;
+              esac ;;
       esac || warn "couldn't remove ${Q_DESC[$i]} — carrying on"
     fi
     i=$((i + 1))
@@ -693,6 +770,10 @@ uninstall_main() {
   [ $drop_cfg -eq 1 ] && move_aside "$cfg_dir"
   head1 "Done"
   say "  Your journal folder is untouched. To bring jnl back: https://github.com/Caddickbrown/jnl"
+  for p in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/quire.fish"; do
+    [ -f "$p" ] && grep -q -F "# Added by Quire's installer" "$p" \
+      && say "  ${D}$p still has the PATH line this installer added; it is harmless, and yours to delete.${R}"
+  done
   [ $DRY -eq 0 ] && say "  Log  $LOG"
   [ $DRY -eq 1 ] && say "  ${D}Dry run: nothing was changed.${R}"
   return 0
@@ -761,6 +842,7 @@ install_main() {
   [ "$PICK" = none ] && [ $HAVE_TUI -eq 0 ] && [ $HAVE_GUI -eq 0 ] && die "--tidy needs Quire installed already; choose --tui, --gui or --both"
   WANT_TUI=0; WANT_GUI=0
   case "$PICK" in tui) WANT_TUI=1 ;; gui) WANT_GUI=1 ;; both) WANT_TUI=1; WANT_GUI=1 ;; esac
+  ASKED_GUI=$WANT_GUI   # WANT_GUI is dropped if its libraries can't be had
   if [ "$PICK" = none ]; then
     say "  → nothing new: the installed Quire stays as it is"
   else
@@ -832,7 +914,7 @@ install_main() {
   olds=$(old_app_names)
   splits=$(legacy_splits "$FOLDER" | tr '\n' ' ' | sed 's/ $//; s/ /, /g')
   if [ -n "$olds" ] && { [ -d "$FOLDER/inbox" ] || [ -d "$FOLDER/split" ] || [ -d "$FOLDER/.quire/migration" ]; }; then
-    since=$(ls "$FOLDER/.quire/migration" 2>/dev/null | sed -n 's/^\(inbox\|split-.*\)-\([0-9]\{4\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)-[0-9]\{6\}.*/\2-\3-\4/p' | sort | head -n 1)
+    since=$(ls "$FOLDER/.quire/migration" 2>/dev/null | sed -E -n 's/^(inbox|split-.*)-([0-9]{4})([0-9]{2})([0-9]{2})-[0-9]{6}.*/\2-\3-\4/p' | sort | head -n 1)
     say ""
     warn "Quire already keeps this journal's drafts in inbox/$([ -d "$FOLDER/split" ] && echo ' and split journals in split/')${since:+ (since $since)}."
     say "    $olds still read only inbox.md and <tag>.md: they don't see what moved, and what"
@@ -842,7 +924,8 @@ install_main() {
   DO_MIGRATE=0; MIGRATE_WHAT=""
   if [ -f "$FOLDER/inbox.md" ] && { [ -d "$FOLDER/inbox" ] || [ -d "$FOLDER/.quire/migration" ]; }; then
     say ""
-    say "  inbox.md has $(grep -c '^\[' "$FOLDER/inbox.md" 2>/dev/null || echo 0) draft(s) written since, by an app still using it."
+    n=$(grep -c '^\[' "$FOLDER/inbox.md" 2>/dev/null)   # prints 0 itself when none match
+    say "  inbox.md has ${n:-0} draft(s) written since, by an app still using it."
     MIGRATE_WHAT="inbox.md"
   elif [ -f "$FOLDER/inbox.md" ]; then
     say ""
@@ -870,7 +953,12 @@ install_main() {
   choose_from
   if [ $FROM = release ]; then
   head1 "What it needs"
-  say "  Quire $REL_VER, the latest release, downloaded and checked against its SHA-256."
+  if [ $DRY -eq 1 ]; then
+    say "  The latest release, downloaded and checked against its SHA-256."
+    say "  ${D}(a dry run doesn't look it up: X.Y.Z below stands for its version)${R}"
+  else
+    say "  Quire $REL_VER, the latest release, downloaded and checked against its SHA-256."
+  fi
   say "  ${D}(--build compiles it from source instead)${R}"
   # An existing ~/.cargo/bin/quire would shadow a new one elsewhere on PATH.
   [ -x "$BIN/quire" ] || TUI_DIR="$HOME/.local/bin"
@@ -993,6 +1081,12 @@ install_main() {
   [ $DO_MEDIA -eq 1 ] && say "  • install ffmpeg and HEIC tools ($PM)"
   [ $DO_FUSE -eq 1 ] && say "  • install $(fuse_pkg) for the AppImage ($PM)"
   local how=build; [ $FROM = release ] && how="download ($REL_VER)"
+  if [ $WANT_TUI -eq 1 ]; then
+    for n in quire jnl; do
+      { [ -f "$TUI_DIR/$n" ] || [ -L "$TUI_DIR/$n" ]; } && [ "$(classify_jnl "$TUI_DIR/$n")" != quire ] \
+        && say "  • move $TUI_DIR/$n aside (it isn't Quire's, and Quire's $n goes there)"
+    done
+  fi
   [ $WANT_TUI -eq 1 ] && say "  • $how and install the terminal app → $TUI_DIR"
   [ $WANT_GUI -eq 1 ] && say "  • $how and install the desktop app ($BUNDLE)"
   [ -n "$SWITCH_PKG" ] && say "  • then remove the desktop app's old package"
@@ -1018,9 +1112,11 @@ install_main() {
   # ----- 3. back up -----
   if [ $DO_BACKUP -eq 1 ]; then
     head1 "Backing up"
-    run tar -czf "$HOME/quire-preinstall-$STAMP.tar.gz" -C "$(dirname "$FOLDER")" "$(basename "$FOLDER")" \
+    # The whole journal in one file: readable by you alone.
+    (umask 077; run tar -czf "$HOME/quire-preinstall-$STAMP.tar.gz" -C "$(dirname "$FOLDER")" "$(basename "$FOLDER")") \
       || die "backup failed — nothing else was changed"
-    say "  → ~/quire-preinstall-$STAMP.tar.gz"
+    run chmod 600 "$HOME/quire-preinstall-$STAMP.tar.gz" || die "couldn't make the backup private — nothing else was changed"
+    say "  → ~/quire-preinstall-$STAMP.tar.gz  ${D}(readable only by you)${R}"
   fi
 
   # ----- 4. prerequisites -----
@@ -1074,7 +1170,9 @@ install_main() {
     say "  Source: $SRC"
   else
     if [ $DRY -eq 1 ]; then DL="${TMPDIR:-/tmp}/quire-download"
-    else DL=$(mktemp -d 2>/dev/null || echo "$STATE_DIR/download-$STAMP"); mkdir -p "$DL"
+    else
+      DL=$(mktemp -d 2>/dev/null || echo "$STATE_DIR/download-$STAMP")
+      (umask 077; mkdir -p "$DL") || die "couldn't make a folder to download into"
     fi
   fi
   fi
@@ -1082,6 +1180,7 @@ install_main() {
   # ----- 5. download or build, and install -----
   if [ $WANT_TUI -eq 1 ]; then
     head1 "The terminal app"
+    clear_tui_dir
     if [ $FROM = release ]; then
       say "  Downloading Quire $REL_VER…"
       install_tui_release
@@ -1093,10 +1192,10 @@ install_main() {
       [ -x "$TUI_DIR/quire" ] && [ -x "$TUI_DIR/jnl" ] || die "the install finished but $TUI_DIR/quire isn't there"
       # In a scratch folder: every quire run folds an inbox.md, and that is
       # the user's call (asked above), not a side effect of checking the build.
-      local probe
-      probe=$(mktemp -d 2>/dev/null || echo "$STATE_DIR/probe-$STAMP")
-      "$TUI_DIR/quire" --folder "$probe" help >/dev/null 2>&1 </dev/null || die "$TUI_DIR/quire doesn't run"
-      rm -rf "$probe"
+      PROBE=$(mktemp -d 2>/dev/null || echo "$STATE_DIR/probe-$STAMP")
+      mkdir -p "$PROBE"
+      "$TUI_DIR/quire" --folder "$PROBE" help >/dev/null 2>&1 </dev/null || die "$TUI_DIR/quire doesn't run"
+      rm -rf "$PROBE"; PROBE=""
     fi
     say "  ✓ quire and jnl → $TUI_DIR$([ $FROM = release ] && echo "  ${D}(\`quire update\` keeps them current)${R}")"
     QUIRE_CLI="$TUI_DIR/quire"
@@ -1118,11 +1217,15 @@ install_main() {
       built=1
     elif [ "$TAURI_VIA" = npm ]; then
       say "  Building (several minutes the first time)…"
-      run_loud sh -c "cd \"$SRC/linux\" && npm install --no-fund --no-audit && npx tauri build --bundles $BUNDLE" && built=1
+      # The folder is an argument, not text in the command: a path with a
+      # quote, a $ or a space in it stays a path.
+      # shellcheck disable=SC2016
+      run_loud sh -c 'cd "$1" && npm install --no-fund --no-audit && npx tauri build --bundles "$2"' sh "$SRC/linux" "$BUNDLE" && built=1
     else
       say "  Building (several minutes the first time)…"
       if have cargo-tauri || [ $DRY -eq 1 ] || run_loud cargo install tauri-cli --version '^2' --locked; then
-        run_loud sh -c "cd \"$SRC/linux\" && cargo tauri build --bundles $BUNDLE" && built=1
+        # shellcheck disable=SC2016
+        run_loud sh -c 'cd "$1" && cargo tauri build --bundles "$2"' sh "$SRC/linux" "$BUNDLE" && built=1
       fi
     fi
     if [ $built -eq 0 ]; then
@@ -1140,6 +1243,29 @@ install_main() {
     fi
   fi
 
+  # Nook and Wander were to go because Quire's desktop app replaces them. It
+  # isn't here, so they stay, whatever was answered above.
+  if [ $ASKED_GUI -eq 1 ] && [ $GUI_DONE -eq 0 ]; then
+    n=0
+    i=0
+    while [ $i -lt ${#ITEM_APP[@]} ]; do
+      case "${ITEM_APP[$i]}" in
+        Nook|Wander) [ "${ITEM_PICK[$i]}" = y ] && { ITEM_PICK[$i]=n; n=$((n + 1)); } ;;
+      esac
+      i=$((i + 1))
+    done
+    i=0
+    while [ $i -lt ${#CFG_APP[@]} ]; do
+      case "${CFG_APP[$i]}" in
+        Nook|Wander) [ "${CFG_PICK[$i]}" = y ] && { CFG_PICK[$i]=n; n=$((n + 1)); } ;;
+      esac
+      i=$((i + 1))
+    done
+    [ $n -gt 0 ] && warn "Quire's desktop app didn't install, so Nook and Wander (and their settings) are left in place."
+  fi
+  # Everything from the download is installed or abandoned by now.
+  if [ -n "$DL" ] && [ $DRY -eq 0 ]; then rm -rf "$DL"; DL=""; fi
+
   # ----- 6. point it at the journal -----
   head1 "Setting Quire up"
   if [ $DRY -eq 0 ] && [ ! -d "$FOLDER" ]; then
@@ -1152,8 +1278,10 @@ install_main() {
   if [ $DO_MIGRATE -eq 1 ]; then
     if [ -n "$QUIRE_CLI" ]; then
       run "$QUIRE_CLI" --folder "$FOLDER" migrate || die "moving the drafts failed — inbox.md is untouched; see $LOG"
-    elif have python3 && [ -f "$SRC/tools/migrate_journal.py" ]; then
-      run python3 -I "$SRC/tools/migrate_journal.py" "$FOLDER" --apply --keep-nook \
+    elif have python3 && [ -n "${SRC:-}" ] && [ -f "$SRC/tools/migrate_journal.py" ]; then
+      # Without --keep-nook: the tool moves .nook/ to .quire/ before it makes
+      # .quire/migration/, so Nook's templates and searches stay visible.
+      run python3 -I "$SRC/tools/migrate_journal.py" "$FOLDER" --apply \
         || die "moving the drafts failed — inbox.md is untouched; see $LOG"
     else
       say "  The desktop app will move the drafts when it next opens the folder."
@@ -1167,7 +1295,12 @@ install_main() {
   local removed=0 pkgs=0
   i=0
   while [ $i -lt ${#ITEM_APP[@]} ]; do
-    if [ "${ITEM_PICK[$i]}" = y ]; then
+    if [ "${ITEM_PICK[$i]}" = y ] && [ "${ITEM_APP[$i]}" = jnl ] && [ "${ITEM_KIND[$i]}" = file ] \
+       && [ "$(classify_jnl "${ITEM_WHAT[$i]}")" = quire ]; then
+      # Looked at again, now: this path holds Quire's jnl (installed over it,
+      # or reached through a link), and that one stays.
+      say "  ${D}${ITEM_WHAT[$i]} is Quire's jnl now — left where it is${R}"
+    elif [ "${ITEM_PICK[$i]}" = y ]; then
       [ $removed -eq 0 ] && head1 "Removing the old apps"
       removed=$((removed + 1))
       [ "${ITEM_KIND[$i]}" = file ] || pkgs=$((pkgs + 1))
@@ -1179,6 +1312,8 @@ install_main() {
     fi
     i=$((i + 1))
   done
+  # Those moved aside before the install count as removed.
+  removed=$((removed + MOVED_OLD))
   i=0
   while [ $i -lt ${#CFG_APP[@]} ]; do
     [ "${CFG_PICK[$i]}" = y ] && move_aside "${CFG_PATH[$i]}"
@@ -1296,8 +1431,18 @@ install_gui() {
       f=${GUI_FILE:-$(ls -t "$out"/appimage/*.AppImage 2>/dev/null | head -n 1)}
       [ $DRY -eq 1 ] && f=${f:-$out/appimage/Quire_amd64.AppImage}
       [ -n "$f" ] || { warn "no AppImage in $out/appimage"; return 1; }
-      run mkdir -p "$HOME/Applications" "$APPS_DIR" "$(dirname "$ICON_PATH")"
-      run install -m 755 "$f" "$APPIMAGE"
+      run mkdir -p "$HOME/Applications" "$APPS_DIR" "$(dirname "$ICON_PATH")" \
+        || { warn "couldn't create $HOME/Applications or the launcher folders"; return 1; }
+      # Copied beside the old one and compared with the file that was checked
+      # (or built) before it takes the name: a short copy never replaces a
+      # working app, and the caller removes no package until this returns 0.
+      run install -m 755 "$f" "$APPIMAGE.new" || { rm -f "$APPIMAGE.new"; warn "copying the AppImage to $HOME/Applications failed"; return 1; }
+      if [ $DRY -eq 0 ] && [ "$(sha256_of "$APPIMAGE.new")" != "$(sha256_of "$f")" ]; then
+        rm -f "$APPIMAGE.new"
+        warn "the copy of the AppImage doesn't match the file it came from — not installed"
+        return 1
+      fi
+      run mv -f "$APPIMAGE.new" "$APPIMAGE" || { rm -f "$APPIMAGE.new"; warn "couldn't put the AppImage at $APPIMAGE"; return 1; }
       [ -f "${ICON_FILE:-$SRC/linux/src-tauri/icons/128x128.png}" ] || [ $DRY -eq 1 ] \
         && run install -m 644 "${ICON_FILE:-$SRC/linux/src-tauri/icons/128x128.png}" "$ICON_PATH"
       # Without FUSE the AppImage can still run by unpacking itself first.
@@ -1336,20 +1481,30 @@ write_settings() {
   [ $DRY -eq 1 ] && return 0
   mkdir -p "$(dirname "$QUIRE_SETTINGS")"
   if have python3; then
-    python3 -I - "$QUIRE_SETTINGS" "$FOLDER" <<'PY' || die "couldn't write Quire's settings"
-import json, os, sys
-path, folder = sys.argv[1], sys.argv[2]
-try:
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-except (OSError, ValueError):
-    data = {}
+    # A settings file that can't be read as JSON is copied to
+    # settings.json.bad-<stamp> before a new one is written; if the copy
+    # fails, nothing is written.
+    python3 -I - "$QUIRE_SETTINGS" "$FOLDER" "$QUIRE_SETTINGS.bad-$STAMP" <<'PY' || die "couldn't write Quire's settings — the file there is as it was"
+import json, os, shutil, sys
+path, folder, bad = sys.argv[1], sys.argv[2], sys.argv[3]
+data = {}
+if os.path.lexists(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("not a JSON object")
+    except (OSError, ValueError):
+        shutil.copy2(path, bad)   # raises, and so stops, if it can't be kept
+        data = {}
 data["folder"] = folder
 tmp = path + ".tmp"
 with open(tmp, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
 os.replace(tmp, path)
 PY
+    [ -f "$QUIRE_SETTINGS.bad-$STAMP" ] \
+      && warn "settings.json couldn't be read; it is kept as $QUIRE_SETTINGS.bad-$STAMP and a new one holds only the folder."
   elif [ ! -f "$QUIRE_SETTINGS" ]; then
     local esc
     esc=$(printf '%s' "$FOLDER" | sed 's/\\/\\\\/g; s/"/\\"/g')

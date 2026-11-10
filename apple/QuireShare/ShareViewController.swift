@@ -9,7 +9,7 @@
 //
 //  The extension never touches the journal itself — it can't reach a custom
 //  folder's security-scoped bookmark — so everything lands in the App Group's
-//  `PendingShare/` handoff (a `pending.md` of jnl-format drafts plus an
+//  `PendingShare/` handoff (a `share-<id>.md` jnl-format draft per share plus an
 //  `assets/` folder), which the app drains into the inbox on its next launch
 //  or foreground (`JournalStore.drainPendingShares`). Media is copied
 //  file-to-file (never buffered — extensions have a tight memory budget) and
@@ -175,7 +175,7 @@ struct ShareComposeView: View {
 
 enum ShareCapture {
     /// Read the attachments: text/URLs into the editable body, media copied
-    /// into the handoff's assets folder. Nothing is written to pending.md yet.
+    /// into the handoff's assets folder. No draft is written yet.
     static func collect(items: [NSExtensionItem]) async -> CapturedShare? {
         var textParts: [String] = []
         var mediaLinks: [String] = []
@@ -213,7 +213,7 @@ enum ShareCapture {
     }
 
     /// Commit: compose the final body (edited text, then media links, then a
-    /// tag line) and append it to pending.md.
+    /// tag line) and leave it for the app as a draft file of its own.
     static func save(_ captured: CapturedShare, editedText: String, tags: String) {
         var parts: [String] = []
         let text = editedText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -293,12 +293,14 @@ enum ShareCapture {
             .appendingPathComponent("PendingShare", isDirectory: true)
     }
 
-    /// Append one jnl-format draft to pending.md (the same header shape the
-    /// app writes: `[YYYY-MM-DD HH:MM:SS] title` then the body).
+    /// Write one jnl-format draft (the same header shape the app writes:
+    /// `[YYYY-MM-DD HH:MM:SS] title` then the body) as a file of its own,
+    /// `share-<id>.md`, complete or not there at all. It used to be appended to
+    /// one `pending.md` by reading and rewriting it, which could put a share
+    /// in twice when the app claimed the file between the two.
     private static func appendDraft(title: String, body: String) {
         guard let dir = pendingDir else { return }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("pending.md")
 
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm:ss"
@@ -307,14 +309,11 @@ enum ShareCapture {
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !t.isEmpty { header += " " + t }
         let block = body.isEmpty ? header : header + "\n" + body
-
-        var out = block + "\n"
-        if let existing = try? String(contentsOf: file, encoding: .utf8),
-           !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            var trimmed = existing
-            while trimmed.hasSuffix("\n") { trimmed.removeLast() }
-            out = trimmed + "\n\n" + out
-        }
-        try? Data(out.utf8).write(to: file, options: .atomic)
+        // Written under another extension and renamed: the app claims `.md`
+        // files, and must never see half of one.
+        let id = UUID().uuidString
+        let draft = dir.appendingPathComponent("share-\(id).tmp")
+        guard (try? Data((block + "\n").utf8).write(to: draft, options: .atomic)) != nil else { return }
+        try? FileManager.default.moveItem(at: draft, to: dir.appendingPathComponent("share-\(id).md"))
     }
 }

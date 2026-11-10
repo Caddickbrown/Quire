@@ -24,9 +24,16 @@ struct TodayScreen: View {
     var settings: () -> Void
     var media: () -> Void
 
-    @State private var line = ""
-    @State private var deleting: Entry?
+    /// "Write a line", held by PhoneRoot with the other faces' state: the face
+    /// is built in a different place when an iPad turns, and a line half
+    /// written went with the old one.
+    @Binding var line: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var lineFocused: Bool
+    /// A row tapped while the page was still drawn from last time's snapshot.
+    /// It has no entry behind it to open yet, so the tap is kept and answered
+    /// when the journal has been read (if that is soon).
+    @State private var pendingOpen: (id: String, at: Date)?
     /// Bumped when a line is saved to the inbox: a light land.
     @State private var savedLines = 0
     /// The day the goal stamp last landed, so it lands once a day.
@@ -34,8 +41,22 @@ struct TodayScreen: View {
     @State private var stampBeat = 0
 
     private var today: String { JournalStore.nowDate() }
+    /// What this page showed when the journal was last read, while it is being
+    /// read again at launch. Only ever today's: the store empties one saved on
+    /// an earlier day, and this checks the day once more.
+    private var snapshot: JournalStore.TodaySnapshot? {
+        guard !store.indexed, let snap = store.todaySnapshot, snap.day == today else { return nil }
+        return snap
+    }
     private var filedToday: [Entry] {
-        (store.archiveEntries.first { $0.date == today }?.entries ?? []).reversed()
+        if let snapshot { return snapshot.entries.map(\.entry).reversed() }
+        return (store.archiveEntries.first { $0.date == today }?.entries ?? []).reversed()
+    }
+    private var wordsToday: Int { snapshot?.wordsToday ?? store.stats().wordsToday }
+    /// The drafts are read as soon as the folder is open, before the rest.
+    private var draftCount: Int {
+        if let snapshot, store.inboxDrafts.isEmpty { return snapshot.inboxDrafts }
+        return store.inboxDrafts.count
     }
     /// `p` asks for another prompt (the offset is bumped by the key handler).
     /// Kept in the App Group, so the widgets show the same prompt.
@@ -43,8 +64,32 @@ struct TodayScreen: View {
     private var prompt: String { QuirePrompts.prompt(offset: promptOffset) }
     /// The earlier years shown here. All of them are in Look back.
     private static let yearsShown = 3
-    private var onThisDay: [OnThisDayYears.Year<Entry>] {
-        OnThisDayYears.group(store.qOnThisDay(), thisYear: String(JournalStore.nowDate().prefix(4)), perYear: 2)
+    /// A line under "On this day": from the journal, or from the snapshot
+    /// (which has no entry to open, only its id).
+    private struct Memory {
+        let id: String
+        let title: String
+        let tagLine: String
+        let ref: EntryRef?
+    }
+    private var onThisDay: [OnThisDayYears.Year<Memory>] {
+        let year = String(today.prefix(4))
+        if let snapshot {
+            let days = Dictionary(grouping: snapshot.onThisDay, by: \.date).map { date, rows in
+                (date: date, entries: rows.map { row in
+                    Memory(id: row.id, title: row.title.qClamped(200),
+                           tagLine: row.tags.map { $0.hasPrefix("@") ? $0 : "@" + $0 }.joined(separator: "  "), ref: nil)
+                })
+            }
+            return OnThisDayYears.group(days, thisYear: year, perYear: 2)
+        }
+        let days = store.qOnThisDay().map { day in
+            (date: day.date, entries: day.entries.map { entry in
+                Memory(id: entry.id, title: entry.qTitle, tagLine: entry.qTagLine,
+                       ref: EntryRef(entry: entry, source: .archive(date: day.date)))
+            })
+        }
+        return OnThisDayYears.group(days, thisYear: year, perYear: 2)
     }
 
     var body: some View {
@@ -52,7 +97,9 @@ struct TodayScreen: View {
             VStack(alignment: .leading, spacing: 22) {
                 QMasthead(onMedia: media, onSearch: search, onSettings: settings)
                 if q.isMarathon {
-                    marathonHeader
+                    // In a timeline, like the header below it, so the date
+                    // moves on at midnight with the page left open.
+                    TimelineView(.everyMinute) { t in marathonHeader(t.date) }
                     readouts
                 } else {
                     TimelineView(.everyMinute) { t in
@@ -78,20 +125,32 @@ struct TodayScreen: View {
         .background(alignment: .topTrailing) {
             if q.isMarathon { QDotField(color: q.signalColor).opacity(0.55).frame(width: 170, height: 120).padding(.top, 150).padding(.trailing, 14) }
         }
-        .confirmationDialog("Delete this entry?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-                            titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                if let d = deleting { _ = store.deleteFiledEntry(date: d.date, entry: d) }
-                deleting = nil
+        .onChange(of: store.indexed) { _, indexed in if indexed { openPending() } }
+    }
+
+    /// A row's tap. From the journal it opens; from the snapshot it waits.
+    private func open(id: String, ref: EntryRef?) {
+        if let ref { open(ref) } else { pendingOpen = (id, Date()) }
+    }
+
+    /// The journal has been read: open what was tapped while it wasn't, found
+    /// by its id among the real entries. Not if that was a while ago.
+    private func openPending() {
+        guard let wanted = pendingOpen else { return }
+        pendingOpen = nil
+        guard Date().timeIntervalSince(wanted.at) < 5 else { return }
+        for day in store.archiveEntries {
+            if let entry = day.entries.first(where: { $0.id == wanted.id }) {
+                open(EntryRef(entry: entry, source: .archive(date: day.date)))
+                return
             }
         }
-        .qKeyBlocker(active: deleting != nil, onEscape: { deleting = nil })
     }
 
     // "Three entries filed, 145 of 250 words so far. Three drafts are waiting."
     private var summary: some View {
-        let words = store.stats().wordsToday
-        let drafts = store.inboxDrafts.count
+        let words = wordsToday
+        let drafts = draftCount
         return (Text(entriesPhrase)
             + (goalOn ? Text(", ") + Text("\(words) of \(max(goal, 1))").foregroundColor(q.accentColor) + Text(" words so far.")
                       : Text(words > 0 ? ", \(words) words so far." : "."))
@@ -128,7 +187,12 @@ struct TodayScreen: View {
 
     private var entriesPhrase: String {
         let n = filedToday.count
-        return n == 0 ? (store.indexed ? "Nothing filed yet" : "Loading your journal") : n == 1 ? "One entry filed" : "\(Self.word(n)) entries filed"
+        if n == 0 {
+            if store.indexed || snapshot != nil { return "Nothing filed yet" }
+            // A jnl or Nook journal, opened for the first time.
+            return store.foldingLegacy ? "Moving your journal into day files" : "Loading your journal"
+        }
+        return n == 1 ? "One entry filed" : "\(Self.word(n)) entries filed"
     }
     private func draftsPhrase(_ n: Int) -> String { n == 1 ? "One draft is" : "\(Self.word(n)) drafts are" }
     private static func word(_ n: Int) -> String {
@@ -160,9 +224,10 @@ struct TodayScreen: View {
                     }
                     Text(prompt).font(q.writing(16, italic: true)).foregroundStyle(q.mutedColor)
                         .multilineTextAlignment(.leading)
-                        // Another prompt (`p`) rolls up into place.
+                        // Another prompt (`p`) rolls up into place; with Reduce
+                        // Motion it changes where it is.
                         .id(promptOffset)
-                        .transition(.push(from: .bottom).combined(with: .opacity))
+                        .transition(reduceMotion ? .opacity : .push(from: .bottom).combined(with: .opacity))
                 }
                 .foregroundStyle(q.inkColor)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -174,18 +239,18 @@ struct TodayScreen: View {
             }
         }
         .buttonStyle(.plain)
-        .animation(QMotion.settle, value: promptOffset)
+        .animation(reduceMotion ? QMotion.micro : QMotion.settle, value: promptOffset)
         .qHaptic(.land, trigger: promptOffset)
         .qArrive()
     }
 
     // MARK: Marathon
 
-    private var marathonHeader: some View {
+    private func marathonHeader(_ now: Date) -> some View {
         let cal = Calendar.current
-        let day = cal.ordinality(of: .day, in: .year, for: Date()) ?? 1
-        let days = cal.range(of: .day, in: .year, for: Date())?.count ?? 365
-        let year = cal.component(.year, from: Date())
+        let day = cal.ordinality(of: .day, in: .year, for: now) ?? 1
+        let days = cal.range(of: .day, in: .year, for: now)?.count ?? 365
+        let year = cal.component(.year, from: now)
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Text(String(format: "LOG %d.%03d", year, day)).tracking(1.4)
@@ -194,7 +259,7 @@ struct TodayScreen: View {
                     .background(q.signalColor).foregroundStyle(q.onSignalColor)
                 Text("DAY \(day) / \(days)").tracking(1.4).font(q.label(11)).foregroundStyle(q.mutedColor)
             }
-            Text(QDate.longDay().uppercased() + " " + String(year)).tracking(1.6)
+            Text(QDate.longDay(now).uppercased() + " " + String(year)).tracking(1.6)
                 .font(q.label(11)).foregroundStyle(q.mutedColor)
             Text("TODAY").font(q.display(60)).tracking(-1.2).foregroundStyle(q.inkColor)
                 .minimumScaleFactor(0.5).lineLimit(1)
@@ -206,8 +271,10 @@ struct TodayScreen: View {
     /// Words and goal, the streak, the inbox: figures in cells, ruled off.
     private var readouts: some View {
         let stats = store.stats()
-        let words = stats.wordsToday
-        let drafts = store.inboxDrafts.count
+        let words = wordsToday
+        let drafts = draftCount
+        let streak = snapshot?.streak ?? stats.currentStreak
+        let best = snapshot?.bestStreak ?? stats.bestStreak
         let fill = goalOn ? min(1, Double(words) / Double(max(goal, 1))) : 0
         return HStack(alignment: .top, spacing: 0) {
             cell("Words" + (goalOn ? " / goal" : ""), spacing: 8) {
@@ -226,9 +293,9 @@ struct TodayScreen: View {
                 }
             }
             cell("Streak", leading: true) {
-                Text("\(stats.currentStreak)").font(q.display(24)).lineLimit(1).minimumScaleFactor(0.5)
+                Text("\(streak)").font(q.display(24)).lineLimit(1).minimumScaleFactor(0.5)
                 Text("DAYS").font(q.label(10)).foregroundStyle(q.mutedColor)
-                if stats.currentStreak > 0 && stats.currentStreak >= stats.bestStreak {
+                if streak > 0 && streak >= best {
                     Text("▲ RECORD").font(q.label(9.5)).tracking(1).foregroundStyle(q.accentColor)
                         .qBreathe(true)
                 }
@@ -258,12 +325,14 @@ struct TodayScreen: View {
 
     private var marathonFooter: some View {
         let stats = store.stats()
+        let entries = snapshot?.totalEntries ?? stats.entries
+        let words = snapshot?.totalWords ?? stats.words
         return VStack(spacing: 8) {
             QHazard(color: q.signalColor).opacity(0.9)
             HStack {
                 Text("~/JOURNAL")
                 Spacer()
-                Text("\(stats.entries) ENTRIES · \(stats.words >= 1000 ? String(format: "%.1fK", Double(stats.words) / 1000) : "\(stats.words)") WORDS")
+                Text("\(entries) ENTRIES · \(words >= 1000 ? String(format: "%.1fK", Double(words) / 1000) : "\(words)") WORDS")
             }
             .font(q.label(9.5)).tracking(1.2).foregroundStyle(q.mutedColor)
         }
@@ -299,24 +368,12 @@ struct TodayScreen: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { lineFocused = true }
     }
 
-    /// On the monitor in desk mode, where the keyboard can answer; the phone's
-    /// dialog otherwise.
-    private func askDelete(_ entry: Entry) {
-        guard DeskConfirm.shared.isAvailable else { deleting = entry; return }
-        // Return answers the question, not the line field.
-        lineFocused = false
-        DeskConfirm.shared.open(.init(kicker: "Today", question: "Delete this entry?",
-                                      detail: DeskConfirm.describe(entry), when: DeskConfirm.when(entry),
-                                      action: "Delete")) {
-            store.deleteFiledEntry(date: entry.date, entry: entry)
-                ? nil : (store.lastWriteError ?? "The entry could not be deleted.")
-        }
-    }
-
     private func saveLine() {
         let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        store.upsertDraft(previous: nil, timestamp: JournalStore.nowTS(), title: "", body: text)
+        // Nil is a write that didn't happen (the store says why): the line
+        // stays in the field to be saved again, not cleared as if it had.
+        guard store.upsertDraft(previous: nil, timestamp: JournalStore.nowTS(), title: "", body: text) != nil else { return }
         line = ""
         lineFocused = false
         savedLines += 1
@@ -325,9 +382,13 @@ struct TodayScreen: View {
     private var entries: some View {
         VStack(alignment: .leading, spacing: 14) {
             QLabel("Filed today", trailing: "\(filedToday.count)")
+            // From the snapshot a row is a picture of the entry, not the entry:
+            // nothing to delete, and a tap waits for the journal.
+            let live = snapshot == nil
             ForEach(filedToday) { entry in
-                let ref = EntryRef(entry: entry, source: .archive(date: today))
-                QEntryRow(entry: entry, onOpen: { open(ref) }, onDelete: { _ = store.deleteFiledEntry(date: entry.date, entry: entry) })
+                let ref = live ? EntryRef(entry: entry, source: .archive(date: today)) : nil
+                QEntryRow(entry: entry, onOpen: { open(id: entry.id, ref: ref) },
+                          onDelete: live ? { _ = store.deleteFiledEntry(date: entry.date, entry: entry) } : nil)
                     // A just-filed entry is set down on the page.
                     .transition(.asymmetric(insertion: .scale(scale: 0.96, anchor: .topLeading).combined(with: .opacity),
                                             removal: .opacity))
@@ -336,21 +397,20 @@ struct TodayScreen: View {
         .animation(QMotion.settle, value: filedToday.map(\.id))
     }
 
-    private func onThisDaySection(_ years: [OnThisDayYears.Year<Entry>]) -> some View {
+    private func onThisDaySection(_ years: [OnThisDayYears.Year<Memory>]) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             QLabel("On this day")
             ForEach(years.prefix(Self.yearsShown)) { year in
                 VStack(alignment: .leading, spacing: 8) {
                     QYearHeading(year: year.year, ago: year.ago)
                     ForEach(Array(year.items.enumerated()), id: \.element.item.id) { i, dated in
-                        let ref = EntryRef(entry: dated.item, source: .archive(date: dated.date))
-                        Button { open(ref) } label: {
+                        Button { open(id: dated.item.id, ref: dated.item.ref) } label: {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(dated.item.qTitle.isEmpty ? "Untitled" : dated.item.qTitle)
+                                Text(dated.item.title.isEmpty ? "Untitled" : dated.item.title)
                                     .font(q.writing(18)).foregroundStyle(q.inkColor)
                                     .multilineTextAlignment(.leading)
-                                if !dated.item.tags.isEmpty {
-                                    Text(dated.item.qTagLine).font(q.ui(13)).foregroundStyle(q.accentColor)
+                                if !dated.item.tagLine.isEmpty {
+                                    Text(dated.item.tagLine).font(q.ui(13)).foregroundStyle(q.accentColor)
                                         .lineLimit(2).multilineTextAlignment(.leading)
                                 }
                             }

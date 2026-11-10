@@ -50,6 +50,16 @@ enum ExternalDisplayContent: Equatable {
     case reading(title: String, date: Date, text: String, isStarred: Bool, isDraft: Bool = false)
 }
 
+extension ExternalDisplayContent {
+    /// The composer's page, new or existing.
+    var isWriting: Bool {
+        switch self {
+        case .composing, .editing: return true
+        default: return false
+        }
+    }
+}
+
 /// Search's field, which is on the phone, for the monitor to show.
 struct DeskSearch: Equatable {
     var query: String
@@ -77,7 +87,7 @@ struct ExternalRow: Equatable, Identifiable {
                         title: $0.preview,
                         starred: $0.isStarred,
                         time: String($0.ts.dropFirst(11).prefix(5)),
-                        body: String($0.body.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1500)))
+                        body: String($0.shownBody.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1500)))
         }
     }
 }
@@ -132,7 +142,11 @@ struct ExternalRow: Equatable, Identifiable {
     /// keystroke in the composer would publish to nobody.
     private var latest: ExternalDisplayContent = .idle
 
-    private var pageOwner: UUID?
+    /// The pages that have claimed the monitor, oldest first, each with what it
+    /// last published. The last one is on the monitor. A stack, not one owner:
+    /// the reader under the composer publishes again on every store change, and
+    /// with a single slot that took the monitor back from the composer.
+    private var pages: [(owner: UUID, content: ExternalDisplayContent)] = []
     private var pendingUnderlay: ExternalDisplayContent?
 
     /// Bumped when a sheet with a list of its own closes: its list took the
@@ -142,15 +156,38 @@ struct ExternalRow: Equatable, Identifiable {
 
     /// Lists can refresh beneath a presented page; they must not replace it.
     func present(_ new: ExternalDisplayContent, owner: UUID? = nil) {
-        if let owner { pageOwner = owner }
-        else if pageOwner != nil {
+        if let owner {
+            if let i = pages.firstIndex(where: { $0.owner == owner }) {
+                pages[i].content = new
+                // A page beneath the one on top keeps what it said for when it
+                // is uncovered, and the monitor stays as it is.
+                guard i == pages.count - 1 else { return }
+            } else if case .reading = new, let top = pages.last, top.content.isWriting {
+                // A reader arriving while a page is being written is beneath it:
+                // the composer covers everything, and a save that moves the entry
+                // (a new date) builds the reader under it afresh.
+                pages.insert((owner, new), at: pages.count - 1)
+                return
+            } else {
+                pages.append((owner, new))
+            }
+        } else if !pages.isEmpty {
             switch new {
-            // `.reading` too: the page coming back as the composer closes, which
-            // may say so before the composer has let go.
-            case .browsing, .idle, .reading: pendingUnderlay = new; return
+            case .browsing, .idle: pendingUnderlay = new; return
+            // The page coming back as the composer closes, said by the root before
+            // the composer has let go. An open reader is in the stack and comes
+            // back with its own, current, page; kept only when there is none.
+            case .reading:
+                let readerOpen = pages.contains { if case .reading = $0.content { true } else { false } }
+                if !readerOpen { pendingUnderlay = new }
+                return
             default: break
             }
         }
+        show(new)
+    }
+
+    private func show(_ new: ExternalDisplayContent) {
         latest = new
         // Nothing goes to the monitor while the app lock is up. The veil only
         // covers the device — the monitor is a window of its own, and left to
@@ -160,12 +197,17 @@ struct ExternalRow: Equatable, Identifiable {
         if isConnected { content = new }
     }
 
+    /// A page going away. If it was on top, the page beneath it comes back with
+    /// what it last published; with none left, the list or Today beneath does.
     func releasePage(owner: UUID) {
-        guard pageOwner == owner else { return }
-        pageOwner = nil
+        guard let i = pages.firstIndex(where: { $0.owner == owner }) else { return }
+        let wasTop = i == pages.count - 1
+        pages.remove(at: i)
+        guard wasTop else { return }
+        if let under = pages.last { show(under.content); return }
         let next = pendingUnderlay ?? .idle
         pendingUnderlay = nil
-        present(next)
+        show(next)
     }
 
     /// The app lock engaged or lifted (called by AppLockManager): the monitor
@@ -175,7 +217,12 @@ struct ExternalRow: Equatable, Identifiable {
         #if os(iOS)
         // Covered, the monitor drops what it was asking: nothing waits behind
         // the lock to be answered, or deleted, once it lifts.
-        if locked { DeskDatePicker.shared.cancel(); DeskConfirm.shared.cancel(); CommandHost.shared.close() }
+        // Settings too: its list is not drawn behind the lock, and must not go on
+        // taking keys there.
+        if locked {
+            DeskDatePicker.shared.cancel(); DeskConfirm.shared.cancel(); CommandHost.shared.close()
+            ExternalSettingsModel.shared.close()
+        }
         #endif
         updateIdleTimer()
         guard isConnected else { return }
@@ -209,7 +256,12 @@ struct ExternalRow: Equatable, Identifiable {
         #if os(iOS)
         // The monitor no longer shows the date picker or a question, so they let
         // go of the keys.
-        if isPaused { DeskDatePicker.shared.cancel(); DeskConfirm.shared.cancel(); CommandHost.shared.close() }
+        // Settings as well: "Display paused" is all the monitor shows, so ↑/↓ and
+        // ↵ must not go on changing rows nobody can see.
+        if isPaused {
+            DeskDatePicker.shared.cancel(); DeskConfirm.shared.cancel(); CommandHost.shared.close()
+            ExternalSettingsModel.shared.close()
+        }
         #endif
         updateIdleTimer()
         content = isPaused || AppLockManager.shared.showsVeil ? .idle : latest

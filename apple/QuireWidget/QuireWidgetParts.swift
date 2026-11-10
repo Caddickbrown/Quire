@@ -106,14 +106,23 @@ struct WidgetDay {
         let url: URL?
     }
 
-    /// The newest entry from this calendar day in an earlier year.
+    /// The newest entry from this calendar day in an earlier year. With the
+    /// app lock on the app sends no words from it, only that it is there and
+    /// how old: the widget then says "A memory from three years ago".
     var onThisDay: Memory? {
-        guard isCurrent, let title = snap.onThisDayPreview?.trimmingCharacters(in: .whitespaces),
-              !title.isEmpty, let ago = snap.onThisDayYearsAgo else { return nil }
+        guard isCurrent, let ago = snap.onThisDayYearsAgo, ago > 0 else { return nil }
         let year = snap.onThisDayDate.map { String($0.prefix(4)) } ?? ""
         var url: URL?
         if let date = snap.onThisDayDate, let ts = snap.onThisDayTS { url = QuireSnapshot.entryURL(date: date, ts: ts) }
-        return Memory(title: title, excerpt: snap.onThisDayExcerpt, year: year, yearsAgo: ago, url: url)
+        if let preview = snap.onThisDayPreview {
+            let title = preview.trimmingCharacters(in: .whitespaces)
+            // Sent, but empty: an entry with nothing to show.
+            guard !title.isEmpty else { return nil }
+            return Memory(title: title, excerpt: snap.onThisDayExcerpt, year: year, yearsAgo: ago, url: url)
+        }
+        guard snap.onThisDayDate != nil else { return nil }
+        let title = ago == 1 ? "A memory from a year ago" : "A memory from \(Self.word(ago).lowercased()) years ago"
+        return Memory(title: title, excerpt: nil, year: year, yearsAgo: ago, url: url)
     }
 
     // Dates, set as the app sets them.

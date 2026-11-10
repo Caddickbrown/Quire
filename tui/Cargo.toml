@@ -27,6 +27,7 @@ dirs.workspace = true
 ratatui = "0.30"
 crossterm = "0.29"
 unicode-width = "0.2"
+unicode-segmentation = "1"
 regex.workspace = true
 once_cell.workspace = true
 rand = "0.9"

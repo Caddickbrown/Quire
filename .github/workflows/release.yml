@@ -54,6 +54,19 @@ jobs:
             /^## \[/ { if (on) exit; if (index($0, "## [" v "]") == 1) { on = 1; next } }
             on' CHANGELOG.md > notes.md
           [ -s notes.md ] || { echo "::error::CHANGELOG.md has no '## [${TAG#v}]' section"; exit 1; }
+      - name: The CHANGELOG heading is dated
+        # "## [x.y.z] — YYYY-MM-DD" exactly: a section still headed "not yet
+        # released", or one left under [Unreleased], publishes nothing.
+        run: |
+          v=${TAG#v}
+          head=$(awk -v v="$v" 'index($0, "## [" v "]") == 1 { print; exit }' CHANGELOG.md)
+          case "$head" in
+            "## [$v] — "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) echo "$head" ;;
+            *) echo "::error::CHANGELOG.md's heading for $v is '$head'; it must be '## [$v] — YYYY-MM-DD'"; exit 1 ;;
+          esac
+          # Bullets still under [Unreleased] would be left out of the notes.
+          left=$(awk '/^## \[/ { on = ($0 == "## [Unreleased]"); next } on && /^- /' CHANGELOG.md | wc -l)
+          [ "$left" -eq 0 ] || { echo "::error::$left bullet(s) are still under [Unreleased]: fold them into [$v] before tagging"; exit 1; }
       - uses: actions/upload-artifact@v7
         with:
           name: notes
@@ -71,7 +84,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # the stable branch, 2026-11-09
       - name: Build quire and jnl
         env:
           QUIRE_RELEASE_TARGET: ${{ matrix.target }}
@@ -101,7 +114,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # the stable branch, 2026-11-09
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -112,6 +125,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libwebkit2gtk-4.1-dev build-essential file libxdo-dev \
             libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf pkg-config
+      # A step of its own, without the signing key: install scripts of the
+      # dependencies never see it.
+      - name: Front-end dependencies
+        working-directory: linux
+        run: npm ci --no-fund --no-audit
       - name: Build the AppImage, .deb and .rpm
         working-directory: linux
         env:
@@ -119,7 +137,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          npm ci --no-fund --no-audit
           extra=()
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             [ -n "$(jq -r '.plugins.updater.pubkey' src-tauri/tauri.conf.json)" ] \

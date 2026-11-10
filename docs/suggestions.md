@@ -5,8 +5,14 @@ A full review from reading the README, CLAUDE.md, the docs and the code on
 for a real device, not a confirmed fault. File references are to `main` at
 `05f99fb`.
 
-**Status, 2026-11-06.** Done since this was written: item 1 (restore is staged and
-swapped), item 3 (`ci.yml`, and `release.yml` runs it first), item 9
+**A newer review exists.** `docs/fix-spec.md` (2026-11-09) is the review to work
+from: it is written as a spec, and its section 9 lists which faults from this
+document are still open.
+
+**Status, 2026-11-06, corrected 2026-11-09.** Done since this was written: item 1
+(restore is staged and swapped), item 3 in part (`ci.yml` exists and `release.yml` runs
+it on a release tag before building; it does not run on a push to `main`, only when
+asked through `workflow_dispatch`, so between releases the checks are run by hand), item 9
 (`ParserChecks.swift` is gone), items 11 and 13, and the `legacy/` move. Item 2 has its
 own piece of work. Not done, and each needs a decision or a careful change of its own:
 items 4 to 8, 10 and 12, and everything from section 3 on. `legacy/` stays where it is

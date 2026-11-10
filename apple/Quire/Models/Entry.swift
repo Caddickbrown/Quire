@@ -76,12 +76,25 @@ struct Entry: Identifiable, Hashable {
         return base.isEmpty ? "*" : base + " *"
     }
 
+    /// The body as it was typed, for showing and for an editor to open with.
+    /// On disk a body line that would read as a header carries a leading
+    /// backslash (the core's `guard_body`); this takes it off again. `body` and
+    /// `raw` stay as stored: they are what an edit's reference and every
+    /// "changed?" comparison use, and saving goes through `makeEntry`, which
+    /// puts the backslash back (`guard_body(unguard_body(b)) == b`). So: hand
+    /// `shownBody` to a view or an editor, never store it back into an Entry.
+    var shownBody: String {
+        // Almost no body has one; don't cross into Rust for the rest.
+        guard body.contains("\\[") else { return body }
+        return unguardText(body: body)
+    }
+
     /// A short one-line preview for list rows: the title (sans star) if present,
     /// else the first non-empty body line.
     var preview: String {
         let t = displayTitle
         if !t.isEmpty { return t }
-        let firstLine = body
+        let firstLine = shownBody
             .split(separator: "\n", omittingEmptySubsequences: true)
             .first.map(String.init) ?? ""
         return firstLine

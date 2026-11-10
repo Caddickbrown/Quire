@@ -68,7 +68,12 @@ extension Notification.Name {
 let quireAtSign: unichar = 64
 
 func quireTagToken(in text: String, caret: Int) -> (range: NSRange, partial: String)? {
-    let ns = text as NSString
+    quireTagToken(in: text as NSString, caret: caret)
+}
+
+/// The same on a string the caller already holds as an NSString (a text
+/// view's storage), so asking on every keystroke copies nothing.
+func quireTagToken(in ns: NSString, caret: Int) -> (range: NSRange, partial: String)? {
     guard caret > 0, caret <= ns.length else { return nil }
     func isTagChar(_ c: unichar) -> Bool {
         (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
@@ -491,6 +496,10 @@ final class PastingTextView: NSTextView {
 #elseif os(iOS)
 import UIKit
 import Combine
+#if DEBUG
+import os
+private let editorLog = Logger(subsystem: "com.caddickbrown.quire", category: "editor")
+#endif
 
 private func platformFont(_ raw: String, _ size: CGFloat, scaled: Bool = true) -> UIFont {
     let base: UIFont
@@ -530,6 +539,44 @@ private func designed(_ size: CGFloat, _ design: UIFontDescriptor.SystemDesign) 
     return base
 }
 
+/// What the editor styles with, worked out when a setting changes rather than
+/// on every key: the fonts are the same objects from one keystroke to the next.
+fileprivate struct EditorStyle {
+    let font: UIFont
+    let italic: UIFont
+    let bold: UIFont
+    let mono: UIFont
+    let color: UIColor
+    let accent: UIColor
+    let lineSpacing: CGFloat
+    let highlightTags: Bool
+    let focusParagraph: Bool
+    /// What unstyled text carries: the body font, its colour and the line spacing.
+    let base: [NSAttributedString.Key: Any]
+}
+
+/// A paragraph as it was measured: its words and the fonts across them.
+fileprivate struct ParagraphKey: Hashable {
+    let text: String
+    let fonts: Int
+}
+
+/// A handle on the live editor for edits that don't come from the keyboard:
+/// an attachment's link, a prompt, a transcript. They go in as one ranged,
+/// undoable edit, so the caret and the undo stack survive; assigning the whole
+/// text instead resets the view, which sends the caret to the end.
+final class WritingEditorProxy {
+    fileprivate weak var coordinator: WritingTextEditor.Coordinator?
+
+    /// Replace `range` (UTF-16) of a text `length` units long with `string`.
+    /// `moveCaret` puts the caret after what went in; otherwise the selection
+    /// stays on the words it was on. False when there is no live editor or it
+    /// holds something else: the caller assigns the text as before.
+    func replace(_ range: NSRange, with string: String, in length: Int, moveCaret: Bool) -> Bool {
+        coordinator?.replace(range, with: string, in: length, moveCaret: moveCaret) ?? false
+    }
+}
+
 struct WritingTextEditor: UIViewRepresentable {
     @Binding var text: String
     var fontRaw: String
@@ -559,13 +606,26 @@ struct WritingTextEditor: UIViewRepresentable {
     /// view as the text grows.
     var mirror = false
     var mirrorCaret: Int? = nil
+    /// Where the keyboard should be. UIKit's first responder is the truth: the
+    /// view reports it here, and a change of this value asks for it once (see
+    /// `Coordinator.request`). Never pair it with SwiftUI's `.focused()`.
     var focused: Binding<Bool>? = nil
+    /// Embedded mode: never shorter than this, however little is written. The
+    /// text view itself then covers the page, so a tap below the words is a
+    /// tap in the text view and UIKit puts the caret after the last one.
+    var minHeight: CGFloat = 0
+    /// For ranged edits from outside (see `WritingEditorProxy`).
+    var proxy: WritingEditorProxy? = nil
+    /// For UI tests to find the view by; nothing reads it otherwise.
+    var identifier: String? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
     func makeUIView(context: Context) -> UITextView {
         let tv: UITextView = mirror ? MirrorTextView() : PastingTextView()
-        tv.delegate = context.coordinator
+        let coordinator = context.coordinator
+        tv.delegate = coordinator
+        tv.accessibilityIdentifier = identifier
         tv.backgroundColor = .clear
         tv.showsVerticalScrollIndicator = false
         tv.showsHorizontalScrollIndicator = false
@@ -585,74 +645,76 @@ struct WritingTextEditor: UIViewRepresentable {
             tv.isEditable = false
             tv.isUserInteractionEnabled = false
         }
-        context.coordinator.textView = tv
-        apply(to: tv)
+        coordinator.textView = tv
+        coordinator.isMirror = mirror
+        coordinator.style = makeStyle()
+        coordinator.lastStyleSignature = styleSignature(tv)
+        // Styling happens inside the storage's own editing (see
+        // `Coordinator.textStorage(_:willProcessEditing:…)`).
+        tv.textStorage.delegate = coordinator
+        (tv as? PastingTextView)?.onWindow = { [weak coordinator] in coordinator?.attached() }
+        proxy?.coordinator = coordinator
+        coordinator.restyleAll(tv)
         return tv
     }
 
     func updateUIView(_ tv: UITextView, context: Context) {
-        context.coordinator.text = $text
-        context.coordinator.textView = tv
-        context.coordinator.focused = focused
-        if mirror { updateMirror(tv, context: context); return }
-        tv.isScrollEnabled = !sizeToFit
-        // Restyle only when something actually changed — the coordinator has
-        // already restyled the edited paragraph on the keystroke path, and the
-        // full re-attribute here made every keystroke O(entry).
-        let signature = styleSignature
-        if tv.text != text {
+        let coordinator = context.coordinator
+        coordinator.text = $text
+        coordinator.textView = tv
+        coordinator.focused = focused
+        proxy?.coordinator = coordinator
+        let signature = styleSignature(tv)
+        let restyle = coordinator.lastStyleSignature != signature
+        if restyle {
+            coordinator.style = makeStyle()
+            coordinator.lastStyleSignature = signature
+        }
+        if mirror { updateMirror(tv, context: context, restyle: restyle); return }
+        if tv.isScrollEnabled == sizeToFit { tv.isScrollEnabled = !sizeToFit }
+        // On a keystroke the view already holds this text and the edited
+        // paragraph was styled as it went in: nothing to do. The check is on
+        // the storage's own string, length first, so it copies nothing; the
+        // slower comparison only runs when that one says they differ.
+        if !coordinator.holds(text), tv.text != text {
+            // A different entry, a template, a sync landing. The swap is styled
+            // whole just below, so the per-edit pass stands aside for it.
+            coordinator.swapping = true
             tv.text = text
+            coordinator.swapping = false
             // Same reason as the macOS side: a wholesale swap invalidates every
             // range the undo stack is holding, so drop it rather than let a
             // shake-to-undo paste the old entry's edits into the new one.
             tv.undoManager?.removeAllActions()
-            apply(to: tv)
-            context.coordinator.lastStyleSignature = signature
-        } else if context.coordinator.lastStyleSignature != signature {
-            apply(to: tv)
-            context.coordinator.lastStyleSignature = signature
+            coordinator.restyleAll(tv)
+        } else if restyle {
+            coordinator.restyleAll(tv)
         }
         // Room under the last line so the caret can stay centred at the end.
-        tv.contentInset.bottom = (typewriter && !sizeToFit) ? tv.bounds.height * 0.5 : 0
-        // Caret-only moves shift the focus dim / typewriter centre; edits
-        // restyle just their own paragraph (focus mode restyles fully — its
-        // dim spans the document).
-        context.coordinator.reapply = { [self] in apply(to: tv) }
-        context.coordinator.restyleParagraph = focusParagraph
-            ? { [self] _ in apply(to: tv) }
-            : { [self] range in styleParagraph(tv, around: range) }
-        context.coordinator.recenter = (typewriter && !sizeToFit) ? { Self.centerCaret(tv) } : nil
-        context.coordinator.focusParagraph = focusParagraph
-        context.coordinator.tagSuggestions = tagSuggestions
-        context.coordinator.onCaretChange = onCaretChange
+        let inset = (typewriter && !sizeToFit) ? tv.bounds.height * 0.5 : 0
+        if tv.contentInset.bottom != inset { tv.contentInset.bottom = inset }
+        coordinator.recenter = (typewriter && !sizeToFit) ? { [weak tv] in if let tv { Self.centerCaret(tv) } } : nil
+        coordinator.tagSuggestions = tagSuggestions
+        coordinator.onCaretChange = onCaretChange
         (tv as? PastingTextView)?.pasteMedia = onPasteMedia
-        // UIKit focus callbacks update SwiftUI state; wait until this update
-        // has finished and the text view is attached to its window.
-        if focused != nil {
-            DispatchQueue.main.async { [weak tv, weak coordinator = context.coordinator] in
-                guard let tv, tv.window != nil, let focused = coordinator?.focused else { return }
-                if focused.wrappedValue, !tv.isFirstResponder { tv.becomeFirstResponder() }
-                else if !focused.wrappedValue, tv.isFirstResponder { tv.resignFirstResponder() }
-            }
-        }
+        // Never first responder from in here: the coordinator asks for it on
+        // the next turn, and only when what's asked for has changed.
+        coordinator.request(focus: focused?.wrappedValue, on: tv)
     }
 
     /// The mirror's update: merge the new text in as one edit, restyle what
     /// changed, and hand the caret to the view. No typewriter, focus dim or
     /// tag bar — none of them mean anything on a screen nobody types into.
-    private func updateMirror(_ tv: UITextView, context: Context) {
-        let signature = styleSignature
-        if tv.text != text {
+    private func updateMirror(_ tv: UITextView, context: Context, restyle: Bool) {
+        if !context.coordinator.holds(text), tv.text != text {
             mergeMirrorText(tv, text)
             (tv as? MirrorTextView)?.noteTextChanged()
         }
-        if context.coordinator.lastStyleSignature != signature {
-            apply(to: tv)
-            context.coordinator.lastStyleSignature = signature
-        }
+        if restyle { context.coordinator.restyleAll(tv) }
         // Room under the last line, so the caret can sit mid-screen at the end
         // of the text instead of the newest words hugging the bottom edge.
-        tv.contentInset.bottom = tv.bounds.height * 0.45
+        let inset = tv.bounds.height * 0.45
+        if tv.contentInset.bottom != inset { tv.contentInset.bottom = inset }
         if let m = tv as? MirrorTextView {
             m.caretColor = UIColor(accent)
             m.caretIndex = mirrorCaret
@@ -663,9 +725,10 @@ struct WritingTextEditor: UIViewRepresentable {
     /// put, so a keystroke restyles only its own paragraph and the scroll
     /// position holds. Assigning `tv.text` wholesale re-laid-out everything
     /// and threw the offset away, which is what kept the monitor pinned to the
-    /// top or the bottom rather than to the caret.
+    /// top or the bottom rather than to the caret. The edit is styled by the
+    /// storage's delegate, in the same pass as the characters.
     private func mergeMirrorText(_ tv: UITextView, _ new: String) {
-        let old = tv.text as NSString
+        let old = tv.textStorage.mutableString
         let incoming = new as NSString
         let shortest = min(old.length, incoming.length)
         var prefix = 0
@@ -678,93 +741,33 @@ struct WritingTextEditor: UIViewRepresentable {
         let range = NSRange(location: prefix, length: old.length - prefix - suffix)
         let replacement = incoming.substring(with: NSRange(location: prefix, length: incoming.length - prefix - suffix))
         tv.textStorage.replaceCharacters(in: range, with: replacement)
-        styleParagraph(tv, around: NSRange(location: prefix, length: (replacement as NSString).length))
     }
 
     /// Everything that changes how text is styled, so unchanged updates skip
-    /// the full re-attribute.
-    private var styleSignature: String {
-        "\(fontRaw)|\(size)|\(lineSpacing)|\(highlightTags)|\(focusParagraph)|\(textColor)|\(accent)|\(mirror)"
+    /// the full re-attribute. The text size setting is in it: the body font is
+    /// scaled by it.
+    private func styleSignature(_ tv: UITextView) -> String {
+        "\(fontRaw)|\(size)|\(lineSpacing)|\(highlightTags)|\(focusParagraph)|\(textColor)|\(accent)|\(mirror)|\(tv.traitCollection.preferredContentSizeCategory.rawValue)"
     }
 
-    /// Re-attribute just the paragraph(s) covering `range` — the per-keystroke
-    /// path. Every styling regex is line-bound, so a paragraph is a safe unit.
-    private func styleParagraph(_ tv: UITextView, around range: NSRange?) {
-        let ns = tv.text as NSString
-        guard let range else { apply(to: tv); return }
-        let clamped = NSRange(location: min(range.location, ns.length),
-                              length: min(range.length, ns.length - min(range.location, ns.length)))
-        let target = ns.paragraphRange(for: clamped)
+    private func makeStyle() -> EditorStyle {
         let font = platformFont(fontRaw, size, scaled: !mirror)
         let color = UIColor(textColor)
         let para = NSMutableParagraphStyle(); para.lineSpacing = lineSpacing
-        tv.textStorage.setAttributes([.font: font, .foregroundColor: color, .paragraphStyle: para], range: target)
-        let sub = ns.substring(with: target)
-        let subRange = NSRange(location: 0, length: (sub as NSString).length)
-        func shifted(_ r: NSRange) -> NSRange { NSRange(location: r.location + target.location, length: r.length) }
-        if highlightTags {
-            for m in tagRegex.matches(in: sub, range: subRange) {
-                tv.textStorage.addAttribute(.foregroundColor, value: UIColor(accent), range: shifted(m.range))
-            }
-        }
-        let italic = italicFont(font)
-        for m in emphasisMatches(in: sub, range: subRange) {
-            tv.textStorage.addAttribute(.font, value: italic, range: shifted(m.range))
-        }
+        // Derived from the (Dynamic Type-scaled) body font, not the raw px size.
         let boldDescriptor = font.fontDescriptor.withSymbolicTraits(.traitBold)
-        let bold = boldDescriptor.map { UIFont(descriptor: $0, size: font.pointSize) } ?? font
-        for m in boldRegex.matches(in: sub, range: subRange) {
-            tv.textStorage.addAttribute(.font, value: bold, range: shifted(m.range))
-        }
-        let mono = UIFont.monospacedSystemFont(ofSize: font.pointSize * 0.92, weight: .regular)
-        for m in codeRegex.matches(in: sub, range: subRange) {
-            tv.textStorage.addAttribute(.font, value: mono, range: shifted(m.range))
-        }
-    }
-
-    private func apply(to tv: UITextView) {
-        let font = platformFont(fontRaw, size, scaled: !mirror)
-        let color = UIColor(textColor)
-        let para = NSMutableParagraphStyle(); para.lineSpacing = lineSpacing
-        tv.font = font
-        tv.textColor = color
-        tv.typingAttributes = [.font: font, .foregroundColor: color, .paragraphStyle: para]
-        let ns = tv.text as NSString
-        let full = NSRange(location: 0, length: ns.length)
-        tv.textStorage.setAttributes([.font: font, .foregroundColor: color, .paragraphStyle: para], range: full)
-        if highlightTags {
-            for m in tagRegex.matches(in: tv.text, range: full) {
-                tv.textStorage.addAttribute(.foregroundColor, value: UIColor(accent), range: m.range)
-            }
-        }
-        let italic = italicFont(font)
-        for m in emphasisMatches(in: tv.text, range: full) {
-            tv.textStorage.addAttribute(.font, value: italic, range: m.range)
-        }
-        // Derive from the (Dynamic Type-scaled) body font, not the raw px size.
-        let boldDescriptor = font.fontDescriptor.withSymbolicTraits(.traitBold)
-        let bold = boldDescriptor.map { UIFont(descriptor: $0, size: font.pointSize) } ?? font
-        for m in boldRegex.matches(in: tv.text, range: full) {
-            tv.textStorage.addAttribute(.font, value: bold, range: m.range)
-        }
-        let mono = UIFont.monospacedSystemFont(ofSize: font.pointSize * 0.92, weight: .regular)
-        for m in codeRegex.matches(in: tv.text, range: full) {
-            tv.textStorage.addAttribute(.font, value: mono, range: m.range)
-        }
-        if focusParagraph, ns.length > 0 {
-            let sel = tv.selectedRange
-            let paragraph = ns.paragraphRange(for: NSRange(location: min(sel.location, ns.length), length: 0))
-            let dimmed = color.withAlphaComponent(0.35)
-            if paragraph.location > 0 {
-                tv.textStorage.addAttribute(.foregroundColor, value: dimmed,
-                                            range: NSRange(location: 0, length: paragraph.location))
-            }
-            let after = paragraph.location + paragraph.length
-            if after < ns.length {
-                tv.textStorage.addAttribute(.foregroundColor, value: dimmed,
-                                            range: NSRange(location: after, length: ns.length - after))
-            }
-        }
+        return EditorStyle(
+            font: font,
+            italic: italicFont(font),
+            bold: boldDescriptor.map { UIFont(descriptor: $0, size: font.pointSize) } ?? font,
+            mono: .monospacedSystemFont(ofSize: font.pointSize * 0.92, weight: .regular),
+            color: color,
+            accent: UIColor(accent),
+            lineSpacing: lineSpacing,
+            highlightTags: highlightTags,
+            focusParagraph: focusParagraph,
+            base: [.font: font, .foregroundColor: color,
+                   .paragraphStyle: (para.copy() as? NSParagraphStyle) ?? para])
     }
 
     /// Scroll so the caret sits mid-viewport.
@@ -785,55 +788,81 @@ struct WritingTextEditor: UIViewRepresentable {
     ///
     /// SwiftUI asks more than once per keystroke (twice, counted on an iPad), and
     /// again whenever the page around it redraws with the text unchanged, so the
-    /// answer is kept for the text, width and type it was measured for.
+    /// answer is kept for the text, width and type it was measured for. When it
+    /// does have to be worked out, only the paragraphs that changed are typeset.
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
-        guard sizeToFit, let width = proposal.width, width > 0 else { return nil }
+        guard sizeToFit, let width = proposal.width, width > 0, width.isFinite else { return nil }
+        let coordinator = context.coordinator
         let key = "\(fontRaw)|\(size)|\(lineSpacing)|\(mirror)|\(uiView.traitCollection.preferredContentSizeCategory.rawValue)"
-        let cache = context.coordinator.measured
-        if let cache, cache.width == width, cache.key == key, cache.text == text {
-            return CGSize(width: width, height: cache.height)
+        if let cache = coordinator.measured, cache.width == width, cache.key == key, cache.text == text {
+            return CGSize(width: width, height: max(cache.height, minHeight))
         }
-        let height = measuredHeight(width: width)
-        context.coordinator.measured = (text, width, key, height)
-        return CGSize(width: width, height: height)
+        // From the view's own styled text, so bold, code and italic runs wrap
+        // as they are drawn. If the view doesn't hold this text yet, the plain
+        // measure stands in, and isn't kept.
+        if let height = coordinator.measuredHeight(of: uiView, holding: text, width: width, key: key) {
+            coordinator.measured = (text, width, key, height)
+            return CGSize(width: width, height: max(height, minHeight))
+        }
+        return CGSize(width: width, height: max(plainHeight(width: width), minHeight))
     }
 
-    /// Height of `text` wrapped at `width`, plus a blank line's slack — enough
-    /// room for the line you're about to start, and never a clipped last line.
-    private func measuredHeight(width: CGFloat) -> CGFloat {
+    /// Height of `text` in the body font alone, wrapped at `width`, plus a
+    /// blank line's slack. Only for a view that doesn't hold the text yet.
+    private func plainHeight(width: CGFloat) -> CGFloat {
+        let font = platformFont(fontRaw, size, scaled: !mirror)
         let para = NSMutableParagraphStyle(); para.lineSpacing = lineSpacing
         let attributed = NSAttributedString(
             string: text.isEmpty ? " " : text,
-            attributes: [.font: platformFont(fontRaw, size, scaled: !mirror), .paragraphStyle: para])
+            attributes: [.font: font, .paragraphStyle: para])
         let bounds = attributed.boundingRect(
             with: CGSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             context: nil)
-        return ceil(bounds.height) + size + lineSpacing
+        return ceil(bounds.height) + ceil(font.lineHeight) + lineSpacing
     }
 
-    final class Coordinator: NSObject, UITextViewDelegate {
+    final class Coordinator: NSObject, UITextViewDelegate, NSTextStorageDelegate {
         var focused: Binding<Bool>?
         var text: Binding<String>
         weak var textView: UITextView?
-        /// Re-applies styling with current settings (the focus dim tracks the caret).
-        var reapply: (() -> Void)?
-        /// Paragraph-scoped restyle for the just-edited range (nil = full).
-        var restyleParagraph: ((NSRange?) -> Void)?
+        /// What to style with; set by the view before anything is styled.
+        fileprivate var style: EditorStyle?
+        var isMirror = false
         /// Typewriter centring; nil when the mode is off.
         var recenter: (() -> Void)?
-        var focusParagraph = false
         /// Tag names for the @-completion bar (no @, frequency-ordered).
         var tagSuggestions: [String] = []
-        /// What the last full apply styled with — updateUIView's skip check.
+        /// What the style was built from — updateUIView's skip check.
         var lastStyleSignature = ""
         /// The last height `sizeThatFits` measured, and what it measured.
         var measured: (text: String, width: CGFloat, key: String, height: CGFloat)?
         /// Caret reporting for the external display (see `onCaretChange`).
         var onCaretChange: ((Int?) -> Void)?
-        /// The post-edit range of the in-flight user edit, recorded in
-        /// shouldChangeTextIn; nil for programmatic replacements (full restyle).
-        private var pendingEditRange: NSRange?
+        /// Set around a wholesale `tv.text =`: the whole text is styled right
+        /// after it, so the per-edit pass has nothing to add.
+        var swapping = false
+        /// Our own attribute pass is running; its edits are not edits to style.
+        private var isStyling = false
+        /// A restyle skipped while an input method was composing, owed once it ends.
+        private var restyleOwed = false
+        /// Counts `textViewDidChange`, so a programmatic edit can tell whether
+        /// UIKit reported it or it must.
+        private var changes = 0
+        /// The focus last asked for or last reported by UIKit. A request is
+        /// only acted on when it differs from this.
+        private var lastFocus: Bool?
+        /// A request made before the view had a window; kept for when it does.
+        private var focusOwed = false
+        /// Where an edit replaced or removed text: that paragraph's layout is
+        /// thrown away and laid out again on the next turn (see `repairLayout`).
+        private var repairAt: Int?
+        private var repairScheduled = false
+        /// Paragraph heights for one width and type (`heightsKey`).
+        private var heights: [ParagraphKey: CGFloat] = [:]
+        private var heightsKey = ""
+        private var heightsWidth: CGFloat = 0
+        private var blankHeight: CGFloat = 0
         private var lastTagBarKey = ""
         private var observers: [NSObjectProtocol] = []
 
@@ -851,24 +880,314 @@ struct WritingTextEditor: UIViewRepresentable {
 
         deinit { for o in observers { NotificationCenter.default.removeObserver(o) } }
 
+        /// Whether the view already holds exactly `text`. Compared on the
+        /// storage's own string, length first: no copy of either.
+        func holds(_ text: String) -> Bool {
+            guard let tv = textView else { return false }
+            let ns = tv.textStorage.mutableString
+            return ns.length == (text as NSString).length && ns.isEqual(to: text)
+        }
+
+        // MARK: Styling
+
+        /// An edit to the characters is styled here, inside the storage's own
+        /// editing pass, so the layout hears of the characters and their
+        /// attributes together. Styling it afterwards from `textViewDidChange`,
+        /// one attribute at a time, changed attributes under TextKit 2 while it
+        /// was still settling the keyboard's own replacement ("..." into "…"),
+        /// and the body sat a line low until the next key.
+        ///
+        /// `will`, not `did`: fonts change here, and changes made before the
+        /// storage fixes its attributes are folded into the edit it reports.
+        func textStorage(_ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorage.EditActions,
+                         range editedRange: NSRange, changeInLength delta: Int) {
+            // Attribute-only passes are our own (or UIKit's); nothing to style.
+            guard editedMask.contains(.editedCharacters), !isStyling, !swapping, let style else { return }
+            let tv = textView
+            // An edit that replaced or removed something, not just added to it.
+            if editedRange.length - delta > 0, !isMirror { scheduleRepair(at: editedRange.location) }
+            // An input method is composing: its marked text carries attributes
+            // of its own, so the paragraph is left alone until it commits.
+            if tv?.markedTextRange != nil { restyleOwed = true; return }
+            isStyling = true
+            Self.applyStyle(textStorage, paragraphsCovering: editedRange, with: style)
+            isStyling = false
+        }
+
+        /// Attributes for the paragraph(s) covering `range`. Every styling
+        /// regex is line-bound, so a paragraph is a safe unit. The caller has
+        /// the storage in an editing pass.
+        private static func applyStyle(_ storage: NSTextStorage, paragraphsCovering range: NSRange, with style: EditorStyle) {
+            let ns = storage.mutableString
+            let length = ns.length
+            let location = min(max(range.location, 0), length)
+            let target = ns.paragraphRange(for: NSRange(location: location, length: min(max(range.length, 0), length - location)))
+            guard target.length > 0 else { return }
+            storage.setAttributes(style.base, range: target)
+            let sub = ns.substring(with: target)
+            let subRange = NSRange(location: 0, length: target.length)
+            func shifted(_ r: NSRange) -> NSRange { NSRange(location: r.location + target.location, length: r.length) }
+            if style.highlightTags {
+                for m in tagRegex.matches(in: sub, range: subRange) {
+                    storage.addAttribute(.foregroundColor, value: style.accent, range: shifted(m.range))
+                }
+            }
+            for m in emphasisMatches(in: sub, range: subRange) {
+                storage.addAttribute(.font, value: style.italic, range: shifted(m.range))
+            }
+            for m in boldRegex.matches(in: sub, range: subRange) {
+                storage.addAttribute(.font, value: style.bold, range: shifted(m.range))
+            }
+            for m in codeRegex.matches(in: sub, range: subRange) {
+                storage.addAttribute(.font, value: style.mono, range: shifted(m.range))
+            }
+        }
+
+        /// Style the whole text, as one editing pass: a new entry, a changed
+        /// setting, or the focus dim following the caret. The view's own font
+        /// and colour are only set while it is empty: on a view with text in
+        /// it they re-attribute everything outside any pass.
+        func restyleAll(_ tv: UITextView) {
+            guard let style else { return }
+            let storage = tv.textStorage
+            if tv.markedTextRange != nil { restyleOwed = true; return }
+            if storage.length == 0 {
+                tv.font = style.font
+                tv.textColor = style.color
+            }
+            tv.typingAttributes = style.base
+            guard storage.length > 0 else { return }
+            isStyling = true
+            storage.beginEditing()
+            Self.applyStyle(storage, paragraphsCovering: NSRange(location: 0, length: storage.length), with: style)
+            if style.focusParagraph {
+                let ns = storage.mutableString
+                let sel = tv.selectedRange
+                let paragraph = ns.paragraphRange(for: NSRange(location: min(sel.location, ns.length), length: 0))
+                let dimmed = style.color.withAlphaComponent(0.35)
+                if paragraph.location > 0 {
+                    storage.addAttribute(.foregroundColor, value: dimmed,
+                                         range: NSRange(location: 0, length: paragraph.location))
+                }
+                let after = paragraph.location + paragraph.length
+                if after < ns.length {
+                    storage.addAttribute(.foregroundColor, value: dimmed,
+                                         range: NSRange(location: after, length: ns.length - after))
+                }
+            }
+            storage.endEditing()
+            isStyling = false
+            // The same words may now wrap differently.
+            measured = nil
+        }
+
+        /// The paragraph the caret is in, as one editing pass: what was owed
+        /// while an input method was composing.
+        private func restyleCaretParagraph(_ tv: UITextView) {
+            guard let style, tv.textStorage.length > 0 else { return }
+            let storage = tv.textStorage
+            isStyling = true
+            storage.beginEditing()
+            Self.applyStyle(storage, paragraphsCovering: tv.selectedRange, with: style)
+            storage.endEditing()
+            isStyling = false
+            measured = nil
+        }
+
+        // MARK: Layout repair
+
+        private func scheduleRepair(at location: Int) {
+            repairAt = min(repairAt ?? location, location)
+            guard !repairScheduled else { return }
+            repairScheduled = true
+            // On the next turn: never from inside the storage's own callback.
+            DispatchQueue.main.async { [weak self] in self?.repairLayout() }
+        }
+
+        /// TextKit 2 can keep a paragraph's old geometry after the keyboard
+        /// swaps characters under it. Throw that paragraph's layout away and
+        /// lay the visible part out again. `textLayoutManager` is nil on a view
+        /// that fell back to TextKit 1, where none of this applies.
+        private func repairLayout() {
+            repairScheduled = false
+            guard let at = repairAt, let tv = textView else { return }
+            repairAt = nil
+            guard tv.markedTextRange == nil, tv.window != nil,
+                  let layout = tv.textLayoutManager, let content = layout.textContentManager else { return }
+            let ns = tv.textStorage.mutableString
+            let paragraph = ns.paragraphRange(for: NSRange(location: min(max(at, 0), ns.length), length: 0))
+            guard paragraph.length > 0,
+                  let start = content.location(content.documentRange.location, offsetBy: paragraph.location),
+                  let end = content.location(start, offsetBy: paragraph.length),
+                  let range = NSTextRange(location: start, end: end) else { return }
+            #if DEBUG
+            let before = Self.firstFragmentMinY(layout)
+            #endif
+            layout.invalidateLayout(for: range)
+            layout.textViewportLayoutController.layoutViewport()
+            #if DEBUG
+            let after = Self.firstFragmentMinY(layout)
+            editorLog.debug("repair at \(paragraph.location)+\(paragraph.length): first fragment minY \(Double(before ?? -1)) -> \(Double(after ?? -1))")
+            #endif
+        }
+
+        #if DEBUG
+        /// Where the first laid-out line sits: 0 unless the text has dropped.
+        /// Reads what is already laid out; forces nothing.
+        private static func firstFragmentMinY(_ layout: NSTextLayoutManager) -> CGFloat? {
+            var y: CGFloat?
+            layout.enumerateTextLayoutFragments(from: layout.documentRange.location, options: []) { fragment in
+                y = fragment.layoutFragmentFrame.minY
+                return false
+            }
+            return y
+        }
+        #endif
+
+        // MARK: Measuring
+
+        /// The height the view's own styled text needs at `width`, plus a blank
+        /// line's slack — room for the line you're about to start, and never a
+        /// clipped last line. Paragraph by paragraph, each kept for its words
+        /// and fonts, so a keystroke typesets one paragraph, not the entry.
+        /// Nil when the view doesn't hold `text`.
+        func measuredHeight(of tv: UITextView, holding text: String, width: CGFloat, key: String) -> CGFloat? {
+            guard let style, textView === tv, holds(text) else { return nil }
+            let storage = tv.textStorage
+            let ns = storage.mutableString
+            if heightsKey != key || heightsWidth != width {
+                heights.removeAll(keepingCapacity: true)
+                heightsKey = key
+                heightsWidth = width
+                blankHeight = Self.height(of: NSAttributedString(string: " ", attributes: style.base), width: width)
+            }
+            // Only the paragraphs still in the text are kept.
+            var kept: [ParagraphKey: CGFloat] = [:]
+            kept.reserveCapacity(heights.count + 1)
+            var total: CGFloat = 0
+            var count = 0
+            var location = 0
+            let length = ns.length
+            // An empty text is one blank line, and so is what follows a final ↩.
+            var endsOpen = true
+            while location < length {
+                var start = 0, end = 0, contentsEnd = 0
+                ns.getParagraphStart(&start, end: &end, contentsEnd: &contentsEnd,
+                                     for: NSRange(location: location, length: 0))
+                let content = NSRange(location: start, length: contentsEnd - start)
+                if content.length == 0 {
+                    total += blankHeight
+                } else {
+                    var hasher = Hasher()
+                    storage.enumerateAttribute(.font, in: content, options: []) { value, range, _ in
+                        hasher.combine(range.location - content.location)
+                        hasher.combine(range.length)
+                        hasher.combine((value as? NSObject)?.hash ?? 0)
+                    }
+                    let paragraph = ParagraphKey(text: ns.substring(with: content), fonts: hasher.finalize())
+                    let height = heights[paragraph]
+                        ?? Self.height(of: storage.attributedSubstring(from: content), width: width)
+                    kept[paragraph] = height
+                    total += height
+                }
+                count += 1
+                endsOpen = end > contentsEnd
+                guard end > location else { break }
+                location = end
+            }
+            if endsOpen { total += blankHeight; count += 1 }
+            heights = kept
+            // Line spacing falls between lines; inside a paragraph it is in the
+            // paragraph's own height already.
+            total += CGFloat(max(0, count - 1)) * style.lineSpacing
+            return ceil(total) + ceil(style.font.lineHeight) + style.lineSpacing
+        }
+
+        private static func height(of string: NSAttributedString, width: CGFloat) -> CGFloat {
+            string.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                                options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).height
+        }
+
+        // MARK: Focus
+
+        /// The host asked for the keyboard to be here (true) or not (false).
+        /// Acted on only when that differs from what was last asked for or
+        /// last reported by UIKit, and on the next turn, after SwiftUI's
+        /// update. Asking again on every update is how two fields come to
+        /// take the keyboard from each other in turn.
+        func request(focus want: Bool?, on tv: UITextView) {
+            guard let want, want != lastFocus else { return }
+            lastFocus = want
+            DispatchQueue.main.async { [weak self, weak tv] in
+                guard let self, let tv, self.lastFocus == want else { return }
+                self.applyFocus(tv)
+            }
+        }
+
+        private func applyFocus(_ tv: UITextView) {
+            guard let want = lastFocus else { return }
+            // Not on screen yet: `attached` picks it up.
+            guard tv.window != nil else { focusOwed = true; return }
+            focusOwed = false
+            if want, !tv.isFirstResponder {
+                // Refused: forget the request, so the next change of anything asks again.
+                if !tv.becomeFirstResponder() { lastFocus = nil }
+            } else if !want, tv.isFirstResponder {
+                tv.resignFirstResponder()
+            }
+        }
+
+        /// The view joined a window with a request still owed.
+        func attached() {
+            guard focusOwed else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.focusOwed, let tv = self.textView else { return }
+                self.applyFocus(tv)
+            }
+        }
+
+        // MARK: UITextViewDelegate
+
         func textViewDidChange(_ textView: UITextView) {
+            changes &+= 1
             text.wrappedValue = textView.text
-            restyleParagraph?(pendingEditRange)   // nil (e.g. programmatic set) = full
-            pendingEditRange = nil
+            if textView.markedTextRange == nil {
+                if restyleOwed {
+                    restyleOwed = false
+                    if style?.focusParagraph == true { restyleAll(textView) } else { restyleCaretParagraph(textView) }
+                } else if style?.focusParagraph == true {
+                    restyleAll(textView)   // its dim spans the document
+                }
+                // An emptied view takes its type from here for what comes next.
+                if textView.textStorage.length == 0, let style {
+                    if textView.font != style.font { textView.font = style.font }
+                    textView.typingAttributes = style.base
+                }
+            }
             recenter?()
             updateTagBar(textView)
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
-            if focusParagraph { reapply?() }   // the dimmed region follows the caret
+            if style?.focusParagraph == true { restyleAll(textView) }   // the dimmed region follows the caret
             recenter?()
             updateTagBar(textView)
             reportCaret(textView)
         }
 
-        func textViewDidBeginEditing(_ textView: UITextView) { focused?.wrappedValue = true; reportCaret(textView) }
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            // UIKit's word on it: recorded first, so the echo through the
+            // binding is not taken for a new request.
+            lastFocus = true
+            focusOwed = false
+            if let focused, !focused.wrappedValue { focused.wrappedValue = true }
+            reportCaret(textView)
+        }
+
         func textViewDidEndEditing(_ textView: UITextView) {
-            focused?.wrappedValue = false
+            lastFocus = false
+            focusOwed = false
+            if let focused, focused.wrappedValue { focused.wrappedValue = false }
             guard let onCaretChange else { return }
             onCaretChange(nil)
             select(nil)
@@ -900,7 +1219,7 @@ struct WritingTextEditor: UIViewRepresentable {
                 tv.reloadInputViews()
             }
             guard !tagSuggestions.isEmpty,
-                  let token = quireTagToken(in: tv.text, caret: tv.selectedRange.location) else {
+                  let token = quireTagToken(in: tv.textStorage.mutableString, caret: tv.selectedRange.location) else {
                 clear(); return
             }
             let partial = token.partial.lowercased()
@@ -933,11 +1252,11 @@ struct WritingTextEditor: UIViewRepresentable {
                     guard let self, let tv,
                           // Re-derive the token at tap time — the text may have
                           // moved under a bar built a keystroke ago.
-                          let token = quireTagToken(in: tv.text, caret: tv.selectedRange.location)
+                          let token = quireTagToken(in: tv.textStorage.mutableString, caret: tv.selectedRange.location)
                     else { return }
                     let replacement = "@\(name) "
                     self.mutate(tv, range: token.range, with: replacement,
-                                caret: token.range.location + (replacement as NSString).length)
+                                selection: NSRange(location: token.range.location + (replacement as NSString).length, length: 0))
                 })
                 button.accessibilityLabel = "Complete tag \(name)"
                 stack.addArrangedSubview(button)
@@ -953,15 +1272,12 @@ struct WritingTextEditor: UIViewRepresentable {
             return bar
         }
 
-        /// ↩ continues / ends a list; anything else falls through. Also
-        /// records where the edit will land, so the restyle stays
-        /// paragraph-local.
+        /// ↩ continues / ends a list; anything else falls through.
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange,
                       replacementText replacement: String) -> Bool {
-            pendingEditRange = NSRange(location: range.location,
-                                       length: (replacement as NSString).length)
             guard replacement == "\n", range.length == 0 else { return true }
-            let ns = textView.text as NSString
+            let ns = textView.textStorage.mutableString
+            guard range.location <= ns.length else { return true }
             let lineRange = ns.lineRange(for: NSRange(location: range.location, length: 0))
             var line = ns.substring(with: lineRange)
             // The terminator comes along with lineRange and isn't always a lone
@@ -974,43 +1290,69 @@ struct WritingTextEditor: UIViewRepresentable {
                 return true
             case .continueList(let prefix):
                 mutate(textView, range: range, with: "\n" + prefix,
-                       caret: range.location + ("\n" + prefix).utf16.count)
+                       selection: NSRange(location: range.location + ("\n" + prefix).utf16.count, length: 0))
                 return false
             case .endList(let prefixLength):
                 let prefixRange = NSRange(location: lineRange.location, length: prefixLength)
-                mutate(textView, range: prefixRange, with: "", caret: lineRange.location)
+                mutate(textView, range: prefixRange, with: "", selection: NSRange(location: lineRange.location, length: 0))
                 return false
             }
         }
 
         /// Replace `range` with `s` through UITextInput's `replace`, which —
         /// unlike mutating textStorage directly — registers undo, matching the
-        /// macOS shouldChangeText path.
-        private func mutate(_ tv: UITextView, range: NSRange, with s: String, caret: Int) {
+        /// macOS shouldChangeText path. The storage's delegate styles it.
+        ///
+        /// Whether `replace` reports the change to the delegate itself is
+        /// UIKit's business and has not been the same everywhere, so the
+        /// change is reported here only if UIKit didn't: once, either way.
+        private func mutate(_ tv: UITextView, range: NSRange, with s: String, selection: NSRange) {
             guard let start = tv.position(from: tv.beginningOfDocument, offset: range.location),
                   let end = tv.position(from: start, offset: range.length),
                   let textRange = tv.textRange(from: start, to: end) else { return }
-            // `replace` may re-enter shouldChangeTextIn with its own range;
-            // set ours after, so the restyle covers what was really inserted.
+            let before = changes
             tv.replace(textRange, withText: s)
-            pendingEditRange = NSRange(location: range.location, length: (s as NSString).length)
-            tv.selectedRange = NSRange(location: caret, length: 0)
-            textViewDidChange(tv)
+            let length = tv.textStorage.length
+            let location = min(max(selection.location, 0), length)
+            tv.selectedRange = NSRange(location: location, length: min(max(selection.length, 0), length - location))
+            if changes == before { textViewDidChange(tv) }
+        }
+
+        /// A ranged edit from outside the keyboard (see `WritingEditorProxy`).
+        fileprivate func replace(_ range: NSRange, with s: String, in length: Int, moveCaret: Bool) -> Bool {
+            guard !isMirror, let tv = textView, tv.textStorage.length == length,
+                  range.location >= 0, range.length >= 0, NSMaxRange(range) <= length else { return false }
+            // An input method mid-word: what it has so far is kept as typed
+            // rather than thrown away by an edit landing under it.
+            if tv.markedTextRange != nil {
+                tv.unmarkText()
+                guard tv.textStorage.length == length else { return false }
+            }
+            let added = (s as NSString).length
+            let selected = tv.selectedRange
+            let selection: NSRange
+            if moveCaret {
+                selection = NSRange(location: range.location + added, length: 0)
+            } else if selected.location >= NSMaxRange(range) {
+                // After the edit: carried along with its words.
+                selection = NSRange(location: selected.location + added - range.length, length: selected.length)
+            } else if NSMaxRange(selected) <= range.location {
+                selection = selected
+            } else {
+                selection = NSRange(location: range.location + added, length: 0)
+            }
+            mutate(tv, range: range, with: s, selection: selection)
+            return true
         }
 
         /// ⌘B/⌘I: wrap the selection in `marker` (or insert an empty pair).
         private func wrapSelection(marker: String) {
             guard let tv = textView, tv.isFirstResponder else { return }
             let sel = tv.selectedRange
-            let ns = tv.text as NSString
-            let selected = sel.length > 0 ? ns.substring(with: sel) : ""
+            let selected = sel.length > 0 ? tv.textStorage.mutableString.substring(with: sel) : ""
             let markerLen = (marker as NSString).length
-            guard let start = tv.position(from: tv.beginningOfDocument, offset: sel.location),
-                  let end = tv.position(from: start, offset: sel.length),
-                  let textRange = tv.textRange(from: start, to: end) else { return }
-            tv.replace(textRange, withText: marker + selected + marker)
-            tv.selectedRange = NSRange(location: sel.location + markerLen, length: sel.length)
-            textViewDidChange(tv)
+            mutate(tv, range: sel, with: marker + selected + marker,
+                   selection: NSRange(location: sel.location + markerLen, length: sel.length))
         }
     }
 }
@@ -1019,6 +1361,14 @@ struct WritingTextEditor: UIViewRepresentable {
 /// attached; anything else pastes as usual.
 final class PastingTextView: UITextView {
     var pasteMedia: ((PastedMedia) -> Void)?
+    /// Told when the view joins a window: a focus request made before it was
+    /// on screen is acted on then (`Coordinator.attached`).
+    var onWindow: (() -> Void)?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { onWindow?() }
+    }
 
     /// A sized-to-fit editor (the composer) never scrolls inside itself: the
     /// page around it does. UIKit still nudged the offset on some edits: Dan's

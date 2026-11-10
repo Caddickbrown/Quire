@@ -21,11 +21,14 @@ enum MDSegment {
     case image(path: String, caption: String)   // relative asset path/URL + alt-text caption
 }
 
+/// Compiled once: the reader and every list preview parse with it as they draw.
+private let mediaSegmentRegex = try! NSRegularExpression(pattern: #"!\[([^\]]*)\]\(\s*(?:<([^>\n]*)>|([^\s)]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?(?:\s*\)|[ \t]*(?=\r?\n|$))"#)
+
 /// Split body text into text runs and image links. The image link's alt text
 /// (`![caption](path)`) is carried through as the caption — the same convention
 /// Obsidian's "Image Captions" plugin uses, so it round-trips as plain markdown.
 func parseMediaSegments(_ s: String) -> [MDSegment] {
-    let regex = try! NSRegularExpression(pattern: #"!\[([^\]]*)\]\(\s*(?:<([^>\n]*)>|([^\s)]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?(?:\s*\)|[ \t]*(?=\r?\n|$))"#)
+    let regex = mediaSegmentRegex
     let ns = s as NSString
     var segments: [MDSegment] = []
     var cursor = 0
@@ -247,6 +250,8 @@ struct MediaBody: View {
             }
             .buttonStyle(.plain)
             .disabled(onUpdateText == nil)
+            .accessibilityLabel(label.isEmpty ? "Task" : label)
+            .accessibilityValue(done ? "Done" : "Not done")
             Text(markdown(label))
                 .font(font)
                 .strikethrough(done, color: .secondary)

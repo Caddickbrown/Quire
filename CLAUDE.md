@@ -55,7 +55,7 @@ does.
 ## Workspace
 
 ```
-Cargo.toml          workspace: core, tui, linux/src-tauri (default members: core, tui)
+Cargo.toml          workspace: core, tui, linux/src-tauri, bindings (default members: core, tui)
 themes.json         the looks — one source. core/src/themes.rs compiles it in.
 install.sh          Linux + macOS installer (bash 3.2). Asks TUI / GUI / both;
                     detect jnl/Nook/Wander + their folders → ask everything →
@@ -112,11 +112,14 @@ tui/                quire-tui: lib + two bins (src/bin/quire.rs, src/bin/jnl.rs)
   src/editor.rs     the composer buffer: wrapping, caret, macros
   src/md.rs         markdown styled in place, one Style per char
   src/paste.rs      clipboard images (arboard), dropped-path detection
+  src/backup.rs     when an automatic backup is due; the copies are the core's
+  src/update.rs     `quire update`: the latest release, or --main, and the AppImage
   src/cli.rs        the printed commands (jnl parity)
   src/theme.rs      Palette from a Theme; truecolor or nearest-256
 linux/              the Tauri app
   src-tauri/src/lib.rs   commands = thin calls on the Journal; watcher; backups
   src/app.js, style.css, index.html, prompts.js   the front end (no build step)
+  src/boot.js       sets the cached theme before the first paint
 bindings/           quire-bindings: UniFFI callback Vault + native journal API;
                     JSON transports existing core values, closed request enum;
                     `bindgen` feature builds the Swift generator, not on devices.
@@ -137,15 +140,21 @@ apple/              Quire SwiftUI app + widget/share extensions from Nook
 tools/
   migrate_journal.py   inbox.md → inbox/, .nook/ → .quire/, from outside the app
   test_migrate_journal.py  its tests (make check)
-  drive_tui.py         pseudo-terminal smoke test of every screen (make smoke)
-  check_tui_settings.py  backup, retention and keyboard settings in a pty; Linux only, by hand,
-                       and stale (it expects version 0.7.0): on a Mac it would reach the real settings
+  drive_tui.py         pseudo-terminal smoke test of every screen (make smoke); each check
+                       looks only at what its own action drew. Runs the app in a scratch
+                       home (HOME, XDG_CONFIG_HOME, QUIRE_CONFIG_DIR), never the real settings
+  check_tui_settings.py  backup, retention and keyboard settings in a pty, in the same kind of
+                       scratch home; by hand, and its keys were last checked against 0.7
+  bump_version.py      the version in its four fields and both lock files (make bump V=x.y.z)
   validate_apple.py    the Xcode project's wiring, on any host (make check)
   check_linux_editor.js, check_media_library.js  the Linux front end (make check)
   make_apple_icon.swift  Quire's Apple app icon set (`swift tools/make_apple_icon.swift <AppIcon.appiconset>`)
 sample/             the sample journal (new layout)
 docs/               consolidation-plan.md (the plan, decisions, the TUI spec),
-                    suggestions.md, maintenance.md, iphone-duo.md
+                    suggestions.md (the 6 November review), fix-spec.md (the 9 November
+                    review, written as a spec: the newer of the two), fix-report.md (what
+                    was done about it and what is still open), maintenance.md,
+                    iphone-duo.md
 legacy/             Nook and Wander, kept for reference: nothing builds from them,
                     so don't grep them for how Quire works
 ```
@@ -272,16 +281,21 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   `linux/src-tauri/tauri.conf.json` and `linux/package.json` always match. A minor bump for a feature or format
   change, a patch for fixes only.
 - **Cutting one**: on `main`, rename `## [Unreleased]` in `CHANGELOG.md` to
-  `## [x.y.z] — YYYY-MM-DD`, open a fresh `[Unreleased]`, bump the four
-  version fields, run `make test`, `make check` and `make smoke`, commit
-  "Release x.y.z", then tag `vx.y.z` on that commit and push the tag. Tag only
+  `## [x.y.z] — YYYY-MM-DD` (that exact shape: the pipeline refuses any other
+  heading, and bullets left under `[Unreleased]`), open a fresh `[Unreleased]`,
+  run `make bump V=x.y.z`, then `make test`, `make check` and `make smoke`, commit
+  "Release x.y.z", then tag `vx.y.z` on that commit and push the tag.
+  `make bump` (`tools/bump_version.py`) writes the four version fields and the
+  three files that repeat them: `Cargo.lock`, `linux/package-lock.json` and the
+  generated Xcode project. A release changes those seven files and the changelog. Tag only
   after the release commit is on `main`: a tag on an older commit fails the
   version check and publishes nothing. Such a tag (no release made) may be
   deleted and pushed again; a published tag is never moved or reused, and a
   bad release is fixed by the next patch.
-- **Pipeline** (`.github/workflows/release.yml`): pushing a `v*` tag checks
-  the tag against the four version fields and that CHANGELOG has the
-  section, then
+- **Pipeline** (`.github/workflows/release.yml`): pushing a `v*` tag runs
+  `ci.yml` on it, checks the tag against the four version fields and that
+  CHANGELOG has the section under a dated heading with nothing left in
+  `[Unreleased]`, then
   builds on Ubuntu 22.04 x86_64 and arm64 and publishes the release with the
   CHANGELOG section as notes:
   `quire-<target>.tar.gz` (+ `.sha256`) holding `quire` and `jnl`, and the
@@ -347,8 +361,11 @@ Quire ships tagged releases. A release lives on GitHub Releases at
 - `make test` (core, TUI and bindings tests), `make check` (clippy, keep it clean; it covers
   the desktop app too where WebKitGTK is installed, plus the front-end, migration and Apple
   project checks), `make smoke`
-  (the pty driver, must pass 23/23 at 100×30 and 80×24) before a push. `.github/workflows/ci.yml`
-  runs the three on every push to `main`, and `release.yml` runs them on the tag before it builds.
+  (the pty driver, must pass 23/23 at 100×30 and 80×24) before a push. Nothing runs them for
+  you on a push: `.github/workflows/ci.yml` runs the three only when asked (`workflow_dispatch`:
+  Actions → CI → Run workflow, or `gh workflow run ci.yml`), and `release.yml` runs them on a
+  release tag before it builds. `apple.yml` runs when asked and on pull requests that touch
+  Apple, bindings or core paths.
   Busy hosts can use `QUIRE_SMOKE_WAIT_SCALE=10 make smoke`; this extends
   processing waits without changing any assertion.
 - The one-line Tauri rule from before still holds: the Linux frontend has

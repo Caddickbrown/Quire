@@ -224,6 +224,10 @@ enum ResurfacingScheduler {
     static let weekdayKey = "weeklyResurfacingWeekday"   // 1 = Sunday … 7 = Saturday
     static let hourKey = "weeklyResurfacingHour"
     private static let requestID = "quire.weeklyResurface"
+    /// The timestamp of the entry the pending note teases, so an edit or a
+    /// delete of that entry can cancel it without asking the notification
+    /// centre on every save.
+    private static let pendingTSKey = "weeklyResurfacingPendingTS"
 
     static var defaultWeekday: Int { 1 }   // Sunday
     static var defaultHour: Int { 10 }
@@ -235,10 +239,13 @@ enum ResurfacingScheduler {
         let center = UNUserNotificationCenter.current()
         guard defaults.bool(forKey: enabledKey) else {
             center.removePendingNotificationRequests(withIdentifiers: [requestID])
+            defaults.removeObject(forKey: pendingTSKey)
             return
         }
         let pending = await center.pendingNotificationRequests()
         guard !pending.contains(where: { $0.identifier == requestID }) else { return }
+        // Chosen from the journal as it is, not from a half-read one.
+        guard store.indexed else { return }
 
         // Pick what to resurface, best pool first.
         var date = "", ts = "", preview = "", journal = ""
@@ -262,7 +269,9 @@ enum ResurfacingScheduler {
 
         let content = UNMutableNotificationContent()
         content.title = "From your journal"
-        content.body = preview.isEmpty ? "A page worth rereading." : preview
+        // With the app lock on, nothing from the journal goes on the Lock Screen.
+        let locked = defaults.bool(forKey: JournalStore.appLockKey)
+        content.body = locked || preview.isEmpty ? "A page worth rereading." : preview
         content.sound = .default
         content.categoryIdentifier = NotificationResponder.resurfaceCategory
         content.userInfo = ["date": date, "ts": ts, "journal": journal]
@@ -273,12 +282,29 @@ enum ResurfacingScheduler {
         // One-shot: the next activation after it fires plans the following one
         // with a freshly chosen entry.
         let trigger = UNCalendarNotificationTrigger(dateMatching: when, repeats: false)
-        try? await center.add(UNNotificationRequest(identifier: requestID, content: content, trigger: trigger))
+        do {
+            try await center.add(UNNotificationRequest(identifier: requestID, content: content, trigger: trigger))
+            defaults.set(ts, forKey: pendingTSKey)
+        } catch { defaults.removeObject(forKey: pendingTSKey) }
     }
 
-    /// The setting changed — replan from scratch.
+    /// The setting changed (or the app lock did) — replan from scratch.
     static func settingsChanged(store: JournalStore) {
+        guard Bundle.main.bundleURL.pathExtension == "app" else { return }
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [requestID])
+        UserDefaults.standard.removeObject(forKey: pendingTSKey)
         Task { await ensureScheduled(store: store) }
+    }
+
+    /// The entry stamped `ts` was edited or deleted. If the pending note
+    /// teases it, the note is cancelled: it was written from the entry as it
+    /// was, up to a week ago, and would arrive with a title that is no longer
+    /// there. The next activation plans another.
+    static func cancelIfTeasing(ts: String) {
+        let defaults = UserDefaults.standard
+        guard defaults.string(forKey: pendingTSKey) == ts,
+              Bundle.main.bundleURL.pathExtension == "app" else { return }
+        defaults.removeObject(forKey: pendingTSKey)
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [requestID])
     }
 }

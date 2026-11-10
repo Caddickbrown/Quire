@@ -200,13 +200,41 @@ struct SettingsView: View {
     ]
 
     private enum MaintenanceAction: String, Identifiable {
-        case fileAll, transfer, conflicts
+        case fileAll, transfer, conflicts, mergeExSplit
         var id: String { rawValue }
         var title: String {
-            switch self { case .fileAll: return "File every draft?"; case .transfer: return "File transfer.md?"; case .conflicts: return "Merge conflict copies?" }
+            switch self {
+            case .fileAll: return "File every draft?"
+            case .transfer: return "File transfer.md?"
+            case .conflicts: return "Merge conflict copies?"
+            case .mergeExSplit: return "Merge ex-split journals into the journal?"
+            }
+        }
+        /// What it will do, where the title doesn't say.
+        var detail: String? {
+            switch self {
+            case .mergeExSplit:
+                return "Every split journal whose @tag is no longer in Split tags is filed back into the main journal by date, and its own files are removed."
+            default: return nil
+            }
+        }
+        /// The row's words while it runs.
+        var working: String {
+            switch self {
+            case .fileAll: return "Filing Drafts…"
+            case .transfer: return "Filing transfer.md…"
+            case .conflicts, .mergeExSplit: return "Merging…"
+            }
         }
     }
     @State private var maintenanceAction: MaintenanceAction?
+    /// The one running now: its row says so, and the others wait.
+    @State private var runningMaintenance: MaintenanceAction?
+    /// A template whose trash was tapped, until the question is answered.
+    @State private var deletingTemplate: String?
+    /// A folder picked for the journal, until the switch is confirmed.
+    @State private var pendingFolder: URL?
+    @State private var confirmingDefaultFolder = false
     @State private var showingImporter = false
     @State private var showingExporter = false
     @State private var exportDoc = ExportDocument(text: "")
@@ -223,6 +251,8 @@ struct SettingsView: View {
     @State private var showingOrphanConfirm = false
     @State private var showingNoOrphans = false
     @State private var orphanCleared: Int?
+    /// The orphan check or the clearing is running, off the main actor.
+    @State private var checkingOrphans = false
     @State private var showingReminderDenied = false
     @State private var templateNames: [String] = []
     @State private var showingDayOnePicker = false
@@ -464,14 +494,14 @@ struct SettingsView: View {
                         Label(name, systemImage: "doc.on.doc.fill")
                         Spacer()
                         Button(role: .destructive) {
-                            store.deleteTemplate(named: name)
-                            templateNames = store.templateNames()
+                            deletingTemplate = name
                         } label: {
                             Image(systemName: "trash")
                         }
                         .buttonStyle(.plain)
                         .destructiveAction()
                         .help("Delete template")
+                        .accessibilityLabel("Delete template \(name)")
                     }
                 }
                 buttonRow {
@@ -567,6 +597,23 @@ struct SettingsView: View {
                         Text("Never").foregroundStyle(.secondary)
                     }
                 }
+                // Scheduled backups fail out of sight: the reason stays here
+                // until one succeeds.
+                if let error = store.lastBackupError, !store.backupRunning {
+                    Label("The last backup failed: \(error)", systemImage: "exclamationmark.triangle")
+                        .font(.callout).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                // A restore that was cut short: what it moved aside is still in
+                // the folder, and this says where until the folder is reopened
+                // without it.
+                if let leftover = store.interruptedRestore {
+                    Label(leftover, systemImage: "clock.badge.exclamationmark")
+                        .font(.callout).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
             } header: {
                 QLabel("Backup")
             } footer: {
@@ -596,9 +643,9 @@ struct SettingsView: View {
                 buttonRow {
                     cleanUpButton
                     Button("Sort Inbox") { store.sortInbox() }
-                    Button("File All Drafts…") { maintenanceAction = .fileAll }
-                    Button("File transfer.md…") { maintenanceAction = .transfer }
-                    Button("Merge Conflict Copies…") { maintenanceAction = .conflicts }
+                    maintenanceButton(.fileAll) { Text("File All Drafts…") }
+                    maintenanceButton(.transfer) { Text("File transfer.md…") }
+                    maintenanceButton(.conflicts) { Text("Merge Conflict Copies…") }
                     compressMediaButton
                     transcribeAllButton
                     mergeExSplitButton
@@ -686,15 +733,22 @@ struct SettingsView: View {
         #endif
         .task(id: store.revision) { templateNames = store.templateNames() }
         .confirmationDialog(maintenanceAction?.title ?? "Maintenance", isPresented: Binding(get: { maintenanceAction != nil }, set: { if !$0 { maintenanceAction = nil } }), titleVisibility: .visible, presenting: maintenanceAction) { action in
-            Button("Continue") {
-                switch action {
-                case .fileAll: cleanupMessage = "Filed \(store.fileAllDrafts()) drafts."
-                case .transfer: cleanupMessage = "Filed \(store.fileTransfer()) entries from transfer.md."
-                case .conflicts: cleanupMessage = "Merged \(store.mergeConflictCopies()) entries from conflict copies."
-                }
-                maintenanceAction = nil; showingCleanup = true
-            }
+            Button("Continue") { run(action) }
             Button("Cancel", role: .cancel) { maintenanceAction = nil }
+        } message: { action in
+            if let detail = action.detail { Text(detail) }
+        }
+        .confirmationDialog("Delete the template “\(deletingTemplate ?? "")”?",
+                            isPresented: Binding(get: { deletingTemplate != nil }, set: { if !$0 { deletingTemplate = nil } }),
+                            titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                if let name = deletingTemplate {
+                    store.deleteTemplate(named: name)
+                    templateNames = store.templateNames()
+                }
+                deletingTemplate = nil
+            }
+            Button("Cancel", role: .cancel) { deletingTemplate = nil }
         }
         .alert("Backup", isPresented: Binding(
             get: { backupMessage != nil },
@@ -738,7 +792,11 @@ struct SettingsView: View {
         }
         .alert("Clear orphan media?", isPresented: $showingOrphanConfirm) {
             Button("Clear \(orphanCount)", role: .destructive) {
-                orphanCleared = store.deleteOrphanAssets()
+                checkingOrphans = true
+                Task { @MainActor in
+                    orphanCleared = await store.deleteOrphanAssetsAsync()
+                    checkingOrphans = false
+                }
             }
             Button("Cancel", role: .cancel) { }
         } message: {
@@ -755,7 +813,8 @@ struct SettingsView: View {
         )) {
             Button("OK") { }
         } message: {
-            Text("Cleared \(orphanCleared ?? 0) unused media file\((orphanCleared ?? 0) == 1 ? "" : "s"). Recovery copies are kept under .quire/media-cleanup/ for 30 days.")
+            Text("Cleared \(orphanCleared ?? 0) unused media file\((orphanCleared ?? 0) == 1 ? "" : "s"). Recovery copies are kept under .quire/media-cleanup/ for 30 days."
+                 + ((orphanCleared ?? 0) < orphanCount ? " \(orphanCount - (orphanCleared ?? 0)) left in place (linked again since the check, or it could not be moved)." : ""))
         }
         .alert("Cleanup complete", isPresented: $showingCleanup) {
             Button("OK") { }
@@ -826,13 +885,70 @@ struct SettingsView: View {
                           allowedContentTypes: [.folder],
                           allowsMultipleSelection: false) { result in
                 if case .success(let urls) = result, let url = urls.first {
-                    store.setCustomFolder(url)
+                    // Finding a folder that went missing is the repair itself;
+                    // moving a working journal somewhere else is asked first.
+                    if missing { store.setCustomFolder(url) } else { pendingFolder = url }
                 }
+            }
+            .confirmationDialog("Use “\(pendingFolder?.lastPathComponent ?? "")” as the journal folder?",
+                                isPresented: Binding(get: { pendingFolder != nil }, set: { if !$0 { pendingFolder = nil } }),
+                                titleVisibility: .visible) {
+                Button("Use This Folder") {
+                    if let url = pendingFolder { store.setCustomFolder(url) }
+                    pendingFolder = nil
+                }
+                Button("Cancel", role: .cancel) { pendingFolder = nil }
+            } message: {
+                Text("Quire will read and write your journal there from now on. The folder in use now is left as it is.")
             }
     }
     private var useDefaultButton: some View {
-        Button(role: .destructive) { store.useDefaultFolder() } label: {
+        Button(role: .destructive) { confirmingDefaultFolder = true } label: {
             Label("Use iCloud / Default", systemImage: "arrow.uturn.backward")
+        }
+        .confirmationDialog("Go back to the default folder?", isPresented: $confirmingDefaultFolder, titleVisibility: .visible) {
+            Button("Use Default", role: .destructive) { store.useDefaultFolder() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Quire will use iCloud, or this device when iCloud is off. The folder in use now is left as it is.")
+        }
+    }
+
+    /// A maintenance row that asks first and says so while it works.
+    private func maintenanceButton<L: View>(_ action: MaintenanceAction, @ViewBuilder label: () -> L) -> some View {
+        Button { maintenanceAction = action } label: {
+            if runningMaintenance == action {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(action.working)
+                }
+            } else {
+                label()
+            }
+        }
+        .disabled(runningMaintenance != nil)
+    }
+
+    /// The store runs these off the main actor: the row says it is working and
+    /// the rest of the app stays live until the journal has been read again.
+    private func run(_ action: MaintenanceAction) {
+        maintenanceAction = nil
+        runningMaintenance = action
+        Task { @MainActor in
+            switch action {
+            case .fileAll: cleanupMessage = "Filed \(await store.fileAllDraftsAsync()) drafts."
+            case .transfer: cleanupMessage = "Filed \(await store.fileTransferAsync()) entries from transfer.md."
+            case .conflicts: cleanupMessage = "Merged \(await store.mergeConflictCopiesAsync()) entries from conflict copies."
+            case .mergeExSplit:
+                let r = await store.mergeExSplitJournalsAsync()
+                cleanupMessage = r.journals == 0
+                    ? "No ex-split journals to merge. (Only split files whose @tag is no longer configured are merged.)"
+                    : "Merged \(r.entries) entr\(r.entries == 1 ? "y" : "ies") from \(r.journals) journal(s) back into the main journal."
+            }
+            // What went wrong is part of the answer, not only the count.
+            if let error = store.lastWriteError { cleanupMessage += "\n\n" + error }
+            runningMaintenance = nil
+            showingCleanup = true
         }
     }
     private var chooseBackupButton: some View {
@@ -885,13 +1001,7 @@ struct SettingsView: View {
         .disabled(cleaningUp)
     }
     private var mergeExSplitButton: some View {
-        Button {
-            let r = store.mergeExSplitJournals()
-            cleanupMessage = r.journals == 0
-                ? "No ex-split journals to merge. (Only split files whose @tag is no longer configured are merged.)"
-                : "Merged \(r.entries) entr\(r.entries == 1 ? "y" : "ies") from \(r.journals) journal(s) back into the main journal."
-            showingCleanup = true
-        } label: {
+        maintenanceButton(.mergeExSplit) {
             Label("Merge Ex-Split Journals into Journal", systemImage: "arrow.triangle.merge")
         }
     }
@@ -902,8 +1012,12 @@ struct SettingsView: View {
                 let total = r.images + r.videos + r.audios
                 let converted = r.converted == 0 ? "" : "Converted \(r.converted) HEIC photo(s) to JPEG. "
                 cleanupMessage = total == 0
-                    ? (converted.isEmpty ? "No new media to compress." : converted)
+                    ? (converted.isEmpty ? (r.failed == 0 ? "No new media to compress." : "") : converted)
                     : converted + "Compressed \(r.images) photo(s), \(r.videos) video(s), \(r.audios) audio — saved \(ByteCountFormatter.string(fromByteCount: Int64(r.bytesSaved), countStyle: .file))."
+                if r.failed > 0 {
+                    cleanupMessage += (cleanupMessage.isEmpty ? "" : " ")
+                        + "\(r.failed) file\(r.failed == 1 ? "" : "s") couldn't be compressed (still downloading, or unreadable just now) and will be tried again next time."
+                }
                 showingCleanup = true
             }
         } label: {
@@ -934,12 +1048,25 @@ struct SettingsView: View {
     }
     private var clearOrphanButton: some View {
         Button {
-            orphanCount = store.orphanAssets().count
-            if orphanCount == 0 { showingNoOrphans = true } else { showingOrphanConfirm = true }
+            // The check reads every entry file: off the main actor.
+            checkingOrphans = true
+            Task { @MainActor in
+                orphanCount = await store.orphanAssetsAsync().count
+                checkingOrphans = false
+                if orphanCount == 0 { showingNoOrphans = true } else { showingOrphanConfirm = true }
+            }
         } label: {
-            Label("Clear Orphan Media", systemImage: "photo.badge.exclamationmark")
+            if checkingOrphans {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking Media…")
+                }
+            } else {
+                Label("Clear Orphan Media", systemImage: "photo.badge.exclamationmark")
+            }
         }
         .destructiveAction()
+        .disabled(checkingOrphans)
     }
     private var exportButton: some View {
         Button {
@@ -978,8 +1105,16 @@ struct SettingsView: View {
 
     private var importDayOneButton: some View {
         Button { showingDayOnePicker = true } label: {
-            Label("Import from Day One…", systemImage: "square.and.arrow.down")
+            if let p = store.importProgress {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Importing \(p.done) of \(p.total)…")
+                }
+            } else {
+                Label("Import from Day One…", systemImage: "square.and.arrow.down")
+            }
         }
+        .disabled(store.importProgress != nil)
         .fileImporter(isPresented: $showingDayOnePicker,
                       allowedContentTypes: [.json, .folder],
                       allowsMultipleSelection: false) { result in
@@ -994,6 +1129,7 @@ struct SettingsView: View {
         Button { showingFolderPicker = true } label: {
             Label("Import Markdown Folder…", systemImage: "square.and.arrow.down.on.square")
         }
+        .disabled(store.importProgress != nil)
         .fileImporter(isPresented: $showingFolderPicker,
                       allowedContentTypes: [.folder],
                       allowsMultipleSelection: false) { result in
@@ -1017,13 +1153,19 @@ struct SettingsView: View {
     private func runImport() {
         guard let preview = pendingImport else { return }
         pendingImport = nil
-        let r = store.commitImport(preview)
-        endImportAccess()
-        cleanupMessage = "Imported \(r.entries) entr\(r.entries == 1 ? "y" : "ies")"
-            + (r.media > 0 ? " and \(r.media) media file\(r.media == 1 ? "" : "s")" : "")
-            + (r.skipped > 0 ? "; skipped \(r.skipped) already present" : "")
-            + "."
-        showingCleanup = true
+        // Off the main actor, the Maintenance section counting as it goes; the
+        // export's folder stays open to us until it has finished.
+        Task { @MainActor in
+            let errorBefore = store.lastWriteError
+            let r = await store.commitImportAsync(preview)
+            endImportAccess()
+            cleanupMessage = "Imported \(r.entries) entr\(r.entries == 1 ? "y" : "ies")"
+                + (r.media > 0 ? " and \(r.media) media file\(r.media == 1 ? "" : "s")" : "")
+                + (r.skipped > 0 ? "; skipped \(r.skipped) already present" : "")
+                + "."
+            if let error = store.lastWriteError, error != errorBefore { cleanupMessage += "\n\n" + error }
+            showingCleanup = true
+        }
     }
 
     // MARK: Reminder helpers
@@ -1097,13 +1239,21 @@ struct RestoreSheet: View {
                         } label: {
                             HStack {
                                 Label {
-                                    if let date = copy.date {
-                                        Text(date.formatted(date: .abbreviated, time: .shortened))
-                                    } else {
-                                        Text(copy.name)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        if let date = copy.date {
+                                            Text(date.formatted(date: .abbreviated, time: .shortened))
+                                        } else {
+                                            Text(copy.name)
+                                        }
+                                        // Not a backup you took: the journal as it
+                                        // was just before a restore replaced it.
+                                        if copy.isSafetyCopy {
+                                            Text("Safety copy · the journal before a restore")
+                                                .font(.caption).foregroundStyle(.secondary)
+                                        }
                                     }
                                 } icon: {
-                                    Image(systemName: "externaldrive")
+                                    Image(systemName: copy.isSafetyCopy ? "arrow.uturn.backward.circle" : "externaldrive")
                                 }
                                 Spacer()
                                 Image(systemName: "clock.arrow.circlepath")
@@ -1136,8 +1286,10 @@ struct RestoreSheet: View {
             }
             Button("Cancel", role: .cancel) { confirming = nil }
         } message: {
-            Text("Your current journal is saved as a new backup first, then replaced by \(confirming?.date?.formatted(date: .abbreviated, time: .shortened) ?? confirming?.name ?? "this copy").")
+            Text("Your current journal is saved as a safety copy first, then replaced by \(confirming?.isSafetyCopy == true ? "the safety copy from " : "")\(confirming?.date?.formatted(date: .abbreviated, time: .shortened) ?? confirming?.name ?? "this copy").")
         }
+        // Not swiped away half way through: the journal is being swapped.
+        .interactiveDismissDisabled(restoring)
         .alert("Restore", isPresented: Binding(
             get: { message != nil },
             set: { if !$0 { message = nil; dismiss() } }

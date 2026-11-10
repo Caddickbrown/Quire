@@ -121,6 +121,8 @@ final class AppLockManager: ObservableObject {
         } else {
             clearVeil()
         }
+        // What the widget and the weekly note may say depends on the lock.
+        NotificationCenter.default.post(name: .quireAppLockChanged, object: nil)
     }
 
     /// The external display is a separate window the veil can't cover, so it

@@ -7,8 +7,9 @@ use notify::{RecursiveMode, Watcher};
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -25,6 +26,20 @@ struct AppState {
     /// "change" backups: when the debounced backup should run.
     backup_deadline: Mutex<Option<Instant>>,
     scheduler_running: AtomicBool,
+    /// When the last scheduled backup was tried, and how many have failed in
+    /// a row: a failing backup is retried with a growing wait, not on every save.
+    backup_attempt: Mutex<Option<Instant>>,
+    backup_failures: AtomicU32,
+    /// The journal changed since the last backup that verified. Mirrored in
+    /// the settings file (`PENDING_KEY`) so an "on change" backup that was
+    /// still waiting when the window closed runs at the next launch.
+    backup_pending: AtomicBool,
+    /// Paths the person chose in a file dialog or dropped on the window. The
+    /// commands that read or write outside the journal (attach, export,
+    /// import) take only these, so the page can't name a path of its own.
+    approved: Mutex<HashSet<PathBuf>>,
+    /// Why the settings file couldn't be used at launch, for the window to show.
+    settings_warning: Mutex<Option<String>>,
 }
 
 /// Lock even if a previous holder panicked.
@@ -36,18 +51,35 @@ fn settings_of(state: &AppState) -> Settings {
     lock(&state.settings).clone()
 }
 
-fn save_settings(s: &Settings) -> Result<(), String> {
-    s.save()
+/// Change settings: read from disk, changed and written back under the core's
+/// lock (so the terminal app's changes are kept), and only then made live.
+fn update_settings(state: &AppState, f: impl FnOnce(&mut Settings)) -> Result<(), String> {
+    let next = Settings::update(f)?;
+    *lock(&state.settings) = next;
+    Ok(())
 }
 
-/// Change settings: applied to a copy, saved, and only then made live.
-fn update_settings(state: &AppState, f: impl FnOnce(&mut Settings)) -> Result<(), String> {
-    let mut g = lock(&state.settings);
-    let mut next = g.clone();
-    f(&mut next);
-    save_settings(&next)?;
-    *g = next;
-    Ok(())
+/// The settings key (kept in `Settings::extra`) for "changed since the last backup".
+const PENDING_KEY: &str = "backup_pending";
+
+/// Let the webview's asset protocol read this folder. Scopes only grow: a
+/// folder used earlier in this run stays readable until Quire closes.
+fn allow_assets(app: &AppHandle, folder: &Path) {
+    let _ = app.asset_protocol_scope().allow_directory(folder, true);
+}
+
+fn approve(state: &AppState, p: &Path) {
+    lock(&state.approved).insert(p.to_path_buf());
+}
+
+/// A path the page handed back: only one a dialog or a drop gave it.
+fn approved(state: &AppState, p: &str) -> Result<PathBuf, String> {
+    let p = PathBuf::from(p);
+    if lock(&state.approved).contains(&p) {
+        Ok(p)
+    } else {
+        Err("Choose the file or folder in the dialog first".into())
+    }
 }
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -92,34 +124,94 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Sen
 
 // ---------- backups ----------
 
-/// Back up now, prune, and record the time. Blocks concurrent runs.
-fn run_backup(app: &AppHandle) -> Result<String, String> {
+#[derive(Serialize, Clone, Default)]
+struct BackupDone {
+    path: String,
+    removed: usize,
+    /// Why no older backup was pruned although there were more than "keep".
+    held: Option<String>,
+    /// Pruning failed; the backup itself is good.
+    prune_error: Option<String>,
+    /// The backup is good but its time couldn't be recorded.
+    settings_error: Option<String>,
+}
+
+/// Back up now, record the time, then prune. Blocks concurrent runs. The time
+/// is recorded as soon as the copy has verified: a prune that fails is
+/// reported beside the backup, and never makes the next focus start another.
+fn run_backup(app: &AppHandle) -> Result<BackupDone, String> {
     let state = app.state::<AppState>();
     let _g = BackupGuard::acquire()?;
     let s = settings_of(&state);
     let dir = s.backup_dir.clone().ok_or("Choose a backup folder first")?;
     let j = root(&state)?;
-    let made = backup(&j, Path::new(&dir))?;
-    prune_backups(Path::new(&dir), s.keep())?;
+    *lock(&state.backup_attempt) = Some(Instant::now());
+    // Cleared first: a write that lands during the copy sets it again.
+    state.backup_pending.store(false, Ordering::SeqCst);
+    let made = match backup(&j, Path::new(&dir)) {
+        Ok(m) => m,
+        Err(e) => {
+            state.backup_pending.store(true, Ordering::SeqCst);
+            state.backup_failures.fetch_add(1, Ordering::SeqCst);
+            return Err(e);
+        }
+    };
+    state.backup_failures.store(0, Ordering::SeqCst);
     let now = now_local();
-    update_settings(&state, |s| s.last_backup = Some(now))?;
-    Ok(made)
+    let still_pending = state.backup_pending.load(Ordering::SeqCst);
+    let settings_error = update_settings(&state, |s| {
+        s.last_backup = Some(now);
+        if still_pending {
+            s.extra.insert(PENDING_KEY.into(), Value::Bool(true));
+        } else {
+            s.extra.remove(PENDING_KEY);
+        }
+    })
+    .err();
+    let (pruned, prune_error) = match prune_backups_checked(Path::new(&dir), s.keep()) {
+        Ok(p) => (p, None),
+        Err(e) => (Pruned::default(), Some(e)),
+    };
+    Ok(BackupDone { path: made, removed: pruned.removed, held: pruned.held, prune_error, settings_error })
+}
+
+/// How long to leave a failing backup alone: 5 minutes, doubling to an hour.
+fn backup_backoff(state: &AppState) -> Duration {
+    let fails = state.backup_failures.load(Ordering::SeqCst);
+    if fails == 0 {
+        return Duration::ZERO;
+    }
+    Duration::from_secs((300u64 << (fails - 1).min(4)).min(3600))
+}
+
+/// Time still to wait before a scheduled backup may be tried again.
+fn backup_wait(state: &AppState) -> Option<Duration> {
+    let wait = backup_backoff(state);
+    let since = (*lock(&state.backup_attempt))?.elapsed();
+    (since < wait).then(|| wait - since)
 }
 
 #[derive(Serialize, Clone)]
 struct BackupEvent {
     ok: bool,
-    path: Option<String>,
+    done: Option<BackupDone>,
     error: Option<String>,
 }
 
-/// After a successful write: in "change" mode, back up 30 s after the last
-/// write (and never sooner than 5 min after the previous backup).
+/// After a successful write: note that the journal has changed since the last
+/// backup and, in "change" mode, back up 30 s after the last write (and never
+/// sooner than 5 min after the previous backup).
 fn wrote(app: &AppHandle) {
     let state = app.state::<AppState>();
     let s = settings_of(&state);
     if s.interval() != "change" || s.backup_dir.is_none() {
         return;
+    }
+    // Persisted once per backup, not once per save.
+    if !state.backup_pending.swap(true, Ordering::SeqCst) || s.extra.get(PENDING_KEY) != Some(&Value::Bool(true)) {
+        let _ = update_settings(&state, |s| {
+            s.extra.insert(PENDING_KEY.into(), Value::Bool(true));
+        });
     }
     *lock(&state.backup_deadline) = Some(Instant::now() + Duration::from_secs(30));
     if state.scheduler_running.swap(true, Ordering::SeqCst) {
@@ -133,7 +225,7 @@ fn wrote(app: &AppHandle) {
                 let Some(dl) = *lock(&state.backup_deadline) else { break };
                 let now = Instant::now();
                 if now < dl {
-                    std::thread::sleep(dl - now);
+                    std::thread::sleep((dl - now).min(Duration::from_secs(30)));
                     continue;
                 }
                 let last = settings_of(&state).last_backup;
@@ -142,6 +234,10 @@ fn wrote(app: &AppHandle) {
                         std::thread::sleep(Duration::from_secs((300 - age) as u64));
                         continue;
                     }
+                }
+                if let Some(wait) = backup_wait(&state) {
+                    std::thread::sleep(wait.min(Duration::from_secs(30)));
+                    continue;
                 }
                 if BACKUP_RUNNING.load(Ordering::SeqCst) {
                     std::thread::sleep(Duration::from_secs(5));
@@ -153,8 +249,12 @@ fn wrote(app: &AppHandle) {
                     break;
                 }
                 let ev = match run_backup(&app) {
-                    Ok(p) => BackupEvent { ok: true, path: Some(p), error: None },
-                    Err(e) => BackupEvent { ok: false, path: None, error: Some(e) },
+                    Ok(d) => BackupEvent { ok: true, done: Some(d), error: None },
+                    Err(e) => {
+                        // Still owed: try again once the wait is over.
+                        *lock(&state.backup_deadline) = Some(Instant::now());
+                        BackupEvent { ok: false, done: None, error: Some(e) }
+                    }
                 };
                 let _ = app.emit("backup-finished", ev);
             }
@@ -213,6 +313,9 @@ struct Snapshot {
     split_migration: Option<SplitMigration>,
     /// Why a root `<tag>.md` could not be folded in (it is still read).
     split_migration_error: Option<String>,
+    /// `.quire-restore-old-*` folders an interrupted restore left in the
+    /// journal: each may hold the only copy of something.
+    restore_leftovers: Vec<String>,
 }
 
 #[tauri::command]
@@ -248,20 +351,27 @@ async fn load(state: State<'_, AppState>) -> Result<Snapshot, String> {
         migration_error: None,
         split_migration: None,
         split_migration_error: None,
+        restore_leftovers: vec![],
     };
     if missing {
         return Ok(snap);
     }
-    let (entries, templates, searches, has_transfer, conflicts, saved, migration, split_migration) = blocking(move || {
+    let (entries, templates, searches, has_transfer, conflicts, saved, migration, split_migration, leftovers) = blocking(move || {
         let j = Journal::open(&r);
         // An inbox.md or <tag>.md left by jnl or Nook is folded into inbox/
         // or split/ first, so the load below sees one layout. Failure is
         // reported, never fatal: the file is still read in place.
         let migration = j.migrate_legacy_inbox();
         let split_migration = j.migrate_legacy_splits();
-        Ok((j.load_all(), list_templates(&j), load_searches(&j), !j.read("transfer.md").trim().is_empty(), j.conflict_files(), media::data_saved_total(&r), migration, split_migration))
+        // Strict: a file or folder that can't be read is an error the window
+        // shows, never a journal that is silently shorter.
+        let entries = j.try_load_all().map_err(|e| format!("Part of the journal couldn't be read, so nothing was reloaded: {}", e))?;
+        // What a restore cut short left behind: staged copies an hour old go, displaced content is reported.
+        let leftovers = restore_leftovers(&r, Duration::from_secs(3600)).old;
+        Ok((entries, list_templates(&j), load_searches(&j), !j.read("transfer.md").trim().is_empty(), j.conflict_files(), media::data_saved_total(&r), migration, split_migration, leftovers))
     })
     .await?;
+    snap.restore_leftovers = leftovers;
     match migration {
         Ok(m) => snap.migration = m,
         Err(e) => snap.migration_error = Some(e),
@@ -280,29 +390,169 @@ async fn load(state: State<'_, AppState>) -> Result<Snapshot, String> {
 }
 
 #[tauri::command]
-fn set_folder(state: State<AppState>, path: String) -> Result<(), String> {
+fn set_folder(app: AppHandle, state: State<AppState>, path: String) -> Result<(), String> {
     let path = path.trim().to_string();
     let p = PathBuf::from(expand_home(&path));
     if !p.is_dir() {
         return Err(format!("Not a folder: {}", path));
     }
     update_settings(&state, |s| s.folder = Some(p.display().to_string()))?;
+    allow_assets(&app, &p);
     sweep_in_background(p);
     Ok(())
 }
 
 #[tauri::command]
-fn use_sample(state: State<AppState>) -> Result<(), String> {
+fn use_sample(app: AppHandle, state: State<AppState>) -> Result<(), String> {
     let p = state.sample_dir.clone();
     let _ = fs::create_dir_all(&p);
     update_settings(&state, |s| s.folder = Some(p.display().to_string()))?;
+    allow_assets(&app, &p);
     sweep_in_background(p);
     Ok(())
 }
 
+/// The PIN's hash is set through `set_pin` only, which asks for the current one.
+const PIN_KEY: &str = "pinHash";
+
+/// Save the window's preferences. Only the keys that differ from what this
+/// window last saw are written, so a preference the terminal app changed in
+/// the meantime is kept.
 #[tauri::command]
 fn save_ui(state: State<AppState>, ui: Value) -> Result<(), String> {
-    update_settings(&state, |s| s.ui = ui)
+    let Value::Object(new) = ui else { return Err("Preferences must be an object".into()) };
+    let prev = settings_of(&state).ui;
+    let changed: Vec<(String, Value)> = new.into_iter().filter(|(k, v)| k != PIN_KEY && prev.get(k) != Some(v)).collect();
+    if changed.is_empty() {
+        return Ok(());
+    }
+    update_settings(&state, |s| {
+        for (k, v) in changed {
+            s.set_ui(&k, v);
+        }
+    })
+}
+
+/// What the window should say once it is up: why the settings file couldn't
+/// be used. Given once.
+#[tauri::command]
+fn startup_notice(state: State<AppState>) -> Option<String> {
+    lock(&state.settings_warning).take()
+}
+
+/// Open a file dialog from here, so the path it returns is known to have come
+/// from the person: `kind` is "file", "folder" or "save".
+#[tauri::command]
+async fn pick_path(app: AppHandle, window: tauri::WebviewWindow, kind: String, title: String, default_name: Option<String>) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let a = app.clone();
+    blocking(move || {
+        let mut d = a.dialog().file().set_title(title).set_parent(&window);
+        if let Some(n) = default_name {
+            d = d.set_file_name(n);
+        }
+        let picked = match kind.as_str() {
+            "file" => d.blocking_pick_file(),
+            "folder" => d.blocking_pick_folder(),
+            "save" => d.blocking_save_file(),
+            other => return Err(format!("Unknown dialog {:?}", other)),
+        };
+        let Some(path) = picked.and_then(|p| p.into_path().ok()) else { return Ok(None) };
+        approve(&a.state::<AppState>(), &path);
+        Ok(Some(path.display().to_string()))
+    })
+    .await
+}
+
+/// Open a journal file or folder in the desktop's own app, or show it in the
+/// file manager. `rel` is root-relative ("" for the journal folder itself)
+/// and must stay inside the journal once symlinks are followed.
+#[tauri::command]
+async fn open_rel(app: AppHandle, state: State<'_, AppState>, rel: String, reveal: bool) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let j = root_r(&state)?;
+    blocking(move || {
+        let target = inside_journal(j.root(), &rel)?;
+        if reveal {
+            app.opener().reveal_item_in_dir(&target).map_err(|e| e.to_string())
+        } else {
+            app.opener().open_path(target.display().to_string(), None::<&str>).map_err(|e| e.to_string())
+        }
+    })
+    .await
+}
+
+/// `rel` under `root` as a real path: checked as a relative path, then again
+/// after symlinks are followed, so a link inside the journal can't lead out of it.
+fn inside_journal(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    let base = root.canonicalize().map_err(|e| e.to_string())?;
+    if rel.trim().is_empty() {
+        return Ok(base);
+    }
+    let target = safe_rel(&base, rel)?.canonicalize().map_err(|_| format!("No such file: {}", rel))?;
+    if !target.starts_with(&base) {
+        return Err(format!("Refusing a path outside the journal: {:?}", rel));
+    }
+    Ok(target)
+}
+
+/// A `settings.json.bad-<stamp>` beside the settings file: an earlier launch
+/// could not parse the settings and moved them aside.
+fn settings_set_aside() -> Option<String> {
+    let path = Settings::path();
+    let mut names: Vec<String> = fs::read_dir(path.parent()?).ok()?.flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.starts_with("settings.json.bad-")).collect();
+    names.sort();
+    names.pop()
+}
+
+// ----- the composer's recovery copy -----
+
+/// Text the composer can't save as an entry yet (it holds header-shaped
+/// lines, or the save keeps failing) is kept here, one file per device, in
+/// the sidecar: never in an entry file.
+fn recovery_rel(j: &Journal, device: &str, write: bool) -> Result<String, String> {
+    let dir = if write { j.sidecar_mut()? } else { j.sidecar() };
+    Ok(format!("{}/recovery-{}.json", dir, device))
+}
+
+#[tauri::command]
+async fn save_recovery(state: State<'_, AppState>, draft: Value) -> Result<String, String> {
+    let j = root(&state)?;
+    let device = device_id(&state);
+    blocking(move || {
+        let rel = recovery_rel(&j, &device, true)?;
+        j.write(&rel, &serde_json::to_string_pretty(&draft).map_err(|e| e.to_string())?)?;
+        Ok(rel)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn read_recovery(state: State<'_, AppState>) -> Result<Option<Value>, String> {
+    let j = root_r(&state)?;
+    let device = device_id(&state);
+    blocking(move || {
+        let rel = recovery_rel(&j, &device, false)?;
+        if !j.is_file(&rel) {
+            return Ok(None);
+        }
+        Ok(serde_json::from_str(&j.try_read(&rel)?).ok())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn clear_recovery(state: State<'_, AppState>) -> Result<(), String> {
+    let j = root(&state)?;
+    let device = device_id(&state);
+    blocking(move || {
+        let rel = recovery_rel(&j, &device, false)?;
+        if j.is_file(&rel) {
+            j.remove(&rel)?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// New draft → its day's file under inbox/, in time order.
@@ -337,8 +587,9 @@ async fn update_entry(
 }
 
 #[tauri::command]
-fn delete_entry(app: AppHandle, state: State<AppState>, file: String, index: usize, expected_raw: String) -> Result<(), String> {
-    root(&state)?.delete_entry(&file, index, &expected_raw)?;
+async fn delete_entry(app: AppHandle, state: State<'_, AppState>, file: String, index: usize, expected_raw: String) -> Result<(), String> {
+    let j = root(&state)?;
+    blocking(move || j.delete_entry(&file, index, &expected_raw)).await?;
     wrote(&app);
     Ok(())
 }
@@ -346,8 +597,10 @@ fn delete_entry(app: AppHandle, state: State<AppState>, file: String, index: usi
 /// File a draft: jnl's fileDraft (split tags first, else the day file,
 /// appended), then remove it from its inbox file. Returns where it went.
 #[tauri::command]
-fn file_draft(app: AppHandle, state: State<AppState>, file: String, index: usize, expected_raw: String) -> Result<String, String> {
-    let target = root(&state)?.file_draft(&file, index, &expected_raw, &split_tags_of(&state))?;
+async fn file_draft(app: AppHandle, state: State<'_, AppState>, file: String, index: usize, expected_raw: String) -> Result<String, String> {
+    let j = root(&state)?;
+    let tags = split_tags_of(&state);
+    let target = blocking(move || j.file_draft(&file, index, &expected_raw, &tags)).await?;
     wrote(&app);
     Ok(target)
 }
@@ -355,8 +608,9 @@ fn file_draft(app: AppHandle, state: State<AppState>, file: String, index: usize
 /// Nook's "Return to Inbox": move a filed entry back to the queue, into the
 /// inbox day file of its own date.
 #[tauri::command]
-fn unfile_entry(app: AppHandle, state: State<AppState>, file: String, index: usize, expected_raw: String) -> Result<Written, String> {
-    let w = root(&state)?.unfile_entry(&file, index, &expected_raw)?;
+async fn unfile_entry(app: AppHandle, state: State<'_, AppState>, file: String, index: usize, expected_raw: String) -> Result<Written, String> {
+    let j = root(&state)?;
+    let w = blocking(move || j.unfile_entry(&file, index, &expected_raw)).await?;
     wrote(&app);
     Ok(w)
 }
@@ -437,16 +691,20 @@ fn save_template_cmd(app: AppHandle, state: State<AppState>, name: String, body:
 }
 
 #[tauri::command]
-fn new_template(app: AppHandle, state: State<AppState>) -> Result<String, String> {
+async fn new_template(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     let r = root(&state)?;
-    let taken: Vec<String> = list_templates(&r).into_iter().map(|t| t.name).collect();
-    let mut name = "New template".to_string();
-    let mut n = 2;
-    while taken.contains(&name) {
-        name = format!("New template {}", n);
-        n += 1;
-    }
-    save_template(&r, &name, STARTER_TEMPLATE)?;
+    let name = blocking(move || {
+        let taken: Vec<String> = list_templates(&r).into_iter().map(|t| t.name).collect();
+        let mut name = "New template".to_string();
+        let mut n = 2;
+        while taken.contains(&name) {
+            name = format!("New template {}", n);
+            n += 1;
+        }
+        save_template(&r, &name, STARTER_TEMPLATE)?;
+        Ok(name)
+    })
+    .await?;
     wrote(&app);
     Ok(name)
 }
@@ -474,19 +732,30 @@ fn save_searches_cmd(app: AppHandle, state: State<AppState>, list: Vec<SavedSear
 
 // ---------- media ----------
 
-#[tauri::command]
-async fn assets(state: State<'_, AppState>) -> Result<Vec<Asset>, String> {
-    let r = root_r(&state)?;
-    blocking(move || list_assets(&r)).await
+/// An asset and where it is on disk, so the page needs no call per file.
+#[derive(Serialize)]
+struct AssetOut {
+    #[serde(flatten)]
+    asset: Asset,
+    path: String,
 }
 
 #[tauri::command]
-fn asset_path(state: State<AppState>, rel: String) -> Result<String, String> {
-    let p = safe_rel(root_r(&state)?.root(), &rel)?;
-    if !p.exists() {
-        return Err("No such asset".into());
-    }
-    Ok(p.display().to_string())
+async fn assets(state: State<'_, AppState>) -> Result<Vec<AssetOut>, String> {
+    let r = root_r(&state)?;
+    blocking(move || {
+        let base = r.root().to_path_buf();
+        Ok(list_assets(&r)?.into_iter().map(|asset| AssetOut { path: base.join(&asset.rel).display().to_string(), asset }).collect())
+    })
+    .await
+}
+
+/// Absolute paths for root-relative files, in one call: null for one that
+/// isn't there or isn't a safe path.
+#[tauri::command]
+async fn asset_paths(state: State<'_, AppState>, rels: Vec<String>) -> Result<Vec<Option<String>>, String> {
+    let r = root_r(&state)?;
+    blocking(move || Ok(rels.iter().map(|rel| safe_rel(r.root(), rel).ok().filter(|p| p.exists()).map(|p| p.display().to_string())).collect())).await
 }
 
 #[tauri::command]
@@ -499,10 +768,13 @@ fn delete_asset(app: AppHandle, state: State<AppState>, rel: String) -> Result<(
 /// Copy a user-chosen file into assets/. Returns the markdown to insert
 /// (`![](assets/…)`, or `[name](assets/…)` for non-media), base-relative.
 #[tauri::command]
-fn attach_file(app: AppHandle, state: State<AppState>, src: String, ts: String, entry_file: String) -> Result<String, String> {
+async fn attach_file(app: AppHandle, state: State<'_, AppState>, src: String, ts: String, entry_file: String) -> Result<String, String> {
     let _ = entry_file;
     let r = root(&state)?;
-    let a = extras::attach_media(&r, Path::new(&src), &ts, settings_of(&state).data_saver, &device_id(&state))?;
+    let src = approved(&state, &src)?;
+    let (saver, device) = (settings_of(&state).data_saver, device_id(&state));
+    let r2 = r.clone();
+    let a = blocking(move || extras::attach_media(&r2, &src, &ts, saver, &device)).await?;
     compress_later(&app, &state, &r, &a);
     wrote(&app);
     Ok(a.link)
@@ -519,7 +791,7 @@ fn compress_later(app: &AppHandle, state: &AppState, r: &Journal, a: &extras::At
         static QUEUE: Mutex<()> = Mutex::new(());
         let _g = QUEUE.lock().unwrap_or_else(|p| p.into_inner());
         let path = root.join(&rel);
-        if let Ok(res) = media::compress_file_in_place(&path) {
+        if let Ok(res) = media::compress_asset(&root, &path) {
             let saved = res.unwrap_or(0);
             media::record_saving(&root, &device, &path, saved);
             let _ = app.emit("media-compressed", serde_json::json!({ "rel": rel, "saved": saved }));
@@ -528,30 +800,40 @@ fn compress_later(app: &AppHandle, state: &AppState, r: &Journal, a: &extras::At
 }
 
 fn device_id(state: &AppState) -> String {
-    let mut s = settings_of(state);
-    let (id, new) = s.ensure_device_id();
-    if new {
-        let _ = update_settings(state, |s| s.device_id = Some(id.clone()));
+    if let Some(id) = settings_of(state).device_id {
+        return id;
     }
-    id
+    // Made under the settings lock, so two windows never mint two ids.
+    let _ = update_settings(state, |s| {
+        s.ensure_device_id();
+    });
+    // If that couldn't be saved, an id for this run still keeps the ledger apart.
+    let mut s = lock(&state.settings);
+    s.ensure_device_id().0
 }
 
 /// Native clipboard-image paste: WebKitGTK often doesn't hand images to the
 /// page's paste event on Linux. Returns the link, or None if the clipboard has
 /// no image; then the usual Data Saver / attach path.
 #[tauri::command]
-fn paste_image(app: AppHandle, state: State<AppState>, ts: String, entry_file: String) -> Result<Option<String>, String> {
+async fn paste_image(app: AppHandle, state: State<'_, AppState>, ts: String, entry_file: String) -> Result<Option<String>, String> {
     let _ = entry_file;
     let r = root(&state)?;
     check_ts(&ts)?;
-    let img = match arboard::Clipboard::new().and_then(|mut c| c.get_image()) {
-        Ok(i) => i,
-        Err(_) => return Ok(None),
-    };
-    let (bytes, ext) = media::encode_clipboard_image(img.width as u32, img.height as u32, img.bytes.into_owned())?;
-    let a = extras::attach_bytes(&r, &bytes, ext, &ts, settings_of(&state).data_saver, &device_id(&state))?;
-    wrote(&app);
-    Ok(Some(a.link))
+    let (saver, device) = (settings_of(&state).data_saver, device_id(&state));
+    let link = blocking(move || {
+        let img = match arboard::Clipboard::new().and_then(|mut c| c.get_image()) {
+            Ok(i) => i,
+            Err(_) => return Ok(None),
+        };
+        let (bytes, ext) = media::encode_clipboard_image(img.width as u32, img.height as u32, img.bytes.into_owned())?;
+        Ok(Some(extras::attach_bytes(&r, &bytes, ext, &ts, saver, &device)?.link))
+    })
+    .await?;
+    if link.is_some() {
+        wrote(&app);
+    }
+    Ok(link)
 }
 
 #[tauri::command]
@@ -585,17 +867,22 @@ async fn compress_existing(app: AppHandle, state: State<'_, AppState>) -> Result
 /// Attach in-memory bytes (clipboard image paste). `name` only supplies the
 /// extension; the stored name comes from `ts` as in attach_file.
 #[tauri::command]
-fn attach_bytes(app: AppHandle, state: State<AppState>, name: String, bytes_b64: String, ts: String, entry_file: String) -> Result<String, String> {
+async fn attach_bytes(app: AppHandle, state: State<'_, AppState>, name: String, bytes_b64: String, ts: String, entry_file: String) -> Result<String, String> {
     let _ = entry_file;
     let r = root(&state)?;
     check_ts(&ts)?;
-    let b64 = bytes_b64.split_once(";base64,").map(|(_, b)| b).unwrap_or(&bytes_b64);
-    let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| format!("Bad base64: {}", e))?;
-    if bytes.is_empty() {
-        return Err("Nothing to attach".into());
-    }
-    let ext = Path::new(name.trim()).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
-    let a = extras::attach_bytes(&r, &bytes, &ext, &ts, settings_of(&state).data_saver, &device_id(&state))?;
+    let (saver, device) = (settings_of(&state).data_saver, device_id(&state));
+    let r2 = r.clone();
+    let a = blocking(move || {
+        let b64 = bytes_b64.split_once(";base64,").map(|(_, b)| b).unwrap_or(&bytes_b64);
+        let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| format!("Bad base64: {}", e))?;
+        if bytes.is_empty() {
+            return Err("Nothing to attach".into());
+        }
+        let ext = Path::new(name.trim()).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+        extras::attach_bytes(&r2, &bytes, &ext, &ts, saver, &device)
+    })
+    .await?;
     compress_later(&app, &state, &r, &a);
     wrote(&app);
     Ok(a.link)
@@ -644,8 +931,9 @@ async fn run_cleanup(app: AppHandle, state: State<'_, AppState>) -> Result<Clean
 }
 
 #[tauri::command]
-fn sort_inbox_cmd(app: AppHandle, state: State<AppState>) -> Result<bool, String> {
-    let changed = sort_inbox(&root(&state)?)?;
+async fn sort_inbox_cmd(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+    let j = root(&state)?;
+    let changed = blocking(move || sort_inbox(&j)).await?;
     if changed {
         wrote(&app);
     }
@@ -655,24 +943,46 @@ fn sort_inbox_cmd(app: AppHandle, state: State<AppState>) -> Result<bool, String
 #[tauri::command]
 async fn export_cmd(state: State<'_, AppState>, dest: String) -> Result<usize, String> {
     let r = root_r(&state)?;
-    blocking(move || export_all(&r, Path::new(&dest))).await
+    let dest = approved(&state, &dest)?;
+    blocking(move || export_all(&r, &dest)).await
 }
 
 #[tauri::command]
-async fn backup_now(app: AppHandle) -> Result<String, String> {
+async fn backup_now(app: AppHandle) -> Result<BackupDone, String> {
     let a = app.clone();
     blocking(move || run_backup(&a)).await
+}
+
+/// For the window's close: is a backup being copied, and is one owed?
+#[derive(Serialize)]
+struct BackupState {
+    running: bool,
+    /// "On change" is on and the journal changed since the last backup.
+    pending: bool,
+}
+
+#[tauri::command]
+fn backup_state(state: State<AppState>) -> BackupState {
+    let s = settings_of(&state);
+    BackupState {
+        running: BACKUP_RUNNING.load(Ordering::SeqCst),
+        pending: s.interval() == "change" && s.backup_dir.is_some() && state.backup_pending.load(Ordering::SeqCst) && root(&state).is_ok(),
+    }
 }
 
 /// Called on launch and window focus: runs a daily/weekly backup if one is
 /// due. Returns the new backup's path, or null if none was due/possible.
 #[tauri::command]
-async fn maybe_backup(app: AppHandle) -> Result<Option<String>, String> {
-    let s = settings_of(&app.state::<AppState>());
-    if s.backup_dir.is_none() || !backup_due(&s.interval(), s.last_backup.as_deref()) || BACKUP_RUNNING.load(Ordering::SeqCst) {
+async fn maybe_backup(app: AppHandle) -> Result<Option<BackupDone>, String> {
+    let state = app.state::<AppState>();
+    let s = settings_of(&state);
+    // "On change" has nothing due by the clock: it is owed when a change was
+    // still waiting for its backup the last time the window closed.
+    let owed = s.interval() == "change" && state.backup_pending.load(Ordering::SeqCst) && lock(&state.backup_deadline).is_none();
+    if s.backup_dir.is_none() || !(owed || backup_due(&s.interval(), s.last_backup.as_deref())) || BACKUP_RUNNING.load(Ordering::SeqCst) || backup_wait(&state).is_some() {
         return Ok(None);
     }
-    if root(&app.state::<AppState>()).is_err() {
+    if root(&state).is_err() {
         return Ok(None);
     }
     let a = app.clone();
@@ -680,9 +990,22 @@ async fn maybe_backup(app: AppHandle) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn backups(state: State<AppState>) -> Result<Vec<String>, String> {
+async fn backups(state: State<'_, AppState>) -> Result<Vec<BackupItem>, String> {
     let dir = settings_of(&state).backup_dir;
-    Ok(dir.map(|d| list_backups(Path::new(&d))).unwrap_or_default())
+    blocking(move || {
+        let Some(d) = dir else { return Ok(vec![]) };
+        // Half-made copies a day old were abandoned (the window was closed mid-copy).
+        sweep_partial_backups(Path::new(&d), PARTIAL_MAX_AGE);
+        Ok(list_backups(Path::new(&d)).into_iter().map(|name| BackupItem { safety: name.starts_with(SAFETY_PREFIX), name }).collect())
+    })
+    .await
+}
+
+#[derive(Serialize)]
+struct BackupItem {
+    name: String,
+    /// A "Quire before-restore …" copy: what the journal held before a restore. Never pruned.
+    safety: bool,
 }
 
 /// Restore a backup over the journal folder. Returns the name of the safety
@@ -703,7 +1026,8 @@ async fn restore_backup(state: State<'_, AppState>, name: String) -> Result<Stri
 #[tauri::command]
 async fn import_markdown(app: AppHandle, state: State<'_, AppState>, dir: String, dry_run: bool) -> Result<ImportReport, String> {
     let r = root(&state)?;
-    let rep = blocking(move || import_markdown_folder(&r, Path::new(&dir), dry_run)).await?;
+    let dir = approved(&state, &dir)?;
+    let rep = blocking(move || import_markdown_folder(&r, &dir, dry_run)).await?;
     if !dry_run && rep.written > 0 {
         wrote(&app);
     }
@@ -713,7 +1037,8 @@ async fn import_markdown(app: AppHandle, state: State<'_, AppState>, dir: String
 #[tauri::command]
 async fn import_dayone(app: AppHandle, state: State<'_, AppState>, path: String, dry_run: bool) -> Result<ImportReport, String> {
     let r = root(&state)?;
-    let rep = blocking(move || import_day_one(&r, Path::new(&path), dry_run)).await?;
+    let path = approved(&state, &path)?;
+    let rep = blocking(move || import_day_one(&r, &path, dry_run)).await?;
     if !dry_run && rep.written > 0 {
         wrote(&app);
     }
@@ -733,8 +1058,9 @@ async fn file_transfer(app: AppHandle, state: State<'_, AppState>, now_ts: Strin
 
 /// Split pasted text into drafts: per [header] when present, else one draft.
 #[tauri::command]
-fn import_text(app: AppHandle, state: State<AppState>, text: String, now_ts: String) -> Result<usize, String> {
-    let n = root(&state)?.import_text(&text, &now_ts)?;
+async fn import_text(app: AppHandle, state: State<'_, AppState>, text: String, now_ts: String) -> Result<usize, String> {
+    let j = root(&state)?;
+    let n = blocking(move || j.import_text(&text, &now_ts)).await?;
     if n > 0 {
         wrote(&app);
     }
@@ -780,9 +1106,28 @@ fn pin_check(state: State<AppState>, pin: String) -> Result<bool, String> {
     Ok(want.is_empty() || hash_pin(&pin) == want)
 }
 
+/// Set, change or remove the PIN. When one is set already, `current` must be
+/// it. Returns the new hash ("" when removed).
 #[tauri::command]
-fn pin_hash(pin: String) -> String {
-    hash_pin(&pin)
+fn set_pin(state: State<AppState>, current: Option<String>, pin: Option<String>) -> Result<String, String> {
+    let s = settings_of(&state);
+    let have = s.ui.get(PIN_KEY).and_then(|v| v.as_str()).unwrap_or("");
+    if !have.is_empty() && current.as_deref().map(hash_pin).as_deref() != Some(have) {
+        return Err("That isn't the current PIN".into());
+    }
+    let hash = match pin.as_deref() {
+        Some(p) if p.chars().count() >= 4 => hash_pin(p),
+        Some(_) => return Err("Use at least 4 characters".into()),
+        None => String::new(),
+    };
+    let h = hash.clone();
+    update_settings(&state, |s| {
+        s.set_ui(PIN_KEY, Value::String(h));
+        if pin.is_none() {
+            s.set_ui("lockOn", Value::Bool(false));
+        }
+    })?;
+    Ok(hash)
 }
 
 fn hash_pin(pin: &str) -> String {
@@ -846,7 +1191,9 @@ fn start_watcher(app: AppHandle, folder: PathBuf) -> Result<notify::RecommendedW
 
 #[tauri::command]
 fn rewatch(app: AppHandle, state: State<AppState>) -> Result<(), String> {
-    let w = start_watcher(app, root_r(&state)?.root().to_path_buf())?;
+    let folder = root_r(&state)?.root().to_path_buf();
+    allow_assets(&app, &folder);
+    let w = start_watcher(app, folder)?;
     // Assigning drops the previous watcher (and so its thread).
     *lock(&state.watcher) = Some(w);
     Ok(())
@@ -949,11 +1296,12 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 /// to show for its window. Write one (and the icon) the first time it runs,
 /// unless a package already left one (install.sh writes the same `Quire.desktop`). `Quire.desktop` matches the
 /// app id set in `run`; StartupWMClass covers X11 and shells that ask for it.
-#[cfg(target_os = "linux")]
+///
 /// One Exec argument as the desktop-entry spec wants it: `%` doubled (field
 /// codes); quoted when it holds a reserved character, with `"`, `` ` ``, `$` and
 /// `\` escaped inside the quotes; then the value's own string escaping, which
 /// doubles every backslash.
+#[cfg(any(target_os = "linux", test))]
 fn desktop_exec_arg(arg: &str) -> String {
     const RESERVED: &[char] = &[' ', '\t', '\n', '"', '\'', '\\', '>', '<', '~', '|', '&', ';', '$', '*', '?', '#', '(', ')', '`'];
     let arg = arg.replace('%', "%%");
@@ -971,6 +1319,7 @@ fn desktop_exec_arg(arg: &str) -> String {
     quoted.replace('\\', "\\\\")
 }
 
+#[cfg(target_os = "linux")]
 fn ensure_launcher() {
     let Ok(appimage) = std::env::var("APPIMAGE") else { return };
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
@@ -1022,16 +1371,43 @@ pub fn run() {
                 }
                 let _ = fs::create_dir_all(&sample_dir);
             }
-            let mut settings = Settings::load();
-            let mut dirty = settings.migrate();
-            // Only an unset folder falls back to the sample. A configured
-            // folder that's missing stays configured (folder_missing).
-            if settings.folder.is_none() {
-                settings.folder = Some(sample_dir.display().to_string());
-                dirty = true;
+            // Only a settings file that isn't there means a first run. One
+            // that can't be read or parsed is said so in the window, and the
+            // sample journal is not put in its place: the person chooses.
+            let (mut settings, mut warning) = match Settings::try_load() {
+                Ok(s) => (s, None),
+                Err(e) => (Settings { unread: Settings::path().exists().then(|| e.clone()), ..Default::default() }, Some(e)),
+            };
+            // Settings written since (a theme change, say) have no folder either:
+            // still the person's to choose, not the sample's to take.
+            if warning.is_none() && settings.folder.is_none() {
+                if let Some(bad) = settings_set_aside() {
+                    warning = Some(format!("Quire’s settings couldn’t be read at an earlier launch and were kept as {}. No journal folder is set now: choose yours again.", bad));
+                }
             }
-            if dirty {
-                let _ = save_settings(&settings);
+            if warning.is_none() {
+                // Only an unset folder falls back to the sample. A configured
+                // folder that's missing stays configured (folder_missing).
+                let sample = sample_dir.display().to_string();
+                let mut probe = settings.clone();
+                if probe.migrate() || probe.folder.is_none() {
+                    let fixed = Settings::update(|s| {
+                        s.migrate();
+                        if s.folder.is_none() {
+                            s.folder = Some(sample.clone());
+                        }
+                    });
+                    match fixed {
+                        Ok(s) => settings = s,
+                        // Can't be written (a read-only home): run on what was worked out.
+                        Err(_) => {
+                            if probe.folder.is_none() {
+                                probe.folder = Some(sample);
+                            }
+                            settings = probe;
+                        }
+                    }
+                }
             }
             #[cfg(not(target_os = "macos"))]
             if !settings.system_titlebar {
@@ -1042,16 +1418,39 @@ pub fn run() {
             let folder = settings.folder.clone().map(PathBuf::from).filter(|f| f.is_dir());
             let watcher = folder.clone().and_then(|f| start_watcher(app.handle().clone(), f).ok());
             if let Some(f) = folder {
+                // The asset protocol starts with no folder at all (tauri.conf.json).
+                allow_assets(app.handle(), &f);
                 sweep_in_background(f);
             }
+            let pending = settings.extra.get(PENDING_KEY) == Some(&Value::Bool(true));
             app.manage(AppState {
                 settings: Mutex::new(settings),
                 sample_dir,
                 watcher: Mutex::new(watcher),
                 backup_deadline: Mutex::new(None),
                 scheduler_running: AtomicBool::new(false),
+                backup_attempt: Mutex::new(None),
+                backup_failures: AtomicU32::new(0),
+                backup_pending: AtomicBool::new(pending),
+                approved: Mutex::new(HashSet::new()),
+                settings_warning: Mutex::new(warning),
             });
             Ok(())
+        })
+        // Files dropped on the window were chosen by the person: attach_file may take them.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                if let Some(state) = window.try_state::<AppState>() {
+                    paths.iter().for_each(|p| approve(&state, p));
+                }
+            }
+        })
+        .on_webview_event(|webview, event| {
+            if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                if let Some(state) = webview.try_state::<AppState>() {
+                    paths.iter().for_each(|p| approve(&state, p));
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             set_data_saver, data_saved, compress_existing, paste_image,
@@ -1077,7 +1476,7 @@ pub fn run() {
             rename_template,
             save_searches_cmd,
             assets,
-            asset_path,
+            asset_paths,
             delete_asset,
             attach_file,
             attach_bytes,
@@ -1100,7 +1499,14 @@ pub fn run() {
             sizes_cmd,
             stats_extra,
             pin_check,
-            pin_hash,
+            set_pin,
+            startup_notice,
+            pick_path,
+            open_rel,
+            save_recovery,
+            read_recovery,
+            clear_recovery,
+            backup_state,
             rewatch,
             undecorated,
             set_system_titlebar,
@@ -1114,7 +1520,33 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::desktop_exec_arg;
+    use super::{desktop_exec_arg, inside_journal};
+
+    #[test]
+    fn opened_paths_stay_inside_the_journal() {
+        let top = std::env::temp_dir().join(format!("quire-desktop-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        let (journal, outside) = (top.join("journal-folder"), top.join("outside"));
+        std::fs::create_dir_all(journal.join("assets")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(journal.join("assets/a.pdf"), b"x").unwrap();
+        std::fs::write(outside.join("secret.txt"), b"x").unwrap();
+        let base = journal.canonicalize().unwrap();
+        assert_eq!(inside_journal(&journal, "").unwrap(), base);
+        assert_eq!(inside_journal(&journal, "assets/a.pdf").unwrap(), base.join("assets/a.pdf"));
+        assert!(inside_journal(&journal, "../outside/secret.txt").is_err());
+        assert!(inside_journal(&journal, outside.join("secret.txt").to_str().unwrap()).is_err());
+        assert!(inside_journal(&journal, "assets/missing.pdf").is_err());
+        // A link inside the journal that points out of it is refused once followed.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, journal.join("assets/out")).unwrap();
+            assert!(inside_journal(&journal, "assets/out/secret.txt").is_err());
+            std::os::unix::fs::symlink(journal.join("assets/a.pdf"), journal.join("assets/b.pdf")).unwrap();
+            assert!(inside_journal(&journal, "assets/b.pdf").is_ok());
+        }
+        let _ = std::fs::remove_dir_all(&top);
+    }
 
     #[test]
     fn exec_args_follow_the_desktop_entry_spec() {

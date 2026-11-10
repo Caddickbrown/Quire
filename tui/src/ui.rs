@@ -6,7 +6,7 @@ use crate::app::{App, Hit, Modal, Pick, Screen};
 use crate::md;
 use crate::theme::Palette;
 use quire_core::stats;
-use quire_core::Entry;
+use quire_core::{unguard_body, Entry};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -21,10 +21,19 @@ const MONTHS_SHORT: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul
 pub fn draw(f: &mut Frame, app: &mut App) {
     app.hits.borrow_mut().clear();
     let area = f.area();
+    // What is drawn and what the keys assume are the same window.
+    app.width = area.width;
+    app.height = area.height;
     let p = app.pal.clone();
     f.render_widget(Block::default().style(p.base()), area);
     if area.height < 6 || area.width < 30 {
         put(f, Rect::new(0, 0, area.width, 1), Line::from(Span::styled("Quire needs a bigger window", p.muted())));
+        return;
+    }
+    if app.screen == Screen::Write && !app.composer_fits() {
+        // No room for the text and its caret: typing is not taken either.
+        put(f, Rect::new(0, 0, area.width, 1), Line::from(Span::styled("Quire needs a bigger window to write in", p.muted())));
+        put(f, Rect::new(0, 1, area.width, 1), Line::from(Span::styled("Your text is kept. esc goes back.", p.faint())));
         return;
     }
     let pad: u16 = 2;
@@ -110,15 +119,26 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.hits.borrow_mut().clear();
         let (enter, esc) = (Some(Hit::Key(KeyEvent::from(KeyCode::Enter))), Some(Hit::Key(KeyEvent::from(KeyCode::Esc))));
         let items: Vec<Item> = match m {
-            Modal::Retime(v) => vec![
-                (Span::styled("Date & time  ", p.muted()), None),
-                (Span::styled(v.clone(), p.ink()), None),
-                (Span::styled("▏", p.accent()), None),
-                (Span::styled("   YYYY-MM-DD HH:MM   ", p.muted()), None),
-                (Span::styled("↵ apply", p.muted()), enter),
-                (Span::styled("   ", p.muted()), None),
-                (Span::styled("esc cancel", p.muted()), esc),
-            ],
+            Modal::Retime(v, target) => {
+                // The entry it is for, by time and title (its date is the
+                // value being typed), then the format if there is room left.
+                let mut room = (hint_row.width as usize).saturating_sub(13 + 16 + 1 + 3 + 7 + 3 + 10);
+                let mut items: Vec<Item> = vec![(Span::styled("Date & time  ", p.muted()), None)];
+                if let Some(name) = target.as_ref().map(|t| t.name.split_once(' ').map(|n| n.1).unwrap_or(&t.name)) {
+                    if room >= 12 {
+                        let name = trunc(name, room.min(40) - 2);
+                        room -= name.width() + 2;
+                        items.push((Span::styled(format!("{}  ", name), p.faint()), None));
+                    }
+                }
+                items.push((Span::styled(v.clone(), p.ink()), None));
+                items.push((Span::styled("▏", p.accent()), None));
+                items.push((Span::styled(if room >= 19 { "   YYYY-MM-DD HH:MM   " } else { "   " }, p.muted()), None));
+                items.push((Span::styled("↵ apply", p.muted()), enter));
+                items.push((Span::styled("   ", p.muted()), None));
+                items.push((Span::styled("esc cancel", p.muted()), esc));
+                items
+            }
             Modal::Input { label, value, .. } => vec![
                 (Span::styled(format!("{}  ", label), p.muted()), None),
                 (Span::styled(value.clone(), p.ink()), None),
@@ -144,7 +164,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 (Span::styled("  esc cancel", p.muted()), esc),
             ],
             Modal::Confirm { text, .. } => vec![
-                (Span::styled(text.clone(), p.ink()), None),
+                // The answers always fit: the question gives way.
+                (Span::styled(trunc(text, (hint_row.width as usize).saturating_sub(17)), p.ink()), None),
                 (Span::styled("   ", p.ink()), None),
                 (Span::styled("y", p.key()), Some(Hit::Key(KeyEvent::from(KeyCode::Char('y'))))),
                 (Span::styled(" yes", p.muted()), Some(Hit::Key(KeyEvent::from(KeyCode::Char('y'))))),
@@ -158,11 +179,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     hover_highlight(f, app);
     if let Some((msg, _, err)) = &app.toast {
-        let w = (msg.width() as u16 + 4).min(inner.width);
-        let r = Rect::new(inner.x + inner.width.saturating_sub(w), area.height - 3, w, 1);
-        f.render_widget(Clear, r);
+        // Up to three rows, so the end of a long message (often the key to
+        // press) is not cut off.
+        let room = (inner.width as usize).saturating_sub(4).max(8);
+        let mut rows = wrap_text(msg, room);
+        if rows.len() > 3 {
+            rows.truncate(3);
+            rows[2] = trunc(&format!("{} …", rows[2]), room);
+        }
+        let w = (rows.iter().map(|l| l.width()).max().unwrap_or(0) as u16 + 4).min(inner.width);
         let st = if *err { Style::default().fg(p.on_accent).bg(p.accent) } else { Style::default().fg(p.fg).bg(p.card) };
-        put(f, r, Line::from(Span::styled(format!("  {}  ", msg), st)));
+        let n = rows.len() as u16;
+        for (k, row) in rows.iter().enumerate() {
+            let r = Rect::new(inner.x + inner.width.saturating_sub(w), (area.height - 3).saturating_sub(n - 1 - k as u16), w, 1);
+            f.render_widget(Clear, r);
+            put(f, r, Line::from(Span::styled(format!("  {:<pad$}  ", row, pad = (w as usize).saturating_sub(4)), st)));
+        }
     }
     if app.help {
         app.hits.borrow_mut().clear(); // any click closes it
@@ -354,7 +386,7 @@ fn title_of(e: &Entry) -> (String, bool) {
     if !e.title.is_empty() {
         (e.title.clone(), false)
     } else {
-        let fl = e.body.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+        let fl = unguard_body(&e.body).lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
         if fl.is_empty() {
             ("untitled".into(), true)
         } else {
@@ -555,7 +587,7 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
         }
         return;
     }
-    let wide = r.width >= 96;
+    let wide = app.browse_wide();
     // Wide enough for the longest label and the biggest count, so neither is cut.
     let colw = |items: &[(String, usize)], label: u16| -> u16 {
         let digits = items.iter().map(|(_, n)| n.to_string().len()).max().unwrap_or(1) as u16;
@@ -627,7 +659,8 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
         }
         lines.push(Line::from(head));
         lines.push(Line::from(""));
-        for line in e.body.split('\n') {
+        // As written: a line kept on disk with a guarding backslash reads without it.
+        for line in unguard_body(&e.body).split('\n') {
             for seg in wrap_text(line, (pw as usize).saturating_sub(8)) {
                 let mut l = md::style_line(&seg, p, false);
                 l.spans.insert(0, Span::styled("       ", p.ink()));
@@ -698,7 +731,8 @@ fn write(f: &mut Frame, r: Rect, app: &mut App) {
     let p = app.pal.clone();
     let width = app.editor_width();
     let suggestions = app.tag_suggestions();
-    let tag_pick = app.tag_pick;
+    // No row is lit while ↵ would not take one (what is typed is a tag already).
+    let tag_pick = if app.tag_accepts() { Some(app.tag_pick) } else { None };
     let focus = app.focus;
     let words_today = app.words_today();
     let goal = app.settings.word_goal();
@@ -722,7 +756,8 @@ fn write(f: &mut Frame, r: Rect, app: &mut App) {
         } else {
             md::style_chars(line, &p, dim)
         };
-        let seg: Vec<(char, Style)> = styled.into_iter().skip(vr.start).take(vr.end - vr.start).collect();
+        // A tab already in an entry is one cell (the terminal would draw none).
+        let seg: Vec<(char, Style)> = styled.into_iter().skip(vr.start).take(vr.end - vr.start).map(|(c, st)| (if c.is_control() { ' ' } else { c }, st)).collect();
         let mut l = md::spans_of(&seg);
         if vr.row == 0 && chars.is_empty() && caret_vi != Some(vi) {
             l = Line::from(Span::styled("Title — or leave it, and the first line will do", p.faint()));
@@ -756,7 +791,7 @@ fn write(f: &mut Frame, r: Rect, app: &mut App) {
                 .iter()
                 .enumerate()
                 .map(|(i, t)| {
-                    let st = if i == tag_pick { Style::default().fg(p.on_accent).bg(p.accent) } else { Style::default().fg(p.fg).bg(p.card) };
+                    let st = if Some(i) == tag_pick { Style::default().fg(p.on_accent).bg(p.accent) } else { Style::default().fg(p.fg).bg(p.card) };
                     Line::from(Span::styled(format!(" {:<w$} ", t, w = (w - 2) as usize), st))
                 })
                 .collect();
@@ -781,7 +816,9 @@ fn write(f: &mut Frame, r: Rect, app: &mut App) {
     if focus {
         right.push(Span::styled("focus on  ·  ", p.faint()));
     }
-    if d.ed.dirty {
+    if d.ed.dirty && d.save_error.is_some() {
+        right.push(Span::styled(if d.ref_.is_some() { "not saved  ·  ^k keeps yours as a new draft" } else { "not saved" }, p.accent()));
+    } else if d.ed.dirty {
         right.push(Span::styled("unsaved", p.faint()));
     } else if let Some(t) = &d.saved_at {
         right.push(Span::styled(format!("saved {}", t), p.faint()));
@@ -992,9 +1029,9 @@ fn help_overlay(f: &mut Frame, area: Rect, app: &App) {
     let p = &app.pal;
     let rows: Vec<(&str, &str)> = match app.screen {
         Screen::Today => vec![("n", "new draft"), ("↵", "write from the prompt"), ("p", "another prompt"), ("i", "inbox"), ("j", "journal"), ("l", "look back"), ("/", "search"), ("r", "a random entry"), (",", "settings"), ("q", "quit")],
-        Screen::Inbox => vec![("← →", "year · month · day · drafts"), ("↑ ↓", "move"), ("f", "file the draft"), ("e", "edit it"), ("/", "filter the column"), ("*", "star"), ("t", "change its date and time"), ("d", "delete"), ("n", "new draft"), ("esc", "back")],
+        Screen::Inbox => vec![("← →", "year · month · day · drafts"), ("↑ ↓", "move"), ("f", "file the marked draft"), ("e", "edit it"), ("/", "filter the column"), ("*", "star"), ("t", "change its date and time"), ("d", "delete"), ("n", "new draft"), ("esc", "back")],
         Screen::Browse => vec![("← →", "year · month · day · entries"), ("↑ ↓", "move"), ("e  ↵", "open (edit) the entry"), ("/", "filter the column"), ("s", "main · split journals · all"), ("u", "return to the inbox"), ("*", "star"), ("t", "date and time"), ("d", "delete"), ("r", "random"), ("esc", "back")],
-        Screen::Write => vec![("^j", "file to its day (or split journal)"), ("^s", "save now (it autosaves)"), ("^t", "date and time"), ("^f", "focus: dim all but this paragraph"), ("^p", "insert a prompt"), ("^o", "timer: start · pause · resume"), ("alt-o", "reset the timer"), ("^b ^i ^g", "bold · italic · code on the word"), ("@", "tag autocomplete, ↹ or ↵ accepts"), ("↹", "indent a list item"), ("↵ ↵", "an empty item ends the list"), ("^v", "paste; a clipboard image is attached"), ("drop", "a photo or video on the window attaches it"), ("^d", "discard the draft"), ("esc", "back (saved)")],
+        Screen::Write => vec![("^j", "file to its day (or split journal)"), ("^s", "save now (it autosaves)"), ("^t", "date and time"), ("^f", "focus: dim all but this paragraph"), ("^p", "insert a prompt"), ("^o", "timer: start · pause · resume"), ("alt-o", "reset the timer"), ("^b ^i ^g", "bold · italic · code on the word"), ("@", "tag autocomplete, ↹ or ↵ accepts"), ("↹", "indent a list item"), ("↵ ↵", "an empty item ends the list"), ("^v", "paste; a clipboard image is attached"), ("drop", "a photo or video on the window attaches it"), ("^d", "undo this visit's changes (new draft: delete)"), ("^k", "save refused: keep yours as a new draft"), ("esc", "back (saved)"), ("^c", "quit (saved; twice if a save fails)")],
         Screen::LookBack => vec![("← →", "earlier · later year"), ("esc", "back")],
         Screen::Settings => vec![("↑ ↓", "choose a setting"), ("← →", "change it"), ("↵", "next value / toggle"), ("esc", "back")],
         Screen::Search => vec![("type", "to search"), ("↑ ↓", "results"), ("↵", "open"), ("esc", "clear, then back")],
@@ -1002,7 +1039,7 @@ fn help_overlay(f: &mut Frame, area: Rect, app: &App) {
     let mut rows = rows;
     rows.push(("F2", if app.mouse { "mouse off (lets the terminal select)" } else { "mouse on: click, scroll" }));
     let w = 56u16.min(area.width - 4);
-    let h = rows.len() as u16 + 4;
+    let h = (rows.len() as u16 + 4).min(area.height);
     let x = (area.width - w) / 2;
     let y = (area.height.saturating_sub(h)) / 2;
     let r = Rect::new(x, y, w, h);

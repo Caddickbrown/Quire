@@ -133,6 +133,24 @@ fn walk_all(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// `walk_all`, leaving out anything whose name starts with a dot, folders
+/// included.
+fn walk_visible(dir: &Path, out: &mut Vec<PathBuf>) {
+    if let Ok(rd) = fs::read_dir(dir) {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
+                walk_visible(&e.path(), out);
+            } else if ft.is_file() {
+                out.push(e.path());
+            }
+        }
+    }
+}
+
 // ---------- media (assets/) ----------
 
 pub fn media_kind(path: &str) -> &'static str {
@@ -374,7 +392,8 @@ pub struct CleanupReport {
     pub duplicates: usize,
 }
 
-static LINK_SPAN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"!?\[[^\]]*\]\([^)]+\)").unwrap());
+// The target may hold balanced brackets (`image(1).jpg`), as LINK_TARGET_RE allows.
+static LINK_SPAN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"!?\[[^\]]*\]\((?:[^()]|\([^()]*\))+\)").unwrap());
 
 fn punct(s: &str) -> String {
     s.replace("...", "\u{2026}").replace('\u{2019}', "'").replace(['\u{201C}', '\u{201D}'], "\"")
@@ -837,7 +856,15 @@ pub fn export_all(j: &Journal, dest: &Path) -> Result<usize, String> {
 /// never followed. With `skip_hidden_top`, top-level dot-items other than
 /// the sidecars (`.quire`, `.nook`) are left out.
 pub fn copy_tree(from: &Path, to: &Path, skip_hidden_top: bool) -> Result<(), String> {
+    copy_tree_counted(from, to, skip_hidden_top).map(|_| ())
+}
+
+/// `copy_tree`, returning how many files it copied and how many bytes each
+/// copy reported: what the copy should hold, whatever happens to the original
+/// afterwards.
+fn copy_tree_counted(from: &Path, to: &Path, skip_hidden_top: bool) -> Result<(u64, u64), String> {
     fs::create_dir_all(to).map_err(|e| e.to_string())?;
+    let (mut files, mut bytes) = (0, 0);
     for e in fs::read_dir(from).map_err(|e| e.to_string())?.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         if skip_hidden_top && name.starts_with('.') && name != SIDECAR && name != LEGACY_SIDECAR {
@@ -852,12 +879,23 @@ pub fn copy_tree(from: &Path, to: &Path, skip_hidden_top: bool) -> Result<(), St
                 std::os::unix::fs::symlink(target, &t).map_err(|e| e.to_string())?;
             }
         } else if ft.is_dir() {
-            copy_tree(&e.path(), &t, false)?;
+            let (f, b) = copy_tree_counted(&e.path(), &t, false)?;
+            files += f;
+            bytes += b;
         } else {
-            fs::copy(e.path(), &t).map_err(|e| format!("{}: {}", e, t.display()))?;
+            match fs::copy(e.path(), &t) {
+                Ok(n) => {
+                    files += 1;
+                    bytes += n;
+                }
+                // Gone between the listing and the copy (a draft filed, an
+                // emptied day file): it isn't part of this copy.
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound && !e.path().exists() => {}
+                Err(err) => return Err(format!("{}: {}", err, t.display())),
+            }
         }
     }
-    Ok(())
+    Ok((files, bytes))
 }
 
 /// Count the files in a tree and add up their bytes, walking it the way
@@ -883,13 +921,23 @@ fn tree_stats(root: &Path, skip_hidden_top: bool) -> Result<(u64, u64), String> 
     Ok((files, bytes))
 }
 
-/// Err unless `copy` holds as many files and bytes as `original`.
+/// Err unless `copy` holds as many files and bytes as `original`. Only for an
+/// original that isn't being written to: a live journal is checked with
+/// `verify_counted` instead.
+#[cfg(test)]
 fn verify_copy(original: &Path, copy: &Path, skip_hidden_top: bool) -> Result<(), String> {
-    let (a, b) = (tree_stats(original, skip_hidden_top)?, tree_stats(copy, false)?);
-    if a == b {
+    verify_counted(copy, tree_stats(original, skip_hidden_top)?)
+}
+
+/// Err unless `copy` holds exactly the files and bytes `copy_tree_counted`
+/// reported writing into it. The journal itself is not walked a second time:
+/// it may have been saved to since, and that must not fail a good copy.
+fn verify_counted(copy: &Path, copied: (u64, u64)) -> Result<(), String> {
+    let found = tree_stats(copy, false)?;
+    if found == copied {
         Ok(())
     } else {
-        Err(format!("the copy doesn't match: {} files and {} bytes, expected {} and {}", b.0, b.1, a.0, a.1))
+        Err(format!("the copy doesn't match: {} files and {} bytes, expected {} and {}", found.0, found.1, copied.0, copied.1))
     }
 }
 
@@ -919,6 +967,14 @@ pub fn check_backup_dir(root: &Path, dest_dir: &Path) -> Result<(), String> {
 
 pub const BACKUP_PREFIX: &str = "Quire backup ";
 pub const NOOK_BACKUP_PREFIX: &str = "Nook-Backup-";
+/// The copy of the journal a restore takes before it replaces anything. Listed
+/// and restorable like a backup, and never pruned with them.
+pub const SAFETY_PREFIX: &str = "Quire before-restore ";
+/// A backup still being copied is `.<final name>.partial`: hidden, so nothing
+/// lists it, counts it against retention or restores from it.
+const PARTIAL_SUFFIX: &str = ".partial";
+/// A partial this old was abandoned (the app was closed or killed mid-copy).
+pub const PARTIAL_MAX_AGE: Duration = Duration::from_secs(24 * 3600);
 
 /// One backup or restore at a time, app-wide.
 pub static BACKUP_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -938,22 +994,60 @@ impl Drop for BackupGuard {
     }
 }
 
-fn copy_to_new_backup(root: &Path, dest_dir: &Path, skip_hidden_top: bool) -> Result<PathBuf, String> {
+fn is_partial_name(name: &str) -> bool {
+    name.strip_prefix('.').and_then(|n| n.strip_suffix(PARTIAL_SUFFIX)).is_some_and(|n| n.starts_with(BACKUP_PREFIX) || n.starts_with(SAFETY_PREFIX))
+}
+
+/// Remove half-made backups (`.Quire backup ….partial`) that have sat in
+/// `dest_dir` for `min_age` or more. Returns how many went. A younger one may
+/// be another window's backup still being copied, and is left.
+pub fn sweep_partial_backups(dest_dir: &Path, min_age: Duration) -> usize {
+    let Ok(rd) = fs::read_dir(dest_dir) else { return 0 };
+    let now = SystemTime::now();
+    let mut n = 0;
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !is_partial_name(&name) || !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|m| now.duration_since(m).ok()).map(|age| age >= min_age).unwrap_or(false);
+        if old && fs::remove_dir_all(e.path()).is_ok() {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Copy `root` into `dest_dir/<prefix><stamp>`. The copy is made under a
+/// hidden `.….partial` name, checked against the sizes recorded as each file
+/// was copied, and only then given its real name, so a backup that exists is a
+/// backup that finished. `after_copy` runs between the copy and the check
+/// (tests use it to write to the journal there).
+fn copy_to_new_backup(root: &Path, dest_dir: &Path, skip_hidden_top: bool, prefix: &str, after_copy: impl FnOnce()) -> Result<PathBuf, String> {
     check_backup_dir(root, dest_dir)?;
     fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
     check_backup_dir(root, dest_dir)?;
-    let base = format!("{}{}", BACKUP_PREFIX, Local::now().format("%Y-%m-%d-%H%M%S"));
+    sweep_partial_backups(dest_dir, PARTIAL_MAX_AGE);
+    let base = format!("{}{}", prefix, Local::now().format("%Y-%m-%d-%H%M%S"));
+    let partial_of = |name: &str| dest_dir.join(format!(".{}{}", name, PARTIAL_SUFFIX));
     let mut name = base.clone();
     let mut n = 2;
-    while dest_dir.join(&name).exists() {
+    while dest_dir.join(&name).exists() || partial_of(&name).exists() {
         name = format!("{}-{}", base, n);
         n += 1;
     }
-    let dest = dest_dir.join(&name);
-    if let Err(e) = copy_tree(root, &dest, skip_hidden_top).and_then(|_| verify_copy(root, &dest, skip_hidden_top)) {
-        let _ = fs::remove_dir_all(&dest);
+    let (partial, dest) = (partial_of(&name), dest_dir.join(&name));
+    let made = copy_tree_counted(root, &partial, skip_hidden_top)
+        .and_then(|copied| {
+            after_copy();
+            verify_counted(&partial, copied)
+        })
+        .and_then(|_| fs::rename(&partial, &dest).map_err(|e| e.to_string()));
+    if let Err(e) = made {
+        let _ = fs::remove_dir_all(&partial);
         return Err(e);
     }
+    crate::vault::sync_dir(dest_dir);
     Ok(dest)
 }
 
@@ -961,27 +1055,93 @@ fn copy_to_new_backup(root: &Path, dest_dir: &Path, skip_hidden_top: bool) -> Re
 /// time). Returns the backup's full path. Does not prune.
 pub fn backup(j: &Journal, dest_dir: &Path) -> Result<String, String> {
     let root = j.local()?;
-    Ok(copy_to_new_backup(root, dest_dir, true)?.display().to_string())
+    Ok(copy_to_new_backup(root, dest_dir, true, BACKUP_PREFIX, || {})?.display().to_string())
 }
 
 fn backup_key(name: &str) -> Option<&str> {
-    name.strip_prefix(BACKUP_PREFIX).or_else(|| name.strip_prefix(NOOK_BACKUP_PREFIX))
+    name.strip_prefix(BACKUP_PREFIX).or_else(|| name.strip_prefix(NOOK_BACKUP_PREFIX)).or_else(|| name.strip_prefix(SAFETY_PREFIX))
 }
 
-/// Keep only the `keep` newest "Quire backup …" folders. Nook's backups and
-/// anything else are left alone. Returns the number removed.
+/// A stable name for a journal folder, for keeping one journal's backups (and
+/// its "last backup" time) apart from another's: the folder's own name, made
+/// safe for a path, and eight hex digits of its full path. `Journal` and
+/// `Journal 2` in different places never share a key; the same folder always
+/// gets the same one.
+pub fn journal_key(root: &Path) -> String {
+    let full = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let name: String = full
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    // FNV-1a: std's hasher may change between Rust versions, and this is kept.
+    let hash = full.to_string_lossy().bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    format!("{}-{:08x}", if name.is_empty() { "journal" } else { &name }, hash as u32)
+}
+
+/// `dest_dir/<journal_key>`: a backup folder of this journal's own, for a
+/// shell that backs up more than one journal into one place.
+pub fn backup_dir_for(dest_dir: &Path, root: &Path) -> PathBuf {
+    dest_dir.join(journal_key(root))
+}
+
+/// What `prune_backups_checked` did.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct Pruned {
+    pub removed: usize,
+    /// Why nothing was removed although there were more backups than `keep`.
+    pub held: Option<String>,
+}
+
+/// Keep only the `keep` newest "Quire backup …" folders. Nook's backups,
+/// restore safety copies and anything else are left alone. Returns the number
+/// removed. See `prune_backups_checked` for when it removes nothing.
 pub fn prune_backups(dest_dir: &Path, keep: usize) -> Result<usize, String> {
-    let names: Vec<String> = list_backups(dest_dir).into_iter().filter(|n| n.starts_with(BACKUP_PREFIX)).collect();
-    let mut n = 0;
-    for name in names.iter().skip(keep.max(1)) {
-        fs::remove_dir_all(dest_dir.join(name)).map_err(|e| e.to_string())?;
-        n += 1;
-    }
-    Ok(n)
+    prune_backups_checked(dest_dir, keep).map(|p| p.removed)
 }
 
-/// "Quire backup …" and "Nook-Backup-…" folders, newest first (by the
-/// timestamp in the name).
+/// `prune_backups`, saying why when it holds back. If the newest backup is
+/// less than half the size of the one before it, the journal may have just
+/// lost most of what it held (a sync gone wrong, the wrong folder): the older
+/// backups are then the only good ones, so none is removed, and `held` says
+/// so. The next backup is compared with this one, so a journal that really did
+/// shrink starts pruning again one backup later.
+pub fn prune_backups_checked(dest_dir: &Path, keep: usize) -> Result<Pruned, String> {
+    sweep_partial_backups(dest_dir, PARTIAL_MAX_AGE);
+    let names: Vec<String> = list_backups(dest_dir).into_iter().filter(|n| n.starts_with(BACKUP_PREFIX)).collect();
+    let keep = keep.max(1);
+    if names.len() <= keep {
+        return Ok(Pruned::default());
+    }
+    if let [newest, previous, ..] = names.as_slice() {
+        let size = |n: &String| tree_stats(&dest_dir.join(n), false).map(|s| s.1);
+        let (new, old) = (size(newest)?, size(previous)?);
+        if old >= SHRINK_FLOOR && new < old / 2 {
+            return Ok(Pruned {
+                removed: 0,
+                held: Some(format!(
+                    "“{}” is much smaller than the backup before it ({} bytes, down from {}), so no older backup was removed. Check the journal folder is the right one and complete.",
+                    newest, new, old
+                )),
+            });
+        }
+    }
+    let mut removed = 0;
+    for name in names.iter().skip(keep) {
+        fs::remove_dir_all(dest_dir.join(name)).map_err(|e| e.to_string())?;
+        removed += 1;
+    }
+    Ok(Pruned { removed, held: None })
+}
+
+/// Below this a backup is too small for "half the size" to mean anything.
+const SHRINK_FLOOR: u64 = 64 * 1024;
+
+/// "Quire backup …", "Quire before-restore …" and "Nook-Backup-…" folders,
+/// newest first (by the timestamp in the name). Half-made backups are hidden
+/// (`.….partial`) and never listed.
 pub fn list_backups(dest_dir: &Path) -> Vec<String> {
     let mut v: Vec<String> = fs::read_dir(dest_dir)
         .map(|rd| {
@@ -997,9 +1157,10 @@ pub fn list_backups(dest_dir: &Path) -> Vec<String> {
 }
 
 /// Restore `dest_dir/name` over `root`. Nothing in the journal is touched until
-/// a checked safety copy (named like a normal backup, not pruned) and a checked
-/// staged copy of the backup both exist. The swap is then renames inside the
-/// journal folder, undone if one fails, and the old content is deleted last.
+/// a checked safety copy (`Quire before-restore <stamp>`: listed and
+/// restorable like a backup, never pruned) and a checked staged copy of the
+/// backup both exist. The swap is then renames inside the journal folder,
+/// undone if one fails, and the old content is deleted last.
 /// Returns the safety copy's name.
 pub fn restore(j: &Journal, dest_dir: &Path, name: &str) -> Result<String, String> {
     let root = j.local()?;
@@ -1016,13 +1177,54 @@ pub fn restore(j: &Journal, dest_dir: &Path, name: &str) -> Result<String, Strin
     }
     check_backup_dir(root, dest_dir)?;
     // Full copy (hidden items too), since the restore removes everything.
-    let safety = copy_to_new_backup(root, dest_dir, false)
+    let safety = copy_to_new_backup(root, dest_dir, false, SAFETY_PREFIX, || {})
         .map_err(|e| format!("Couldn't make a safety copy first ({}); nothing was changed", e))?;
     let safety_name = safety.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     swap_in_backup(root, &src, |_| Ok(())).map_err(|e| {
         format!("Restore failed ({}). Your journal was put back, and it is also saved as “{}”.", e, safety_name)
     })?;
     Ok(safety_name)
+}
+
+const RESTORE_NEW: &str = ".quire-restore-new-";
+const RESTORE_OLD: &str = ".quire-restore-old-";
+
+/// What an interrupted restore left in a journal folder.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct RestoreLeftovers {
+    /// Staged copies of a backup (`.quire-restore-new-*`) removed just now:
+    /// the backup they were copied from is still in the backup folder.
+    pub swept: usize,
+    /// `.quire-restore-old-*` folders still there. Each holds what was in the
+    /// journal when a restore was cut short, which may be the only copy of
+    /// something, so they are never removed here: tell the person.
+    pub old: Vec<String>,
+}
+
+/// Look for what a restore that was interrupted mid-swap left behind, when a
+/// journal folder is opened. Staged copies at least `min_age` old are removed
+/// (a younger one may belong to a restore running in another window); folders
+/// of displaced journal content are only reported. Local folders only.
+pub fn restore_leftovers(root: &Path, min_age: Duration) -> RestoreLeftovers {
+    let mut out = RestoreLeftovers::default();
+    let Ok(rd) = fs::read_dir(root) else { return out };
+    let now = SystemTime::now();
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        if name.starts_with(RESTORE_OLD) {
+            out.old.push(name);
+        } else if name.starts_with(RESTORE_NEW) {
+            let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|m| now.duration_since(m).ok()).map(|age| age >= min_age).unwrap_or(false);
+            if old && fs::remove_dir_all(e.path()).is_ok() {
+                out.swept += 1;
+            }
+        }
+    }
+    out.old.sort();
+    out
 }
 
 /// Hidden items other than the sidecars stay where they are: .git, Syncthing's
@@ -1049,9 +1251,9 @@ fn names_in(dir: &Path) -> Result<Vec<String>, String> {
 fn swap_in_backup(root: &Path, src: &Path, mut before_move: impl FnMut(&str) -> Result<(), String>) -> Result<(), String> {
     // Unique names: a leftover from a crash may hold the only copy of something.
     let stamp = Local::now().format("%Y%m%d-%H%M%S-%f");
-    let new = root.join(format!(".quire-restore-new-{}", stamp));
-    let old = root.join(format!(".quire-restore-old-{}", stamp));
-    let staged = copy_tree(src, &new, false).and_then(|_| verify_copy(src, &new, false));
+    let new = root.join(format!("{}{}", RESTORE_NEW, stamp));
+    let old = root.join(format!("{}{}", RESTORE_OLD, stamp));
+    let staged = copy_tree_counted(src, &new, false).and_then(|copied| verify_counted(&new, copied));
     if let Err(e) = staged {
         let _ = fs::remove_dir_all(&new);
         return Err(e);
@@ -1207,11 +1409,16 @@ fn file_date(p: &Path) -> Option<String> {
 /// (fallback modified) date. Time: 12:00:00, +1 s for each further file on
 /// the same date. Title: the file stem unless it is just the date. Files
 /// already in jnl format import their entries verbatim.
+///
+/// Folders and files whose names start with a dot are not read (`.trash/`,
+/// `.stversions/`, `.obsidian/`: other tools' leftovers, not notes). In a
+/// file with entries, text above the first header becomes an entry of its
+/// own, dated like a plain file.
 pub fn import_markdown_folder(j: &Journal, dir: &Path, dry_run: bool) -> Result<ImportReport, String> {
     let mut rep = ImportReport::default();
     let mut have = existing_key_counts(j)?;
     let mut files = Vec::new();
-    walk_all(dir, &mut files);
+    walk_visible(dir, &mut files);
     files.sort();
     let mut per_date: HashMap<String, i64> = HashMap::new();
     let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -1226,27 +1433,25 @@ pub fn import_markdown_folder(j: &Journal, dir: &Path, dry_run: bool) -> Result<
             rep.skipped += 1;
             continue;
         };
+        let text = normalise_outside(&text);
         let parsed = parse_entries(&text);
-        let items: Vec<(String, String, String)> = if !parsed.is_empty() {
-            parsed
-                .into_iter()
-                .map(|e| (dedupe_key(&e.ts, &strip_star(&e.suffix), &e.body), journal_rel(&e.date), e.raw.trim_end().to_string()))
-                .collect()
-        } else {
-            let body = text.trim();
-            if body.is_empty() {
-                continue;
+        // Text with no header of its own: the whole of a plain note, or what
+        // sits above the first entry of a file in jnl's format.
+        let loose = if parsed.is_empty() { text.trim().to_string() } else { leading_preamble(&text).trim().to_string() };
+        let mut items: Vec<(String, String, String)> = Vec::new();
+        if !loose.is_empty() {
+            if let Some(date) = first_valid_date(&name).or_else(|| file_date(&f)) {
+                let n = per_date.entry(date.clone()).or_insert(0);
+                let ts = add_secs(&format!("{} 12:00:00", date), *n)?;
+                *n += 1;
+                let stem = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                let title = if stem.trim() == date { String::new() } else { stem };
+                let raw = make_raw(&ts, &title, false, &loose);
+                let e = parse_entries(&raw).remove(0);
+                items.push((dedupe_key(&ts, &strip_star(&e.suffix), &e.body), journal_rel(&date), raw));
             }
-            let Some(date) = first_valid_date(&name).or_else(|| file_date(&f)) else { continue };
-            let n = per_date.entry(date.clone()).or_insert(0);
-            let ts = add_secs(&format!("{} 12:00:00", date), *n)?;
-            *n += 1;
-            let stem = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-            let title = if stem.trim() == date { String::new() } else { stem };
-            let raw = make_raw(&ts, &title, false, body);
-            let e = parse_entries(&raw).remove(0);
-            vec![(dedupe_key(&ts, &strip_star(&e.suffix), &e.body), journal_rel(&date), raw)]
-        };
+        }
+        items.extend(parsed.into_iter().map(|e| (dedupe_key(&e.ts, &strip_star(&e.suffix), &e.body), journal_rel(&e.date), e.raw.trim_end().to_string())));
         for (key, file, raw) in items {
             rep.found += 1;
             if take(&mut have, &key) {
@@ -1372,7 +1577,14 @@ pub fn import_day_one(j: &Journal, path: &Path, dry_run: bool) -> Result<ImportR
             rep.skipped += 1;
             continue;
         }
-        let key = dedupe_key(&ts, &title, &guard_body(body.trim()));
+        // The key as the entry will read back once written: built from the
+        // same text `make_raw` produces, so a title with doubled spaces or a
+        // body it tidies still matches itself on a second import.
+        let starred = e.get("starred").and_then(|s| s.as_bool()).unwrap_or(false);
+        let key = match parse_entries(&make_raw(&ts, &title, starred, &body)).into_iter().next() {
+            Some(w) => dedupe_key(&w.ts, &strip_star(&w.suffix), &w.body),
+            None => dedupe_key(&ts, &title, &guard_body(body.trim())),
+        };
         if take(&mut have, &key) {
             rep.skipped += 1;
             continue;
@@ -1396,7 +1608,6 @@ pub fn import_day_one(j: &Journal, path: &Path, dry_run: bool) -> Result<ImportR
                 _ => body = format!("{}\n\n{}", body.trim(), link).trim().to_string(),
             }
         }
-        let starred = e.get("starred").and_then(|s| s.as_bool()).unwrap_or(false);
         groups.entry(journal_rel(&ts[..10])).or_default().push(make_raw(&ts, &title, starred, &body));
     }
     if !dry_run {
@@ -1520,15 +1731,45 @@ pub fn tag_review(j: &Journal) -> Vec<TagGroup> {
     groups
 }
 
+static CODE_SPAN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"`[^`\n]+`").unwrap());
+
+/// The parts of `s` where an `@word` is not a tag to rename: link and image
+/// targets (`](assets/@home/x.jpg)`), inline code spans and fenced code
+/// blocks. Byte ranges, in order. A fence left open ends at the next entry
+/// header, so one stray ``` can't shield the rest of a file.
+fn not_prose(s: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut fenced = false;
+    let mut at = 0;
+    for line in s.split_inclusive('\n') {
+        let (start, end) = (at, at + line.len());
+        at = end;
+        if is_header_line(line.trim_end_matches('\n')) {
+            fenced = false;
+        }
+        let fence = line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~");
+        if fence || fenced {
+            out.push(start..end);
+            fenced ^= fence;
+            continue;
+        }
+        out.extend(CODE_SPAN_RE.find_iter(line).map(|m| start + m.start()..start + m.end()));
+        out.extend(LINK_TARGET_RE.find_iter(line).map(|m| start + m.start()..start + m.end()));
+    }
+    out
+}
+
 /// Replace whole `@tag` tokens in `s` (case-insensitive match against
-/// `from`), skipping any preceded by a letter/digit, `.` or `/` (emails, URLs).
+/// `from`), skipping any preceded by a letter/digit, `.` or `/` (emails, URLs)
+/// and any inside a link target, a code span or a fenced code block.
 pub fn replace_tags(s: &str, from: &[String], to: &str) -> String {
+    let skip = not_prose(s);
     let mut out = String::with_capacity(s.len());
     let mut last = 0;
     for m in TAG_RE.find_iter(s) {
         out.push_str(&s[last..m.start()]);
         let prev = s[..m.start()].chars().next_back();
-        let blocked = prev.map(|c| c.is_alphanumeric() || c == '.' || c == '/').unwrap_or(false);
+        let blocked = prev.map(|c| c.is_alphanumeric() || c == '.' || c == '/').unwrap_or(false) || skip.iter().any(|r| r.contains(&m.start()));
         if !blocked && from.iter().any(|f| f.eq_ignore_ascii_case(m.as_str())) {
             out.push_str(to);
         } else {
@@ -1934,7 +2175,8 @@ mod tests {
         assert_eq!(a.link, "![](assets/2026/09/30-080000.jpg)");
         assert_eq!(a.rel, "assets/2026/09/30-080000.jpg");
         assert!(!a.compress_later);
-        assert_eq!(crate::media::read_ledger(d.path(), "DEV").assets.len(), 1, "counted once on this device");
+        let ledger = crate::media::read_ledger(d.path(), "DEV");
+        assert_eq!(ledger.assets, vec!["2026/09/30-080000.jpg", "2026/09/30-080000"], "counted once on this device, under both forms of its id");
         let mut clear = vec![0u8; 2 * 2 * 4];
         clear[3] = 10;
         assert_eq!(crate::media::encode_clipboard_image(2, 2, clear).unwrap().1, "png");
@@ -1962,10 +2204,10 @@ mod tests {
         backup(&jn(&root), &dest).unwrap();
         assert_eq!(prune_backups(&dest, 2).unwrap(), 2);
         let left = list_backups(&dest);
-        assert_eq!(left.len(), 3, "{:?}", left);
-        assert!(left[0].starts_with("Quire backup 2026-10") || left[0] > "Quire backup 2026-01-03".to_string());
-        assert!(left.contains(&"Nook-Backup-2026-01-02-000000".to_string()));
-        assert!(dest.join("Quire before-restore 2026-01-01-000000").exists());
+        // The two newest backups, Nook's, and the restore safety copy: listed, never pruned.
+        assert_eq!(left.len(), 4, "{:?}", left);
+        assert!(left[0].starts_with(BACKUP_PREFIX) && left[0].as_str() > "Quire backup 2026-01-03", "{:?}", left);
+        assert_eq!(&left[1..], ["Quire backup 2026-01-03-000000", "Nook-Backup-2026-01-02-000000", "Quire before-restore 2026-01-01-000000"]);
 
         // Restore: validates, takes a listed safety copy, replaces everything.
         let good = &left[0];
@@ -1979,6 +2221,166 @@ mod tests {
         assert!(!root.join("stray.md").exists());
         assert_eq!(list_backups(&dest).len(), n_before + 1);
         assert!(read(&dest.join(&safety).join("stray.md")).contains("stray"));
+
+        // B3: the next scheduled backup, keeping one, leaves the safety copy
+        // (and so the way back from the restore) where it is.
+        assert!(safety.starts_with(SAFETY_PREFIX), "{safety}");
+        assert!(list_backups(&dest).contains(&safety));
+        backup(&jn(&root), &dest).unwrap();
+        prune_backups(&dest, 1).unwrap();
+        let left = list_backups(&dest);
+        assert_eq!(left.iter().filter(|n| n.starts_with(BACKUP_PREFIX)).count(), 1, "{left:?}");
+        assert!(left.contains(&safety) && left.contains(&"Quire before-restore 2026-01-01-000000".to_string()), "{left:?}");
+        restore(&jn(&root), &dest, &safety).unwrap();
+        assert!(read(&root.join("stray.md")).contains("stray"), "and it restores like any backup");
+    }
+
+    // B1
+    #[test]
+    fn a_backup_taken_while_the_journal_is_written_to_still_verifies() {
+        let d = tmp();
+        let (root, dest) = (d.path().join("live"), d.path().join("backups"));
+        w(&root, "inbox/2026/11/09.md", "[2026-11-09 08:00:00] typing\n");
+        w(&root, "journal/2026/11/08.md", "[2026-11-08 08:00:00] filed\n");
+        // An autosave lands, and a draft is filed, after the copy and before the check.
+        let made = copy_to_new_backup(&root, &dest, true, BACKUP_PREFIX, || {
+            w(&root, "inbox/2026/11/09.md", "[2026-11-09 08:00:00] typing some more, and more\n");
+            fs::remove_file(root.join("journal/2026/11/08.md")).unwrap();
+            w(&root, "journal/2026/11/09.md", "[2026-11-09 08:01:00] new\n");
+        })
+        .unwrap();
+        assert_eq!(read(&made.join("inbox/2026/11/09.md")), "[2026-11-09 08:00:00] typing\n", "the copy is the journal as it was copied");
+        assert!(made.join("journal/2026/11/08.md").exists() && !made.join("journal/2026/11/09.md").exists());
+        assert!(verify_copy(&root, &made, true).is_err(), "checking against the live folder is what used to fail it");
+    }
+
+    // B2
+    #[test]
+    fn a_half_made_backup_is_never_taken_for_a_backup() {
+        let d = tmp();
+        let (root, dest) = (d.path().join("live"), d.path().join("backups"));
+        w(&root, "inbox.md", "[2026-11-09 08:00:00] x\n");
+        w(&root, "journal/2026/11/08.md", "[2026-11-08 08:00:00] filed\n");
+        // Killed mid-copy: what an interrupted run leaves is hidden and unfinished.
+        let partial = ".Quire backup 2026-11-08-120000.partial";
+        w(&dest, &format!("{partial}/inbox.md"), "[2026-11-08 08:00:00] half\n");
+        assert!(list_backups(&dest).is_empty());
+        assert!(restore(&jn(&root), &dest, partial).unwrap_err().contains("Bad backup name"));
+        let made = backup(&jn(&root), &dest).unwrap();
+        assert_eq!(list_backups(&dest).len(), 1);
+        assert_eq!(prune_backups(&dest, 1).unwrap(), 0, "it takes no retention slot");
+        assert!(Path::new(&made).is_dir() && dest.join(partial).is_dir(), "a young partial may be another window's backup");
+        assert_eq!(sweep_partial_backups(&dest, Duration::ZERO), 1);
+        assert!(!dest.join(partial).exists() && Path::new(&made).is_dir());
+        // A copy that fails its check leaves nothing behind under either name.
+        let before = fs::read_dir(&dest).unwrap().count();
+        let failed = copy_to_new_backup(&root, &dest, true, BACKUP_PREFIX, || {
+            let half = fs::read_dir(&dest).unwrap().flatten().find(|e| e.file_name().to_string_lossy().ends_with(".partial")).expect("copied under a partial name");
+            fs::remove_file(half.path().join("journal/2026/11/08.md")).unwrap();
+        });
+        assert!(failed.unwrap_err().contains("doesn't match"));
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), before);
+    }
+
+    // B4
+    #[test]
+    fn pruning_holds_back_when_the_newest_backup_has_shrunk() {
+        let d = tmp();
+        let dest = d.path().join("backups");
+        let full = "x".repeat(200 * 1024);
+        for day in 1..=3 {
+            w(&dest, &format!("Quire backup 2026-11-0{day}-000000/journal/2026/11/01.md"), &full);
+        }
+        // The journal folder came back nearly empty (a sync gone wrong).
+        w(&dest, "Quire backup 2026-11-04-000000/inbox.md", "[2026-11-04 08:00:00] only this\n");
+        let held = prune_backups_checked(&dest, 2).unwrap();
+        assert_eq!(held.removed, 0);
+        assert!(held.held.as_deref().unwrap().contains("much smaller"), "{held:?}");
+        assert_eq!(prune_backups(&dest, 2).unwrap(), 0, "the plain call removes nothing either, without failing the backup");
+        assert_eq!(list_backups(&dest).len(), 4, "every good backup is still there");
+        // It really is that small now: the next backup is like the last, and pruning resumes.
+        w(&dest, "Quire backup 2026-11-05-000000/inbox.md", "[2026-11-04 08:00:00] only this\n");
+        let p = prune_backups_checked(&dest, 2).unwrap();
+        assert_eq!((p.removed, p.held.is_none()), (3, true));
+        assert_eq!(list_backups(&dest), ["Quire backup 2026-11-05-000000", "Quire backup 2026-11-04-000000"]);
+        // Backups kept apart by journal.
+        let (a, b) = (d.path().join("one/Journal"), d.path().join("two/Journal"));
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        assert_ne!(journal_key(&a), journal_key(&b));
+        assert_eq!(journal_key(&a), journal_key(&a.join(".")));
+        assert!(journal_key(&a).starts_with("Journal-") && backup_dir_for(&dest, &a).starts_with(&dest));
+    }
+
+    // B5
+    #[test]
+    fn what_an_interrupted_restore_left_is_swept_or_reported() {
+        let d = tmp();
+        let root = d.path();
+        w(root, ".quire-restore-new-20261109-080000-1/journal/2026/11/01.md", "staged");
+        w(root, ".quire-restore-old-20261109-080000-1/journal/2026/11/01.md", "what was here");
+        w(root, "journal/2026/11/01.md", "live");
+        let young = restore_leftovers(root, Duration::from_secs(3600));
+        assert_eq!((young.swept, young.old.len()), (0, 1), "a restore may be running in another window");
+        let found = restore_leftovers(root, Duration::ZERO);
+        assert_eq!(found.swept, 1);
+        assert_eq!(found.old, vec![".quire-restore-old-20261109-080000-1"]);
+        assert!(!root.join(".quire-restore-new-20261109-080000-1").exists());
+        assert_eq!(read(&root.join(".quire-restore-old-20261109-080000-1/journal/2026/11/01.md")), "what was here", "never removed, only reported");
+        assert_eq!(read(&root.join("journal/2026/11/01.md")), "live");
+    }
+
+    // C6, C15
+    #[test]
+    fn markdown_folder_import_skips_dot_folders_and_keeps_loose_text() {
+        let d = tmp();
+        let src = d.path().join("src");
+        for hidden in [".trash", ".stversions", ".obsidian/plugins"] {
+            fs::create_dir_all(src.join(hidden)).unwrap();
+            fs::write(src.join(hidden).join("2026-09-01 old.md"), "Deleted long ago").unwrap();
+        }
+        fs::create_dir_all(src.join("notes")).unwrap();
+        // jnl's format from a Windows editor (BOM, CRLF), with a line above the first header.
+        fs::write(src.join("notes/2026-09-28 log.md"), "\u{FEFF}Written on the train.\r\n\r\n[2026-09-28 07:00:00] First\r\none\r\ntwo\r\n\r\n[2026-09-28 09:00:00] Second\r\nthree\r\n").unwrap();
+        let root = d.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        let r = import_markdown_folder(&jn(&root), &src, false).unwrap();
+        assert_eq!((r.found, r.written, r.skipped), (3, 3, 0), "{r:?}");
+        assert_eq!(
+            read(&root.join("journal/2026/09/28.md")),
+            "[2026-09-28 07:00:00] First\none\ntwo\n\n[2026-09-28 09:00:00] Second\nthree\n\n[2026-09-28 12:00:00] 2026-09-28 log\nWritten on the train.\n"
+        );
+        assert!(!root.join("journal/2026/09/01.md").exists());
+        let again = import_markdown_folder(&jn(&root), &src, false).unwrap();
+        assert_eq!((again.written, again.skipped), (0, 3), "and a second import adds nothing");
+    }
+
+    #[test]
+    fn dayone_reimport_matches_a_title_with_doubled_spaces() {
+        let d = tmp();
+        let json = d.path().join("Journal.json");
+        fs::write(&json, r##"{"entries":[{"creationDate":"2026-09-30T08:00:00Z","timeZone":"UTC","text":"# Two  spaces   here\n\nBody\r\nsecond line"}]}"##).unwrap();
+        let root = d.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        assert_eq!(import_day_one(&jn(&root), &json, false).unwrap().written, 1);
+        assert_eq!(read(&root.join("journal/2026/09/30.md")), "[2026-09-30 08:00:00] Two spaces here\nBody\nsecond line\n");
+        let again = import_day_one(&jn(&root), &json, false).unwrap();
+        assert_eq!((again.written, again.skipped), (0, 1));
+    }
+
+    // C15
+    #[test]
+    fn tag_rename_leaves_link_targets_and_code_alone() {
+        let text = "[2026-09-30 08:00:00] plans @home\nat @home ![](assets/@home/x.jpg) and `ssh dan@box @home`\n```\necho @home\n```\nafter @home\n\n[2026-10-01 08:00:00]\n```\nnever closed @home\n\n[2026-10-02 08:00:00]\nnext entry @home\n";
+        assert_eq!(
+            replace_tags(text, &["@home".into()], "@house"),
+            "[2026-09-30 08:00:00] plans @house\nat @house ![](assets/@home/x.jpg) and `ssh dan@box @home`\n```\necho @home\n```\nafter @house\n\n[2026-10-01 08:00:00]\n```\nnever closed @home\n\n[2026-10-02 08:00:00]\nnext entry @house\n"
+        );
+    }
+
+    #[test]
+    fn punctuation_keeps_a_link_whose_name_has_brackets() {
+        assert_eq!(fix_punctuation("So... ![](assets/2026/09/image(1)...final.jpg) done..."), "So\u{2026} ![](assets/2026/09/image(1)...final.jpg) done\u{2026}");
     }
 
     fn restore_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {

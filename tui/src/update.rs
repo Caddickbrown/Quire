@@ -18,6 +18,9 @@ const REPO: &str = "Caddickbrown/Quire";
 const INSTALL: &str = "curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash -s -- --tui";
 /// The target triple of a release build; None for a source build.
 pub const RELEASE_TARGET: Option<&str> = option_env!("QUIRE_RELEASE_TARGET");
+/// The longest one request may take, start to last byte (the AppImage is
+/// about 100 MB).
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 /// The binaries in each release tarball, installed side by side.
 const BINS: [&str; 2] = ["quire", "jnl"];
 
@@ -62,6 +65,10 @@ fn agent() -> ureq::Agent {
         .user_agent(concat!("quire/", env!("CARGO_PKG_VERSION")))
         // download() follows redirects itself; see there.
         .max_redirects(0)
+        // The whole of one request, body included: a connection that stalls
+        // mid-download ends in an error instead of hanging for good.
+        .timeout_connect(Some(std::time::Duration::from_secs(30)))
+        .timeout_global(Some(DOWNLOAD_TIMEOUT))
         .build()
         .new_agent()
 }
@@ -131,23 +138,82 @@ pub fn unpack(tarball: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     Ok(out)
 }
 
-/// Write each binary beside the running one: a temporary file, then a
-/// rename over the old name, so a failure never leaves half a binary and the
-/// running process keeps its own (now unlinked) copy.
-pub fn replace_bins(dir: &Path, bins: &[(String, Vec<u8>)]) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    for (name, data) in bins {
-        let tmp = dir.join(format!(".{name}.update"));
-        let dest = dir.join(name);
-        std::fs::write(&tmp, data)
-            .and_then(|_| std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)))
-            .and_then(|_| std::fs::rename(&tmp, &dest))
-            .map_err(|e| {
-                let _ = std::fs::remove_file(&tmp);
-                format!("Can't write {}: {e}", dest.display())
-            })?;
+/// Write `data` to a new file beside `dest` and return its path: a name no
+/// one else has (`create_new`, so a leftover or a planted link is never
+/// written through), executable, and on the disk before anything is renamed.
+fn stage(dest: &Path, data: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("quire");
+    for _ in 0..16 {
+        let tmp = dest.with_file_name(format!(".{name}.update-{:016x}", rand::random::<u64>()));
+        let mut f = match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o755).open(&tmp) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        };
+        let written = f.write_all(data).and_then(|_| {
+            use std::os::unix::fs::PermissionsExt;
+            // The mode asked for above is cut down by the umask.
+            f.set_permissions(std::fs::Permissions::from_mode(0o755))
+        }).and_then(|_| f.sync_all());
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        return Ok(tmp);
     }
-    Ok(())
+    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "no free temporary name"))
+}
+
+fn sync_dir(dir: &Path) {
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+}
+
+/// Put the new binaries beside the running one. Every one is written in full
+/// first, under a temporary name; only then is each renamed over the old
+/// name, so a full disk or a failed write leaves both old binaries as they
+/// were, never a new `quire` beside an old `jnl`. If a rename itself fails,
+/// the ones already done are put back from a link to the old file. The
+/// running process keeps its own (now unlinked) copy throughout.
+pub fn replace_bins(dir: &Path, bins: &[(String, Vec<u8>)]) -> Result<(), String> {
+    let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let drop_staged = |staged: &[(PathBuf, PathBuf)]| staged.iter().for_each(|(tmp, _)| { let _ = std::fs::remove_file(tmp); });
+    for (name, data) in bins {
+        let dest = dir.join(name);
+        match stage(&dest, data) {
+            Ok(tmp) => staged.push((tmp, dest)),
+            Err(e) => {
+                drop_staged(&staged);
+                return Err(format!("Can't write {}: {e}; nothing was changed.", dest.display()));
+            }
+        }
+    }
+    // The old binaries, kept under another name until every rename has worked.
+    let old: Vec<Option<PathBuf>> = staged.iter().map(|(tmp, dest)| {
+        let mut keep = tmp.clone().into_os_string();
+        keep.push(".old");
+        let keep = PathBuf::from(keep);
+        std::fs::hard_link(dest, &keep).ok().map(|_| keep)
+    }).collect();
+    let mut failed = None;
+    for (i, (tmp, dest)) in staged.iter().enumerate() {
+        if let Err(e) = std::fs::rename(tmp, dest) {
+            let mut undone = true;
+            for (j, (_, done)) in staged.iter().enumerate().take(i) {
+                undone &= old[j].as_ref().is_some_and(|keep| std::fs::rename(keep, done).is_ok());
+            }
+            let state = if i == 0 || undone { "nothing was changed" } else { "the earlier ones are already the new version: run the update again" };
+            failed = Some(format!("Can't replace {}: {e}; {state}.", dest.display()));
+            break;
+        }
+    }
+    drop_staged(&staged);
+    old.iter().flatten().for_each(|keep| { let _ = std::fs::remove_file(keep); });
+    sync_dir(dir);
+    failed.map_or(Ok(()), Err)
 }
 
 fn install_dir() -> Result<PathBuf, String> {
@@ -459,18 +525,18 @@ fn update_desktop(agent: &ureq::Agent, rel: &Release, check_only: bool, asked: b
     }
 }
 
-/// Write `bytes` over `path` by a temporary file and a rename (executable).
+/// Write `bytes` over `path` by a temporary file and a rename (executable):
+/// written in full and synced first, as `replace_bins` does.
 pub fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("Quire.AppImage");
-    let tmp = path.with_file_name(format!(".{name}.update"));
-    std::fs::write(&tmp, bytes)
-        .and_then(|_| std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)))
-        .and_then(|_| std::fs::rename(&tmp, path))
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            format!("can't write {}: {e}", path.display())
-        })
+    let tmp = stage(path, bytes).map_err(|e| format!("can't write {}: {e}", path.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("can't write {}: {e}", path.display())
+    })?;
+    if let Some(dir) = path.parent() {
+        sync_dir(dir);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -529,7 +595,7 @@ mod tests {
         std::fs::write(&p, "old").unwrap();
         replace_file(&p, b"new").unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "new");
-        assert!(!d.path().join(".Quire.AppImage.update").exists());
+        assert_eq!(names_in(d.path()), ["Quire.AppImage"], "no temporary file is left");
     }
 
     #[test]
@@ -564,6 +630,32 @@ mod tests {
         replace_bins(d.path(), &bins).unwrap();
         assert_eq!(std::fs::read_to_string(d.path().join("quire")).unwrap(), "#!quire");
         assert_eq!(std::fs::read_to_string(d.path().join("jnl")).unwrap(), "#!jnl");
-        assert!(!d.path().join(".quire.update").exists());
+        assert_eq!(names_in(d.path()), ["jnl", "quire"], "no temporary file is left");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(d.path().join("jnl")).unwrap().permissions().mode() & 0o777, 0o755);
+    }
+
+    /// One binary that can't be written must not leave the other replaced.
+    #[test]
+    fn a_failed_stage_or_rename_leaves_both_old_binaries() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("quire"), "old quire").unwrap();
+        // A folder where `jnl` should go: its rename fails after quire's worked.
+        std::fs::create_dir(d.path().join("jnl")).unwrap();
+        std::fs::write(d.path().join("jnl/keep"), "x").unwrap();
+        let bins = vec![("quire".to_string(), b"new quire".to_vec()), ("jnl".to_string(), b"new jnl".to_vec())];
+        let e = replace_bins(d.path(), &bins).unwrap_err();
+        assert!(e.contains("nothing was changed"), "{e}");
+        assert_eq!(std::fs::read_to_string(d.path().join("quire")).unwrap(), "old quire");
+        assert_eq!(names_in(d.path()), ["jnl", "quire"]);
+        // A folder that can't be written to: nothing is staged, nothing renamed.
+        let e = replace_bins(&d.path().join("missing"), &bins).unwrap_err();
+        assert!(e.contains("nothing was changed"), "{e}");
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        v.sort();
+        v
     }
 }

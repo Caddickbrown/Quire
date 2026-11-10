@@ -57,7 +57,25 @@ pub const LEGACY_SIDECAR: &str = ".nook";
 
 /// Validate a `YYYY-MM-DD HH:MM:SS` timestamp supplied by the front end before
 /// it is sliced or written into a header.
+///
+/// It must also be a real moment: `2026-02-31 25:99:00` has the right shape
+/// and would be filed under `02/31.md`. The parser stays as lenient as jnl's
+/// (a header like that already in a file still reads); this only guards what
+/// Quire itself writes.
 pub fn check_ts(ts: &str) -> Result<(), String> {
+    check_ts_shape(ts)?;
+    let n = |a: usize, b: usize| ts[a..b].parse::<u32>().unwrap_or(u32::MAX);
+    let real_day = chrono::NaiveDate::from_ymd_opt(n(0, 4) as i32, n(5, 7), n(8, 10)).is_some();
+    if real_day && n(11, 13) < 24 && n(14, 16) < 60 && n(17, 19) < 60 {
+        Ok(())
+    } else {
+        Err(format!("{:?} is not a real date and time", ts))
+    }
+}
+
+/// The shape alone (`YYYY-MM-DD HH:MM:SS`, ASCII digits), which is all that
+/// slicing a timestamp needs.
+pub fn check_ts_shape(ts: &str) -> Result<(), String> {
     if TS_RE.is_match(ts) {
         Ok(())
     } else {
@@ -69,6 +87,10 @@ pub fn check_ts(ts: &str) -> Result<(), String> {
 /// lost compare-and-swap means another writer won, so this only runs out under
 /// a storm of writes to one file.
 const EDIT_PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
+/// How many times a legacy `inbox.md` or `<tag>.md` is folded again because
+/// another writer changed it mid-fold, before the migration is left for the
+/// next open.
+const MIGRATE_ATTEMPTS: usize = 5;
 /// A random wait that grows with each lost attempt, so writers that collided
 /// don't collide again in step.
 fn backoff(attempt: u64) -> std::time::Duration {
@@ -90,7 +112,7 @@ pub fn is_reserved(name_or_tag: &str) -> bool {
 
 /// Syncthing (`x.sync-conflict-…`) and Dropbox (`x (… conflicted copy …)`) copies.
 pub fn is_conflict_name(name: &str) -> bool {
-    let l = name.to_lowercase();
+    let l = name.to_ascii_lowercase();
     l.contains(".sync-conflict-") || l.contains("conflicted copy")
 }
 
@@ -102,7 +124,9 @@ pub fn conflict_main_name(rel: &str) -> Option<String> {
         Some(i) => (&rel[..=i], &rel[i + 1..]),
         None => ("", rel),
     };
-    let l = name.to_lowercase();
+    // ASCII only: full lowercasing changes the byte length of letters such as
+    // `İ` and `ẞ`, and the offsets found in `l` are used to slice `name`.
+    let l = name.to_ascii_lowercase();
     let main = if let Some(i) = l.find(".sync-conflict-") {
         let rest = &name[i + ".sync-conflict-".len()..];
         let ext = rest.find('.').map(|j| &rest[j..]).unwrap_or("");
@@ -261,6 +285,20 @@ pub fn normalised(content: &str) -> String {
     }
 }
 
+/// Text that came from outside the journal (a paste, a conflict copy handed
+/// over by a shell, a file being imported), made safe to parse: no byte-order
+/// mark, and every line ending a plain LF. Every such entry point goes through
+/// here, so a BOM never hides the first header and a CRLF entry is recognised
+/// as the one already on disk.
+pub fn normalise_outside(text: &str) -> String {
+    let s = text.strip_prefix('\u{FEFF}').unwrap_or(text);
+    if s.contains('\r') {
+        s.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        s.to_string()
+    }
+}
+
 pub fn is_header_line(line: &str) -> bool {
     HEADER_RE.is_match(line)
 }
@@ -347,6 +385,21 @@ pub fn guard_body(body: &str) -> String {
         .join("\n")
 }
 
+/// Undo `guard_body` for showing or editing a body: a line stored as
+/// `\[2026-10-01 09:00:00] note` reads `[2026-10-01 09:00:00] note`. Only the
+/// one backslash `guard_body` adds is taken, and only from a line that would
+/// otherwise be a header, so `guard_body(unguard_body(b)) == b` for any body
+/// read from disk: saving what was shown writes back what was there.
+pub fn unguard_body(body: &str) -> String {
+    body.split('\n')
+        .map(|l| match l.strip_prefix('\\') {
+            Some(rest) if EMBEDDED_HEADER_RE.is_match(rest) => rest,
+            _ => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Build an entry's raw text the way jnl's fileDraft does.
 /// Title whitespace (including newlines) collapses to single spaces; the body
 /// is trimmed; body lines that look like headers get a leading backslash so
@@ -356,6 +409,9 @@ pub fn make_raw(ts: &str, title: &str, starred: bool, body: &str) -> String {
     if starred {
         suffix = if suffix.is_empty() { "*".into() } else { format!("{} *", suffix) };
     }
+    // Line endings first: every read turns CRLF into LF, so a raw that kept one
+    // could never match the entry it wrote.
+    let body = if body.contains('\r') { body.replace("\r\n", "\n").replace('\r', "\n") } else { body.to_string() };
     let body = guard_body(body.trim());
     match (suffix.is_empty(), body.is_empty()) {
         (false, false) => format!("[{}] {}\n{}", ts, suffix, body),
@@ -369,15 +425,28 @@ pub fn rebuild(e: &RawEntry) -> String {
     make_raw(&e.ts, &strip_star(&e.suffix), has_star(&e.suffix), &e.body)
 }
 
+/// The year, month and day of a `YYYY-MM-DD` date as path parts. Total: a
+/// part that is missing or isn't digits of the right width becomes zeros
+/// (`2026-11` gives `2026`, `11`, `00`), a day no entry is filed under, so a
+/// malformed date names a file that isn't there instead of panicking or
+/// escaping its folder.
+fn ymd(date: &str) -> [String; 3] {
+    let mut it = date.split('-');
+    [4usize, 2, 2].map(|width| match it.next() {
+        Some(p) if p.len() == width && p.bytes().all(|b| b.is_ascii_digit()) => p.to_string(),
+        _ => "0".repeat(width),
+    })
+}
+
 pub fn journal_rel(date: &str) -> String {
-    let p: Vec<&str> = date.split('-').collect();
-    format!("{}/{}/{}/{}.md", JOURNAL_DIR, p[0], p[1], p[2])
+    let [y, m, d] = ymd(date);
+    format!("{}/{}/{}/{}.md", JOURNAL_DIR, y, m, d)
 }
 
 /// The inbox day file a draft dated `date` lives in.
 pub fn inbox_rel(date: &str) -> String {
-    let p: Vec<&str> = date.split('-').collect();
-    format!("{}/{}/{}/{}.md", INBOX_DIR, p[0], p[1], p[2])
+    let [y, m, d] = ymd(date);
+    format!("{}/{}/{}/{}.md", INBOX_DIR, y, m, d)
 }
 
 /// True for any inbox file: the legacy `inbox.md` or a day file under `inbox/`.
@@ -387,8 +456,8 @@ pub fn is_inbox_rel(rel: &str) -> bool {
 
 /// The day file of split journal `tag` for `date`.
 pub fn split_rel(tag: &str, date: &str) -> String {
-    let p: Vec<&str> = date.split('-').collect();
-    format!("{}/{}/{}/{}/{}.md", SPLIT_DIR, tag, p[0], p[1], p[2])
+    let [y, m, d] = ymd(date);
+    format!("{}/{}/{}/{}/{}.md", SPLIT_DIR, tag, y, m, d)
 }
 
 /// `split/<tag>/preamble.md`: where text above the first entry of a migrated
@@ -462,7 +531,7 @@ fn to_entry(r: &RawEntry, file: &str, index: usize, source: &str, split: Option<
         split,
         ts: r.ts.clone(),
         date: r.date.clone(),
-        time: r.ts[11..16].to_string(),
+        time: r.ts.get(11..16).unwrap_or("").to_string(),
         title: strip_star(&r.suffix),
         starred: has_star(&r.suffix),
         words: r.body.split_whitespace().count(),
@@ -545,6 +614,10 @@ pub struct InboxMigration {
 }
 
 // ---------- the handle ----------
+
+/// An entry file as the listings give it: root-relative path, source
+/// ("inbox", "journal" or "split") and, for a split journal, its tag.
+pub type EntryFile = (String, &'static str, Option<String>);
 
 /// A journal folder and the vault that reaches it. Cheap to clone.
 #[derive(Clone)]
@@ -645,10 +718,29 @@ impl Journal {
     /// Every regular file under `dir` (rel paths, sorted), never following
     /// symlinks, hidden files included.
     pub fn walk_files(&self, dir: &str) -> Vec<String> {
+        self.walk_files_with(dir, false).unwrap_or_default()
+    }
+
+    /// `walk_files`, but a folder that can't be listed is an error instead of
+    /// an empty folder: for reads that must not mistake an unreachable folder
+    /// (permissions, an evicted cloud folder) for a shorter journal.
+    pub fn try_walk_files(&self, dir: &str) -> Result<Vec<String>, String> {
+        self.walk_files_with(dir, true)
+    }
+
+    fn list_with(&self, rel: &str, strict: bool) -> Result<Vec<Item>, String> {
+        if strict {
+            self.vault.list(rel)
+        } else {
+            Ok(self.list(rel))
+        }
+    }
+
+    fn walk_files_with(&self, dir: &str, strict: bool) -> Result<Vec<String>, String> {
         let mut out = Vec::new();
         let mut stack = vec![dir.trim_end_matches('/').to_string()];
         while let Some(d) = stack.pop() {
-            for it in self.list(&d) {
+            for it in self.list_with(&d, strict)? {
                 let rel = join_rel_parts(&d, &it.name);
                 if it.is_dir {
                     stack.push(rel);
@@ -658,7 +750,7 @@ impl Journal {
             }
         }
         out.sort();
-        out
+        Ok(out)
     }
 
     /// Total bytes of the files under `dir`.
@@ -669,13 +761,18 @@ impl Journal {
     /// Every `.md` under `dir` (no symlinked folders), hidden files and
     /// conflict copies excluded, sorted.
     pub fn walk_md(&self, dir: &str) -> Vec<String> {
-        self.walk_files(dir)
+        self.walk_md_with(dir, false).unwrap_or_default()
+    }
+
+    fn walk_md_with(&self, dir: &str, strict: bool) -> Result<Vec<String>, String> {
+        Ok(self
+            .walk_files_with(dir, strict)?
             .into_iter()
             .filter(|rel| {
                 let name = rel.rsplit('/').next().unwrap_or(rel);
                 name.ends_with(".md") && !name.starts_with('.') && !is_conflict_name(name)
             })
-            .collect()
+            .collect())
     }
 
     // ----- sidecar -----
@@ -708,18 +805,23 @@ impl Journal {
     /// into `split/` (migrate_legacy_splits) but reads them where they are
     /// until then.
     pub fn legacy_split_files(&self) -> Vec<String> {
-        self.list("")
-            .into_iter()
-            .filter(|it| it.is_file && split_tag_of(&it.name).is_some())
-            .map(|it| it.name)
-            .collect()
+        self.legacy_split_files_with(false).unwrap_or_default()
+    }
+
+    fn legacy_split_files_with(&self, strict: bool) -> Result<Vec<String>, String> {
+        Ok(self.list_with("", strict)?.into_iter().filter(|it| it.is_file && split_tag_of(&it.name).is_some()).map(|it| it.name).collect())
     }
 
     /// Every split-journal file as (rel, tag): legacy root `<tag>.md` files,
     /// then the day files under `split/<tag>/`.
     pub fn split_files(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self.legacy_split_files().into_iter().map(|n| (n.clone(), split_tag_of(&n).unwrap_or_default())).collect();
-        for rel in self.walk_md(SPLIT_DIR) {
+        self.split_files_with(false).unwrap_or_default()
+    }
+
+    fn split_files_with(&self, strict: bool) -> Result<Vec<(String, String)>, String> {
+        let mut out: Vec<(String, String)> =
+            self.legacy_split_files_with(strict)?.into_iter().map(|n| (n.clone(), split_tag_of(&n).unwrap_or_default())).collect();
+        for rel in self.walk_md_with(SPLIT_DIR, strict)? {
             if is_split_preamble(&rel) {
                 continue;
             }
@@ -727,30 +829,49 @@ impl Journal {
                 out.push((rel, tag));
             }
         }
-        out
+        Ok(out)
     }
 
     /// Every inbox file in load order: the legacy `inbox.md` when present,
     /// then the day files under `inbox/`.
     pub fn inbox_files(&self) -> Vec<String> {
+        self.inbox_files_with(false).unwrap_or_default()
+    }
+
+    /// `inbox_files`, failing when `inbox/` can't be listed in full.
+    pub fn try_inbox_files(&self) -> Result<Vec<String>, String> {
+        self.inbox_files_with(true)
+    }
+
+    fn inbox_files_with(&self, strict: bool) -> Result<Vec<String>, String> {
         let mut out = Vec::new();
         if self.vault.is_file(LEGACY_INBOX) {
             out.push(LEGACY_INBOX.to_string());
         }
-        out.extend(self.walk_md(INBOX_DIR).into_iter().filter(|r| r != INBOX_PREAMBLE));
-        out
+        out.extend(self.walk_md_with(INBOX_DIR, strict)?.into_iter().filter(|r| r != INBOX_PREAMBLE));
+        Ok(out)
     }
 
     /// Every entry file as (root-relative path, source, split tag), in load order.
     pub fn entry_files(&self) -> Vec<(String, &'static str, Option<String>)> {
-        let mut out: Vec<(String, &'static str, Option<String>)> = self.inbox_files().into_iter().map(|f| (f, "inbox", None)).collect();
-        for f in self.walk_md(JOURNAL_DIR) {
+        self.entry_files_with(false).unwrap_or_default()
+    }
+
+    /// `entry_files`, failing when the root, `inbox/`, `journal/` or `split/`
+    /// can't be listed in full.
+    pub fn try_entry_files(&self) -> Result<Vec<EntryFile>, String> {
+        self.entry_files_with(true)
+    }
+
+    fn entry_files_with(&self, strict: bool) -> Result<Vec<EntryFile>, String> {
+        let mut out: Vec<EntryFile> = self.inbox_files_with(strict)?.into_iter().map(|f| (f, "inbox", None)).collect();
+        for f in self.walk_md_with(JOURNAL_DIR, strict)? {
             out.push((f, "journal", None));
         }
-        for (rel, tag) in self.split_files() {
+        for (rel, tag) in self.split_files_with(strict)? {
             out.push((rel, "split", Some(tag)));
         }
-        out
+        Ok(out)
     }
 
     /// Conflict copies of entry files (root, inbox/**, journal/** and split/**).
@@ -776,15 +897,16 @@ impl Journal {
         self.load_all_with(false).unwrap_or_default()
     }
 
-    /// Strict load: Err if any entry file cannot be read (used before
-    /// destructive operations such as deleting orphaned assets).
+    /// Strict load: Err if any entry file cannot be read, or any folder of
+    /// them cannot be listed (used before destructive operations such as
+    /// deleting orphaned assets, and for every snapshot a shell shows).
     pub fn try_load_all(&self) -> Result<Vec<Entry>, String> {
         self.load_all_with(true)
     }
 
     fn load_all_with(&self, strict: bool) -> Result<Vec<Entry>, String> {
         let mut out = Vec::new();
-        for (rel, source, split) in self.entry_files() {
+        for (rel, source, split) in self.entry_files_with(strict)? {
             let content = if strict { self.try_read(&rel)? } else { self.read(&rel) };
             for (i, r) in parse_entries(&content).iter().enumerate() {
                 out.push(to_entry(r, &rel, i, source, split.clone()));
@@ -916,6 +1038,27 @@ impl Journal {
         })
     }
 
+    /// `append_raw`, unless an entry with exactly this text (trim_end) is
+    /// already in the file: a move that wrote here and then failed to remove
+    /// its source can be tried again without leaving two copies. Returns the
+    /// entry's index either way.
+    pub fn append_raw_once(&self, file: &str, raw: &str) -> Result<usize, String> {
+        let want = raw.trim_end();
+        self.edit_file(file, |content| {
+            let have = parse_entries(content);
+            if let Some(i) = have.iter().position(|e| e.raw.trim_end() == want) {
+                return Ok((None, i));
+            }
+            let mut s = if content.trim().is_empty() { String::new() } else { content.to_string() };
+            if !s.is_empty() && !s.ends_with("\n\n") {
+                s.push_str(if s.ends_with('\n') { "\n" } else { "\n\n" });
+            }
+            s.push_str(want.trim_end_matches('\n'));
+            s.push('\n');
+            Ok((Some(s), have.len()))
+        })
+    }
+
     /// Insert every entry parsed from each of `raws` into `file`, each after
     /// the last entry whose ts is <= its own (stable, so a file already in
     /// order stays in order). One read and one write. With `skip_existing`,
@@ -986,6 +1129,18 @@ impl Journal {
         r.first().copied().flatten().ok_or_else(|| "bad entry".to_string())
     }
 
+    /// `insert_sorted` for the destination of a move: an entry with exactly
+    /// this text already there is left as the one copy (a retry after the
+    /// removal from the source failed), and its index is returned.
+    fn insert_sorted_once(&self, file: &str, raw: &str) -> Result<usize, String> {
+        let r = self.insert_entries(file, &[raw.to_string()], true)?;
+        if let Some(i) = r.first().copied().flatten() {
+            return Ok(i);
+        }
+        let want = raw.trim_end();
+        parse_entries(&self.try_read(file)?).iter().position(|e| e.raw.trim_end() == want).ok_or_else(|| "bad entry".to_string())
+    }
+
     // ----- the operations every shell shares -----
 
     /// A new draft, into its day's inbox file, in time order.
@@ -1007,7 +1162,14 @@ impl Journal {
     #[allow(clippy::too_many_arguments)]
     pub fn update_entry(&self, file: &str, index: usize, expected_raw: &str, ts: &str, title: &str, starred: bool, body: &str) -> Result<Written, String> {
         let file = check_entry_rel(file)?;
-        check_ts(ts)?;
+        if let Err(e) = check_ts(ts) {
+            // An entry that already carries an impossible date (jnl and a text
+            // editor allow one) can still be edited while its time is left alone.
+            check_ts_shape(ts)?;
+            if parse_entries(expected_raw).first().map(|x| x.ts.as_str()) != Some(ts) {
+                return Err(e);
+            }
+        }
         let new_raw = make_raw(ts, title, starred, body);
         let new_date = &ts[..10];
         let day_file = is_day_file(&file);
@@ -1021,8 +1183,9 @@ impl Journal {
         if day_file && dest != file {
             self.locate(&file, index, expected_raw)?;
             let new_raw = rebase_links(&new_raw, &file, &dest);
-            // Write the destination first: a failure leaves a duplicate, never a loss.
-            let idx = self.insert_sorted(&dest, &new_raw)?;
+            // Write the destination first: a failure leaves a duplicate, never a
+            // loss, and trying again finds that copy instead of adding another.
+            let idx = self.insert_sorted_once(&dest, &new_raw)?;
             self.remove_entry(&file, index, expected_raw)?;
             return Ok(Written { file: dest, index: idx, raw: new_raw });
         }
@@ -1071,7 +1234,7 @@ impl Journal {
         }
         let target = split_target(&e.raw, split_tags).unwrap_or_else(|| journal_rel(&e.date));
         let raw = rebase_links(&rebuild(&e), &file, &target);
-        self.append_raw(&target, &raw)?;
+        self.append_raw_once(&target, &raw)?;
         self.remove_entry(&file, i, expected_raw)?;
         Ok(target)
     }
@@ -1087,17 +1250,20 @@ impl Journal {
         let e = parse_entries(&raws[i]).into_iter().next().ok_or("bad entry")?;
         let dest = inbox_rel(&e.date);
         let raw = rebase_links(raws[i].trim_end(), &file, &dest);
-        // Inbox first, then remove: a failure leaves a duplicate, never a loss.
-        let index = self.insert_sorted(&dest, &raw)?;
+        // Inbox first, then remove: a failure leaves a duplicate, never a loss,
+        // and trying again finds that copy instead of adding another.
+        let index = self.insert_sorted_once(&dest, &raw)?;
         self.remove_entry(&file, i, expected_raw)?;
         Ok(Written { file: dest, index, raw })
     }
 
     /// Pasted text into drafts: one per `[header]` when present, else one
-    /// draft dated `now_ts`. Returns how many.
+    /// draft dated `now_ts`. Text above the first header is kept as a draft of
+    /// its own, dated `now_ts`. Returns how many drafts were made.
     pub fn import_text(&self, text: &str, now_ts: &str) -> Result<usize, String> {
         check_ts(now_ts)?;
-        let parsed = parse_entries(text);
+        let text = normalise_outside(text);
+        let parsed = parse_entries(&text);
         if parsed.is_empty() {
             if text.trim().is_empty() {
                 return Ok(0);
@@ -1105,11 +1271,25 @@ impl Journal {
             self.insert_sorted(&inbox_rel(&now_ts[..10]), &make_raw(now_ts, "", false, text.trim()))?;
             return Ok(1);
         }
-        let n = parsed.len();
+        let mut n = parsed.len();
+        let pre = leading_preamble(&text);
+        if !pre.trim().is_empty() {
+            self.insert_sorted(&inbox_rel(&now_ts[..10]), &make_raw(now_ts, "", false, pre.trim()))?;
+            n += 1;
+        }
         for e in parsed {
             self.insert_sorted(&inbox_rel(&e.date), &rebuild(&e))?;
         }
         Ok(n)
+    }
+
+    /// Merge text a shell holds (another version of `file`: an iCloud conflict
+    /// version, say) into `file`: every entry not already there, by exact
+    /// text, is added in time order. Returns how many were added.
+    pub fn merge_text(&self, file: &str, content: &str) -> Result<usize, String> {
+        let file = check_entry_rel(file)?;
+        let raws: Vec<String> = parse_entries(&normalise_outside(content)).into_iter().map(|e| e.raw).collect();
+        Ok(self.insert_entries(&file, &raws, true)?.iter().filter(|i| i.is_some()).count())
     }
 
     /// Fold a legacy `inbox.md` into `inbox/` day files. Every draft is
@@ -1121,49 +1301,80 @@ impl Journal {
         if !self.vault.is_file(LEGACY_INBOX) {
             return Ok(None);
         }
-        let content = self.try_read(LEGACY_INBOX)?;
-        let entries = parse_entries(&content);
-        let pre = leading_preamble(&content);
         let mut rep = InboxMigration::default();
-        let mut by_day: Vec<(String, Vec<String>)> = Vec::new();
-        for e in &entries {
-            match by_day.iter_mut().find(|(d, _)| *d == e.date) {
-                Some((_, v)) => v.push(e.raw.clone()),
-                None => by_day.push((e.date.clone(), vec![e.raw.clone()])),
+        for attempt in 0..MIGRATE_ATTEMPTS {
+            // The exact bytes folded are the bytes kept and the bytes the
+            // removal expects: a draft jnl, Nook or a sync writes after this
+            // read makes the removal refuse, and the fold runs again.
+            let Some(bytes) = self.vault.read(LEGACY_INBOX)? else {
+                return Ok((attempt > 0).then_some(rep));
+            };
+            let content = Self::decoded(LEGACY_INBOX, Some(&bytes))?;
+            let entries = parse_entries(&content);
+            let pre = leading_preamble(&content);
+            let mut by_day: Vec<(String, Vec<String>)> = Vec::new();
+            for e in &entries {
+                match by_day.iter_mut().find(|(d, _)| *d == e.date) {
+                    Some((_, v)) => v.push(e.raw.clone()),
+                    None => by_day.push((e.date.clone(), vec![e.raw.clone()])),
+                }
+            }
+            let (mut moved, mut skipped) = (0, 0);
+            for (date, raws) in &by_day {
+                let res = self.insert_entries(&inbox_rel(date), raws, true)?;
+                moved += res.iter().filter(|r| r.is_some()).count();
+                skipped += res.iter().filter(|r| r.is_none()).count();
+            }
+            // On a second pass, what the first pass moved is found again.
+            rep.skipped = skipped.saturating_sub(rep.moved);
+            rep.moved += moved;
+            if !pre.is_empty() {
+                self.keep_preamble(INBOX_PREAMBLE, &pre)?;
+            }
+            // Verify before touching the original.
+            let mut have: HashMap<String, usize> = HashMap::new();
+            for rel in self.walk_md(INBOX_DIR) {
+                for e in parse_entries(&self.try_read(&rel)?) {
+                    *have.entry(e.raw.trim_end().to_string()).or_default() += 1;
+                }
+            }
+            for e in &entries {
+                match have.get_mut(e.raw.trim_end()) {
+                    Some(c) if *c > 0 => *c -= 1,
+                    _ => return Err(format!("inbox.md was not moved: the draft {:?} could not be read back from inbox/", e.ts)),
+                }
+            }
+            if let Some(backup) = self.retire_legacy(LEGACY_INBOX, &bytes, "inbox")? {
+                rep.backup = backup;
+                return Ok(Some(rep));
             }
         }
-        for (date, raws) in &by_day {
-            let res = self.insert_entries(&inbox_rel(date), raws, true)?;
-            rep.moved += res.iter().filter(|r| r.is_some()).count();
-            rep.skipped += res.iter().filter(|r| r.is_none()).count();
-        }
-        if !pre.is_empty() {
-            self.keep_preamble(INBOX_PREAMBLE, &pre)?;
-        }
-        // Verify before touching the original.
-        let mut have: HashMap<String, usize> = HashMap::new();
-        for rel in self.walk_md(INBOX_DIR) {
-            for e in parse_entries(&self.try_read(&rel)?) {
-                *have.entry(e.raw.trim_end().to_string()).or_default() += 1;
-            }
-        }
-        for e in &entries {
-            match have.get_mut(e.raw.trim_end()) {
-                Some(c) if *c > 0 => *c -= 1,
-                _ => return Err(format!("inbox.md was not moved: the draft {:?} could not be read back from inbox/", e.ts)),
-            }
-        }
+        Err("inbox.md kept changing while Quire was folding it into inbox/. It is still there, nothing was lost, and the next open tries again.".into())
+    }
+
+    /// The last step of folding a legacy file: keep `bytes` (what was folded)
+    /// as `<sidecar>/migration/<label>-<stamp>.md`, read that copy back, then
+    /// remove the original only if it still holds exactly those bytes.
+    /// `Ok(None)` when it has changed since: the copy is taken away again and
+    /// the caller folds the new text.
+    fn retire_legacy(&self, file: &str, bytes: &[u8], label: &str) -> Result<Option<String>, String> {
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         let dir = format!("{}/migration", self.sidecar_mut()?);
-        let mut backup = format!("{}/inbox-{}.md", dir, stamp);
+        let mut backup = format!("{}/{}-{}.md", dir, label, stamp);
         let mut n = 1;
         while self.vault.is_file(&backup) {
             n += 1;
-            backup = format!("{}/inbox-{}-{}.md", dir, stamp, n);
+            backup = format!("{}/{}-{}-{}.md", dir, label, stamp, n);
         }
-        self.vault.rename(LEGACY_INBOX, &backup)?;
-        rep.backup = backup;
-        Ok(Some(rep))
+        self.vault.write(&backup, bytes)?;
+        if self.vault.read(&backup)?.as_deref() != Some(bytes) {
+            return Err(format!("{} was not moved: its copy at {} could not be read back", file, backup));
+        }
+        if self.vault.replace_if_unchanged(file, Some(bytes), None)? {
+            return Ok(Some(backup));
+        }
+        let _ = self.vault.remove(&backup);
+        Ok(None)
     }
 
     /// Fold each legacy root `<tag>.md` split journal into
@@ -1177,58 +1388,70 @@ impl Journal {
     pub fn migrate_legacy_splits(&self) -> Result<Option<SplitMigration>, String> {
         let mut rep = SplitMigration::default();
         for name in self.legacy_split_files() {
-            let content = self.try_read(&name)?;
-            let entries = parse_entries(&content);
-            if entries.is_empty() {
-                continue;
-            }
             let tag = split_tag_of(&name).unwrap_or_default();
-            let mut by_day: Vec<(String, Vec<String>)> = Vec::new();
-            let mut want: HashMap<String, usize> = HashMap::new();
-            for e in &entries {
-                let dest = split_rel(&tag, &e.date);
-                let raw = rebase_links(e.raw.trim_end(), &name, &dest);
-                *want.entry(raw.trim_end().to_string()).or_default() += 1;
-                match by_day.iter_mut().find(|(d, _)| *d == dest) {
-                    Some((_, v)) => v.push(raw),
-                    None => by_day.push((dest, vec![raw])),
+            let mut moved_before = 0;
+            let mut done = false;
+            for _ in 0..MIGRATE_ATTEMPTS {
+                // As for inbox.md: fold the bytes read, remove only those bytes.
+                let Some(bytes) = self.vault.read(&name)? else {
+                    done = true;
+                    break;
+                };
+                let content = Self::decoded(&name, Some(&bytes))?;
+                let entries = parse_entries(&content);
+                if entries.is_empty() {
+                    done = true;
+                    break;
+                }
+                let mut by_day: Vec<(String, Vec<String>)> = Vec::new();
+                let mut want: HashMap<String, usize> = HashMap::new();
+                for e in &entries {
+                    let dest = split_rel(&tag, &e.date);
+                    let raw = rebase_links(e.raw.trim_end(), &name, &dest);
+                    *want.entry(raw.trim_end().to_string()).or_default() += 1;
+                    match by_day.iter_mut().find(|(d, _)| *d == dest) {
+                        Some((_, v)) => v.push(raw),
+                        None => by_day.push((dest, vec![raw])),
+                    }
+                }
+                let (mut moved, mut skipped) = (0, 0);
+                for (dest, raws) in &by_day {
+                    let res = self.insert_entries(dest, raws, true)?;
+                    moved += res.iter().filter(|r| r.is_some()).count();
+                    skipped += res.iter().filter(|r| r.is_none()).count();
+                }
+                rep.moved += moved;
+                rep.skipped += skipped.saturating_sub(moved_before);
+                moved_before += moved;
+                let pre = leading_preamble(&content);
+                if !pre.trim().is_empty() {
+                    self.keep_preamble(&format!("{}/{}/preamble.md", SPLIT_DIR, tag), &pre)?;
+                }
+                // Verify before touching the original.
+                let mut have: HashMap<String, usize> = HashMap::new();
+                for rel in self.walk_md(&format!("{}/{}", SPLIT_DIR, tag)) {
+                    if is_split_preamble(&rel) {
+                        continue;
+                    }
+                    for e in parse_entries(&self.try_read(&rel)?) {
+                        *have.entry(e.raw.trim_end().to_string()).or_default() += 1;
+                    }
+                }
+                for (raw, n) in &want {
+                    if have.get(raw).copied().unwrap_or(0) < *n {
+                        return Err(format!("{} was not moved: an entry could not be read back from {}/{}/", name, SPLIT_DIR, tag));
+                    }
+                }
+                if let Some(backup) = self.retire_legacy(&name, &bytes, &format!("split-{}", tag))? {
+                    rep.journals += 1;
+                    rep.backups.push(backup);
+                    done = true;
+                    break;
                 }
             }
-            for (dest, raws) in &by_day {
-                let res = self.insert_entries(dest, raws, true)?;
-                rep.moved += res.iter().filter(|r| r.is_some()).count();
-                rep.skipped += res.iter().filter(|r| r.is_none()).count();
+            if !done {
+                return Err(format!("{} kept changing while Quire was folding it into {}/{}/. It is still there, nothing was lost, and the next open tries again.", name, SPLIT_DIR, tag));
             }
-            let pre = leading_preamble(&content);
-            if !pre.trim().is_empty() {
-                self.keep_preamble(&format!("{}/{}/preamble.md", SPLIT_DIR, tag), &pre)?;
-            }
-            // Verify before touching the original.
-            let mut have: HashMap<String, usize> = HashMap::new();
-            for rel in self.walk_md(&format!("{}/{}", SPLIT_DIR, tag)) {
-                if is_split_preamble(&rel) {
-                    continue;
-                }
-                for e in parse_entries(&self.try_read(&rel)?) {
-                    *have.entry(e.raw.trim_end().to_string()).or_default() += 1;
-                }
-            }
-            for (raw, n) in &want {
-                if have.get(raw).copied().unwrap_or(0) < *n {
-                    return Err(format!("{} was not moved: an entry could not be read back from {}/{}/", name, SPLIT_DIR, tag));
-                }
-            }
-            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-            let dir = format!("{}/migration", self.sidecar_mut()?);
-            let mut backup = format!("{}/split-{}-{}.md", dir, tag, stamp);
-            let mut n = 1;
-            while self.vault.is_file(&backup) {
-                n += 1;
-                backup = format!("{}/split-{}-{}-{}.md", dir, tag, stamp, n);
-            }
-            self.vault.rename(&name, &backup)?;
-            rep.journals += 1;
-            rep.backups.push(backup);
         }
         Ok((rep.journals > 0).then_some(rep))
     }
@@ -1336,7 +1559,9 @@ pub fn percent_decode(s: &str) -> String {
 }
 
 /// `](target` in images and links; group 1 = leading space, 2 = `<…>` form, 3 = bare.
-pub static LINK_TARGET_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\]\((\s*)(?:<([^>\n]*)>|([^)\s]+))").unwrap());
+/// A bare target may hold balanced brackets, as CommonMark allows, so
+/// `](assets/2026/09/image(1).jpg)` is one target and not `image(1`.
+pub static LINK_TARGET_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\]\((\s*)(?:<([^>\n]*)>|((?:[^()\s]|\([^()\s]*\))+))").unwrap());
 
 /// Every local link target in `text` (as written).
 pub fn link_targets(text: &str) -> Vec<String> {
@@ -1431,6 +1656,18 @@ mod tests {
         let e = parse_entries("[2026–01–02 08:00:00] En dash\nbody\n");
         assert_eq!(e[0].ts, "2026-01-02 08:00:00");
         assert_eq!(e[0].raw, "[2026-01-02 08:00:00] En dash\nbody\n");
+        // A header is matched by shape, as jnl's regexp does: an impossible
+        // date already in a file still reads as an entry (check_ts, which
+        // guards what Quire writes, is stricter and is not the parser).
+        let e = parse_entries("[2026-02-31 25:99:00] odd\nbody\n");
+        assert_eq!((e.len(), e[0].date.as_str(), e[0].body.as_str()), (1, "2026-02-31", "body"));
+        // fileDraft's raw is LF whatever the body came in as, and reads back
+        // as the same single entry.
+        let raw = make_raw("2026-05-10 08:00:00", "A title", false, "first line\r\nsecond line\rthird\r\n");
+        assert_eq!(raw, "[2026-05-10 08:00:00] A title\nfirst line\nsecond line\nthird");
+        let e = parse_entries(&raw);
+        assert_eq!((e.len(), e[0].raw.as_str()), (1, raw.as_str()));
+        assert_eq!(rebuild(&e[0]), raw);
     }
 
     // nook ParserChecks: the star marker is a standalone token.
@@ -2019,5 +2256,301 @@ mod tests {
         j.sidecar_mut().unwrap();
         assert!(j.is_file(".nook/b.json"));
         assert_eq!(sidecar_dir_path(j.root()), j.root().join(".quire"));
+    }
+    // ----- fixes from the 2026-11-09 review -----
+
+    /// A vault with hooks, for the faults the fixes below are about: something
+    /// done just after a read (another writer landing), a compare-and-swap
+    /// that is refused or fails, a folder that can't be listed.
+    type AfterRead = Box<dyn Fn(&str) + Send + Sync>;
+    /// Given the path: `None` to do the real swap, or the answer to give instead.
+    type Swap = Box<dyn Fn(&str) -> Option<Result<bool, String>> + Send + Sync>;
+
+    #[derive(Default)]
+    struct Hooked {
+        root: PathBuf,
+        after_read: Option<AfterRead>,
+        swap: Option<Swap>,
+        unlistable: Option<String>,
+    }
+
+    impl Hooked {
+        fn fs(&self) -> FsVault {
+            FsVault::new(&self.root)
+        }
+        fn journal(self) -> Journal {
+            Journal::with_vault(self.root.clone(), Arc::new(self))
+        }
+    }
+
+    impl Vault for Hooked {
+        fn read(&self, rel: &str) -> Result<Option<Vec<u8>>, String> {
+            let bytes = self.fs().read(rel);
+            if let Some(f) = &self.after_read {
+                f(rel);
+            }
+            bytes
+        }
+        fn write(&self, rel: &str, bytes: &[u8]) -> Result<(), String> {
+            self.fs().write(rel, bytes)
+        }
+        fn replace_if_unchanged(&self, rel: &str, expected: Option<&[u8]>, bytes: Option<&[u8]>) -> Result<bool, String> {
+            match self.swap.as_ref().and_then(|f| f(rel)) {
+                Some(r) => r,
+                None => self.fs().replace_if_unchanged(rel, expected, bytes),
+            }
+        }
+        fn remove(&self, rel: &str) -> Result<bool, String> {
+            self.fs().remove(rel)
+        }
+        fn rename(&self, from: &str, to: &str) -> Result<(), String> {
+            self.fs().rename(from, to)
+        }
+        fn list(&self, rel: &str) -> Result<Vec<Item>, String> {
+            if self.unlistable.as_deref() == Some(rel) {
+                return Err(format!("Can't list {}: permission denied", rel));
+            }
+            self.fs().list(rel)
+        }
+        fn is_dir(&self, rel: &str) -> bool {
+            self.fs().is_dir(rel)
+        }
+        fn is_file(&self, rel: &str) -> bool {
+            self.fs().is_file(rel)
+        }
+        fn len(&self, rel: &str) -> u64 {
+            self.fs().len(rel)
+        }
+        fn modified(&self, rel: &str) -> Option<u64> {
+            self.fs().modified(rel)
+        }
+        fn local_path(&self, rel: &str) -> Option<PathBuf> {
+            self.fs().local_path(rel)
+        }
+    }
+
+    /// Fails the first compare-and-swap on `rel`, then behaves.
+    fn fails_once_on(rel: &'static str) -> Option<Swap> {
+        let failed = std::sync::atomic::AtomicBool::new(false);
+        Some(Box::new(move |r: &str| (r == rel && !failed.swap(true, std::sync::atomic::Ordering::SeqCst)).then(|| Err("the disk went away".to_string()))))
+    }
+
+    // C8
+    #[test]
+    fn a_draft_with_crlf_can_be_saved_again() {
+        let (_d, j) = tmp();
+        let w = j.new_draft("2026-11-09 08:00:00", "Pasted", false, "one\r\ntwo\r\n\r\nthree").unwrap();
+        assert_eq!(w.raw, "[2026-11-09 08:00:00] Pasted\none\ntwo\n\nthree");
+        let on_disk = j.load_file(&w.file);
+        assert_eq!(on_disk[w.index].raw.trim_end(), w.raw, "the reference handed back is what a reload reads");
+        // The next save presents that reference and is accepted: one entry, not two.
+        let w2 = j.update_entry(&w.file, w.index, &w.raw, "2026-11-09 08:00:00", "Pasted", false, "one\r\ntwo\r\n\r\nthree, four").unwrap();
+        assert_eq!(j.load_all().len(), 1);
+        assert!(!j.read(&w2.file).contains('\r'));
+    }
+
+    // C10
+    #[test]
+    fn a_move_that_failed_halfway_can_be_tried_again_without_a_second_copy() {
+        let count = |j: &Journal, file: &str| j.load_file(file).len();
+        // Retime to another day: the new day is written, taking it out of the old one fails.
+        let d = tempfile::tempdir().unwrap();
+        let j = Hooked { root: d.path().into(), swap: fails_once_on(DAY), ..Default::default() }.journal();
+        j.write(DAY, MINE).unwrap();
+        assert!(j.update_entry(DAY, 0, MINE, "2026-10-02 08:00:00", "mine", false, "body").is_err());
+        assert_eq!((count(&j, DAY), count(&j, "journal/2026/10/02.md")), (1, 1), "a duplicate for now, never a loss");
+        let w = j.update_entry(DAY, 0, MINE, "2026-10-02 08:00:00", "mine", false, "body").unwrap();
+        assert_eq!((w.file.as_str(), w.index), ("journal/2026/10/02.md", 0));
+        assert_eq!((count(&j, DAY), count(&j, "journal/2026/10/02.md")), (0, 1));
+
+        // Return to Inbox.
+        let d = tempfile::tempdir().unwrap();
+        let j = Hooked { root: d.path().into(), swap: fails_once_on(DAY), ..Default::default() }.journal();
+        j.write(DAY, MINE).unwrap();
+        assert!(j.unfile_entry(DAY, 0, MINE).is_err());
+        let w = j.unfile_entry(DAY, 0, MINE).unwrap();
+        assert_eq!((count(&j, DAY), count(&j, &w.file), w.index), (0, 1, 0));
+
+        // File a draft.
+        let d = tempfile::tempdir().unwrap();
+        let inbox = "inbox/2026/10/01.md";
+        let j = Hooked { root: d.path().into(), swap: fails_once_on(inbox), ..Default::default() }.journal();
+        j.write(inbox, MINE).unwrap();
+        assert!(j.file_draft(inbox, 0, MINE, &[]).is_err());
+        assert_eq!(j.file_draft(inbox, 0, MINE, &[]).unwrap(), DAY);
+        assert_eq!((count(&j, inbox), count(&j, DAY)), (0, 1));
+        // Two entries that really are the same text can still both be filed by hand.
+        j.write(inbox, MINE).unwrap();
+        assert_eq!(j.append_raw(DAY, MINE).unwrap(), 1);
+        assert_eq!(count(&j, DAY), 2);
+    }
+
+    // C13
+    #[test]
+    fn conflict_copies_named_with_letters_that_change_length_in_lowercase() {
+        // "İ" is two bytes and lowercases to three; "ẞ" lowercases to "ß".
+        for (name, main) in [
+            ("inbox (İlker's conflicted copy 2026-10-01).md", "inbox.md"),
+            ("journal/2026/10/01 (İİİ Conflicted Copy).md", "journal/2026/10/01.md"),
+            ("İİİİ notes (ẞ conflicted copy).md", "İİİİ notes.md"),
+            ("İ.sync-conflict-20261001-101010-ABC.md", "İ.md"),
+            ("ẞẞ.SYNC-CONFLICT-1.md", "ẞẞ.md"),
+        ] {
+            assert!(is_conflict_name(name), "{name}");
+            assert_eq!(conflict_main_name(name).as_deref(), Some(main), "{name}");
+        }
+        assert_eq!(conflict_main_name("İ (ẞ).md"), None);
+    }
+
+    // C9
+    #[test]
+    fn a_strict_load_fails_when_a_folder_cannot_be_listed() {
+        let d = tempfile::tempdir().unwrap();
+        let fs = FsVault::new(d.path());
+        fs.write("journal/2026/10/01.md", MINE.as_bytes()).unwrap();
+        fs.write("journal/2025/10/01.md", b"[2025-10-01 08:00:00] last year\n").unwrap();
+        for folder in ["journal/2025", "inbox", "split", ""] {
+            let j = Hooked { root: d.path().into(), unlistable: Some(folder.into()), ..Default::default() }.journal();
+            let e = j.try_load_all().unwrap_err();
+            assert!(e.contains("permission denied"), "{folder}: {e}");
+            assert!(j.try_entry_files().is_err(), "{folder}");
+        }
+        let j = Hooked { root: d.path().into(), unlistable: Some("journal/2025".into()), ..Default::default() }.journal();
+        assert_eq!(j.load_all().len(), 1, "the lenient load still shows what it can");
+        assert_eq!(Journal::open(d.path()).try_load_all().unwrap().len(), 2);
+    }
+
+    // C5
+    #[test]
+    fn a_draft_written_to_inbox_md_while_it_is_folded_is_folded_too() {
+        let d = tempfile::tempdir().unwrap();
+        let first = "[2026-01-05 09:00:00] Already there\nx\n";
+        let later = format!("{first}\n[2026-01-05 10:00:00] From jnl, mid-fold\nkeep me\n");
+        std::fs::write(d.path().join("inbox.md"), first).unwrap();
+        // jnl appends a draft right after Quire has read inbox.md.
+        let (root, text, landed) = (d.path().to_path_buf(), later.clone(), std::sync::atomic::AtomicBool::new(false));
+        let j = Hooked {
+            root: d.path().into(),
+            after_read: Some(Box::new(move |rel| {
+                if rel == LEGACY_INBOX && !landed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    std::fs::write(root.join("inbox.md"), &text).unwrap();
+                }
+            })),
+            ..Default::default()
+        }
+        .journal();
+        let rep = j.migrate_legacy_inbox().unwrap().unwrap();
+        assert_eq!((rep.moved, rep.skipped), (2, 0));
+        let day = j.read("inbox/2026/01/05.md");
+        assert!(day.contains("keep me") && day.contains("Already there"), "{day}");
+        assert!(!j.is_file("inbox.md"));
+        assert_eq!(j.read(&rep.backup), later, "the copy kept is the text that was folded");
+        assert_eq!(j.walk_files(".quire/migration"), vec![rep.backup.clone()], "the first pass's copy isn't left behind");
+
+        // The same for a split journal's one file.
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("work.md"), "[2026-01-05 09:00:00] a @work\n").unwrap();
+        let (root, landed) = (d.path().to_path_buf(), std::sync::atomic::AtomicBool::new(false));
+        let j = Hooked {
+            root: d.path().into(),
+            after_read: Some(Box::new(move |rel| {
+                if rel == "work.md" && !landed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    std::fs::write(root.join("work.md"), "[2026-01-05 09:00:00] a @work\n\n[2026-01-06 09:00:00] b @work\nkeep me\n").unwrap();
+                }
+            })),
+            ..Default::default()
+        }
+        .journal();
+        let rep = j.migrate_legacy_splits().unwrap().unwrap();
+        assert_eq!((rep.journals, rep.moved, rep.skipped), (1, 2, 0));
+        assert!(j.read("split/work/2026/01/06.md").contains("keep me"));
+        assert!(!j.is_file("work.md"));
+    }
+
+    #[test]
+    fn an_inbox_md_that_never_holds_still_is_left_where_it_is() {
+        let d = tempfile::tempdir().unwrap();
+        let text = "[2026-01-05 09:00:00] a\nx\n";
+        std::fs::write(d.path().join("inbox.md"), text).unwrap();
+        let j = Hooked { root: d.path().into(), swap: Some(Box::new(|rel| (rel == LEGACY_INBOX).then_some(Ok(false)))), ..Default::default() }.journal();
+        let e = j.migrate_legacy_inbox().unwrap_err();
+        assert!(e.contains("kept changing"), "{e}");
+        assert_eq!(std::fs::read_to_string(d.path().join("inbox.md")).unwrap(), text);
+        assert_eq!(j.load_file("inbox/2026/01/05.md").len(), 1, "its drafts are in inbox/ all the same");
+        assert!(j.walk_files(".quire/migration").is_empty());
+    }
+
+    // C6, C15
+    #[test]
+    fn text_from_outside_is_normalised_before_it_is_parsed() {
+        assert_eq!(normalise_outside("\u{FEFF}a\r\nb\rc\n"), "a\nb\nc\n");
+        // Another version of a day file, as iCloud hands it over: with a BOM
+        // and CRLF, holding one entry already here and one that isn't.
+        let (_d, j) = tmp();
+        j.write(DAY, &landed()).unwrap();
+        let copy = "\u{FEFF}[2026-10-01 08:00:00] mine\r\nbody\r\n\r\n[2026-10-01 08:30:00] only in the copy\r\nline one\r\nline two\r\n";
+        assert_eq!(j.merge_text(DAY, copy).unwrap(), 1, "the BOM hid the first header; CRLF made every entry look new");
+        let es = j.load_file(DAY);
+        assert_eq!(es.iter().map(|e| e.title.as_str()).collect::<Vec<_>>(), ["mine", "only in the copy", "from another device"]);
+        assert_eq!(es[1].body, "line one\nline two");
+        assert!(!j.read(DAY).contains('\r'));
+        assert_eq!(j.merge_text(DAY, copy).unwrap(), 0, "merging it again adds nothing");
+        assert!(j.merge_text("assets/x.md", copy).is_err());
+
+        // Pasted text: the same, and what sits above the first header is kept.
+        let (_d, j) = tmp();
+        let pasted = "\u{FEFF}A thought with no date.\r\n\r\n[2026-09-01 08:00:00] First\r\nbody\r\n";
+        assert_eq!(j.import_text(pasted, "2026-09-30 09:00:00").unwrap(), 2);
+        assert_eq!(j.read("inbox/2026/09/01.md"), "[2026-09-01 08:00:00] First\nbody\n");
+        assert_eq!(j.read("inbox/2026/09/30.md"), "[2026-09-30 09:00:00]\nA thought with no date.\n");
+    }
+
+    // T7
+    #[test]
+    fn dates_are_real_and_paths_never_panic() {
+        for bad in ["2026-02-31 08:00:00", "2026-13-01 08:00:00", "2026-11-09 25:00:00", "2026-11-09 08:99:00", "2026-11-09 08:00:60", "2026-00-10 08:00:00"] {
+            assert!(check_ts(bad).is_err(), "{bad}");
+            assert!(check_ts_shape(bad).is_ok(), "{bad}");
+        }
+        assert!(check_ts("2028-02-29 23:59:59").is_ok());
+        assert!(check_ts("2026-02-29 08:00:00").is_err());
+        // A malformed date names a file that can't exist, and stays in its tree.
+        assert_eq!(journal_rel("2026-11"), "journal/2026/11/00.md");
+        assert_eq!(inbox_rel(""), "inbox/0000/00/00.md");
+        assert_eq!(split_rel("work", "../../x-y-z"), "split/work/0000/00/00.md");
+        assert_eq!(journal_rel("2026-11-09-extra"), "journal/2026/11/09.md");
+        assert_eq!(journal_rel("2026-11-09"), "journal/2026/11/09.md");
+        let (_d, j) = tmp();
+        assert!(j.new_draft("2026-02-31 08:00:00", "t", false, "b").is_err());
+        assert!(j.inbox_files().is_empty());
+        // An entry that already has an impossible date can be edited, and
+        // given a real one; it can't be given another impossible one.
+        j.write("journal/2026/02/31.md", "[2026-02-31 08:00:00] odd\nbody\n").unwrap();
+        let raw = "[2026-02-31 08:00:00] odd\nbody";
+        let w = j.update_entry("journal/2026/02/31.md", 0, raw, "2026-02-31 08:00:00", "odd", true, "edited").unwrap();
+        assert_eq!(w.file, "journal/2026/02/31.md");
+        assert!(j.update_entry(&w.file, 0, &w.raw, "2026-02-30 08:00:00", "odd", true, "edited").is_err());
+        assert_eq!(j.update_entry(&w.file, 0, &w.raw, "2026-02-28 08:00:00", "odd", true, "edited").unwrap().file, "journal/2026/02/28.md");
+    }
+
+    #[test]
+    fn unguard_shows_what_was_typed_and_saving_it_changes_nothing() {
+        let typed = "see below\n[2026-10-01 09:00:00] a pasted header\n\\[not a date] kept\n\\\\[2026-10-01 09:00:00] two slashes kept";
+        let raw = make_raw("2026-10-02 08:00:00", "t", false, typed);
+        let stored = parse_entries(&raw).remove(0).body;
+        assert!(stored.contains("\n\\[2026-10-01 09:00:00] a pasted header\n"));
+        let shown = unguard_body(&stored);
+        assert_eq!(shown, typed);
+        assert_eq!(guard_body(&shown), stored);
+        assert_eq!(make_raw("2026-10-02 08:00:00", "t", false, &shown), raw, "the reference still matches after an edit that changed nothing");
+    }
+
+    // C3
+    #[test]
+    fn a_bare_link_target_may_hold_balanced_brackets() {
+        assert_eq!(link_targets("![](assets/2026/09/image(1).jpg) and [d](assets/a (b).pdf)"), vec!["assets/2026/09/image(1).jpg", "assets/a"]);
+        assert_eq!(link_targets("(see [x](assets/a.jpg)) [y](assets/b_(c)_d.png \"t\")"), vec!["assets/a.jpg", "assets/b_(c)_d.png"]);
+        let raw = "[2026-09-30 08:00:00]\n![](../../../assets/2026/09/image(1).jpg)";
+        assert_eq!(rebase_links(raw, "journal/2026/09/30.md", "inbox.md"), "[2026-09-30 08:00:00]\n![](assets/2026/09/image(1).jpg)");
     }
 }

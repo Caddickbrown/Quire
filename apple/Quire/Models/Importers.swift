@@ -136,7 +136,14 @@ enum JournalImporter {
         // Several files on one date fan out +1s from noon, so their order is
         // stable instead of piling onto a shared 12:00:00.
         var perDate: [String: Int] = [:]
-        for case let file as URL in en where ["md", "txt"].contains(file.pathExtension.lowercased()) {
+        // By path, not in the order the directory happens to list them: the
+        // offsets are part of each entry's timestamp, and a second import of
+        // the same folder must give every file the one it had the first time,
+        // or nothing matches and everything is filed twice.
+        let files = (en.allObjects as? [URL] ?? [])
+            .filter { ["md", "txt"].contains($0.pathExtension.lowercased()) }
+            .sorted { $0.path < $1.path }
+        for file in files {
             guard let content = try? String(contentsOf: file, encoding: .utf8),
                   !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
 
@@ -200,26 +207,89 @@ extension JournalStore {
     /// links stripped out.
     @discardableResult
     func commitImport(_ preview: ImportPreview) -> ImportResult {
+        guard let base = baseURL, let dir = newAssetsDirectory else {
+            lastWriteError = "The journal folder is unavailable."
+            return ImportResult()
+        }
+        let outcome = Self.runImport(preview, base: base, assetsDir: dir,
+                                     dataSaver: UserDefaults.standard.bool(forKey: "dataSaver"), progress: { _ in })
+        return finishImport(outcome)
+    }
+
+    /// `commitImport` off the main actor, with `importProgress` moving as it
+    /// goes. A five-year Day One export froze the app for minutes: every
+    /// distinct date read the whole journal again, and the media was copied on
+    /// the main actor.
+    @discardableResult
+    func commitImportAsync(_ preview: ImportPreview) async -> ImportResult {
+        guard let base = baseURL, let dir = newAssetsDirectory else {
+            lastWriteError = "The journal folder is unavailable."
+            return ImportResult()
+        }
+        guard importProgress == nil else { return ImportResult() }
+        let total = preview.entries.count
+        setImportProgress((0, total))
+        defer { setImportProgress(nil) }
+        let dataSaver = UserDefaults.standard.bool(forKey: "dataSaver")
+        let outcome = await Task.detached(priority: .userInitiated) { [weak self] in
+            Self.runImport(preview, base: base, assetsDir: dir, dataSaver: dataSaver) { done in
+                Task { @MainActor [weak self] in
+                    // Never after the end: these arrive in order, but the last
+                    // may land once the import has returned.
+                    guard let self, self.importProgress != nil else { return }
+                    self.setImportProgress((done, total))
+                }
+            }
+        }.value
+        return finishImport(outcome)
+    }
+
+    private func finishImport(_ outcome: ImportOutcome) -> ImportResult {
+        if let error = outcome.error { lastWriteError = error }
+        noteImported(compressed: outcome.compressed, saved: outcome.saved, transcode: outcome.transcode,
+                     reload: outcome.result.entries > 0 || outcome.result.media > 0)
+        return outcome.result
+    }
+
+    /// What an import did, and what the store still has to note on the main
+    /// actor: the Data Saver ledger and the videos to compress afterwards.
+    struct ImportOutcome {
         var result = ImportResult()
-        var toFile: [Entry] = []
+        var error: String?
+        var compressed: [String] = []
+        var saved = 0
+        var transcode: [String] = []
+    }
+
+    /// The import itself, against one reading of the journal. Nothing here
+    /// touches the store, so it runs anywhere.
+    nonisolated static func runImport(
+        _ preview: ImportPreview, base: URL, assetsDir: URL, dataSaver: Bool, progress: (Int) -> Void
+    ) -> ImportOutcome {
+        var out = ImportOutcome()
+        let core = CoreJournal(base: base)
         // date → how many entries with each key that day file still holds
         // unclaimed. A count rather than a set so an export that really does
         // carry two look-alike entries files both the first time, and skips
         // both — not just one — on a re-run.
         var filed: [String: [String: Int]] = [:]
-        for prepared in preview.entries {
-            let date = String(prepared.ts.prefix(10))
-            if filed[date] == nil {
-                var counts: [String: Int] = [:]
-                for e in entries(for: date) {
-                    counts[Self.importKey(ts: e.ts, title: e.suffix, body: e.body), default: 0] += 1
-                }
-                filed[date] = counts
+        do {
+            for e in try core.load() where e.source == "journal" {
+                let entry = e.entry
+                filed[e.date, default: [:]][importKey(ts: entry.ts, title: entry.suffix, body: entry.body), default: 0] += 1
             }
-            let key = Self.importKey(ts: prepared.ts, title: prepared.title, body: prepared.body)
+        } catch {
+            out.error = journalErrorMessage(error)
+            return out
+        }
+        var toFile: [(date: String, raw: String)] = []
+        for (n, prepared) in preview.entries.enumerated() {
+            defer { if (n + 1) % 10 == 0 || n + 1 == preview.entries.count { progress(n + 1) } }
+            let date = String(prepared.ts.prefix(10))
+            let key = importKey(ts: prepared.ts, title: prepared.title, body: prepared.body)
             if let remaining = filed[date]?[key], remaining > 0 {
                 filed[date]?[key] = remaining - 1
-                result.skipped += 1
+                out.result.skipped += 1
                 continue
             }
 
@@ -227,18 +297,27 @@ extension JournalStore {
             for m in prepared.media {
                 let scoped = m.url.startAccessingSecurityScopedResource()
                 defer { if scoped { m.url.stopAccessingSecurityScopedResource() } }
-                // Images go through saveAsset so Data Saver can downsample;
+                // Images are stored through Data Saver's downsampler;
                 // video/audio copy file-to-file so an export's movies never
-                // sit in memory whole (importAsset also queues transcoding).
-                let rel: String?
+                // sit in memory whole (and are queued for transcoding after).
+                var stored: URL?
                 if MediaKind(path: m.url.lastPathComponent) == .image {
-                    rel = (try? Data(contentsOf: m.url))
-                        .flatMap { saveAsset($0, ext: m.url.pathExtension.lowercased()) }
-                } else {
-                    rel = importAsset(from: m.url)
+                    if let data = try? Data(contentsOf: m.url),
+                       let image = storeAsset(data, ext: m.url.pathExtension.lowercased(), into: assetsDir, dataSaver: dataSaver) {
+                        stored = image.url
+                        if image.saved > 0 {
+                            // By its ledger key (the path under assets/), as the store records it.
+                            out.compressed.append(ledgerKey(assetRelPath: relativePath(of: image.url, under: base)))
+                            out.saved += image.saved
+                        }
+                    }
+                } else if let copy = copyAsset(from: m.url, into: assetsDir) {
+                    stored = copy
+                    out.transcode.append(relativePath(of: copy, under: base))
                 }
-                guard let rel else { continue }
-                result.media += 1
+                guard let stored else { continue }
+                let rel = relativePath(of: stored, under: base)
+                out.result.media += 1
                 let link = "![](\(rel))"
                 let moment = "![](dayone-moment://\(m.identifier))"
                 if body.contains(moment) {
@@ -250,19 +329,28 @@ extension JournalStore {
                     body += (body.isEmpty ? "" : "\n\n") + link
                 }
             }
-            toFile.append(Self.makeEntry(timestamp: prepared.ts, title: prepared.title, body: body))
+            guard let entry = JournalParser.parseEntries(makeText(ts: prepared.ts, title: prepared.title, body: body)).first else { continue }
+            toFile.append((entry.date, entry.raw))
         }
-        let appended = appendFiledEntries(toFile)
-        result.entries = appended
-        result.skipped += toFile.count - appended
-        return result
+        // Appended day by day, skipping any whose exact text is already there.
+        var appended = 0
+        for (date, entries) in Dictionary(grouping: toFile, by: \.date) {
+            do {
+                let count: Int = try core.call("insert", ["file": "journal/" + date.replacingOccurrences(of: "-", with: "/") + ".md",
+                                                          "raws": entries.map(\.raw)])
+                appended += count
+            } catch { out.error = out.error ?? journalErrorMessage(error) }
+        }
+        out.result.entries = appended
+        out.result.skipped += toFile.count - appended
+        return out
     }
 
     /// The identity of an imported entry, stable across the media rewrite:
     /// timestamp + title + body with every `![](…)` link removed and the
     /// remaining whitespace collapsed (stripping a link leaves blank lines
     /// behind, and a link appended to the end leaves a trailing one).
-    private static func importKey(ts: String, title: String, body: String) -> String {
+    private nonisolated static func importKey(ts: String, title: String, body: String) -> String {
         let squashed = MediaLinks.strippingLinks(body)
             .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         return "\(ts)\u{1}\(title.trimmingCharacters(in: .whitespacesAndNewlines))\u{1}\(squashed)"

@@ -77,6 +77,21 @@ final class JournalStore: ObservableObject {
     /// edit path sets it instead of failing silently, so the UI can never show
     /// a change that never reached disk. Whoever displays it clears it.
     @Published var lastWriteError: String?
+    /// What Today showed when the journal was last read, published at launch so
+    /// the page can draw before the journal has been read again. Always for the
+    /// current day (a saved one for an earlier day is emptied first), and only
+    /// worth reading while `indexed` is false: it is cleared when the index lands.
+    @Published private(set) var todaySnapshot: TodaySnapshot?
+    /// True while a jnl or Nook journal's single files are being folded into
+    /// day files as the folder is opened. The journal is read when it finishes.
+    @Published private(set) var foldingLegacy = false
+    /// Non-nil while `commitImportAsync` files an import.
+    @Published private(set) var importProgress: (done: Int, total: Int)?
+    /// Why the last backup failed, scheduled ones included. Nil after a good one.
+    @Published private(set) var lastBackupError: String?
+    /// Set when the folder was opened with a `.quire-restore-old-…` folder in
+    /// it: a restore was interrupted and what it moved aside is still there.
+    @Published private(set) var interruptedRestore: String?
 
     struct ArchiveDay: Identifiable, Hashable {
         let date: String     // "YYYY-MM-DD"
@@ -159,7 +174,9 @@ final class JournalStore: ObservableObject {
     }
     func writeSidecar(name: String, data: Data) throws {
         guard let core else { throw JournalError.journalUnavailable }
-        try core.write(core.sidecar(write: true) + "/" + name, String(decoding: data, as: UTF8.self))
+        let rel = try core.sidecar(write: true) + "/" + name
+        try core.write(rel, String(decoding: data, as: UTF8.self))
+        noteOwnWrite(rel)
     }
     private var lastWritten: CoreWritten?
     private var composerEntry: Entry?
@@ -173,8 +190,12 @@ final class JournalStore: ObservableObject {
     /// Editor writes return their own reference, never a shared last-write slot.
     /// A conflict leaves the caller's text and original reference untouched.
     func saveEditorEntry(_ original: Entry, source: EntrySource, text: String) -> (entry: Entry, source: EntrySource)? {
-        guard let result = coreMutation({ try $0.update(original, text: text) }),
-              var entry = JournalParser.parseEntries(result.raw).first else { return nil }
+        guard let result = coreMutation(patched: true, { try $0.update(original, text: text) }) else { return nil }
+        guard var entry = JournalParser.parseEntries(result.raw).first else {
+            unpatchedSeq &+= 1
+            scheduleRebuild()
+            return nil
+        }
         entry.file = result.file
         entry.fileIndex = result.index
         let destination: EntrySource
@@ -182,6 +203,13 @@ final class JournalStore: ObservableObject {
         case .archive: destination = .archive(date: entry.date)
         default: destination = source
         }
+        noteOwnWrite(original.file)
+        noteOwnWrite(result.file)
+        // The lists hold this entry too: give them the write's own reference
+        // now, or a star, delete or retime before the rebuild presents the old
+        // text and is refused as "changed on disk".
+        recordPatch(replacing: original, with: entry, source: source, destination: destination)
+        entryTouched(original)
         publishAutosave()
         return (entry, destination)
     }
@@ -189,7 +217,7 @@ final class JournalStore: ObservableObject {
     /// Always inserts a distinct draft, including for explicit conflict recovery.
     /// Returns nil on failure instead of returning a previous timestamp as success.
     func createEditorDraft(timestamp: String, title: String, body: String) -> Entry? {
-        let result: CoreWritten? = coreMutation { core in
+        let result: CoreWritten? = coreMutation(patched: true) { core in
             var ts = timestamp
             let used = Set(try core.inbox().map(\.ts))
             while used.contains(ts) {
@@ -202,11 +230,17 @@ final class JournalStore: ObservableObject {
         guard let result, var entry = JournalParser.parseEntries(result.raw).first else { return nil }
         entry.file = result.file
         entry.fileIndex = result.index
+        noteOwnWrite(result.file)
+        // A new draft touches nothing the archive caches hold; the inbox alone
+        // is read again (no migration, no walk of the journal).
+        loadInbox()
         publishAutosave()
         return entry
     }
 
-    private func coreMutation<T>(_ action: (CoreJournal) throws -> T) -> T? {
+    /// `patched` is a promise that the caller puts the write's effect into the
+    /// caches itself (`recordPatch`, or a re-read of the inbox for a draft).
+    private func coreMutation<T>(patched: Bool = false, _ action: (CoreJournal) throws -> T) -> T? {
         guard let core else { lastWriteError = "The journal folder is unavailable."; return nil }
         do {
             let result = try action(core)
@@ -215,6 +249,10 @@ final class JournalStore: ObservableObject {
             // on every autosave.
             if lastWriteError != nil { lastWriteError = nil }
             lastLocalWriteAt = Date()
+            // Unless the caller patches it in, the caches no longer say what
+            // the disk does until a rebuild started after this write lands.
+            mutationSeq &+= 1
+            if !patched { unpatchedSeq &+= 1 }
             journalDidChange()
             return result
         } catch { lastWriteError = journalErrorMessage(error); return nil }
@@ -223,13 +261,191 @@ final class JournalStore: ObservableObject {
         if reindex { loadInbox(); rebuildIndex() }
     }
 
-    /// After an autosave. The words are already on disk; what waits is the
-    /// rebuild, which re-reads every file in the journal and redraws every
-    /// screen. Run on each pause in typing, it made the phone lag (Dan, 9 Nov),
-    /// so it waits until typing has rested for two seconds.
+    /// After an autosave. The words are already on disk and the lists already
+    /// hold the write's own entry (`recordPatch`); what waits is the rebuild,
+    /// which re-reads every file in the journal and redraws every screen. Run
+    /// on each pause in typing, it made the phone lag (Dan, 9 Nov), so it is
+    /// held while an editor is open: `settlePendingRebuild` (the composer calls
+    /// it as it closes) or `endEditing` runs it. An editor that does neither
+    /// gets it once the autosaves have stopped for `editorIdleRebuild`.
     private func publishAutosave() {
-        loadInbox()
-        scheduleRebuild(after: 2_000_000_000)
+        scheduleRebuild(after: Self.editorIdleRebuild)
+    }
+    private static let editorIdleRebuild: UInt64 = 30_000_000_000
+
+    // MARK: Cache patches (an edit's own entry, ahead of the rebuild)
+
+    /// Counts every successful core write; `unpatchedSeq` counts those whose
+    /// effect is not in the caches. A rebuild remembers both when it starts.
+    private var mutationSeq = 0
+    private var unpatchedSeq = 0
+    /// `unpatchedSeq` as it was when the build now published began.
+    private var freshAsOf = -1
+    /// Whether `archiveEntries` and `splitEntriesCache` say what the disk does:
+    /// the index has been published and nothing unpatched was written since the
+    /// build it came from began. `entries(for:)` reads the caches only then.
+    private var cacheFresh: Bool { indexed && unpatchedSeq == freshAsOf }
+
+    private struct CachePatch {
+        let seq: Int
+        let original: Entry
+        let updated: Entry
+        let source: EntrySource
+        let destination: EntrySource
+    }
+    /// Patches a build still in flight may not have seen: its publication
+    /// would put the older text back, so they are applied again on top of it.
+    /// Kept only while a build is running, and dropped when the next starts.
+    private var cachePatches: [CachePatch] = []
+    private var buildInFlight = false
+
+    /// The write that just succeeded replaced `original` with `updated`: put
+    /// that into whichever list holds it and tell the views.
+    private func recordPatch(replacing original: Entry, with updated: Entry, source: EntrySource, destination: EntrySource) {
+        let patch = CachePatch(seq: mutationSeq, original: original, updated: updated, source: source, destination: destination)
+        if buildInFlight { cachePatches.append(patch) }
+        if applyPatch(patch) {
+            revision &+= 1
+        } else if source == .inbox {
+            // A draft the list didn't have: the inbox is cheap to read again,
+            // and the archive caches were never involved.
+            loadInbox()
+        } else if indexed {
+            // The lists were behind already: readers go to the core until a
+            // rebuild. (Before the first index there is nothing to patch; it
+            // applies the patches still waiting when it lands.)
+            unpatchedSeq &+= 1
+        }
+    }
+
+    private func holds(_ entry: Entry, in source: EntrySource) -> Bool {
+        switch source {
+        case .inbox: return Self.position(of: entry, in: inboxDrafts) != nil
+        case .archive(let date):
+            return archiveEntries.first { $0.date == date }.map { Self.position(of: entry, in: $0.entries) != nil } ?? false
+        case .journal(let name):
+            return splitEntriesCache[name].map { Self.position(of: entry, in: $0) != nil } ?? false
+        }
+    }
+
+    /// Where `entry` is in a list. By raw text, as the core finds one, apart
+    /// from trailing newlines: an entry read from a file carries the blank
+    /// line after it, one parsed from a write's result doesn't.
+    private static func position(of entry: Entry, in list: [Entry]) -> Int? {
+        let raw = JournalParser.trimRightNewlines(entry.raw)
+        func same(_ other: Entry) -> Bool { JournalParser.trimRightNewlines(other.raw) == raw }
+        return list.firstIndex { $0.file == entry.file && $0.fileIndex == entry.fileIndex && same($0) }
+            ?? list.firstIndex { $0.file == entry.file && same($0) }
+            ?? list.firstIndex(where: same)
+    }
+
+    /// `list` with `entry` put where its file and index say, and the entries of
+    /// that file numbered again in order (a list holds a file's entries in file
+    /// order). An index that is slightly out is harmless: the core finds an
+    /// entry by its raw text when the index has moved.
+    private static func inserting(_ entry: Entry, into list: [Entry]) -> [Entry] {
+        var list = list
+        let at = list.firstIndex { other in
+            guard let a = other.file, let b = entry.file else { return false }
+            if a != b { return a > b }
+            return (other.fileIndex ?? 0) >= (entry.fileIndex ?? 0)
+        } ?? list.count
+        list.insert(entry, at: at)
+        return renumbered(list, file: entry.file)
+    }
+
+    private static func renumbered(_ list: [Entry], file: String?) -> [Entry] {
+        guard let file else { return JournalParser.withOccurrences(list) }
+        var n = 0
+        return JournalParser.withOccurrences(list.map { e in
+            guard e.file == file else { return e }
+            var e = e
+            e.fileIndex = n
+            n += 1
+            return e
+        })
+    }
+
+    private func applyPatch(_ patch: CachePatch) -> Bool {
+        let original = patch.original, updated = patch.updated
+        switch patch.source {
+        case .inbox:
+            guard let i = Self.position(of: original, in: inboxDrafts) else { return false }
+            if updated.file == original.file, updated.fileIndex == inboxDrafts[i].fileIndex {
+                var list = inboxDrafts
+                list[i] = updated
+                inboxDrafts = JournalParser.withOccurrences(list)
+            } else {
+                // Retimed into another day file: read the inbox (only) again.
+                loadInbox()
+            }
+            return true
+        case .archive:
+            var days = archiveEntries
+            guard let d = days.firstIndex(where: { $0.date == original.date }),
+                  let i = Self.position(of: original, in: days[d].entries) else { return false }
+            days[d].entries.remove(at: i)
+            days[d].entries = Self.renumbered(days[d].entries, file: original.file)
+            if days[d].entries.isEmpty { days.remove(at: d) }
+            if let t = days.firstIndex(where: { $0.date == updated.date }) {
+                days[t].entries = Self.inserting(updated, into: days[t].entries)
+            } else {
+                let at = days.firstIndex { $0.date < updated.date } ?? days.count
+                days.insert((date: updated.date, entries: JournalParser.withOccurrences([updated])), at: at)
+            }
+            archiveEntries = days
+            // The day summaries the Journal lists.
+            var summaries = archiveDays.filter { $0.date != original.date && $0.date != updated.date }
+            for date in Set([original.date, updated.date]) {
+                if let day = days.first(where: { $0.date == date }) {
+                    summaries.append(Self.summary(date: date, entries: day.entries))
+                }
+            }
+            archiveDays = summaries.sorted { $0.date > $1.date }
+            return true
+        case .journal(let name):
+            guard var list = splitEntriesCache[name],
+                  let i = Self.position(of: original, in: list) else { return false }
+            list.remove(at: i)
+            list = Self.renumbered(list, file: original.file)
+            splitEntriesCache[name] = Self.inserting(updated, into: list)
+            return true
+        }
+    }
+
+    /// One day's line in the Journal list, from its entries.
+    nonisolated static func summary(date: String, entries: [Entry]) -> ArchiveDay {
+        var day = ArchiveDay(date: date, count: entries.count, preview: entries.first?.preview ?? "")
+        day.hasStarred = entries.contains { $0.isStarred }
+        for entry in entries {
+            for path in mediaPaths(in: entry.raw) {
+                switch MediaKind(path: path) {
+                case .image: day.hasPhoto = true
+                case .video: day.hasVideo = true
+                case .audio: day.hasAudio = true
+                }
+            }
+        }
+        return day
+    }
+
+    /// An entry was edited or deleted: a weekly note that teases it must not
+    /// arrive with the old title.
+    private func entryTouched(_ entry: Entry) {
+        ResurfacingScheduler.cancelIfTeasing(ts: entry.ts)
+    }
+
+    // MARK: Editing sessions
+
+    private var editingDepth = 0
+    /// An editor is open: the rebuild its autosaves put off is held until
+    /// `endEditing`. Optional (the composer's `settlePendingRebuild` on close
+    /// does the same job), but with it nothing lands mid-typing however long
+    /// the pause.
+    func beginEditing() { editingDepth += 1 }
+    func endEditing() {
+        editingDepth = max(0, editingDepth - 1)
+        if editingDepth == 0 { settlePendingRebuild() }
     }
 
 
@@ -243,7 +459,24 @@ final class JournalStore: ObservableObject {
 
     init() {
         loadLastBackupDate()
+        // Before the folder is even found: what Today showed last time, so the
+        // page has something to draw while the journal is read.
+        todaySnapshot = Self.loadTodaySnapshot()?.rolled(to: Self.nowDate())
+        observeDayAndLock()
         resolveBaseAndReload()
+    }
+
+    private var lifetimeObservers: [NSObjectProtocol] = []
+    /// Midnight (or a change of time zone) makes "today" another day with no
+    /// file changing, and the app lock decides what the widget may say.
+    private func observeDayAndLock() {
+        let center = NotificationCenter.default
+        lifetimeObservers.append(center.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.rebuildIfDayChanged() }
+        })
+        lifetimeObservers.append(center.addObserver(forName: .quireAppLockChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appLockChanged() }
+        })
     }
 
     #if DEBUG
@@ -296,6 +529,12 @@ final class JournalStore: ObservableObject {
         lastHeavyStats = HeavyStats()
         inboxDrafts = []; archiveDays = []; archiveEntries = []; splitEntriesCache = [:]
         splitJournals = []; tagCounts = []
+        // Nothing of the folder before is known about this one.
+        if indexed { indexed = false }
+        freshAsOf = -1; cachePatches = []; buildInFlight = false; indexDay = ""
+        lastSignatures = [:]; ownWrites = [:]; legacyDeclined = nil
+        interruptedRestore = nil
+        if let snap = todaySnapshot, snap.base != resolved.url?.path { todaySnapshot = nil }
         if let old = securityScopedURL {
             old.stopAccessingSecurityScopedResource()
             securityScopedURL = nil
@@ -319,7 +558,70 @@ final class JournalStore: ObservableObject {
                                 withIntermediateDirectories: true)
         Self.sweepStaleTempFiles(under: url)
         startSyncWatcher()
-        reload()
+        openFolder(url)
+    }
+
+    /// The first read of a folder just opened. A journal jnl or Nook wrote has
+    /// its `inbox.md` and `<tag>.md` folded into day files first, one
+    /// coordinated write per day: that happens here, off the main actor (on the
+    /// main actor a large one risked the launch watchdog), and the journal is
+    /// read when it is done. What an interrupted restore left is dealt with on
+    /// the way.
+    private func openFolder(_ base: URL) {
+        reloadStartedAt = Date()
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let leftover = Self.sweepRestoreLeftovers(base: base)
+            var migrateError: String?
+            if Self.legacySignature(base: base) != nil {
+                await MainActor.run { [weak self] in
+                    guard let self, self.baseURL == base else { return }
+                    self.foldingLegacy = true
+                }
+                do { try CoreJournal(base: base).migrate() }
+                catch { migrateError = journalErrorMessage(error) }
+            }
+            let failure = migrateError
+            let declined = Self.legacySignature(base: base) ?? ""
+            await MainActor.run { [weak self] in
+                guard let self, self.baseURL == base else { return }
+                if self.foldingLegacy { self.foldingLegacy = false }
+                self.legacyDeclined = declined
+                self.interruptedRestore = leftover
+                if let message = failure ?? leftover { self.lastWriteError = message }
+                self.reload()
+            }
+        }
+    }
+
+    /// What is left in the folder root for `migrate` to fold: `inbox.md` and
+    /// any other markdown file there (a legacy split journal, or a note that
+    /// isn't one and will be left alone). Names, sizes and dates only, so it
+    /// costs one directory listing. Nil when there is nothing.
+    nonisolated static func legacySignature(base: URL) -> String? {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        guard let items = try? FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: keys) else { return nil }
+        var parts: [String] = []
+        for url in items where url.pathExtension == "md" && !nonJournalFiles.contains(url.lastPathComponent) {
+            guard let v = try? url.resourceValues(forKeys: Set(keys)), v.isRegularFile == true,
+                  let size = v.fileSize, size > 0 else { continue }
+            parts.append("\(url.lastPathComponent):\(size):\(v.contentModificationDate?.timeIntervalSince1970 ?? 0)")
+        }
+        return parts.isEmpty ? nil : parts.sorted().joined(separator: "|")
+    }
+
+    /// The legacy files `migrate` was last run over (and left, when it left
+    /// any). While the root still looks like this there is nothing new to fold.
+    private var legacyDeclined: String?
+
+    /// Fold legacy files into day files when there are some that haven't been
+    /// looked at. One directory listing when there is nothing to do, which is
+    /// nearly always: the fold itself lists the inbox, journal and split trees
+    /// in full, and used to run on every autosave.
+    private func migrateLegacyIfPresent() {
+        guard let base = baseURL, let core else { return }
+        guard let found = Self.legacySignature(base: base), found != legacyDeclined else { return }
+        do { try core.migrate() } catch { lastWriteError = journalErrorMessage(error) }
+        legacyDeclined = Self.legacySignature(base: base) ?? ""
     }
 
     /// Resolution order: a user-chosen custom folder (security-scoped bookmark),
@@ -380,12 +682,14 @@ final class JournalStore: ObservableObject {
             return
         }
         UserDefaults.standard.set(data, forKey: Self.bookmarkKey)
+        clearTodaySnapshot()
         resolveBaseAndReload()
     }
 
     /// Forget the custom folder and fall back to iCloud / local.
     func useDefaultFolder() {
         UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
+        clearTodaySnapshot()
         resolveBaseAndReload()
     }
 
@@ -399,7 +703,7 @@ final class JournalStore: ObservableObject {
     /// setting, so a burst of edits can't spin the disk copying all day.
     private static let changeBackupFloor: TimeInterval = 300
 
-    private static let stampFormatter: DateFormatter = {
+    private nonisolated static let stampFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd-HH-mm-ss"
         f.locale = Locale(identifier: "en_US_POSIX"); return f
     }()
@@ -455,7 +759,26 @@ final class JournalStore: ObservableObject {
     func autoBackupIfDue() {
         guard let gap = backupInterval.scheduledGap else { return }
         if let last = lastBackupAt, Date().timeIntervalSince(last) < gap { return }
-        Task { await runBackup() }
+        // One that just failed isn't tried again on the next keystroke.
+        guard backupBackoffRemaining <= 0, !backupRunning else { return }
+        Task { await performBackup(scheduled: true) }
+    }
+
+    // A failed backup is retried, but not at once: five minutes after the
+    // first failure, doubling to six hours. The trigger is a write, so without
+    // this a backup that can't finish started again on every autosave.
+    private static let backupAttemptKey = "lastBackupAttemptAt"
+    private static let backupFailuresKey = "backupFailureCount"
+    nonisolated static func backupBackoff(failures: Int) -> TimeInterval {
+        guard failures > 0 else { return 0 }
+        return min(300 * pow(2, Double(min(failures, 12) - 1)), 6 * 60 * 60)
+    }
+    private var backupBackoffRemaining: TimeInterval {
+        let defaults = UserDefaults.standard
+        let failures = defaults.integer(forKey: Self.backupFailuresKey)
+        let last = defaults.double(forKey: Self.backupAttemptKey)
+        guard failures > 0, last > 0 else { return 0 }
+        return Self.backupBackoff(failures: failures) - Date().timeIntervalSince(Date(timeIntervalSince1970: last))
     }
 
     /// A journal file just changed on disk. Drives the "On every change"
@@ -472,15 +795,17 @@ final class JournalStore: ObservableObject {
             guard !Task.isCancelled, let self else { return }
             // Inside the floor, wait it out rather than giving up: returning
             // here dropped the last edit of a burst for good, because nothing
-            // else was coming to reschedule it.
+            // else was coming to reschedule it. The same for a backoff after a
+            // failure.
+            var wait = self.backupBackoffRemaining
             if let last = self.lastBackupAt {
-                let wait = Self.changeBackupFloor - Date().timeIntervalSince(last)
-                if wait > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
-                    guard !Task.isCancelled else { return }
-                }
+                wait = max(wait, Self.changeBackupFloor - Date().timeIntervalSince(last))
             }
-            await self.runBackup()
+            if wait > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+            }
+            await self.performBackup(scheduled: true)
         }
     }
 
@@ -489,6 +814,14 @@ final class JournalStore: ObservableObject {
     /// off the main actor so a big assets folder never blocks writing.
     @discardableResult
     func runBackup() async -> (ok: Bool, message: String) {
+        await performBackup(scheduled: false)
+    }
+
+    /// `scheduled` is a backup nobody asked for just now: its failure has no
+    /// sheet to show in, so it is said through `lastWriteError` as well as
+    /// `lastBackupError`.
+    @discardableResult
+    private func performBackup(scheduled: Bool) async -> (ok: Bool, message: String) {
         guard !backupRunning else { return (false, "A backup is already running.") }
         guard let base = baseURL else { return (false, "No journal folder to back up.") }
         guard let backupBase = resolveBackupURL() else {
@@ -497,7 +830,9 @@ final class JournalStore: ObservableObject {
         if let clash = Self.nestingProblem(base: base, backupBase: backupBase) { return (false, clash) }
         backupRunning = true
         defer { backupRunning = false }
-        let name = "Quire-Backup-\(Self.stampFormatter.string(from: Date()))"
+        let defaults = UserDefaults.standard
+        defaults.set(Date().timeIntervalSince1970, forKey: Self.backupAttemptKey)
+        let name = Self.backupPrefix + Self.stampFormatter.string(from: Date())
         let keep = backupKeepCount
         let result = await Task.detached(priority: .utility) {
             Self.copyTree(from: base, into: backupBase, named: name, keep: keep)
@@ -505,7 +840,13 @@ final class JournalStore: ObservableObject {
         if result.ok {
             let now = Date()
             lastBackupAt = now
-            UserDefaults.standard.set(now.timeIntervalSince1970, forKey: lastBackupKey)
+            defaults.set(now.timeIntervalSince1970, forKey: lastBackupKey)
+            defaults.set(0, forKey: Self.backupFailuresKey)
+            if lastBackupError != nil { lastBackupError = nil }
+        } else {
+            defaults.set(defaults.integer(forKey: Self.backupFailuresKey) + 1, forKey: Self.backupFailuresKey)
+            lastBackupError = result.message
+            if scheduled { lastWriteError = result.message }
         }
         return result
     }
@@ -520,31 +861,163 @@ final class JournalStore: ObservableObject {
         return nil
     }
 
+    /// Scheduled and manual backups. Retention prunes these and nothing else.
+    nonisolated static let backupPrefix = "Quire-Backup-"
+    /// The copy a restore takes of what it is about to replace. Listed with the
+    /// backups, never pruned with them.
+    nonisolated static let safetyPrefix = "Quire before-restore "
+
     /// The copy + prune itself, off-main. Security-scoped access is held around
-    /// both so a sandboxed user-picked backup folder stays writable. A copy that
-    /// fails or doesn't match the journal is removed, so it can never be listed
-    /// as a backup or push a good one out through pruning.
-    private nonisolated static func copyTree(
-        from base: URL, into backupBase: URL, named name: String, keep: Int
+    /// both so a sandboxed user-picked backup folder stays writable.
+    ///
+    /// The copy is made under a `.partial` name and renamed once it checks out,
+    /// so one that was interrupted is never listed, never takes a retention
+    /// slot and can't be restored from. It is checked against the sizes noted
+    /// as each file was copied, not against the journal afterwards: the journal
+    /// is being written to (a write is what starts most backups), and comparing
+    /// with it failed every backup taken while typing. `beforeFile` runs before
+    /// each file is copied, so a test can change the journal mid-copy.
+    nonisolated static func copyTree(
+        from base: URL, into backupBase: URL, named name: String, keep: Int,
+        beforeFile: (String) -> Void = { _ in }
     ) -> (ok: Bool, message: String) {
         let fm = FileManager.default
         let scoped = backupBase.startAccessingSecurityScopedResource()
         defer { if scoped { backupBase.stopAccessingSecurityScopedResource() } }
+        sweepPartials(in: backupBase)
+        let previous = backupNames(in: backupBase).first
         let target = backupBase.appendingPathComponent(name)
+        let partial = backupBase.appendingPathComponent(".\(name).partial")
+        let copied: (files: Int, bytes: Int64)
         do {
-            try fm.copyItem(at: base, to: target)
-            try verifyCopy(of: base, at: target)
+            guard !fm.fileExists(atPath: target.path) else { throw CopyFailure("A backup called \(name) is already there.") }
+            try? fm.removeItem(at: partial)
+            let manifest = try copyRecording(from: base, to: partial, beforeFile: beforeFile)
+            try verify(partial, against: manifest)
+            try fm.moveItem(at: partial, to: target)
+            copied = (manifest.count, manifest.values.reduce(0, +))
         } catch {
-            try? fm.removeItem(at: target)
+            try? fm.removeItem(at: partial)
             return (false, "Backup failed: \(error.localizedDescription)")
+        }
+        guard keep > 0 else { return (true, "Backed up to \(name).") }
+        // A journal that has suddenly shrunk is more likely damage than an
+        // edit. The older backups may be the only good ones, so they all stay.
+        if let previous, let before = try? treeStats(backupBase.appendingPathComponent(previous)),
+           shrankDrastically(from: before, to: copied) {
+            return (true, "Backed up to \(name). It is much smaller than the last backup, so no older backup was removed.")
         }
         prune(in: backupBase, keep: keep)
         return (true, "Backed up to \(name).")
     }
 
+    /// Less than half the files, or half the bytes, of the backup before.
+    nonisolated static func shrankDrastically(from before: (files: Int, bytes: Int64), to after: (files: Int, bytes: Int64)) -> Bool {
+        (before.files >= 4 && after.files * 2 < before.files) || (before.bytes >= 4096 && after.bytes * 2 < before.bytes)
+    }
+
     private struct CopyFailure: LocalizedError {
         let errorDescription: String?
         init(_ text: String) { errorDescription = text }
+    }
+
+    /// Names a backup doesn't carry: writes in flight, and what a restore left.
+    private nonisolated static func isTransient(_ name: String) -> Bool {
+        (name.hasPrefix(".quire-") && name.hasSuffix(".tmp")) || name.hasPrefix("._tmp_") || name.hasPrefix(".quire-restore-")
+    }
+
+    /// Copy `base` to `dest` file by file, returning each copied file's path
+    /// (relative) and the size its copy had. A file that goes while the copy
+    /// runs (a day file emptied, a temporary file) is not an error; an iCloud
+    /// placeholder is, after asking for the download, because a copy of one
+    /// holds none of the file's contents.
+    private nonisolated static func copyRecording(
+        from base: URL, to dest: URL, beforeFile: (String) -> Void
+    ) throws -> [String: Int64] {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
+        var failure: Error?
+        // A folder that has gone (a drive removed) must fail the backup, not
+        // be copied as an empty journal.
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: base.path, isDirectory: &isDirectory), isDirectory.boolValue,
+              let walk = fm.enumerator(at: base, includingPropertiesForKeys: keys, options: [],
+                                       errorHandler: { _, error in failure = error; return false })
+        else { throw CopyFailure("Couldn't read \(base.lastPathComponent).") }
+        try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+        let roots = [base.path, base.resolvingSymlinksInPath().path, "/private" + base.path]
+        var manifest: [String: Int64] = [:]
+        for case let item as URL in walk {
+            let name = item.lastPathComponent
+            guard let root = roots.first(where: { item.path.hasPrefix($0 + "/") }) else {
+                throw CopyFailure("Couldn't place \(name) in the journal folder.")
+            }
+            let rel = String(item.path.dropFirst(root.count + 1))
+            let v = try item.resourceValues(forKeys: Set(keys))
+            if isTransient(name) {
+                if v.isDirectory == true { walk.skipDescendants() }
+                continue
+            }
+            if item.pathExtension == "icloud", name.hasPrefix(".") {
+                try? fm.startDownloadingUbiquitousItem(at: item)
+                throw CopyFailure("Some files are still downloading from iCloud. Try again shortly.")
+            }
+            let to = dest.appendingPathComponent(rel)
+            if v.isSymbolicLink == true {
+                // The link itself, never what it points at.
+                try? fm.copyItem(at: item, to: to)
+                walk.skipDescendants()
+            } else if v.isDirectory == true {
+                try fm.createDirectory(at: to, withIntermediateDirectories: true)
+            } else if v.isRegularFile == true {
+                beforeFile(rel)
+                do { try fm.copyItem(at: item, to: to) }
+                catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+                    if fm.fileExists(atPath: item.path) { throw error }
+                    continue
+                }
+                manifest[rel] = (try fm.attributesOfItem(atPath: to.path)[.size] as? NSNumber)?.int64Value ?? 0
+            }
+        }
+        if let failure { throw failure }
+        return manifest
+    }
+
+    /// The copy holds exactly the files that were copied, at the sizes they had.
+    private nonisolated static func verify(_ copy: URL, against manifest: [String: Int64]) throws {
+        let fm = FileManager.default
+        var seen = 0
+        for (rel, size) in manifest {
+            let attributes = try? fm.attributesOfItem(atPath: copy.appendingPathComponent(rel).path)
+            guard let found = (attributes?[.size] as? NSNumber)?.int64Value, found == size else {
+                throw CopyFailure("The copy doesn't match: \(rel) is not as it was copied.")
+            }
+            seen += 1
+        }
+        let stats = try treeStats(copy)
+        guard stats.files == seen else {
+            throw CopyFailure("The copy doesn't match: \(stats.files) files, expected \(seen).")
+        }
+    }
+
+    /// A `.partial` folder nobody is still writing: an interrupted backup.
+    private nonisolated static func sweepPartials(in backupBase: URL) {
+        let fm = FileManager.default
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+        for url in (try? fm.contentsOfDirectory(at: backupBase, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        where url.lastPathComponent.hasPrefix(".") && url.pathExtension == "partial" {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if modified < cutoff { try? fm.removeItem(at: url) }
+        }
+    }
+
+    /// The finished backups in a folder, newest first. Partials (dot-named) and
+    /// restore safety copies are not among them.
+    private nonisolated static func backupNames(in backupBase: URL) -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(at: backupBase, includingPropertiesForKeys: nil)) ?? [])
+            .map(\.lastPathComponent)
+            .filter { $0.hasPrefix(backupPrefix) }
+            .sorted(by: >)
     }
 
     /// Files and bytes in a tree. Throws on an iCloud placeholder, after asking
@@ -573,6 +1046,7 @@ final class JournalStore: ObservableObject {
         return (files, bytes)
     }
 
+    /// Two trees that are not being written to (a backup and its staged copy).
     private nonisolated static func verifyCopy(of original: URL, at copy: URL) throws {
         let a = try treeStats(original), b = try treeStats(copy)
         guard a == b else {
@@ -583,34 +1057,42 @@ final class JournalStore: ObservableObject {
     // MARK: Restore
 
     struct BackupCopy: Identifiable, Sendable {
-        let name: String       // "Quire-Backup-YYYY-MM-dd-HH-mm-ss"
+        let name: String       // "Quire-Backup-YYYY-MM-dd-HH-mm-ss", or a restore's safety copy
         let date: Date?
         var id: String { name }
+        /// What a restore kept of the journal it replaced.
+        var isSafetyCopy: Bool { name.hasPrefix(JournalStore.safetyPrefix) }
     }
 
-    /// The timestamped copies in the backup folder, newest first.
+    /// The timestamped copies in the backup folder, newest first: backups, and
+    /// the safety copies restores have taken. Unfinished copies are not listed.
     func listBackups() async -> [BackupCopy] {
         guard let backupBase = resolveBackupURL() else { return [] }
         return await Task.detached(priority: .userInitiated) {
             let scoped = backupBase.startAccessingSecurityScopedResource()
             defer { if scoped { backupBase.stopAccessingSecurityScopedResource() } }
-            let names = ((try? FileManager.default.contentsOfDirectory(
-                at: backupBase, includingPropertiesForKeys: nil)) ?? [])
-                .map(\.lastPathComponent)
-                .filter { $0.hasPrefix("Quire-Backup-") }
-                .sorted(by: >)
-            let f = DateFormatter()
-            f.dateFormat = "yyyy-MM-dd-HH-mm-ss"
-            f.locale = Locale(identifier: "en_US_POSIX")
-            return names.map {
-                BackupCopy(name: $0, date: f.date(from: String($0.dropFirst("Quire-Backup-".count))))
-            }
+            return Self.backupCopies(in: backupBase)
         }.value
     }
 
+    nonisolated static func backupCopies(in backupBase: URL) -> [BackupCopy] {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd-HH-mm-ss"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return ((try? FileManager.default.contentsOfDirectory(at: backupBase, includingPropertiesForKeys: nil)) ?? [])
+            .map(\.lastPathComponent)
+            .compactMap { name -> BackupCopy? in
+                for prefix in [backupPrefix, safetyPrefix] where name.hasPrefix(prefix) {
+                    return BackupCopy(name: name, date: f.date(from: String(name.dropFirst(prefix.count))))
+                }
+                return nil
+            }
+            .sorted { ($0.date ?? .distantPast, $0.name) > ($1.date ?? .distantPast, $1.name) }
+    }
+
     /// Replace the journal with a backup copy. A safety copy of the current
-    /// folder is taken first (never pruned by this call), so a restore is
-    /// itself restorable. Runs off-main; reloads on success.
+    /// folder is taken first (never pruned), so a restore is itself restorable.
+    /// Runs off-main; reloads on success.
     func restoreBackup(named name: String) async -> (ok: Bool, message: String) {
         guard !backupRunning else { return (false, "A backup is already running.") }
         guard let base = baseURL else { return (false, "No journal folder to restore into.") }
@@ -618,15 +1100,8 @@ final class JournalStore: ObservableObject {
         if let clash = Self.nestingProblem(base: base, backupBase: backupBase) { return (false, clash) }
         backupRunning = true
         defer { backupRunning = false }
-        let safetyName = "Quire-Backup-\(Self.stampFormatter.string(from: Date()))"
         let result = await Task.detached(priority: .userInitiated) {
-            // Safety copy first, with keep: 0 so pruning can't delete the very
-            // backup that's about to be restored.
-            let safety = Self.copyTree(from: base, into: backupBase, named: safetyName, keep: 0)
-            guard safety.ok else {
-                return (false, "Couldn't take a safety copy first — nothing was changed. \(safety.message)")
-            }
-            return Self.replaceTree(base: base, from: backupBase.appendingPathComponent(name))
+            Self.restore(base: base, backupBase: backupBase, named: name)
         }.value
         if result.0 {
             let now = Date()
@@ -635,6 +1110,44 @@ final class JournalStore: ObservableObject {
             reload()
         }
         return (ok: result.0, message: result.1)
+    }
+
+    /// The safety copy, then the swap, with one security scope on the backup
+    /// folder itself held across both: a scope asked for on a URL made from it
+    /// (the backup's own folder) isn't one the sandbox knows.
+    nonisolated static func restore(base: URL, backupBase: URL, named name: String, now: Date = Date()) -> (Bool, String) {
+        let scoped = backupBase.startAccessingSecurityScopedResource()
+        defer { if scoped { backupBase.stopAccessingSecurityScopedResource() } }
+        let safetyName = safetyPrefix + stampFormatter.string(from: now)
+        // keep: 0, so taking it prunes nothing: least of all the backup that's
+        // about to be restored.
+        let safety = copyTree(from: base, into: backupBase, named: safetyName, keep: 0)
+        guard safety.ok else {
+            return (false, "Couldn't take a safety copy first — nothing was changed. \(safety.message)")
+        }
+        return replaceTree(base: base, from: backupBase.appendingPathComponent(name))
+    }
+
+    /// What an interrupted restore left in the journal folder. A staged copy
+    /// (`.quire-restore-new-…`) is only a copy of a backup and is removed once
+    /// it is an hour old (a restore on another device may be using a newer
+    /// one). `.quire-restore-old-…` holds what the restore had moved out of the
+    /// journal, which may be the only copy: it is never touched, and the
+    /// message returned says where it is.
+    nonisolated static func sweepRestoreLeftovers(base: URL, now: Date = Date()) -> String? {
+        let fm = FileManager.default
+        var kept: [String] = []
+        for url in (try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+            let name = url.lastPathComponent
+            if name.hasPrefix(".quire-restore-new-") {
+                let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                if now.timeIntervalSince(modified) > 3600 { try? fm.removeItem(at: url) }
+            } else if name.hasPrefix(".quire-restore-old-") {
+                kept.append(name)
+            }
+        }
+        guard !kept.isEmpty else { return nil }
+        return "A restore was interrupted. What it had moved out of your journal is still in the journal folder, in \(kept.sorted().joined(separator: ", ")). Check that nothing is missing before removing it."
     }
 
     /// Hidden items other than the sidecars stay where they are: .git, Syncthing's
@@ -653,9 +1166,8 @@ final class JournalStore: ObservableObject {
     nonisolated static func replaceTree(
         base: URL, from backup: URL, beforeMove: (String) throws -> Void = { _ in }
     ) -> (Bool, String) {
+        // The caller holds the security scope on the backup folder (`restore`).
         let fm = FileManager.default
-        let scoped = backup.deletingLastPathComponent().startAccessingSecurityScopedResource()
-        defer { if scoped { backup.deletingLastPathComponent().stopAccessingSecurityScopedResource() } }
         guard fm.fileExists(atPath: backup.appendingPathComponent("inbox").path)
                 || fm.fileExists(atPath: backup.appendingPathComponent("split").path)
                 || fm.fileExists(atPath: backup.appendingPathComponent("inbox.md").path)
@@ -727,17 +1239,12 @@ final class JournalStore: ObservableObject {
 
     /// Keep only the newest `keep` backups. The timestamped names sort
     /// lexicographically == chronologically, the same trick jnl uses for entries.
+    /// Only finished backups count and only they go: a restore's safety copy
+    /// and a copy still being made have other names.
     private nonisolated static func prune(in backupBase: URL, keep: Int) {
         guard keep > 0 else { return }
-        let fm = FileManager.default
-        guard let items = try? fm.contentsOfDirectory(at: backupBase, includingPropertiesForKeys: nil)
-        else { return }
-        let names = items
-            .map(\.lastPathComponent)
-            .filter { $0.hasPrefix("Quire-Backup-") }
-            .sorted(by: >)
-        for stale in names.dropFirst(keep) {
-            try? fm.removeItem(at: backupBase.appendingPathComponent(stale))
+        for stale in backupNames(in: backupBase).dropFirst(keep) {
+            try? FileManager.default.removeItem(at: backupBase.appendingPathComponent(stale))
         }
     }
 
@@ -759,63 +1266,120 @@ final class JournalStore: ObservableObject {
     func reload() {
         reloadStartedAt = Date()
         drainPendingShares()
-        loadInbox()
+        loadInbox()      // folds a legacy inbox.md or <tag>.md first, when one is there
         rebuildIndex()   // bumps `revision`
         dataSaved = totalDataSaved()
     }
 
-    /// What the journal looked like at the last reload — a stat-only walk
-    /// (count + mtimes + sizes), no file reads.
-    private var lastFingerprint = ""
+    /// What the journal looked like when the index now showing was read: each
+    /// file's size and date by path (a stat-only walk, no file reads). Recorded
+    /// when an index is published, never before: a reload that fails must leave
+    /// the next look still seeing a change.
+    private var lastSignatures: [String: String] = [:]
     private var reloadStartedAt = Date.distantPast
+    /// Files this app has written itself since then, and when. A change to one
+    /// of these alone is our own write coming back through the watcher.
+    private var ownWrites: [String: Date] = [:]
+    private func noteOwnWrite(_ rel: String?) {
+        if let rel { ownWrites[rel] = Date() }
+    }
+    /// The day ("YYYY-MM-DD") the index now showing was built for: today's
+    /// words, the streak and On this day are all relative to it.
+    private var indexDay = ""
 
     /// Foreground/activation path: skip the full reload when nothing on disk
     /// changed. Every app-switch used to trigger a complete corpus re-read.
     func reloadIfChanged() {
         guard let base = baseURL else { return }
-        // The first index is still being built (it records the fingerprint when
+        // The first index is still being built (it records the signatures when
         // it lands), so there is nothing yet to compare against: a second full
         // read here would double the time to open the journal.
         if !indexed, Date().timeIntervalSince(reloadStartedAt) < 120 { return }
-        let previous = lastFingerprint
+        if rebuildIfDayChanged() { return }
         Task.detached(priority: .userInitiated) { [weak self] in
-            let fp = Self.contentFingerprint(base: base)
-            guard fp != previous else { return }
+            let now = Self.contentSignatures(base: base)
             await MainActor.run { [weak self] in
-                guard let self, self.baseURL == base else { return }
-                self.lastFingerprint = fp
+                guard let self, self.baseURL == base, self.changedElsewhere(now) else { return }
                 self.reload()
             }
         }
     }
 
-    /// Cheap change detector over inbox.md + every journal/split md file.
-    nonisolated static func contentFingerprint(base: URL) -> String {
+    /// The index was built for a day that is no longer today (the app sat
+    /// suspended overnight, or midnight passed while it was open): read again,
+    /// so Today, the streak, the widgets and On this day are about today. No
+    /// file need have changed for this. True when it did reload.
+    @discardableResult
+    func rebuildIfDayChanged() -> Bool {
+        guard baseURL != nil, indexed, Self.dayChanged(indexDay: indexDay, today: Self.nowDate()) else { return false }
+        reload()
+        return true
+    }
+
+    nonisolated static func dayChanged(indexDay: String, today: String) -> Bool {
+        !indexDay.isEmpty && indexDay != today
+    }
+
+    /// Whether `now` differs from the last index in a file this app didn't
+    /// write. A difference only in our own files is taken as read.
+    private func changedElsewhere(_ now: [String: String]) -> Bool {
+        let changed = Self.changedPaths(lastSignatures, now)
+        guard !changed.isEmpty else { return false }
+        if changed.contains(where: { ownWrites[$0] == nil }) { return true }
+        for path in changed { lastSignatures[path] = now[path] }
+        return false
+    }
+
+    nonisolated static func changedPaths(_ a: [String: String], _ b: [String: String]) -> Set<String> {
+        var out = Set<String>()
+        for (path, signature) in a where b[path] != signature { out.insert(path) }
+        for path in b.keys where a[path] == nil { out.insert(path) }
+        return out
+    }
+
+    /// Size and date of every entry file and sidecar, by path relative to the
+    /// journal folder. Stat-only.
+    nonisolated static func contentSignatures(base: URL) -> [String: String] {
         let fm = FileManager.default
-        var parts: [String] = []
+        let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
+        var out: [String: String] = [:]
+        func note(_ url: URL, _ rel: String) {
+            guard let v = try? url.resourceValues(forKeys: Set(keys)) else { return }
+            out[rel] = "\(v.fileSize ?? 0):\(v.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+        }
         for directory in ["inbox", "journal", "split", ".quire", ".nook"] {
-            guard let en = fm.enumerator(at: base.appendingPathComponent(directory), includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) else { continue }
+            let root = base.appendingPathComponent(directory)
+            guard let en = fm.enumerator(at: root, includingPropertiesForKeys: keys) else { continue }
+            // iOS gives a folder as /var/… or /private/var/…, either way round.
+            let prefixes = [root.path + "/", "/private" + root.path + "/"]
             for case let url as URL in en where url.pathExtension == "md" || url.pathExtension == "json" {
-                if let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) {
-                    parts.append("\(url.path):\(v.fileSize ?? 0):\(v.contentModificationDate?.timeIntervalSince1970 ?? 0)")
+                let path = url.path
+                if let prefix = prefixes.first(where: { path.hasPrefix($0) }) {
+                    note(url, directory + "/" + path.dropFirst(prefix.count))
+                } else {
+                    note(url, path)
                 }
             }
         }
-        for url in (try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)) ?? [] where url.pathExtension == "md" {
-            if let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) {
-                parts.append("\(url.path):\(v.fileSize ?? 0):\(v.contentModificationDate?.timeIntervalSince1970 ?? 0)")
-            }
+        for url in (try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: keys)) ?? [] where url.pathExtension == "md" {
+            note(url, url.lastPathComponent)
         }
-        return parts.sorted().joined(separator: "|")
+        return out
     }
 
+    /// Cheap change detector over inbox.md + every journal/split md file.
+    nonisolated static func contentFingerprint(base: URL) -> String {
+        contentSignatures(base: base).map { "\($0.key):\($0.value)" }.sorted().joined(separator: "|")
+    }
+
+    /// Read the drafts. No migration here beyond a look in the folder root for
+    /// a legacy file: `migrate` lists the whole journal, and this runs after
+    /// every discrete change.
     private func loadInbox() {
         guard let core else { inboxDrafts = []; return }
-        do {
-            try core.migrate()
-            inboxDrafts = JournalParser.withOccurrences(try core.inbox().map(\.entry))
-        } catch { lastWriteError = journalErrorMessage(error) }
-
+        migrateLegacyIfPresent()
+        do { inboxDrafts = JournalParser.withOccurrences(try core.inbox().map(\.entry)) }
+        catch { lastWriteError = journalErrorMessage(error) }
     }
 
     struct BuiltIndex {
@@ -831,24 +1395,31 @@ final class JournalStore: ObservableObject {
         var splitEntries: [String: [Entry]] = [:]
     }
 
-    /// Coalesce a burst of mutations into one rebuild. The caches were already
-    /// patched synchronously by the mutation, so nothing waits on this — it
-    /// reconciles tags, stats, the widget, and Spotlight in the background.
+    /// Coalesce a burst of mutations into one rebuild. Nothing waits on it for
+    /// the entry that was edited: an edit puts its own entry into the caches
+    /// (`recordPatch`), and until a rebuild lands after any other kind of
+    /// change `entries(for:)` reads the core. The rebuild reconciles the rest:
+    /// tags, stats, the widget, Spotlight.
     private var rebuildDebounce: Task<Void, Never>?
+    /// A rebuild is owed, whether or not a timer is running for it.
+    private var rebuildWanted = false
     private var indexGeneration = 0
     private func scheduleRebuild(after nanoseconds: UInt64 = 300_000_000) {
+        rebuildWanted = true
         rebuildDebounce?.cancel()
         rebuildDebounce = Task { [weak self] in
             try? await Task.sleep(nanoseconds: nanoseconds)
-            guard !Task.isCancelled else { return }
-            self?.rebuildIndex()
+            guard !Task.isCancelled, let self else { return }
+            // An editor is open (`beginEditing`): `endEditing` runs it.
+            guard self.editingDepth == 0 else { return }
+            self.rebuildIndex()
         }
     }
 
     /// The rebuild an autosave put off, now: the composer calls this as it
     /// closes, so the screens beneath show the entry as soon as you're back.
     func settlePendingRebuild() {
-        guard let pending = rebuildDebounce, !pending.isCancelled else { return }
+        guard rebuildWanted else { return }
         rebuildIndex()
     }
 
@@ -857,14 +1428,21 @@ final class JournalStore: ObservableObject {
     private func rebuildIndex() {
         rebuildDebounce?.cancel()
         rebuildDebounce = nil
+        rebuildWanted = false
         indexGeneration &+= 1
         let generation = indexGeneration
+        // Whatever was patched before now, this build reads after it.
+        cachePatches = []
         guard let base = baseURL else {
+            buildInFlight = false
             archiveDays = []; tagCounts = []; splitJournals = []
             archiveEntries = []; splitEntriesCache = [:]
             revision &+= 1
             return
         }
+        buildInFlight = true
+        let startedSeq = mutationSeq, startedUnpatched = unpatchedSeq
+        let started = Date()
         let inboxTags = inboxDrafts.flatMap { $0.tags }
         // Drafts dated today count toward today's words (the goal is about
         // writing, not about filing) — computed here so the detached pass
@@ -877,6 +1455,11 @@ final class JournalStore: ObservableObject {
         let hasDraftToday = !draftsToday.isEmpty
         let triggerDownloads = storageMode == .iCloud
         Task.detached(priority: .userInitiated) {
+            // Taken before the read: a file that changes while the journal is
+            // being read then differs from this at the next look, and the
+            // journal is read again. (Taken after, such a change was recorded
+            // as seen and stayed unread.)
+            let signatures = Self.contentSignatures(base: base)
             // ONE pass: the index, the parsed corpus, and the stats all come
             // out of the same read of each file — this used to be two full
             // corpus reads per rebuild.
@@ -885,6 +1468,7 @@ final class JournalStore: ObservableObject {
             catch {
                 await MainActor.run { [weak self] in
                     guard let self, self.baseURL == base, self.indexGeneration == generation else { return }
+                    self.buildInFlight = false
                     self.lastWriteError = journalErrorMessage(error)
                 }
                 return
@@ -894,10 +1478,11 @@ final class JournalStore: ObservableObject {
             built.heavy.hasEntryToday = built.heavy.hasEntryToday || hasDraftToday
             let idx = built
             let heavy = idx.heavy
-            let fp = Self.contentFingerprint(base: base)
             await MainActor.run { [weak self] in
                 guard let self, self.baseURL == base, self.indexGeneration == generation else { return }
-                self.lastFingerprint = fp
+                self.lastSignatures = signatures
+                self.ownWrites = self.ownWrites.filter { $0.value >= started }
+                self.indexDay = todayISO
                 self.archiveDays = idx.days
                 var map = Dictionary(uniqueKeysWithValues: idx.tags.map { ($0.tag, $0.count) })
                 for t in inboxTags { map[t, default: 0] += 1 }
@@ -907,6 +1492,20 @@ final class JournalStore: ObservableObject {
                 self.archiveEntries = idx.corpus
                 self.indexed = true
                 self.splitEntriesCache = idx.splitEntries
+                // Editor saves made while this was being read: the read may
+                // have come before them, so their entries go on top again.
+                let later = self.cachePatches.filter { $0.seq > startedSeq }
+                self.cachePatches = []
+                self.buildInFlight = false
+                var settled = true
+                for patch in later where patch.source != .inbox {
+                    if !self.applyPatch(patch) && !self.holds(patch.updated, in: patch.destination) { settled = false }
+                }
+                self.freshAsOf = startedUnpatched
+                if !settled {
+                    self.unpatchedSeq &+= 1
+                    self.rebuildWanted = true
+                }
                 var withSizes = heavy
                 withSizes.copySizes(from: self.lastHeavyStats)
                 self.lastHeavyStats = withSizes
@@ -914,6 +1513,10 @@ final class JournalStore: ObservableObject {
                 // this rebuild, and views reloading on `.task(id: revision)`
                 // must find the fresh corpus already in place when they fire.
                 self.revision &+= 1
+                // Today now draws from the journal itself; what it shows is
+                // kept for the next launch.
+                if self.todaySnapshot != nil { self.todaySnapshot = nil }
+                self.saveTodaySnapshot()
                 self.writeWidgetSnapshot()
                 ReminderScheduler.refresh(hasEntryToday: heavy.hasEntryToday,
                                           streak: heavy.currentStreak)
@@ -964,8 +1567,13 @@ final class JournalStore: ObservableObject {
         let goal = defaults.object(forKey: "wordGoal") as? Int ?? 750
         snap.wordGoal = goalEnabled ? max(goal, 1) : 0
         if heavy.onThisDayCount > 0 {
-            snap.onThisDayPreview  = heavy.onThisDayPreview
-            snap.onThisDayExcerpt  = heavy.onThisDayExcerpt.isEmpty ? nil : heavy.onThisDayExcerpt
+            // With the app lock on, the widget gets no words from the journal:
+            // it says only that there is a memory, and how old ("A memory from
+            // three years ago"). The link still opens it, behind the lock.
+            if !defaults.bool(forKey: Self.appLockKey) {
+                snap.onThisDayPreview  = heavy.onThisDayPreview
+                snap.onThisDayExcerpt  = heavy.onThisDayExcerpt.isEmpty ? nil : heavy.onThisDayExcerpt
+            }
             snap.onThisDayYearsAgo = heavy.onThisDayYearsAgo
             snap.onThisDayDate     = heavy.onThisDayDate
             snap.onThisDayTS       = heavy.onThisDayTS
@@ -983,11 +1591,177 @@ final class JournalStore: ObservableObject {
         #endif
     }
 
+    /// AppLockManager.enabledKey; AppLock.swift isn't compiled into the tests.
+    nonisolated static let appLockKey = "appLock"
+
+    /// The lock was switched on or off: what the widget and the weekly note
+    /// may say has changed with it.
+    private func appLockChanged() {
+        guard indexed else { return }
+        writeWidgetSnapshot()
+        ResurfacingScheduler.settingsChanged(store: self)
+    }
+
+    // MARK: Today, as it was last drawn
+
+    /// What Today needs to draw, kept in the app's own container (not the App
+    /// Group: this holds titles) and read back at launch, so the page is up
+    /// before the journal has been read. It says which day and which folder it
+    /// describes; for any other day it is emptied, and for any other folder
+    /// dropped.
+    struct TodaySnapshot: Codable, Equatable {
+        /// One of today's filed entries, as its row shows it. Enough to draw
+        /// the row and to find the real entry by `id` once the journal is
+        /// read; never a reference to edit with (there is no raw text here).
+        struct Row: Codable, Equatable {
+            var file: String?
+            var index: Int?
+            var occurrence = 0
+            var ts: String
+            var suffix: String
+            /// The body lines the row shows, no more.
+            var lines: String
+
+            init(_ entry: Entry) {
+                file = entry.file; index = entry.fileIndex; occurrence = entry.occurrence
+                ts = entry.ts; suffix = entry.suffix
+                // The first line (a title, when the header has none) and the
+                // first two that aren't media: what `preview` and the row's
+                // excerpt read.
+                let all = entry.body.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+                var keep = Set<Int>()
+                if !all.isEmpty { keep.insert(0) }
+                for (i, line) in all.enumerated() where !line.trimmingCharacters(in: .whitespaces).hasPrefix("![") {
+                    keep.insert(i)
+                    if keep.count >= 3 { break }
+                }
+                lines = keep.sorted().map { String(all[$0].prefix(400)) }.joined(separator: "\n")
+            }
+
+            /// A stand-in to draw a row with. Its `id` is the real entry's.
+            var entry: Entry {
+                var e = Entry(date: String(ts.prefix(10)), ts: ts, suffix: suffix, body: lines,
+                              raw: (suffix.isEmpty ? "[\(ts)]" : "[\(ts)] \(suffix)") + (lines.isEmpty ? "" : "\n" + lines))
+                e.file = file; e.fileIndex = index; e.occurrence = occurrence
+                return e
+            }
+        }
+
+        /// An entry from this day in an earlier year: its title and tags.
+        struct Memory: Codable, Equatable, Identifiable {
+            var id: String
+            var date: String
+            var title: String
+            var tags: [String]
+        }
+
+        var day: String
+        /// The journal folder it was read from.
+        var base: String
+        /// Filed today, in file order.
+        var entries: [Row] = []
+        var onThisDay: [Memory] = []
+        var wordsToday = 0
+        var streak = 0
+        var bestStreak = 0
+        var inboxDrafts = 0
+        var totalEntries = 0
+        var totalWords = 0
+
+        /// This snapshot as Today should draw it on `today`. On its own day,
+        /// itself. On a later day nothing in it is about today any more:
+        /// today's entries, its words and the memories go, and the streak
+        /// survives only if it ran through the day before.
+        func rolled(to today: String) -> TodaySnapshot {
+            guard day != today else { return self }
+            var next = self
+            next.day = today
+            next.entries = []
+            next.onThisDay = []
+            next.wordsToday = 0
+            next.streak = (Self.dayAfter(day) == today && !entries.isEmpty) ? streak : 0
+            return next
+        }
+
+        static func dayAfter(_ day: String) -> String? {
+            let f = DateFormatter()
+            f.dateFormat = "yyyy-MM-dd"
+            f.locale = Locale(identifier: "en_US_POSIX")
+            guard let date = f.date(from: day),
+                  let next = Calendar.current.date(byAdding: .day, value: 1, to: date) else { return nil }
+            return f.string(from: next)
+        }
+    }
+
+    /// Today's page as the caches have it now.
+    func makeTodaySnapshot(today day: String? = nil) -> TodaySnapshot? {
+        guard let base = baseURL else { return nil }
+        let today = day ?? Self.nowDate()
+        var snap = TodaySnapshot(day: today, base: base.path)
+        snap.entries = (archiveEntries.first { $0.date == today }?.entries ?? []).map(TodaySnapshot.Row.init)
+        let monthDay = String(today.suffix(5)), year = String(today.prefix(4))
+        for day in archiveEntries where day.date.hasSuffix(monthDay) && String(day.date.prefix(4)) < year {
+            for entry in day.entries.prefix(12) {
+                snap.onThisDay.append(.init(id: entry.id, date: day.date,
+                                            title: String(entry.preview.trimmingCharacters(in: .whitespaces).prefix(400)),
+                                            tags: entry.tags))
+            }
+            if snap.onThisDay.count >= 60 { break }
+        }
+        let heavy = lastHeavyStats
+        snap.wordsToday = heavy.wordsToday
+        snap.streak = heavy.currentStreak
+        snap.bestStreak = heavy.bestStreak
+        snap.inboxDrafts = inboxDrafts.count
+        snap.totalEntries = heavy.entries
+        snap.totalWords = heavy.words
+        return snap
+    }
+
+    private var lastTodaySaved: TodaySnapshot?
+
+    /// Keep Today for the next launch. Skipped when nothing on the page moved.
+    private func saveTodaySnapshot() {
+        #if DEBUG
+        if isTestStore { return }
+        #endif
+        guard let snap = makeTodaySnapshot(), snap != lastTodaySaved, let url = Self.todaySnapshotURL else { return }
+        lastTodaySaved = snap
+        Task.detached(priority: .utility) { Self.writeTodaySnapshot(snap, to: url) }
+    }
+
+    /// The journal folder is being changed: what Today showed is about the old one.
+    private func clearTodaySnapshot() {
+        todaySnapshot = nil
+        lastTodaySaved = nil
+        if let url = Self.todaySnapshotURL { try? FileManager.default.removeItem(at: url) }
+    }
+
+    /// In Application Support, inside the app's own container.
+    nonisolated static var todaySnapshotURL: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.caddickbrown.quire", isDirectory: true)
+            .appendingPathComponent("today.json")
+    }
+
+    nonisolated static func writeTodaySnapshot(_ snap: TodaySnapshot, to url: URL) {
+        guard let data = try? JSONEncoder().encode(snap) else { return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // Unreadable while the device is locked, like anything else that holds
+        // journal text and isn't the journal.
+        try? data.write(to: url, options: [.atomic, .completeFileProtection])
+    }
+
+    nonisolated static func loadTodaySnapshot(from url: URL? = todaySnapshotURL) -> TodaySnapshot? {
+        guard let url, let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(TodaySnapshot.self, from: data)
+    }
+
     /// The first body line worth showing under an entry's preview: not the
     /// preview itself, not a media link.
     nonisolated static func excerpt(of entry: Entry) -> String {
         let preview = entry.preview.trimmingCharacters(in: .whitespaces)
-        let line = entry.body.split(separator: "\n", omittingEmptySubsequences: true)
+        let line = entry.shownBody.split(separator: "\n", omittingEmptySubsequences: true)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty && !$0.hasPrefix("![") && $0 != preview } ?? ""
         return line.count <= 140 ? line : String(line.prefix(140)).trimmingCharacters(in: .whitespaces) + "…"
@@ -1005,7 +1779,7 @@ final class JournalStore: ObservableObject {
             out.append(SpotlightIndexer.IndexableEntry(
                 id: n == 0 ? base : "\(base)#\(n)",
                 title: e.preview.isEmpty ? "Journal entry" : e.preview,
-                body: String(e.body.prefix(400)),
+                body: String(e.shownBody.prefix(400)),
                 keywords: e.tags.map { String($0.dropFirst()) },
                 ts: e.ts))
         }
@@ -1038,17 +1812,7 @@ final class JournalStore: ObservableObject {
         for u in urls {
             let entries = JournalParser.withOccurrences((grouped[staticFileToDate(u)] ?? []).map(\.entry))
             let content = entries.map(\.raw).joined(separator: "\n\n")
-            var day = ArchiveDay(date: staticFileToDate(u),
-                                 count: entries.count,
-                                 preview: entries.first?.preview ?? "")
-            day.hasStarred = entries.contains { $0.isStarred }
-            for path in mediaPaths(in: content) {
-                switch MediaKind(path: path) {
-                case .image: day.hasPhoto = true
-                case .video: day.hasVideo = true
-                case .audio: day.hasAudio = true
-                }
-            }
+            let day = summary(date: staticFileToDate(u), entries: entries)
             idx.days.append(day)
             if !entries.isEmpty { idx.corpus.append((date: day.date, entries: entries)) }
             for t in JournalParser.splitTags(content) { tagMap[t, default: 0] += 1 }
@@ -1119,8 +1883,12 @@ final class JournalStore: ObservableObject {
         archiveEntries
     }
 
-    /// Entries filed on a given day, chronological.
+    /// Entries filed on a given day, chronological. From the index in memory
+    /// when it says what the disk does; from the core (a read of the whole
+    /// journal, so not something to call in a loop) only before the first
+    /// index, and between a change the caches weren't given and its rebuild.
     func entries(for date: String) -> [Entry] {
+        if cacheFresh { return archiveEntries.first { $0.date == date }?.entries ?? [] }
         guard let core else { return [] }
         do { return JournalParser.withOccurrences(try core.load().filter { $0.source == "journal" && $0.date == date }.map(\.entry)) }
         catch { lastWriteError = journalErrorMessage(error); return [] }
@@ -1245,15 +2013,30 @@ final class JournalStore: ObservableObject {
     /// editor must not advance its baseline on a write that didn't happen.
     @discardableResult
     func updateJournalEntry(name: String, original: Entry, newText: String, reindex: Bool = true) -> Bool {
-        guard let result = coreMutation({ try $0.update(original, text: newText) }) else { return false }
+        guard let result = coreMutation(patched: true, { try $0.update(original, text: newText) }) else { return false }
         lastWritten = result
+        patchAfterUpdate(original, result, source: .journal(name: name))
         publishCoreChange(reindex: reindex)
         return true
+    }
+
+    /// An update through one of the older (Mac) paths: the same patch the
+    /// editor's saves make, so the lists are right before the rebuild lands
+    /// (and at all, when the caller asked for no rebuild).
+    private func patchAfterUpdate(_ original: Entry, _ result: CoreWritten, source: EntrySource) {
+        entryTouched(original)
+        guard var entry = JournalParser.parseEntries(result.raw).first else { unpatchedSeq &+= 1; return }
+        entry.file = result.file
+        entry.fileIndex = result.index
+        var destination = source
+        if case .archive = source { destination = .archive(date: entry.date) }
+        recordPatch(replacing: original, with: entry, source: source, destination: destination)
     }
 
     @discardableResult
     func deleteJournalEntry(name: String, entry: Entry) -> Bool {
         let ok = coreMutation { try $0.delete(entry); return true } ?? false
+        if ok { entryTouched(entry) }
         publishCoreChange()
         return ok
     }
@@ -1314,7 +2097,8 @@ final class JournalStore: ObservableObject {
         guard let core else { return previous }
         if previous == nil { composerEntry = nil }
         if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if let composerEntry { _ = coreMutation { try $0.delete(composerEntry); return true } }
+            // Drafts only: the archive caches are as right as they were.
+            if let composerEntry { _ = coreMutation(patched: true) { try $0.delete(composerEntry); return true } }
             self.composerEntry = nil
             publishCoreChange(reindex: reindex)
             return nil
@@ -1328,7 +2112,7 @@ final class JournalStore: ObservableObject {
                 composerEntry = matches[0].entry
             } catch { lastWriteError = journalErrorMessage(error); return previous }
         }
-        let result: CoreWritten? = coreMutation { core in
+        let result: CoreWritten? = coreMutation(patched: true) { core in
             if let composerEntry { return try core.update(composerEntry, text: Self.makeEntry(timestamp: timestamp, title: title, body: body).raw) }
             var ts = timestamp
             let used = Set(try core.inbox().map(\.ts))
@@ -1482,7 +2266,84 @@ final class JournalStore: ObservableObject {
         return map
     }
 
-    func deleteAsset(_ url: URL) { try? fm.removeItem(at: url) }
+    /// Remove a file from the Media Library. It is moved, not unlinked: into
+    /// `.quire/media-cleanup/<UTC time>/deleted/`, where it stays for
+    /// `recoveryDays`. False (and `lastWriteError`) when it couldn't be moved.
+    @discardableResult
+    func deleteAsset(_ url: URL) -> Bool {
+        guard let base = baseURL, let core else {
+            lastWriteError = "The journal folder is unavailable."
+            return false
+        }
+        do {
+            let rel = Self.relativePath(of: url, under: base)
+            guard rel.hasPrefix("assets/"), fm.fileExists(atPath: url.path) else {
+                throw CocoaError(.fileNoSuchFile, userInfo: [NSLocalizedDescriptionKey: "It is no longer in the media folder."])
+            }
+            let folder = Self.recoveryFolder(sidecar: try core.sidecar(write: true), bucket: "deleted")
+            try AppleVault(base: base).rename(from: rel, to: folder + "/" + rel)
+            lastLocalWriteAt = Date()
+            Task.detached(priority: .utility) { Self.pruneRecovery(base: base) }
+            return true
+        } catch {
+            lastWriteError = "Couldn't delete \(url.lastPathComponent): \(journalErrorMessage(error))"
+            return false
+        }
+    }
+
+    // MARK: Recovery folder (.quire/media-cleanup, as core/src/media_cleanup.rs)
+
+    /// How long a parked original is kept. The core's RECOVERY_DAYS.
+    nonisolated static let recoveryDays = 30
+
+    /// A run's folder name: its UTC time, `20261020T101500.123456789`. The core
+    /// prunes by the first fifteen characters, so the shape is its.
+    nonisolated static func recoveryStamp(_ date: Date = Date()) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd'T'HHmmss"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        let whole = date.timeIntervalSince1970.rounded(.down)
+        let nanos = Int((date.timeIntervalSince1970 - whole) * 1_000_000_000)
+        return f.string(from: Date(timeIntervalSince1970: whole)) + String(format: ".%09d", max(0, min(nanos, 999_999_999)))
+    }
+
+    /// `<sidecar>/media-cleanup/<stamp>/<bucket>`: files go under it at their
+    /// own journal-relative path, as the core's cleanup lays them out.
+    /// `orphans` is the core's own bucket; `deleted` and `datasaver` are Apple's.
+    nonisolated static func recoveryFolder(sidecar: String, stamp: String = recoveryStamp(), bucket: String) -> String {
+        "\(sidecar)/media-cleanup/\(stamp)/\(bucket)"
+    }
+
+    /// Remove recovery folders older than `days`, judged by the UTC time in
+    /// their name. A folder named anything else is left alone, and links are
+    /// not followed. Returns how many went. Runs when media is cleared,
+    /// deleted or compressed, never on a timer.
+    @discardableResult
+    nonisolated static func pruneRecovery(base: URL, days: Int = recoveryDays, now: Date = Date()) -> Int {
+        let fm = FileManager.default
+        let root = base.appendingPathComponent(".quire/media-cleanup", isDirectory: true)
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey]
+        guard let items = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: keys) else { return 0 }
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd'T'HHmmss"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        let cutoff = now.addingTimeInterval(-Double(days) * 24 * 60 * 60)
+        var pruned = 0
+        for item in items {
+            let name = item.lastPathComponent
+            guard name.count >= 15, let when = f.date(from: String(name.prefix(15))), when < cutoff,
+                  let v = try? item.resourceValues(forKeys: Set(keys)), v.isDirectory == true, v.isSymbolicLink != true
+            else { continue }
+            var removed = false
+            NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: item, options: .forDeleting, error: nil) { target in
+                removed = (try? fm.removeItem(at: target)) != nil
+            }
+            if removed { pruned += 1 }
+        }
+        return pruned
+    }
 
     nonisolated private static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tiff", "tif", "bmp",
@@ -1495,11 +2356,64 @@ final class JournalStore: ObservableObject {
         catch { lastWriteError = journalErrorMessage(error); return [] }
     }
 
+    /// `orphanAssets`, off the main actor: the check reads every entry file.
+    func orphanAssetsAsync() async -> [URL] {
+        guard let base = baseURL else { return [] }
+        let found: Result<[String], Error> = await Task.detached(priority: .userInitiated) {
+            Result { try CoreJournal(base: base).call("orphans") }
+        }.value
+        switch found {
+        case .success(let files): return files.map { base.appendingPathComponent($0) }
+        case .failure(let error): lastWriteError = journalErrorMessage(error); return []
+        }
+    }
+
+    /// Clear the unused media: each file is moved into the recovery folder
+    /// (never read into memory: one was a 1 GB video), after the core has
+    /// checked again that nothing links it. Returns how many were cleared.
     @discardableResult
     func deleteOrphanAssets() -> Int {
-        let count: Int = coreMutation { try $0.call("delete_orphans") } ?? 0
-        if count > 0 { scheduleRebuild() }
-        return count
+        guard let base = baseURL else { lastWriteError = "The journal folder is unavailable."; return 0 }
+        let outcome = Self.archiveOrphans(base: base)
+        return finishOrphans(outcome)
+    }
+
+    /// `deleteOrphanAssets`, off the main actor.
+    @discardableResult
+    func deleteOrphanAssetsAsync() async -> Int {
+        guard let base = baseURL else { lastWriteError = "The journal folder is unavailable."; return 0 }
+        let outcome = await Task.detached(priority: .userInitiated) { Self.archiveOrphans(base: base) }.value
+        return finishOrphans(outcome)
+    }
+
+    private func finishOrphans(_ outcome: (cleared: Int, error: String?)) -> Int {
+        if let error = outcome.error { lastWriteError = error }
+        if outcome.cleared > 0 {
+            lastLocalWriteAt = Date()
+            scheduleRebuild()
+        }
+        return outcome.cleared
+    }
+
+    /// The core says which files nothing links (a fresh check, not the list
+    /// the person was shown); each is renamed into this run's recovery folder
+    /// under file coordination. One that can't be moved stays where it is.
+    nonisolated static func archiveOrphans(base: URL) -> (cleared: Int, error: String?) {
+        let core = CoreJournal(base: base)
+        var cleared = 0
+        var failure: String?
+        do {
+            let orphans: [String] = try core.call("orphans")
+            guard !orphans.isEmpty else { return (0, nil) }
+            let folder = recoveryFolder(sidecar: try core.sidecar(write: true), bucket: "orphans")
+            let vault = AppleVault(base: base)
+            for rel in orphans where rel.hasPrefix("assets/") {
+                do { try vault.rename(from: rel, to: folder + "/" + rel); cleared += 1 }
+                catch { failure = failure ?? "Couldn't clear \((rel as NSString).lastPathComponent): \(journalErrorMessage(error))" }
+            }
+        } catch { failure = journalErrorMessage(error) }
+        pruneRecovery(base: base)
+        return (cleared, failure)
     }
 
     /// Entries that reference an asset by file name (for "go to file").
@@ -1557,18 +2471,21 @@ final class JournalStore: ObservableObject {
     /// Copy an existing file (e.g. a recorded video) into assets/ and return the
     /// relative path. Better than loading large media into memory.
     func importAsset(from url: URL) -> String? {
-        guard let dir = newAssetsDirURL else { return nil }
+        guard let dir = newAssetsDirURL, let dest = Self.copyAsset(from: url, into: dir) else { return nil }
+        let rel = assetRelativePath(dest)
+        scheduleCompression(assetRelPath: rel)   // video/audio, in the background
+        return rel
+    }
+
+    /// The copy itself, callable off the main actor. Nil on failure.
+    nonisolated static func copyAsset(from url: URL, into dir: URL) -> URL? {
+        let fm = FileManager.default
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let ext = url.pathExtension.isEmpty ? "mov" : url.pathExtension.lowercased()
         let dest = dir.appendingPathComponent("\(UUID().uuidString).\(ext)")
         let ok = url.startAccessingSecurityScopedResource()
         defer { if ok { url.stopAccessingSecurityScopedResource() } }
-        do {
-            try fm.copyItem(at: url, to: dest)
-            let rel = assetRelativePath(dest)
-            scheduleCompression(assetRelPath: rel)   // video/audio, in the background
-            return rel
-        } catch { return nil }
+        return (try? fm.copyItem(at: url, to: dest)) != nil ? dest : nil
     }
 
     /// Save image data into the journal's assets folder and return the relative
@@ -1590,12 +2507,24 @@ final class JournalStore: ObservableObject {
     }
 
     func saveAsset(_ data: Data, ext: String) -> String? {
-        guard let dir = newAssetsDirURL else { return nil }
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard let dir = newAssetsDirURL,
+              let stored = Self.storeAsset(data, ext: ext, into: dir,
+                                           dataSaver: UserDefaults.standard.bool(forKey: "dataSaver")) else { return nil }
+        let rel = assetRelativePath(stored.url)
+        if stored.saved > 0 { recordCompression(key: Self.ledgerKey(assetRelPath: rel), saved: stored.saved) }
+        // Images are handled synchronously above; video/audio compress in the background.
+        if !ImageDownsampler.compressible.contains(stored.url.pathExtension) { scheduleCompression(assetRelPath: rel) }
+        return rel
+    }
+
+    /// Write attached data into `dir` under a fresh name, as a JPEG when it
+    /// arrived as HEIC and downsampled when Data Saver is on. Callable off the
+    /// main actor; the caller records `saved` in the ledger. Nil on failure.
+    nonisolated static func storeAsset(_ data: Data, ext: String, into dir: URL, dataSaver: Bool) -> (url: URL, id: String, saved: Int)? {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let id = UUID().uuidString
         var lower = ext.lowercased()
         var out = data
-        let dataSaver = UserDefaults.standard.bool(forKey: "dataSaver")
         // An iPhone photo arrives as HEIC, which Wander on Linux and Android
         // can't show: it is stored as a JPEG instead (Data Saver's size applies
         // in the same pass, so it isn't encoded twice).
@@ -1608,17 +2537,9 @@ final class JournalStore: ObservableObject {
            let shrunk = ImageDownsampler.downsample(data), shrunk.count < data.count {
             out = shrunk
         }
-        let name = "\(id).\(lower)"
-        do {
-            try out.write(to: dir.appendingPathComponent(name), options: .atomic)
-            if out.count < data.count { recordCompression(assetID: id, saved: data.count - out.count) }
-            let rel = assetRelativePath(dir.appendingPathComponent(name))
-            // Images are handled synchronously above; video/audio compress in the background.
-            if !ImageDownsampler.compressible.contains(lower) { scheduleCompression(assetRelPath: rel) }
-            return rel
-        } catch {
-            return nil
-        }
+        let url = dir.appendingPathComponent("\(id).\(lower)")
+        guard (try? out.write(to: url, options: .atomic)) != nil else { return nil }
+        return (url, id, max(0, data.count - out.count))
     }
 
     // MARK: Data Saver (image compression + merged, per-device savings tally)
@@ -1657,51 +2578,122 @@ final class JournalStore: ObservableObject {
     /// Bytes saved across ALL devices (merged sum — the number shown in Settings).
     func totalDataSaved() -> Int { allDataSaverRecords().reduce(0) { $0 + $1.savedBytes } }
 
-    /// Asset uuids already compressed on ANY device, so batch runs never repeat one.
-    private func allCompressedAssetIDs() -> Set<String> {
-        Set(allDataSaverRecords().flatMap(\.assets))
+    /// What every device's ledger lists as dealt with, so batch runs never repeat one.
+    private func allHandledAssets() -> LedgerHandled {
+        LedgerHandled(Set(allDataSaverRecords().flatMap(\.assets)))
     }
 
-    private func recordCompression(assetID: String, saved: Int) {
+    /// An asset's name in the ledger: its path under `assets/` with its
+    /// extension (`2026/09/x.jpg`), the core's `asset_key`.
+    nonisolated static func ledgerKey(assetRelPath rel: String) -> String {
+        rel.hasPrefix("assets/") ? String(rel.dropFirst("assets/".count)) : rel
+    }
+
+    /// The ids one asset is listed under, as the core's `ledger_add` writes
+    /// them: the key, and the key without its extension (what Nook and earlier
+    /// Quires look for). Two ids, one asset: nothing counts the list.
+    nonisolated static func ledgerIDs(forKey key: String) -> [String] {
+        let short = (key as NSString).deletingPathExtension
+        return short == key || short.isEmpty ? [key] : [key, short]
+    }
+
+    /// The assets the ledgers list as done, read the way the core's `Handled`
+    /// reads them. Three forms are about: the path under `assets/` with its
+    /// extension (`2026/09/x.jpg`, the core since 0.12 and this app now), the
+    /// same without the extension (`2026/09/x`), and the bare file name
+    /// without it (`x`, what this app wrote before). A short form can't tell
+    /// `x.jpg` from `x.mp4`, so it only counts when no long form explains it.
+    struct LedgerHandled {
+        private let ids: Set<String>
+        /// Short forms a long form accounts for, whole and by file name.
+        private let explained: Set<String>
+
+        init(_ ids: Set<String>) {
+            self.ids = ids
+            var explained = Set<String>()
+            for id in ids {
+                let ext = (id as NSString).pathExtension.lowercased()
+                guard !ext.isEmpty, ImageDownsampler.compressible.contains(ext) || ImageDownsampler.convertible.contains(ext)
+                        || MediaTranscoder.video.contains(ext) || MediaTranscoder.audio.contains(ext) else { continue }
+                let short = (id as NSString).deletingPathExtension
+                explained.insert(short)
+                explained.insert((short as NSString).lastPathComponent)
+            }
+            self.explained = explained
+        }
+
+        func has(key: String) -> Bool {
+            if ids.contains(key) { return true }
+            let short = (key as NSString).deletingPathExtension
+            if ids.contains(short), !explained.contains(short) { return true }
+            let name = (short as NSString).lastPathComponent
+            return name != short && ids.contains(name) && !explained.contains(name)
+        }
+    }
+
+    /// One asset's saving, counted once: a key the ledger already lists adds
+    /// no bytes, as in the core's `ledger_add`.
+    private func recordCompression(key: String, saved: Int) {
         guard var rec = loadMyRecord() else { return }
+        if !rec.assets.contains(key) { rec.savedBytes += max(0, saved) }
+        for id in Self.ledgerIDs(forKey: key) where !rec.assets.contains(id) { rec.assets.append(id) }
+        saveMyRecord(rec)
+        dataSaved = totalDataSaved()
+    }
+
+    /// Several assets at once (a batch run): one read and one write of the
+    /// ledger for all of them. `keys` are those now dealt with, gain or none.
+    private func recordCompressions(keys: [String], saved: Int) {
+        guard !keys.isEmpty, var rec = loadMyRecord() else { return }
         rec.savedBytes += max(0, saved)
-        if !rec.assets.contains(assetID) { rec.assets.append(assetID) }
+        var known = Set(rec.assets)
+        for id in keys.flatMap(Self.ledgerIDs(forKey:)) where known.insert(id).inserted { rec.assets.append(id) }
         saveMyRecord(rec)
         dataSaved = totalDataSaved()
     }
 
     /// Mark an asset as handled (no bytes gained) so batch runs skip it next time.
-    private func markHandled(assetID: String) {
+    private func markHandled(key: String) {
         guard var rec = loadMyRecord() else { return }
-        guard !rec.assets.contains(assetID) else { return }
-        rec.assets.append(assetID)
+        let missing = Self.ledgerIDs(forKey: key).filter { !rec.assets.contains($0) }
+        guard !missing.isEmpty else { return }
+        rec.assets.append(contentsOf: missing)
         saveMyRecord(rec)
     }
 
     /// Kick off background video/audio transcoding for a just-attached asset (when
     /// Data Saver is on). The original is stored/returned immediately; the file is
-    /// swapped in place (same name/extension) once the export finishes.
+    /// swapped in place (same name/extension) once the export finishes, and the
+    /// original goes to the recovery folder for `recoveryDays`.
     func scheduleCompression(assetRelPath: String) {
         guard UserDefaults.standard.bool(forKey: "dataSaver"),
-              let url = assetURL(forRelative: assetRelPath) else { return }
+              let base = baseURL, let url = assetURL(forRelative: assetRelPath) else { return }
         let ext = url.pathExtension.lowercased()
         guard MediaTranscoder.video.contains(ext) || MediaTranscoder.audio.contains(ext) else { return }
-        let id = url.deletingPathExtension().lastPathComponent
+        let key = Self.ledgerKey(assetRelPath: assetRelPath)
+        // Without somewhere to park the original it is not replaced at all.
+        guard let sidecar = try? core?.sidecar(write: true) else { return }
+        let recovery = base.appendingPathComponent(Self.recoveryFolder(sidecar: sidecar, bucket: "datasaver") + "/" + assetRelPath)
         Task.detached(priority: .background) {
             #if os(iOS)
             // Give the export a grace period if the app is backgrounded mid-encode.
             let bgTask = await MainActor.run { UIApplication.shared.beginBackgroundTask(withName: "quire.compress") }
             defer { if bgTask != .invalid { Task { @MainActor in UIApplication.shared.endBackgroundTask(bgTask) } } }
             #endif
-            let saved = await MediaTranscodeQueue.shared.run { await MediaTranscoder.compressInPlace(url: url, ext: ext) }
+            let outcome = await MediaTranscodeQueue.shared.run { await MediaTranscoder.compress(url: url, ext: ext, recovery: recovery) }
+            Self.pruneRecovery(base: base)
             await MainActor.run {
-                if let saved, saved > 0 { self.recordCompression(assetID: id, saved: saved) }
-                else { self.markHandled(assetID: id) }
+                switch outcome {
+                case .saved(let saved): self.recordCompression(key: key, saved: saved)
+                case .noGain: self.markHandled(key: key)
+                // Not marked: it is tried again by "Compress Existing Media".
+                case .failed: break
+                }
             }
         }
     }
 
-    struct MediaCompressionResult { var images = 0; var videos = 0; var audios = 0; var bytesSaved = 0; var converted = 0 }
+    struct MediaCompressionResult { var images = 0; var videos = 0; var audios = 0; var bytesSaved = 0; var converted = 0; var failed = 0 }
 
     /// Turn every HEIC/HEIF in assets/ into a JPEG under the same UUID, and point
     /// every link at it, so the photo shows in Wander on Linux and Android too.
@@ -1709,85 +2701,161 @@ final class JournalStore: ObservableObject {
     /// handled (Quire on Linux can't read one) still wants converting.
     ///
     /// The JPEG is written first, then every file linking to the HEIC is
-    /// rewritten, and only then is the HEIC removed — stopped at any point, every
-    /// link still resolves. A file that can't be read (an iCloud placeholder, say)
-    /// keeps the HEIC for the next run rather than leaving that file's link dead.
-    @discardableResult
-    func convertHEICAssets() -> Int {
-        let items = allAssets().map(\.url)
-        let heics = items.filter { ImageDownsampler.convertible.contains($0.pathExtension.lowercased()) }
+    /// rewritten, and only then is the HEIC moved to the recovery folder —
+    /// stopped at any point, every link still resolves. A file that can't be
+    /// read (an iCloud placeholder, say) keeps every HEIC for the next run
+    /// rather than leaving that file's link dead.
+    ///
+    /// The entry files are read once for the whole run, off the main actor,
+    /// keeping only those that mention a HEIC at all: this used to read every
+    /// file in the journal again for each photo.
+    private func convertHEICAssets(recovery: String) async -> Int {
+        guard let base = baseURL, let dir = assetsDirURL else { return 0 }
+        let heics = await Task.detached(priority: .utility) {
+            Self.listAssets(in: dir).map(\.url).filter { ImageDownsampler.convertible.contains($0.pathExtension.lowercased()) }
+        }.value
         guard !heics.isEmpty else { return 0 }
         let dataSaver = UserDefaults.standard.bool(forKey: "dataSaver")
-        let files = allContentFileURLs()
+        let index = await Task.detached(priority: .utility) { Self.heicLinkIndex(base: base) }.value
+        var texts = index.texts
+        let vault = AppleVault(base: base)
 
         var converted = 0
         for heic in heics {
-            let jpgURL = heic.deletingLastPathComponent().appendingPathComponent("\(heic.deletingPathExtension().lastPathComponent).jpg")
-            guard let data = try? Data(contentsOf: heic),
-                  let jpg = ImageDownsampler.jpeg(data, dataSaver: dataSaver),
-                  (try? jpg.write(to: jpgURL, options: .atomic)) != nil else { continue }
-            var relinked = true
-            for file in files where fm.fileExists(atPath: file.path) {
-                guard let text = try? readContentFile(file) else { relinked = false; continue }
-                guard let renamed = MediaLinks.renaming(text, from: heic.lastPathComponent,
-                                                        to: jpgURL.lastPathComponent) else { continue }
-                do { try writeFile(file, renamed, replacing: text) } catch { relinked = false }
+            guard baseURL == base else { break }
+            let jpgName = "\(heic.deletingPathExtension().lastPathComponent).jpg"
+            let jpgURL = heic.deletingLastPathComponent().appendingPathComponent(jpgName)
+            let written = await Task.detached(priority: .utility) { () -> Bool in
+                guard let data = try? Data(contentsOf: heic),
+                      let jpg = ImageDownsampler.jpeg(data, dataSaver: dataSaver) else { return false }
+                return (try? jpg.write(to: jpgURL, options: .atomic)) != nil
+            }.value
+            guard written else { continue }
+            var relinked = index.complete
+            for (rel, text) in texts {
+                guard let renamed = MediaLinks.renaming(text, from: heic.lastPathComponent, to: jpgName) else { continue }
+                do {
+                    try writeFile(base.appendingPathComponent(rel), renamed, replacing: text)
+                    texts[rel] = renamed
+                } catch { relinked = false }
             }
-            if relinked {
-                try? fm.removeItem(at: heic)
-                converted += 1
-            }
+            guard relinked else { continue }
+            // Parked, not removed: a link this didn't know to rewrite (a
+            // template, transfer.md) can still be put right by hand.
+            let rel = Self.relativePath(of: heic, under: base)
+            try? vault.rename(from: rel, to: recovery + "/" + rel)
+            converted += 1
         }
-        if converted > 0 { reload() }
         return converted
     }
 
+    /// Every entry file that mentions a HEIC, with its text, and whether every
+    /// file could be read (`complete`).
+    nonisolated static func heicLinkIndex(base: URL) -> (texts: [String: String], complete: Bool) {
+        let core = CoreJournal(base: base)
+        guard let files: [String] = try? core.call("files") else { return ([:], false) }
+        var texts: [String: String] = [:]
+        var complete = true
+        for rel in files {
+            guard let text = try? core.text(rel) else { complete = false; continue }
+            let lower = text.lowercased()
+            if lower.contains(".heic") || lower.contains(".heif") { texts[rel] = text }
+        }
+        return (texts, complete)
+    }
+
+    /// One image, re-encoded smaller in place with its original parked in the
+    /// recovery folder. Off the main actor.
+    nonisolated static func compressImage(at url: URL, recovery: URL) -> MediaTranscoder.Outcome {
+        let fm = FileManager.default
+        guard let data = try? Data(contentsOf: url) else { return .failed }
+        // An animated PNG or a multi-page TIFF would come out as one frame.
+        if ImageDownsampler.isMultiFrame(data) { return .noGain }
+        guard let shrunk = ImageDownsampler.downsample(data) else { return .failed }
+        guard shrunk.count < data.count else { return .noGain }
+        let tmp = url.deletingLastPathComponent().appendingPathComponent("._tmp_\(UUID().uuidString).\(url.pathExtension)")
+        do {
+            try shrunk.write(to: tmp)
+            try MediaTranscoder.swap(tmp, into: url, parking: recovery)
+            return .saved(data.count - shrunk.count)
+        } catch {
+            try? fm.removeItem(at: tmp)
+            return .failed
+        }
+    }
+
     /// Compress existing media (images, video, audio) that no device has processed
-    /// yet, in place (same filename/format, so markdown links are untouched). Images
-    /// re-encode synchronously; video/audio transcode via the serial queue. Skips
-    /// anything already handled elsewhere so nothing is compressed — or counted —
-    /// twice. Async because video/audio export is long-running.
+    /// yet, in place (same filename/format, so markdown links are untouched),
+    /// each original parked in `.quire/media-cleanup/` for `recoveryDays`. The
+    /// work runs off the main actor, one file at a time (video/audio through
+    /// the serial queue), with `mediaProgress` moving as it goes. Skips anything
+    /// already handled elsewhere so nothing is compressed — or counted — twice.
+    /// A file is marked handled when it was compressed or when compressing
+    /// gained nothing; one that failed (still downloading, unreadable just
+    /// now) is left to be tried again.
     @discardableResult
     func compressExistingMedia() async -> MediaCompressionResult {
-        let converted = convertHEICAssets()
-        let items = allAssets().map(\.url)
-        let already = allCompressedAssetIDs()
-        let candidates = items.filter { url in
-            guard !url.hasDirectoryPath else { return false }
-            let ext = url.pathExtension.lowercased()
-            let known = ImageDownsampler.compressible.contains(ext)
-                || MediaTranscoder.video.contains(ext) || MediaTranscoder.audio.contains(ext)
-            return known && !already.contains(url.deletingPathExtension().lastPathComponent)
-        }
+        guard mediaProgress == nil, let base = baseURL, let core, let dir = assetsDirURL else { return MediaCompressionResult() }
+        let sidecar: String
+        do { sidecar = try core.sidecar(write: true) }
+        catch { lastWriteError = journalErrorMessage(error); return MediaCompressionResult() }
+        mediaProgress = (0, 0)
+        defer { mediaProgress = nil }
+        let recovery = Self.recoveryFolder(sidecar: sidecar, bucket: "datasaver")
+        await Task.detached(priority: .utility) { Self.sweepStaleTempFilesNow(under: base) }.value
+
         var res = MediaCompressionResult()
-        res.converted = converted
+        res.converted = await convertHEICAssets(recovery: recovery)
+        let already = allHandledAssets()
+        let candidates = await Task.detached(priority: .utility) {
+            Self.listAssets(in: dir).map(\.url).filter { url in
+                guard !url.hasDirectoryPath else { return false }
+                let ext = url.pathExtension.lowercased()
+                let known = ImageDownsampler.compressible.contains(ext)
+                    || MediaTranscoder.video.contains(ext) || MediaTranscoder.audio.contains(ext)
+                return known && !already.has(key: Self.ledgerKey(assetRelPath: Self.relativePath(of: url, under: base)))
+            }
+        }.value
         mediaProgress = (0, candidates.count)
+        // The ledger is written every so often, not once per file.
+        var handled: [String] = []
+        var savedSinceFlush = 0
+        func flush() {
+            recordCompressions(keys: handled, saved: savedSinceFlush)
+            handled = []; savedSinceFlush = 0
+        }
         for (i, url) in candidates.enumerated() {
+            guard baseURL == base else { break }
             let ext = url.pathExtension.lowercased()
-            let id = url.deletingPathExtension().lastPathComponent
-            if ImageDownsampler.compressible.contains(ext) {
-                if let data = try? Data(contentsOf: url),
-                   let shrunk = ImageDownsampler.downsample(data), shrunk.count < data.count,
-                   (try? shrunk.write(to: url, options: .atomic)) != nil {
-                    res.images += 1
-                    res.bytesSaved += data.count - shrunk.count
-                    recordCompression(assetID: id, saved: data.count - shrunk.count)
-                } else {
-                    markHandled(assetID: id)
-                }
+            let key = Self.ledgerKey(assetRelPath: Self.relativePath(of: url, under: base))
+            let parked = base.appendingPathComponent(recovery + "/" + Self.relativePath(of: url, under: base))
+            let isImage = ImageDownsampler.compressible.contains(ext)
+            let outcome: MediaTranscoder.Outcome
+            if isImage {
+                outcome = await Task.detached(priority: .utility) { Self.compressImage(at: url, recovery: parked) }.value
             } else {
-                let saved = await MediaTranscodeQueue.shared.run { await MediaTranscoder.compressInPlace(url: url, ext: ext) }
-                if let saved, saved > 0 {
-                    if MediaTranscoder.video.contains(ext) { res.videos += 1 } else { res.audios += 1 }
-                    res.bytesSaved += saved
-                    recordCompression(assetID: id, saved: saved)
-                } else {
-                    markHandled(assetID: id)
-                }
+                outcome = await MediaTranscodeQueue.shared.run { await MediaTranscoder.compress(url: url, ext: ext, recovery: parked) }
+            }
+            switch outcome {
+            case .saved(let saved):
+                if isImage { res.images += 1 } else if MediaTranscoder.video.contains(ext) { res.videos += 1 } else { res.audios += 1 }
+                res.bytesSaved += saved
+                savedSinceFlush += saved
+                handled.append(key)
+            case .noGain:
+                handled.append(key)
+            case .failed:
+                res.failed += 1
             }
             mediaProgress = (i + 1, candidates.count)
+            if handled.count >= 20 { flush() }
         }
-        mediaProgress = nil
+        flush()
+        await Task.detached(priority: .utility) { _ = Self.pruneRecovery(base: base) }.value
+        if res.failed > 0 {
+            lastWriteError = "\(res.failed) media file\(res.failed == 1 ? "" : "s") couldn't be compressed and will be tried again next time."
+        }
+        lastLocalWriteAt = Date()
         reload()
         return res
     }
@@ -1815,13 +2883,14 @@ final class JournalStore: ObservableObject {
         guard let base = resolved.url else { return 0 }
         let started = resolved.scoped && base.startAccessingSecurityScopedResource()
         defer { if started { base.stopAccessingSecurityScopedResource() } }
-        return (try? CoreJournal(base: base).load().filter { $0.source == "inbox" }.count) ?? 0
+        return (try? CoreJournal(base: base).inbox().count) ?? 0
     }
 
 
-    /// Remove leftover `.quire-*.tmp` files from writes that never completed.
+    /// Remove leftover `.quire-*.tmp` files from writes that never completed, and
+    /// the `._tmp_*` files a Data Saver encode leaves if it is killed part-way.
     /// Age-guarded so an in-flight write from another process (the intents
-    /// extension) is never swept out from under it.
+    /// extension) or an encode still running is never swept out from under it.
     nonisolated static func sweepStaleTempFiles(under base: URL) {
         Task.detached(priority: .background) { sweepStaleTempFilesNow(under: base) }
     }
@@ -1831,7 +2900,7 @@ final class JournalStore: ObservableObject {
         guard let en = fm.enumerator(at: base, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
         let cutoff = Date().addingTimeInterval(-3600)
         for case let url as URL in en
-        where url.lastPathComponent.hasPrefix(".quire-") && url.pathExtension == "tmp" {
+        where (url.lastPathComponent.hasPrefix(".quire-") && url.pathExtension == "tmp") || url.lastPathComponent.hasPrefix("._tmp_") {
             let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             if modified < cutoff { try? fm.removeItem(at: url) }
         }
@@ -1868,7 +2937,7 @@ final class JournalStore: ObservableObject {
     }
 
     func deleteDraft(_ entry: Entry) {
-        _ = coreMutation { try $0.delete(entry); return true }
+        if coreMutation({ try $0.delete(entry); return true }) == true { entryTouched(entry) }
         publishCoreChange()
     }
 
@@ -1876,15 +2945,16 @@ final class JournalStore: ObservableObject {
     /// false when the draft couldn't be found or the write failed.
     @discardableResult
     func updateDraft(_ entry: Entry, newText: String, reindex: Bool = true) -> Bool {
-        guard let result = coreMutation({ try $0.update(entry, text: newText) }) else { return false }
+        guard let result = coreMutation(patched: true, { try $0.update(entry, text: newText) }) else { return false }
         lastWritten = result
+        patchAfterUpdate(entry, result, source: .inbox)
         publishCoreChange(reindex: reindex)
         return true
     }
 
     func deleteEditorDraft(_ entry: Entry) -> Bool {
         let ok = coreMutation { try $0.delete(entry); return true } ?? false
-        if ok { publishCoreChange() }
+        if ok { entryTouched(entry); publishCoreChange() }
         return ok
     }
 
@@ -1904,8 +2974,9 @@ final class JournalStore: ObservableObject {
     /// Returns the source the entry now lives in, or nil if nothing was written.
     @discardableResult
     func updateFiledEntry(date: String, original: Entry, newText: String, reindex: Bool = true) -> EntrySource? {
-        guard let result = coreMutation({ try $0.update(original, text: newText) }) else { return nil }
+        guard let result = coreMutation(patched: true, { try $0.update(original, text: newText) }) else { return nil }
         lastWritten = result
+        patchAfterUpdate(original, result, source: .archive(date: original.date))
         publishCoreChange(reindex: reindex)
         let date = String((JournalParser.parseEntries(result.raw).first?.ts ?? original.ts).prefix(10))
         return .archive(date: date)
@@ -1915,6 +2986,7 @@ final class JournalStore: ObservableObject {
     @discardableResult
     func deleteFiledEntry(date: String, entry: Entry) -> Bool {
         let ok = coreMutation { try $0.delete(entry); return true } ?? false
+        if ok { entryTouched(entry) }
         publishCoreChange()
         return ok
     }
@@ -2015,6 +3087,89 @@ final class JournalStore: ObservableObject {
         return MergeResult(journals: report.journals, entries: report.entries)
     }
 
+    // MARK: Maintenance off the main actor
+
+    /// One of the long jobs (file everything, transfer.md, conflict copies,
+    /// ex-split journals) run off the main actor, on a journal handle of its
+    /// own as the index builds and the importer use, so Settings stays live
+    /// while it walks the journal. Every write it makes is the core's
+    /// compare-and-swap through the coordinated vault, so an autosave landing
+    /// beside it is redone, not lost; an editor whose entry the job moved is
+    /// refused as stale by the core and keeps its words (the composer's
+    /// banner). The caches are marked stale for as long as it runs, and the
+    /// inbox and the index are read again when it ends, whatever it did.
+    private func maintenance<T: Sendable>(_ work: @escaping @Sendable (CoreJournal) throws -> T) async -> T? {
+        guard let base = baseURL else { lastWriteError = "The journal folder is unavailable."; return nil }
+        // Nothing reads the caches as the disk's word while files are moving
+        // under them.
+        unpatchedSeq &+= 1
+        let outcome: Result<T, Error> = await Task.detached(priority: .userInitiated) {
+            Result { try work(CoreJournal(base: base)) }
+        }.value
+        // Another folder was chosen meanwhile: this one's result is not its.
+        guard baseURL == base else { return nil }
+        lastLocalWriteAt = Date()
+        mutationSeq &+= 1
+        unpatchedSeq &+= 1
+        journalDidChange()
+        publishCoreChange()
+        switch outcome {
+        case .success(let value):
+            if lastWriteError != nil { lastWriteError = nil }
+            return value
+        case .failure(let error):
+            lastWriteError = journalErrorMessage(error)
+            return nil
+        }
+    }
+
+    private struct FileAllReport: Decodable, Sendable { let filed: Int; let errors: [String] }
+    private struct MergeReport: Decodable, Sendable { let journals: Int; let entries: Int; let errors: [String] }
+
+    /// `fileAllDrafts`, off the main actor.
+    @discardableResult
+    func fileAllDraftsAsync() async -> Int {
+        let tags = splitTags
+        let report: FileAllReport? = await maintenance { try $0.call("file_all", ["tags": tags]) }
+        if let report, !report.errors.isEmpty { lastWriteError = report.errors.joined(separator: "\n") }
+        return report?.filed ?? 0
+    }
+
+    /// `fileTransfer`, off the main actor.
+    @discardableResult
+    func fileTransferAsync() async -> Int {
+        let tags = splitTags, ts = Self.nowTS()
+        let added: Int? = await maintenance { try $0.call("file_transfer", ["ts": ts, "tags": tags]) }
+        return added ?? 0
+    }
+
+    /// `mergeConflictCopies`, off the main actor. What merged before a copy
+    /// that failed still counts, and the failure is said.
+    @discardableResult
+    func mergeConflictCopiesAsync() async -> Int {
+        let done: ConflictMerge? = await maintenance { core in
+            var merged = ConflictMerge()
+            do {
+                let files: [String] = try core.call("conflicts")
+                for file in files { let count: Int = try core.call("merge_conflict", ["file": file]); merged.added += count }
+            } catch { merged.error = journalErrorMessage(error) }
+            return merged
+        }
+        if let error = done?.error { lastWriteError = error }
+        return done?.added ?? 0
+    }
+    private struct ConflictMerge: Sendable { var added = 0; var error: String? }
+
+    /// `mergeExSplitJournals`, off the main actor.
+    @discardableResult
+    func mergeExSplitJournalsAsync() async -> MergeResult {
+        let tags = splitTags
+        let report: MergeReport? = await maintenance { try $0.call("merge", ["tags": tags]) }
+        guard let report else { return MergeResult() }
+        if !report.errors.isEmpty { lastWriteError = report.errors.joined(separator: "\n") }
+        return MergeResult(journals: report.journals, entries: report.entries)
+    }
+
     // MARK: Stats (jnl cmdStats)
 
     struct Stats {
@@ -2066,7 +3221,6 @@ final class JournalStore: ObservableObject {
     /// Streaks and on-disk sizes — the parts of the stats pass that aren't
     /// per-file. Called by `buildIndex` after its single read of the corpus.
     nonisolated static func finishHeavyStats(_ s: inout HeavyStats, base: URL, dates: [Date]) {
-        let fm = FileManager.default
         var dates = dates
         dates.sort()
         let cal = Calendar.current
@@ -2253,8 +3407,9 @@ final class JournalStore: ObservableObject {
 
     // MARK: Shared-in drafts (share extension handoff)
 
-    /// Where the share extension leaves what it captured: a `pending.md` of
-    /// jnl-format drafts plus an `assets/` folder of media, inside the App
+    /// Where the share extension leaves what it captured: one `share-<id>.md`
+    /// per share (older builds appended to a single `pending.md`), each a
+    /// jnl-format draft, plus an `assets/` folder of media, inside the App
     /// Group container — the extension can't reach a custom journal folder's
     /// security-scoped bookmark, so the app moves everything in from here.
     nonisolated static var pendingShareDir: URL? {
@@ -2271,48 +3426,75 @@ final class JournalStore: ObservableObject {
         #if DEBUG
         if isTestStore { return }
         #endif
-        guard let dir = Self.pendingShareDir, baseURL != nil else { return }
-        // Claim the handoff by renaming it *before* reading. The extension only
-        // ever appends to pending.md, so a share captured between our read and
-        // our delete used to land in the file we then threw away. `.processing`
-        // files left behind by a drain that crashed are picked up here too.
-        let pendingFile = dir.appendingPathComponent("pending.md")
-        if fm.fileExists(atPath: pendingFile.path) {
-            try? fm.moveItem(at: pendingFile,
-                             to: dir.appendingPathComponent("\(UUID().uuidString).processing"))
+        guard let dir = Self.pendingShareDir, let base = baseURL else { return }
+        Self.drainShares(from: dir, into: base, compress: { [weak self] rel in
+            self?.scheduleCompression(assetRelPath: rel)
+        }, report: { [weak self] message in
+            self?.lastWriteError = message
+        })
+    }
+
+    /// The drain itself, over any two folders so it can be tested.
+    ///
+    /// Each handoff file is claimed by renaming it to `.processing` *before* it
+    /// is read: a share captured between a read and a delete used to land in a
+    /// file that was then thrown away. `.processing` files left by a drain that
+    /// crashed are picked up too. A claimed file is removed only once its
+    /// drafts are in the inbox; one that can't be read is kept for the next
+    /// time, never taken for empty and deleted.
+    static func drainShares(from dir: URL, into base: URL,
+                            compress: (String) -> Void = { _ in },
+                            report: (String) -> Void = { _ in },
+                            now: Date = Date()) {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.creationDateKey, .contentModificationDateKey]
+        for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        where url.pathExtension == "md" {
+            try? fm.moveItem(at: url, to: dir.appendingPathComponent("\(UUID().uuidString).processing"))
         }
         func captured(_ url: URL) -> Date {
             (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
         }
-        let claimed = ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.creationDateKey])) ?? [])
+        let claimed = ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys)) ?? [])
             .filter { $0.pathExtension == "processing" }
             .sorted { captured($0) < captured($1) }
-        guard !claimed.isEmpty else { return }
-        let shared = claimed.flatMap {
-            JournalParser.parseEntries((try? String(contentsOf: $0, encoding: .utf8)) ?? "")
+        var readable: [URL] = []
+        var shared: [Entry] = []
+        for url in claimed {
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            readable.append(url)
+            shared += JournalParser.parseEntries(text)
         }
-        // Media first, so the links resolve the moment the drafts appear.
+        // Media first, so the links resolve the moment the drafts appear. A
+        // file a draft here links is complete (the draft is written after it);
+        // any other may still be being copied in by the extension, so it waits
+        // until it has been still for a minute. Media is moved whether or not
+        // a draft came with it: left behind once, it used to stay for good.
+        let linked = Set(shared.flatMap { MediaLinks.paths(in: $0.raw) }.map { ($0 as NSString).lastPathComponent })
         let pendingAssets = dir.appendingPathComponent("assets", isDirectory: true)
-        if let items = try? fm.contentsOfDirectory(at: pendingAssets, includingPropertiesForKeys: nil),
-           let assetsDir = baseURL?.appendingPathComponent("assets", isDirectory: true) {
+        if let items = try? fm.contentsOfDirectory(at: pendingAssets, includingPropertiesForKeys: keys), !items.isEmpty {
+            let assetsDir = base.appendingPathComponent("assets", isDirectory: true)
             try? fm.createDirectory(at: assetsDir, withIntermediateDirectories: true)
             for item in items {
+                let modified = (try? item.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                guard linked.contains(item.lastPathComponent) || now.timeIntervalSince(modified) > 60 else { continue }
                 let dest = assetsDir.appendingPathComponent(item.lastPathComponent)
-                try? fm.moveItem(at: item, to: dest)
-                scheduleCompression(assetRelPath: "assets/\(item.lastPathComponent)")
+                if (try? fm.moveItem(at: item, to: dest)) != nil {
+                    compress("assets/\(item.lastPathComponent)")
+                }
             }
         }
         if !shared.isEmpty {
             // An unreadable inbox keeps the claimed files for the next reload
             // rather than being replaced by the shares alone.
-            guard let core else { return }
+            let core = CoreJournal(base: base)
             do {
                 for (date, entries) in Dictionary(grouping: shared, by: \.date) {
                     let _: Int = try core.call("insert", ["file": "inbox/" + date.replacingOccurrences(of: "-", with: "/") + ".md", "raws": entries.map(\.raw)])
                 }
-            } catch { lastWriteError = journalErrorMessage(error); return }
+            } catch { report(journalErrorMessage(error)); return }
         }
-        for url in claimed { try? fm.removeItem(at: url) }
+        for url in readable { try? fm.removeItem(at: url) }
     }
 
     // MARK: Import (external journals → filed entries)
@@ -2332,6 +3514,27 @@ final class JournalStore: ObservableObject {
     }
 
     // MARK: Cross-file helpers (for feature extensions in other files)
+
+    /// Where a new attachment goes (assets/YYYY/MM), for the importers.
+    var newAssetsDirectory: URL? { newAssetsDirURL }
+
+    func setImportProgress(_ p: (done: Int, total: Int)?) {
+        importProgress = p
+    }
+
+    /// After an import ran off the main actor: its Data Saver savings go in
+    /// the ledger, its videos are queued for compression, and the journal is
+    /// read again.
+    func noteImported(compressed: [String], saved: Int, transcode: [String], reload: Bool) {
+        recordCompressions(keys: compressed, saved: saved)
+        for rel in transcode { scheduleCompression(assetRelPath: rel) }
+        guard reload else { return }
+        lastLocalWriteAt = Date()
+        mutationSeq &+= 1
+        unpatchedSeq &+= 1
+        journalDidChange()
+        self.reload()
+    }
 
     /// Stable per-device id, shared with Data Saver's record files — feature
     /// extensions (transcription records) key their `.quire/` files by it too.
@@ -2373,12 +3576,16 @@ final class JournalStore: ObservableObject {
     // MARK: On This Day
 
     /// Filed entries from this calendar day in previous years, newest year
-    /// first. Cheap: the day list is already indexed, so only the handful of
-    /// matching day files are read.
+    /// first. From the index in memory once there is one; before that the
+    /// matching days are read through the core, one whole-journal read each.
     func onThisDay(reference: Date = Date()) -> [(date: String, entries: [Entry])] {
         let iso = Self.ts(from: reference).prefix(10)
         let monthDay = String(iso.suffix(5))
         let thisYear = String(iso.prefix(4))
+        if indexed {
+            // `archiveEntries` is newest day first, and holds no empty days.
+            return archiveEntries.filter { $0.date.hasSuffix(monthDay) && String($0.date.prefix(4)) < thisYear }
+        }
         return archiveDays
             .filter { $0.date.hasSuffix(monthDay) && $0.year < thisYear }
             .sorted { $0.date > $1.date }
@@ -2442,18 +3649,29 @@ final class JournalStore: ObservableObject {
 
     /// Debounced: sync updates arrive in bursts, and our own writes echo back
     /// through the watcher — a change landing within 2s of a local write is us.
+    ///
+    /// What the watcher says is only that something moved. Whether to read the
+    /// journal again is decided off the main actor, from each file's size and
+    /// date: nothing is reloaded unless a file other than the ones this app
+    /// just wrote has changed, or iCloud holds a conflicting version of one.
+    /// An autosave used to come back as a conflict scan and a full reload.
     private func scheduleSyncReload(after delay: TimeInterval = 1.5) {
         syncReloadTask?.cancel()
         syncReloadTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard !Task.isCancelled, let self else { return }
+            guard !Task.isCancelled, let self, let base = self.baseURL else { return }
             let now = Date()
+            // The first index is still being read (the query's first gathering
+            // lands about now on a cold launch): reading it all again would
+            // double the time to open, so look once it is in.
+            if !self.indexed, now.timeIntervalSince(self.reloadStartedAt) < 120 {
+                self.scheduleSyncReload(after: 2)
+                return
+            }
             // Our own write, echoing straight back through the watcher. Skip
             // it — but not forever: continuous autosave keeps every check
-            // inside the echo window, and simply deferring each one (as this
-            // did) turned every pause in typing into a full conflict scan and
-            // corpus reload. Suppress the echo, and let a check through once
-            // the session has gone `syncStarvationCeiling` without one, so a
+            // inside the echo window, so a check is let through once the
+            // session has gone `syncStarvationCeiling` without one, and a
             // change from another device can't wait out the whole session.
             if now.timeIntervalSince(self.lastLocalWriteAt) < 2,
                now.timeIntervalSince(self.lastSyncCheckAt) < Self.syncStarvationCeiling {
@@ -2461,8 +3679,13 @@ final class JournalStore: ObservableObject {
                 return
             }
             self.lastSyncCheckAt = now
-            await self.resolveFileConflicts()
-            guard !Task.isCancelled else { return }
+            let found = await Task.detached(priority: .utility) {
+                (signatures: Self.contentSignatures(base: base), conflicted: Self.filesWithConflicts(base: base, splits: []))
+            }.value
+            guard !Task.isCancelled, self.baseURL == base else { return }
+            let elsewhere = self.changedElsewhere(found.signatures)
+            guard elsewhere || !found.conflicted.isEmpty else { return }
+            for url in found.conflicted { self.resolveConflicts(at: url) }
             self.reload()
         }
     }
@@ -2480,20 +3703,14 @@ final class JournalStore: ObservableObject {
     /// whichever version won. With plain text, keeping both is always safe;
     /// Clean Up removes exact duplicates.
     /// Finding the conflicts is a walk of the whole corpus, so it runs off the
-    /// main actor; only the merge itself (which rewrites files and touches the
-    /// caches) comes back. This used to enumerate every day file and ask
-    /// `NSFileVersion` about each one on the main actor — ~200 ms of stall on a
-    /// journal of a few thousand entries, every time the watcher fired.
-    private func resolveFileConflicts() async {
-        guard let base = baseURL else { return }
-        let splits = splitJournals.compactMap { baseURL?.appendingPathComponent("split/\($0.name)") }
-        let conflicted = await Task.detached(priority: .utility) {
-            Self.filesWithConflicts(base: base, splits: splits)
-        }.value
-        for url in conflicted { resolveConflicts(at: url) }
-    }
-
-    /// The subset of journal files carrying unresolved iCloud conflicts.
+    /// main actor (`scheduleSyncReload`); only the merge itself (which rewrites
+    /// files and touches the caches) comes back. This used to enumerate every
+    /// day file and ask `NSFileVersion` about each one on the main actor —
+    /// ~200 ms of stall on a journal of a few thousand entries, every time the
+    /// watcher fired.
+    ///
+    /// This is the finding: the subset of journal files carrying unresolved
+    /// iCloud conflicts.
     ///
     /// `NSFileVersion.unresolvedConflictVersionsOfItem` is expensive per file,
     /// so it is only asked about files the much cheaper resource-value flag has
@@ -2644,11 +3861,20 @@ enum ImageDownsampler {
         return out as Data
     }
 
+    /// More than one image in the file: an animated PNG, a multi-page TIFF.
+    /// Re-encoding keeps only the first, so these are left as they are.
+    static func isMultiFrame(_ data: Data) -> Bool {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
+        return CGImageSourceGetCount(src) > 1
+    }
+
     /// Downsample to `maxPixel` on the longest edge and re-encode in the same
     /// format at `quality` (lossy formats only). Returns nil if not a decodable
-    /// image or on failure — callers keep the original bytes in that case.
+    /// image, if it holds more than one frame, or on failure — callers keep
+    /// the original bytes in that case.
     static func downsample(_ data: Data, maxPixel: Int = 2048, quality: Double = 0.7) -> Data? {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(src) == 1,
               let type = CGImageSourceGetType(src) else { return nil }
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -2700,36 +3926,81 @@ enum MediaTranscoder {
         }
     }
 
+    /// What became of one file. Only `saved` and `noGain` are final: a file
+    /// that `failed` (unreadable just now, an export that didn't finish) is
+    /// worth another try, so it must not be recorded as dealt with.
+    enum Outcome: Sendable, Equatable { case saved(Int), noGain, failed }
+
     /// Transcode `url` to a temp file and, if the result is smaller, atomically swap
     /// it in place. Returns bytes saved, or nil if skipped / no gain / failure.
     static func compressInPlace(url: URL, ext: String) async -> Int? {
+        if case .saved(let saved) = await compress(url: url, ext: ext, recovery: nil) { return saved }
+        return nil
+    }
+
+    /// Transcode `url` to a temp file and, if the result is smaller, swap it in
+    /// place, moving the original to `recovery` first (the recovery folder's
+    /// path for it) so the re-encode can be undone.
+    static func compress(url: URL, ext: String, recovery: URL?) async -> Outcome {
         let fm = FileManager.default
         guard let originalSize = try? fm.attributesOfItem(atPath: url.path)[.size] as? Int, originalSize > 0
-        else { return nil }
+        else { return .failed }
+        guard video.contains(ext) || audio.contains(ext) else { return .noGain }
         let tmp = url.deletingLastPathComponent().appendingPathComponent("._tmp_\(UUID().uuidString).\(ext)")
         let ok: Bool
         if video.contains(ext) {
             ok = await transcodeVideo(from: url, to: tmp, as: fileType(forExt: ext) ?? .mov)
-        } else if audio.contains(ext) {
-            ok = await transcodeAudio(from: url, to: tmp)
         } else {
-            ok = false
+            ok = await transcodeAudio(from: url, to: tmp)
         }
-        guard ok, let newSize = try? fm.attributesOfItem(atPath: tmp.path)[.size] as? Int, newSize < originalSize else {
+        guard ok, let newSize = try? fm.attributesOfItem(atPath: tmp.path)[.size] as? Int else {
             try? fm.removeItem(at: tmp)
-            return nil
+            return .failed
         }
-        // Coordinated, so the swap can't race an iCloud sync of the same file
-        // (the coordinator serialises us against any presenter/daemon writer).
-        var swapped: Int?
-        let coordinator = NSFileCoordinator()
-        coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: nil) { dest in
-            if (try? fm.replaceItemAt(dest, withItemAt: tmp)) != nil {
-                swapped = originalSize - newSize
+        guard newSize < originalSize else {
+            try? fm.removeItem(at: tmp)
+            return .noGain
+        }
+        do {
+            try swap(tmp, into: url, parking: recovery)
+            return .saved(originalSize - newSize)
+        } catch {
+            try? fm.removeItem(at: tmp)
+            return .failed
+        }
+    }
+
+    /// Put `tmp` where `url` is. With `recovery`, the original is moved there
+    /// first and put back if the new file can't be moved in; without, it is
+    /// replaced. Coordinated either way, so the swap can't race an iCloud sync
+    /// of the same file (the coordinator serialises us against any
+    /// presenter/daemon writer).
+    static func swap(_ tmp: URL, into url: URL, parking recovery: URL?) throws {
+        let fm = FileManager.default
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        var coordinationError: NSError?
+        var result: Result<Void, Error>?
+        if let recovery {
+            try fm.createDirectory(at: recovery.deletingLastPathComponent(), withIntermediateDirectories: true)
+            coordinator.coordinate(writingItemAt: url, options: .forMoving,
+                                   writingItemAt: recovery, options: .forReplacing, error: &coordinationError) { original, parked in
+                result = Result {
+                    try fm.moveItem(at: original, to: parked)
+                    do { try fm.moveItem(at: tmp, to: original) }
+                    catch {
+                        try? fm.moveItem(at: parked, to: original)
+                        throw error
+                    }
+                }
+            }
+        } else {
+            coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { dest in
+                result = Result { _ = try fm.replaceItemAt(dest, withItemAt: tmp) }
             }
         }
-        if swapped == nil { try? fm.removeItem(at: tmp) }
-        return swapped
+        if let coordinationError { throw coordinationError }
+        guard let result else { throw CocoaError(.fileWriteUnknown) }
+        try result.get()
     }
 
     /// 720p H.264 re-encode. Uses the completion-handler API (async `export()` is
@@ -2793,4 +4064,9 @@ enum MediaTranscoder {
             }
         }
     }
+}
+
+extension Notification.Name {
+    /// The app lock was switched on or off (AppLockManager posts it).
+    static let quireAppLockChanged = Notification.Name("com.caddickbrown.quire.appLockChanged")
 }

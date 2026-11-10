@@ -26,7 +26,17 @@ struct ComposerScreen: View {
     var onRemove: () -> Void = {}
 
     @State private var title = ""
-    @State private var text = ""
+    /// The body's words live in an object the page doesn't watch: only the
+    /// small view around the editor (`ComposerBody`) is redrawn as you type,
+    /// not the whole page with its header, title field and footer.
+    @State private var draft = ComposerText()
+    private var text: String {
+        get { draft.text }
+        nonmutating set { draft.text = newValue }
+    }
+    /// For edits that don't come from the keyboard (a link, a prompt, a
+    /// transcript): they go into the editor as ranged edits.
+    @State private var editorProxy = WritingEditorProxy()
     @State private var starred = false
     /// The entry being edited, kept current as saves land.
     @State private var current: Entry?
@@ -38,9 +48,18 @@ struct ComposerScreen: View {
     /// What an existing entry opened with: unchanged, it isn't written back, so
     /// opening an entry never re-normalises it on disk.
     @State private var opened: (title: String, text: String, starred: Bool)?
-    @State private var pending: Task<Void, Never>?
     private enum Field: Hashable { case title, body }
-    @FocusState private var focus: Field?
+    /// Where the keyboard is, as UIKit last reported it, and where it is asked
+    /// to go. Plain state, not `@FocusState`: the two fields are UIKit views
+    /// and report their own first responder, and a second arbiter beside them
+    /// is how the keyboard came to be fought over. Each field acts on a change
+    /// of this, once (see `WritingTextEditor.Coordinator.request`).
+    @State private var focus: Field?
+    /// The page's visible size, and how far down it the body starts, so the
+    /// text view can reach the footer (a tap below the words is then a tap in
+    /// the text).
+    @State private var page: CGSize = .zero
+    @State private var editorTop: CGFloat = 0
     /// What changes on every keystroke but isn't drawn here: kept out of
     /// SwiftUI state, so writing it never asks for another pass over the page.
     @State private var scratch = Scratch()
@@ -52,7 +71,6 @@ struct ComposerScreen: View {
     @State private var tagNames: [String] = []
     @State private var savedSource: EntrySource?
     @State private var saveError: String?
-    @State private var saveGeneration = 0
     @State private var recoverCopy = false
     @State private var routerID = UUID()
     @State private var showStamp = false
@@ -108,6 +126,7 @@ struct ComposerScreen: View {
                     HStack {
                         Button("Retry save") { _ = saveNow() }
                         Button("Save a copy to Inbox") { recoverCopy = true }
+                        Button("Copy text") { copyText() }
                     }.font(q.ui(14))
                 }.padding(.horizontal, 20).padding(.vertical, 8)
             }
@@ -119,14 +138,21 @@ struct ComposerScreen: View {
                                        placeholderColor: UIColor(q.faintColor), tint: UIColor(q.accentColor),
                                        focused: Binding(get: { focus == .title },
                                                         set: { if $0 { focus = .title } else if focus == .title { focus = nil } }),
+                                       identifier: "composer.title",
                                        onSubmit: { focus = .body })
-                        .focused($focus, equals: .title)
                         .fixedSize(horizontal: false, vertical: true)
                         .opacity(quiet)
                     QTitleRule().qDrawIn().opacity(quiet)
                     editor
                 }
-                .padding(.horizontal, 28).padding(.top, 16).padding(.bottom, 24)
+                .padding(.horizontal, 28).padding(.top, 16).padding(.bottom, Self.bottomPadding)
+                .coordinateSpace(.named(Self.pageSpace))
+            }
+            // The tallest the page has been at this width: the keyboard coming
+            // and going doesn't resize the body under your hands.
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                if abs(size.width - page.width) > 0.5 { page = size }
+                else if size.height > page.height + 0.5 { page.height = size.height }
             }
             .scrollDismissesKeyboard(.interactively)
             footer
@@ -146,12 +172,21 @@ struct ComposerScreen: View {
                 KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false)
             }
         }
-        .onAppear { load(); registerKeys() }
+        .onAppear { scratch.closing = false; ComposerRecovery.live.insert(scratch.recoveryID); load(); registerKeys() }
         .onChange(of: title) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror() }
-        .onChange(of: text) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror(); scheduleCount() }
         .onReceive(store.$tagCounts) { counts in tagNames = counts.map { String($0.tag.dropFirst()) } }
         .onDisappear {
-            pending?.cancel()
+            // However the page came to be taken down (a widget or a link
+            // opening another, not only Close), what's unsaved is saved first.
+            // After Close this finds nothing to write; after a discard or a
+            // filing it is skipped; an empty page still makes no draft.
+            scratch.closing = true
+            if loaded, !scratch.settled {
+                finishRecordingIfNeeded()
+                saveNow()
+            }
+            scratch.pending?.cancel()
+            ComposerRecovery.live.remove(scratch.recoveryID)
             store.settlePendingRebuild()
             scratch.countTask?.cancel()
             DeskDatePicker.shared.cancel()
@@ -212,7 +247,7 @@ struct ComposerScreen: View {
 
     private var header: some View {
         HStack {
-            QLink(title: "Close") { close() }
+            QLink(title: "Close") { close() }.accessibilityIdentifier("composer.close")
             Spacer()
             Button { showStamp = true } label: {
                 Text("[\(stampText)]").font(q.mono(12)).foregroundStyle(q.mutedColor).underline(pattern: .dot)
@@ -243,24 +278,25 @@ struct ComposerScreen: View {
         .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
     }
 
-    private var editor: some View {
-        ZStack(alignment: .topLeading) {
-            if text.isEmpty {
-                Text(editing == nil ? (promptsOn ? Self.prompt : "Begin writing") : "").font(q.writing(fontSize + 2, italic: true))
-                    .foregroundStyle(q.faintColor).padding(.top, 8).allowsHitTesting(false)
-                    .qHover()
-            }
-            WritingTextEditor(text: $text, fontRaw: q.editorFontName,
-                              size: fontSize + 2, textColor: q.inkColor, lineSpacing: 8,
-                              accent: q.accentColor, sizeToFit: true,
-                              tagSuggestions: tagNames,
-                              onCaretChange: caretMoved,
-                              onPasteMedia: { if let rel = Attach.pasted($0, into: store) { link(rel) } },
-                              focused: Binding(get: { focus == .body }, set: { if $0 { focus = .body } else if focus == .body { focus = nil } }))
-                .focused($focus, equals: .body)
-                .frame(minHeight: 360, alignment: .top)
+    private static let pageSpace = "composer.page"
+    private static let bottomPadding: CGFloat = 24
 
-        }
+    /// From where the body starts to the foot of the page.
+    private var bodyMinHeight: CGFloat {
+        max(240, page.height - editorTop - Self.bottomPadding)
+    }
+
+    private var editor: some View {
+        ComposerBody(draft: draft,
+                     placeholder: editing == nil ? (promptsOn ? Self.prompt : "Begin writing") : "",
+                     size: fontSize + 2, tagNames: tagNames, minHeight: bodyMinHeight, proxy: editorProxy,
+                     focused: Binding(get: { focus == .body },
+                                      set: { if $0 { focus = .body } else if focus == .body { focus = nil } }),
+                     onEdit: { stampOnFirstKeystroke(); scheduleSave(); mirror(); scheduleCount() },
+                     onCaretChange: caretMoved,
+                     onPasteMedia: { if let rel = Attach.pasted($0, into: store) { link(rel) } })
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.pageSpace)).minY.rounded() }
+                action: { editorTop = $0 }
     }
 
     private var footer: some View {
@@ -304,7 +340,7 @@ struct ComposerScreen: View {
                         .font(q.isMarathon ? q.label(12, weight: .medium) : q.ui(14, weight: .semibold)).foregroundStyle(q.onSignalColor)
                         .padding(.horizontal, 18).frame(minHeight: 44).background(q.signalColor)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.plain).accessibilityIdentifier("composer.file")
             }
             .padding(.horizontal, 20).padding(.vertical, 4)
         }
@@ -313,9 +349,40 @@ struct ComposerScreen: View {
 
     // MARK: Attachments
 
-    /// Put an attachment's link in the body where the caret was.
+    /// Put an attachment's link in the body where the caret was, and the
+    /// caret after it.
     private func link(_ rel: String) {
-        text = JournalStore.linking(rel, into: text, at: scratch.lastCaret)
+        edit(to: JournalStore.linking(rel, into: text, at: scratch.lastCaret), moveCaret: true)
+    }
+
+    /// Change the body to `new` from outside the keyboard. Only what differs
+    /// goes into the editor, as one undoable edit, so the caret, the undo
+    /// stack and the words around it stay as they were. Assigning the whole
+    /// text is kept for when there is no live editor (the page is closing).
+    private func edit(to new: String, moveCaret: Bool) {
+        let old = text
+        guard new != old else { return }
+        let a = old as NSString, b = new as NSString
+        let shortest = min(a.length, b.length)
+        var prefix = 0
+        while prefix < shortest, a.character(at: prefix) == b.character(at: prefix) { prefix += 1 }
+        // Never between the two halves of one character.
+        if prefix > 0, UTF16.isLeadSurrogate(a.character(at: prefix - 1)) { prefix -= 1 }
+        var suffix = 0
+        while suffix < shortest - prefix,
+              a.character(at: a.length - 1 - suffix) == b.character(at: b.length - 1 - suffix) { suffix += 1 }
+        if suffix > 0, UTF16.isTrailSurrogate(a.character(at: a.length - suffix)) { suffix -= 1 }
+        let range = NSRange(location: prefix, length: a.length - prefix - suffix)
+        let replacement = b.substring(with: NSRange(location: prefix, length: b.length - prefix - suffix))
+        if !scratch.closing, editorProxy.replace(range, with: replacement, in: a.length, moveCaret: moveCaret) { return }
+        text = new
+    }
+
+    /// The failure banner's last resort: the words on the clipboard.
+    private func copyText() {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        UIPasteboard.general.string = t.isEmpty ? text : t + "\n\n" + text
+        say("Copied")
     }
 
     private func say(_ message: String) {
@@ -347,7 +414,8 @@ struct ComposerScreen: View {
               let url = store.assetURL(forRelative: rel) else { return }
         Task { @MainActor in
             guard let transcript = try? await Transcriber.transcribe(url: url) else { return }
-            text = Transcriber.insert(transcript: transcript, after: rel, in: text)
+            // Beneath its link, wherever the caret has got to since.
+            edit(to: Transcriber.insert(transcript: transcript, after: rel, in: text), moveCaret: false)
             store.markTranscribed(assetID: ((rel as NSString).lastPathComponent as NSString).deletingPathExtension)
         }
     }
@@ -366,7 +434,10 @@ struct ComposerScreen: View {
         if let ref = editing {
             current = ref.entry
             title = ref.entry.displayTitle
-            text = ref.entry.body
+            // As typed: a line the core guards with a backslash opens without it,
+            // and `makeEntry` puts it back on save, so an unchanged page still
+            // composes to `current.raw`.
+            text = ref.entry.shownBody
             starred = ref.entry.isStarred
             opened = (title, text, starred)
         }
@@ -377,13 +448,23 @@ struct ComposerScreen: View {
         DispatchQueue.main.async { focus = editing == nil ? .title : .body }
         mirror()
         // The edits above would otherwise schedule a save of unchanged text.
-        pending?.cancel()
+        scratch.pending?.cancel()
     }
 
-    private var headerTitle: String {
+    private var headerTitle: String { Self.headerTitle(title, starred: starred) }
+
+    /// The header's title as it is written. A trailing ` *` is the star
+    /// (`journal::has_star`, `Entry.hasStarMarker`), so a title that only
+    /// happens to end in one would be saved as a starred entry and come back
+    /// two characters short. Starred, the real marker goes after it and it
+    /// reads back whole; unstarred, the asterisk is closed up to the word
+    /// before it, where it is not a marker, and a title of just `*` is no title.
+    static func headerTitle(_ title: String, starred: Bool) -> String {
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard starred else { return t }
-        return t.isEmpty ? "*" : t + " *"
+        if starred { return t.isEmpty ? "*" : t + " *" }
+        guard Entry.hasStarMarker(t) else { return t }
+        let before = String(t.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        return before.isEmpty ? "" : before + "*"
     }
 
     /// Republish the page to a connected monitor as you type. A keystroke
@@ -432,31 +513,34 @@ struct ComposerScreen: View {
 
     private func scheduleSave() {
         guard loaded else { return }
-        savedFlash = false
-        pending?.cancel()
-        saveGeneration += 1
-        let generation = saveGeneration
-        pending = Task {
+        // Only when it is showing: this runs on every keystroke, and the
+        // footer has no need to hear about each one.
+        if savedFlash { savedFlash = false }
+        scratch.pending?.cancel()
+        scratch.saveGeneration += 1
+        let generation = scratch.saveGeneration
+        scratch.pending = Task {
             try? await Task.sleep(nanoseconds: 700_000_000)
-            if !Task.isCancelled, generation == saveGeneration { saveNow() }
+            if !Task.isCancelled, generation == scratch.saveGeneration { saveNow() }
         }
     }
 
     @discardableResult
     private func saveNow(timestamp: String? = nil) -> Bool {
-        pending?.cancel()
-        saveGeneration += 1
+        scratch.pending?.cancel()
+        scratch.saveGeneration += 1
         let body = text.trimmingCharacters(in: .newlines)
         let stamp = timestamp ?? pendingTS ?? current?.ts ?? startedAt ?? JournalStore.nowTS()
         let raw = JournalStore.makeEntry(timestamp: stamp, title: headerTitle, body: body).raw
         if let current {
-            if raw == current.raw { saveError = nil; return true }
+            if raw == current.raw { settleSaved(); return true }
             // Opened and untouched: never re-normalise it on disk. A new date
             // (^t, the stamp) is a change too: without the check it was dropped
             // whenever the words hadn't moved since the last save.
             if let o = opened, o.title == title, o.text == text, o.starred == starred, stamp == current.ts {
-                saveError = nil; return true
+                settleSaved(); return true
             }
+            keepForRecovery(stamp: stamp, composed: raw)
             guard let result = store.saveEditorEntry(current, source: source, text: raw) else {
                 reportFailure(); return false
             }
@@ -465,7 +549,9 @@ struct ComposerScreen: View {
             // What's on disk now is the baseline an unchanged page compares to.
             opened = (title, text, starred)
             onUpdate(EntryRef(entry: result.entry, source: result.source))
-        } else if !headerTitle.isEmpty || !body.isEmpty {
+        } else if !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !body.isEmpty {
+            // Words, not just a star: a starred page with nothing on it is not a draft.
+            keepForRecovery(stamp: stamp, composed: raw)
             guard let entry = store.createEditorDraft(timestamp: stamp, title: headerTitle, body: body) else {
                 reportFailure(); return false
             }
@@ -473,10 +559,39 @@ struct ComposerScreen: View {
             savedSource = .inbox
             startedAt = entry.ts
         }
-        saveError = nil
+        settleSaved()
         if current != nil { pendingTS = nil }
         mirror()
         return true
+    }
+
+    /// The journal holds what's on the page: no error, and nothing to recover.
+    private func settleSaved() {
+        if saveError != nil { saveError = nil }
+        dropRecovery()
+    }
+
+    /// Before each write to the journal, the page goes to a small file in the
+    /// app's own container. If the write fails and the app is then killed, the
+    /// words are there at the next launch (`ComposerRecovery.pending()`).
+    private func keepForRecovery(stamp: String, composed: String) {
+        let sourceName: String
+        switch source {
+        case .inbox: sourceName = "inbox"
+        case .archive(let date): sourceName = "archive:\(date)"
+        case .journal(let name): sourceName = "journal:\(name)"
+        }
+        let record = ComposerRecovery(id: scratch.recoveryID, savedAt: Date(), title: title, text: text,
+                                      starred: starred, stamp: stamp, composed: composed,
+                                      file: current?.file, index: current?.fileIndex, raw: current?.raw,
+                                      source: current == nil ? nil : sourceName)
+        if record.write() { scratch.recoveryKept = true }
+    }
+
+    private func dropRecovery() {
+        guard scratch.recoveryKept else { return }
+        scratch.recoveryKept = false
+        ComposerRecovery.remove(scratch.recoveryID)
     }
 
     private func reportFailure() {
@@ -491,8 +606,10 @@ struct ComposerScreen: View {
     }
 
     private func saveRecoveryCopy() {
-        pending?.cancel()
-        saveGeneration += 1
+        scratch.pending?.cancel()
+        scratch.saveGeneration += 1
+        keepForRecovery(stamp: stampText,
+                        composed: JournalStore.makeEntry(timestamp: stampText, title: headerTitle, body: text).raw)
         guard let entry = store.createEditorDraft(timestamp: stampText, title: headerTitle, body: text) else {
             reportFailure(); return
         }
@@ -501,7 +618,9 @@ struct ComposerScreen: View {
         startedAt = entry.ts
         onUpdate(EntryRef(entry: entry, source: .inbox))
         pendingTS = nil
-        saveError = nil
+        // The copy is the page now: it is what an unchanged page compares to.
+        opened = (title, text, starred)
+        settleSaved()
         mirror()
     }
 
@@ -548,16 +667,20 @@ struct ComposerScreen: View {
 
     private func insertPrompt() {
         let prompt = PromptDeck.prompts.randomElement() ?? "Begin writing"
-        text += (text.isEmpty ? "" : "\n\n") + prompt + "\n"
+        // At the end of the page, as an edit of its own: ⌘Z takes it back.
+        edit(to: text + (text.isEmpty ? "" : "\n\n") + prompt + "\n", moveCaret: true)
     }
 
     private func discard() {
         if recorder.isRecording { _ = recorder.stop() }
-        pending?.cancel()
-        saveGeneration += 1
+        scratch.pending?.cancel()
+        scratch.saveGeneration += 1
         if let cur = current {
             guard store.deleteEditorDraft(cur) else { reportFailure(); return }
         }
+        // Discarded on purpose: no last save as the page goes, nothing to recover.
+        scratch.settled = true
+        dropRecovery()
         onRemove()
         leave()
     }
@@ -630,6 +753,8 @@ struct ComposerScreen: View {
         guard saveNow() else { return }
         if isDraft, let current {
             guard store.fileDraft(current) != nil else { reportFailure(); return }
+            // Filed: the reference this page holds is the draft that was.
+            scratch.settled = true
             onRemove()
             filedBeat += 1
             // The page turns over to its day before it closes.
@@ -653,13 +778,133 @@ private final class Scratch {
     var countTask: Task<Void, Never>?
     /// The page last sent to the monitor.
     var mirrored: ExternalDisplayContent?
+    /// The autosave waiting out its pause, and which one it is.
+    var pending: Task<Void, Never>?
+    var saveGeneration = 0
+    /// Discarded or filed: the page has nothing left to save as it goes.
+    var settled = false
+    /// The page is being taken down: edits go to the text, not the editor.
+    var closing = false
+    /// This page's recovery file, and whether one is on disk.
+    let recoveryID = UUID()
+    var recoveryKept = false
+}
+
+/// The body's words, outside the page's own state (see `ComposerScreen.draft`).
+final class ComposerText: ObservableObject {
+    @Published var text = ""
+}
+
+/// The body: the placeholder and the editor. The only view that is redrawn on
+/// a keystroke.
+private struct ComposerBody: View {
+    @Environment(\.quire) private var q
+    @ObservedObject var draft: ComposerText
+    let placeholder: String
+    let size: Double
+    let tagNames: [String]
+    let minHeight: CGFloat
+    let proxy: WritingEditorProxy
+    let focused: Binding<Bool>
+    let onEdit: () -> Void
+    let onCaretChange: (Int?) -> Void
+    let onPasteMedia: (PastedMedia) -> Void
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if draft.text.isEmpty {
+                Text(placeholder).font(q.writing(size, italic: true))
+                    .foregroundStyle(q.faintColor).padding(.top, 8).allowsHitTesting(false)
+                    .qHover()
+            }
+            // The text view is as tall as the page (`minHeight`), so a tap
+            // anywhere below the words lands in it and UIKit places the caret.
+            WritingTextEditor(text: $draft.text, fontRaw: q.editorFontName,
+                              size: size, textColor: q.inkColor, lineSpacing: 8,
+                              accent: q.accentColor, sizeToFit: true,
+                              tagSuggestions: tagNames,
+                              onCaretChange: onCaretChange,
+                              onPasteMedia: onPasteMedia,
+                              focused: focused, minHeight: minHeight, proxy: proxy,
+                              identifier: "composer.body")
+        }
+        .onChange(of: draft.text) { _, _ in onEdit() }
+    }
+}
+
+/// What the composer was about to write, kept in the app's own container
+/// (Application Support, not the journal folder and not the App Group) from
+/// just before each write until the write succeeds or the page is discarded.
+/// One small file per open page. A file found at launch means a write never
+/// landed, or the app died in the moment between keeping and writing: check
+/// `composed` against the journal before offering it.
+struct ComposerRecovery: Codable, Equatable, Identifiable {
+    var id: UUID
+    var savedAt: Date
+    var title: String
+    /// The body as it stood in the editor.
+    var text: String
+    var starred: Bool
+    /// `YYYY-MM-DD HH:MM:SS`.
+    var stamp: String
+    /// The whole entry as it was about to be written, header line included.
+    var composed: String
+    /// The entry being edited: its file, index and raw text, and `inbox`,
+    /// `archive:<date>` or `journal:<name>`. All nil for a page never saved.
+    var file: String?
+    var index: Int?
+    var raw: String?
+    var source: String?
+
+    /// Pages open now: theirs are not "pending", they are in hand.
+    static var live: Set<UUID> = []
+
+    /// The oldest page whose words never reached the journal, if any.
+    static func pending() -> ComposerRecovery? { all().first }
+
+    /// Every such page, oldest first.
+    static func all() -> [ComposerRecovery] {
+        guard let dir = directory(create: false),
+              let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        else { return [] }
+        return files.filter { $0.pathExtension == "json" }
+            .compactMap { try? JSONDecoder().decode(ComposerRecovery.self, from: Data(contentsOf: $0)) }
+            .filter { !live.contains($0.id) }
+            .sorted { $0.savedAt < $1.savedAt }
+    }
+
+    /// Forget the one `pending()` returns: it was restored, or declined.
+    static func clear() { if let record = pending() { remove(record.id) } }
+
+    static func remove(_ id: UUID) {
+        guard let dir = directory(create: false) else { return }
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent(id.uuidString + ".json"))
+    }
+
+    /// Atomically: the file is whole or it is the one before.
+    func write() -> Bool {
+        guard let dir = Self.directory(create: true), let data = try? JSONEncoder().encode(self) else { return false }
+        do {
+            try data.write(to: dir.appendingPathComponent(id.uuidString + ".json"), options: .atomic)
+            return true
+        } catch { return false }
+    }
+
+    private static func directory(create: Bool) -> URL? {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        else { return nil }
+        let dir = base.appendingPathComponent("ComposerRecovery", isDirectory: true)
+        if create { try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        return dir
+    }
 }
 
 /// A one-line field in UIKit so it can claim Esc: a SwiftUI TextField's
 /// UITextField keeps Esc for itself, so from a new page (which opens on its
 /// title) Esc never reached the composer and the page couldn't be left from
 /// the keyboard, and Search, which opens on its field, was the same. Focus
-/// follows the host's own, as the body's editor does.
+/// follows the host's own, as the body's editor does: `focused` is the one
+/// channel, so don't add SwiftUI's `.focused()` beside it.
 struct QEscapingField: UIViewRepresentable {
     @Binding var text: String
     let placeholder: String
@@ -672,6 +917,8 @@ struct QEscapingField: UIViewRepresentable {
     var returnKey: UIReturnKeyType = .next
     /// Off for a search: what's typed is a query, not prose.
     var plain = false
+    /// For UI tests to find the field by; nothing reads it otherwise.
+    var identifier: String? = nil
     var onSubmit: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -685,41 +932,114 @@ struct QEscapingField: UIViewRepresentable {
             field.autocorrectionType = .no
         }
         field.borderStyle = .none
+        field.accessibilityIdentifier = identifier
         field.adjustsFontForContentSizeCategory = false
         field.setContentHuggingPriority(.defaultHigh, for: .vertical)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         field.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+        context.coordinator.field = field
+        field.onWindow = { [weak coordinator = context.coordinator] in coordinator?.attached() }
         return field
     }
 
     func updateUIView(_ field: EscapingTextField, context: Context) {
-        context.coordinator.parent = self
-        if field.text != text { field.text = text }
-        field.font = font
-        field.textColor = color
-        field.tintColor = tint
-        field.attributedPlaceholder = NSAttributedString(string: placeholder,
-            attributes: [.font: placeholderFont ?? font, .foregroundColor: placeholderColor])
-        DispatchQueue.main.async { [weak field] in
-            guard let field, field.window != nil else { return }
-            if focused.wrappedValue, !field.isFirstResponder { field.becomeFirstResponder() }
-            else if !focused.wrappedValue, field.isFirstResponder { field.resignFirstResponder() }
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        coordinator.field = field
+        // Each only when it differs: this runs whenever the page around the
+        // field is redrawn, and a setter on a text field is not free.
+        if (field.text ?? "") != text { field.text = text }
+        if field.font != font { field.font = font }
+        if field.textColor != color { field.textColor = color }
+        if field.tintColor != tint { field.tintColor = tint }
+        let shown = Coordinator.Placeholder(text: placeholder, font: placeholderFont ?? font, color: placeholderColor)
+        if coordinator.placeholder != shown {
+            coordinator.placeholder = shown
+            field.attributedPlaceholder = NSAttributedString(string: placeholder,
+                attributes: [.font: shown.font, .foregroundColor: placeholderColor])
         }
+        // Never first responder from in here (see `Coordinator.request`).
+        coordinator.request(focus: focused.wrappedValue, on: field)
     }
 
     final class Coordinator: NSObject, UITextFieldDelegate {
+        struct Placeholder: Equatable {
+            let text: String
+            let font: UIFont
+            let color: UIColor
+        }
+
         var parent: QEscapingField
+        weak var field: EscapingTextField?
+        var placeholder: Placeholder?
+        /// The focus last asked for or last reported by UIKit; a request is
+        /// acted on only when it differs. The same rule as the body's editor.
+        private var lastFocus: Bool?
+        /// Asked for before the field had a window; kept for when it does.
+        private var focusOwed = false
+
         init(_ parent: QEscapingField) { self.parent = parent }
 
+        /// On the next turn, after SwiftUI's update, and only for a change:
+        /// asking on every update set two fields taking the keyboard from each
+        /// other.
+        func request(focus want: Bool, on field: EscapingTextField) {
+            guard want != lastFocus else { return }
+            lastFocus = want
+            DispatchQueue.main.async { [weak self, weak field] in
+                guard let self, let field, self.lastFocus == want else { return }
+                self.applyFocus(field)
+            }
+        }
+
+        private func applyFocus(_ field: EscapingTextField) {
+            guard let want = lastFocus else { return }
+            guard field.window != nil else { focusOwed = true; return }
+            focusOwed = false
+            if want, !field.isFirstResponder {
+                // Refused: forget the request, so the next change of anything asks again.
+                if !field.becomeFirstResponder() { lastFocus = nil }
+            } else if !want, field.isFirstResponder {
+                field.resignFirstResponder()
+            }
+        }
+
+        /// The field joined a window with a request still owed.
+        func attached() {
+            guard focusOwed else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.focusOwed, let field = self.field else { return }
+                self.applyFocus(field)
+            }
+        }
+
         @objc func changed(_ field: UITextField) { parent.text = field.text ?? "" }
-        func textFieldDidBeginEditing(_ field: UITextField) { parent.focused.wrappedValue = true }
-        func textFieldDidEndEditing(_ field: UITextField) { parent.focused.wrappedValue = false }
+        func textFieldDidBeginEditing(_ field: UITextField) {
+            // UIKit's word on it, recorded before the binding echoes it back.
+            lastFocus = true
+            focusOwed = false
+            if !parent.focused.wrappedValue { parent.focused.wrappedValue = true }
+        }
+        func textFieldDidEndEditing(_ field: UITextField) {
+            lastFocus = false
+            focusOwed = false
+            if parent.focused.wrappedValue { parent.focused.wrappedValue = false }
+        }
         func textFieldShouldReturn(_ field: UITextField) -> Bool { parent.onSubmit(); return false }
     }
 }
 
 /// Declares Esc and ⌘. ahead of the text system and hands them to the router.
 final class EscapingTextField: UITextField {
+    /// Told when the field joins a window: a focus request made before it was
+    /// on screen is acted on then.
+    var onWindow: (() -> Void)?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { onWindow?() }
+    }
+
     override var keyCommands: [UIKeyCommand]? {
         let esc = EscapeChord.declared(composing: markedTextRange != nil).map { $0.keyCommand(action: #selector(quireEscape)) }
         return (super.keyCommands ?? []) + esc + [CommandKeys.toggle]

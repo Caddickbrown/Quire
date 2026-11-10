@@ -53,9 +53,12 @@ struct MiniCalendarView: View {
                 }
                 Spacer()
                 calButton("chevron.left") { shift(-1) }
+                    .accessibilityLabel("Previous month")
                 calButton("smallcircle.filled.circle") { month = Self.startOfMonth(Date()) }
                     .help("Today")
+                    .accessibilityLabel("This month")
                 calButton("chevron.right") { shift(1) }
+                    .accessibilityLabel("Next month")
             }
             weekdayHeader
             ForEach(0..<6, id: \.self) { row in

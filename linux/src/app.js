@@ -5,7 +5,14 @@
 'use strict';
 
 const T = window.__TAURI__;
-const invoke = (cmd, args) => T.core.invoke(cmd, args);
+/** Commands that change entry files. A snapshot asked for before one of them finished may not hold its result. */
+const WRITES = /^(create_draft|update_entry|delete_entry|file_draft|unfile_entry|file_all|file_transfer|import_|merge_|run_cleanup|sort_inbox_cmd|restore_backup)/;
+let writeEpoch = 0;
+const invoke = (cmd, args) => WRITES.test(cmd) ? T.core.invoke(cmd, args).finally(() => { writeEpoch++; }) : T.core.invoke(cmd, args);
+/** A file dialog, opened by the back end so it knows which paths the person chose. kind: 'file' | 'folder' | 'save'. */
+const pick = (kind, title, defaultName = null) => invoke('pick_path', { kind, title, defaultName });
+/** Open something in the journal folder in its own app, or show it in the file manager. rel '' is the folder itself. */
+const openRel = (rel, reveal = false) => invoke('open_rel', { rel, reveal });
 const fileSrc = p => T.core.convertFileSrc(p);
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -53,6 +60,7 @@ const S = {
   assetFilter: 'all', assetQuery: '', assets: null, assetUrls: new Map(), tagReview: null, tagPicks: {}, backups: null, sizes: null, statsExtra: null, tplEdit: null,
   narrow: false, showList: true, tagPick: null, lightbox: null, printDay: null, printAll: false, jnlDir: null, customChrome: false, chromeAvail: false,
   folderMissing: false, conflicts: [], stale: false, menuAsset: null,
+  loadError: null, notice: null, restoreLeftovers: [], backupHeld: null,
   backupInterval: 'off', backupKeep: 10, lastBackup: null, backupRunning: false,
   dataSaver: false, dataSaved: 0, mediaTools: { ffmpeg: true, heif: true }, compress: null, compressReport: null,
 };
@@ -141,10 +149,12 @@ function streakToYesterday() {
   return n;
 }
 
+/** kind: '' | 'error' | 'sticky' (stays until the next toast). */
 function toast(msg, kind = '') {
   const t = $('#toast');
   t.textContent = msg; t.classList.toggle('error', kind === 'error'); t.classList.add('show');
-  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), kind === 'error' ? 4200 : 2600);
+  clearTimeout(toast.h);
+  if (kind !== 'sticky') toast.h = setTimeout(() => t.classList.remove('show'), kind === 'error' ? 4200 : 2600);
 }
 function fail(err) { console.error(err); toast(String(err?.message || err), 'error'); }
 
@@ -168,29 +178,99 @@ function checkGoal() {
 }
 
 /* ---------- data ---------- */
+let loadSeq = 0, loadApplied = 0;
+const sameEntries = (a, b) => a.length === b.length && a.every((e, i) => e.file === b[i].file && e.index === b[i].index && e.raw === b[i].raw);
+/** Every file the entries link, as one string: the Media Library is re-listed only when this changes. */
+const mediaSig = entries => { const out = []; for (const e of entries) for (const p of mediaOf(e)) out.push(resolveRel(e.file, p)); return out.sort().join('\n'); };
+const composerRaw = d => makeRaw(d.ts, d.title, d.starred, d.body);
+/** Put an entry as it is on disk into the composer. */
+function adoptIntoComposer(d, e) {
+  Object.assign(d, { ref: e, ts: e.ts, title: e.title, body: e.body, starred: e.starred, conflict: null, pendingRaw: null, failed: 0 });
+}
+/** The composer's reference after a reload. It follows the entry only when the text on disk is the text
+ *  the composer started from. If the entry at the same place and time now reads differently, someone else
+ *  changed it: a clean composer takes that version; a dirty one keeps its reference, so the core refuses
+ *  the save, and the person chooses between the two. */
+function followDraftRef() {
+  const d = S.draft, r = d?.ref;
+  if (!r) return;
+  const hit = S.entries.find(e => sameEntry(e, r));
+  if (hit) { d.ref = hit; d.conflict = null; return; }
+  const theirs = S.entries.find(e => e.file === r.file && e.ts === r.ts) || null;
+  // Our own save, read back before its answer arrived: the answer brings the new reference.
+  if (theirs && d.pendingRaw != null && theirs.raw.trimEnd() === d.pendingRaw) return;
+  const clean = composerRaw(d) === r.raw.trimEnd();
+  if (clean && theirs) { adoptIntoComposer(d, theirs); S.composerStale = true; }
+  else if (!clean) d.conflict = theirs ? 'changed' : 'gone';
+}
+/** After a reload put a version from disk into the open composer's fields, without a full render. */
+function syncComposer() {
+  if (!S.composerStale) return;
+  S.composerStale = false;
+  const d = S.draft, ta = $('#bodyta'), ti = $('#title');
+  if (S.mode !== 'write' || !d || !ta) return;
+  const pos = Math.min(ta.selectionStart ?? 0, d.body.length);
+  ta.value = d.body; ta.setSelectionRange?.(pos, pos);
+  if (ti) ti.value = d.title;
+  resizeTitle(); paintBackdrop(); refreshDateButton(); refreshChrome(false);
+  const st = $('.toolbar [data-action="star"]'); if (st) { st.classList.toggle('star-on', d.starred); st.innerHTML = icon.star(d.starred); }
+  toast('This entry was changed somewhere else. The composer now shows that version.');
+}
+/** Reload the snapshot. Returns true when anything the views draw from changed. */
 async function load(reselect) {
-  const snap = await invoke('load');
+  const seq = ++loadSeq, epoch = writeEpoch, wasMissing = S.folderMissing;
+  let snap;
+  try { snap = await invoke('load'); }
+  catch (e) { if (seq > loadApplied) { S.loadError = String(e?.message || e); renderMissing(); } throw e; }
+  // One of our own writes finished while this was being read: it may show the file from before the write. Read again.
+  if (epoch !== writeEpoch) return load(reselect);
+  const reselectAfterLoad = () => {
+    if (reselect) S.sel = S.entries.find(e => sameEntry(e, reselect)) || S.entries.find(e => e.ts === reselect.ts && e.file === reselect.file) || null;
+    else if (S.sel) S.sel = S.entries.find(e => sameEntry(e, S.sel)) || null;
+  };
+  // An answer older than one already shown is dropped: applied late it would put back entries
+  // that a save has since replaced, and the next save would be refused as "changed on disk".
+  if (seq < loadApplied) { reselectAfterLoad(); return false; }
+  loadApplied = seq;
   if (!S.appInfo) S.appInfo = await invoke('app_info').catch(() => null);
+  const entries = snap.entries || [];
+  const { entries: _e, ...rest } = snap;
+  const restSig = JSON.stringify(rest);
+  const entriesChanged = !sameEntries(entries, S.entries), folderChanged = snap.folder !== S.folder;
+  const changed = entriesChanged || restSig !== S.restSig || !!S.loadError;
+  S.restSig = restSig; S.loadError = null;
   Object.assign(S, {
     folder: snap.folder, isSample: snap.is_sample, splitTags: snap.split_tags || [], splitSource: snap.split_tags_source, backupDir: snap.backup_dir,
-    templates: snap.templates || [], searches: snap.searches || [], hasTransfer: snap.has_transfer, entries: snap.entries || [], jnlDir: snap.jnl_dir || null,
+    templates: snap.templates || [], searches: snap.searches || [], hasTransfer: snap.has_transfer, jnlDir: snap.jnl_dir || null,
     folderMissing: !!snap.folder_missing, conflicts: snap.conflicts || [],
     backupInterval: snap.backup_interval || 'off', backupKeep: snap.backup_keep || 10, lastBackup: snap.last_backup || null, backupRunning: !!snap.backup_running,
     dataSaver: !!snap.data_saver, dataSaved: snap.data_saved || 0, mediaTools: snap.media_tools || { ffmpeg: false, heif: false },
+    restoreLeftovers: snap.restore_leftovers || [],
   });
   S.ui = { ...DEFAULT_UI, ...(snap.ui && typeof snap.ui === 'object' ? snap.ui : {}) };
   if (!Array.isArray(S.ui.ignoredTagGroups)) S.ui.ignoredTagGroups = [];
-  S.statsExtra = null; S.sizes = null;
-  if (reselect) S.sel = S.entries.find(e => sameEntry(e, reselect)) || S.entries.find(e => e.ts === reselect.ts && e.file === reselect.file) || null;
-  else if (S.sel) S.sel = S.entries.find(e => sameEntry(e, S.sel)) || null;
+  if (entriesChanged) {
+    // Unchanged entries keep their array, so selections and caches made from it stay good.
+    S.entries = entries; S.statsExtra = null; S.sizes = null;
+    const sig = mediaSig(entries);
+    if (sig !== S.mediaSig) { S.mediaSig = sig; S.assets = null; }
+  }
+  if (folderChanged) { S.assets = null; S.assetUrls.clear(); S.backupHeld = null; }
+  // The folder is back (a drive mounted, a sync arrived): the watcher on the old one is dead, or was never started.
+  if (wasMissing && !S.folderMissing) invoke('rewatch').catch(e => console.warn(e));
+  if (folderChanged && S.folder) S.notice = null; // a folder has been chosen: the settings notice has done its job
+  reselectAfterLoad();
   // The composer's reference must follow the reload too, or its index/raw go stale.
-  if (S.draft?.ref) { const r = S.draft.ref; S.draft.ref = S.entries.find(e => sameEntry(e, r)) || S.entries.find(e => e.file === r.file && e.ts === r.ts) || r; }
-  S.assets = null;
+  followDraftRef();
   if (snap.migration) toast(`inbox.md folded into inbox/: ${plural(snap.migration.moved, 'draft')} moved${snap.migration.skipped ? `, ${snap.migration.skipped} already there` : ''}. The original is in ${snap.migration.backup}`);
   if (snap.migration_error) fail(snap.migration_error);
   if (snap.split_migration) toast(`${plural(snap.split_migration.journals, 'split journal')} folded into split/: ${plural(snap.split_migration.moved, 'entry', 'entries')} moved${snap.split_migration.skipped ? `, ${snap.split_migration.skipped} already there` : ''}. The originals are in .quire/migration/`);
   if (snap.split_migration_error) fail(snap.split_migration_error);
+  // What a restore that was cut short left in the folder: said once per folder, and listed under Settings › Backup.
+  if (S.restoreLeftovers.length && S.leftoversSaid !== S.folder) { S.leftoversSaid = S.folder; toast(`A restore was interrupted here. ${plural(S.restoreLeftovers.length, 'folder')} of what the journal held before it ${S.restoreLeftovers.length === 1 ? 'is' : 'are'} still in the journal folder: see Settings › Backup.`, 'error'); }
   applyUi();
+  syncComposer();
+  return changed;
 }
 const saveUi = () => invoke('save_ui', { ui: S.ui }).catch(fail);
 const inbox = () => S.entries.filter(e => e.source === 'inbox').sort((a, b) => b.ts.localeCompare(a.ts));
@@ -198,6 +278,12 @@ const filed = () => S.entries.filter(e => e.source !== 'inbox');
 const byNewest = arr => [...arr].sort((a, b) => b.ts.localeCompare(a.ts));
 const sorted = arr => S.ui.sortNewest ? byNewest(arr) : [...arr].sort((a, b) => a.ts.localeCompare(b.ts));
 
+/** Text on a custom accent: near-black or white, whichever has the higher WCAG contrast with it. */
+function onAccent(hex) {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(c => c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return (L + 0.05) / 0.05 > 1.05 / (L + 0.05) ? '#111111' : '#FFFFFF';
+}
 function applyUi() {
   const r = document.documentElement;
   let theme = S.ui.theme;
@@ -206,42 +292,95 @@ function applyUi() {
   try { localStorage.setItem('quire.theme', theme); } catch (e) { /* the next start just won't know */ }
   r.dataset.size = S.ui.size; r.dataset.font = S.ui.font; r.dataset.tags = S.ui.highlightTags ? 'on' : 'off';
   const acc = ACCENTS[S.ui.accent];
-  if (acc) { r.style.setProperty('--accent', acc); r.style.setProperty('--accent-ink', acc); r.style.setProperty('--on-accent', '#FFFFFF'); r.style.setProperty('--accent-soft', acc + '26'); }
+  if (acc) { r.style.setProperty('--accent', acc); r.style.setProperty('--accent-ink', acc); r.style.setProperty('--on-accent', onAccent(acc)); r.style.setProperty('--accent-soft', acc + '26'); }
   else ['--accent', '--accent-ink', '--on-accent', '--accent-soft'].forEach(p => r.style.removeProperty(p));
 }
 
-/* ---------- search grammar (Nook's SearchQuery) ----------
-   words · "exact phrase" · tag:x or @x · before:YYYY[-MM[-DD]] · after:… · has:image|video|audio|media · is:starred */
-function parseQuery(q) {
-  const out = { terms: [], phrases: [], tags: [], before: null, after: null, has: [], starred: false };
-  const re = /"([^"]+)"|(\S+)/g;
-  let m;
-  while ((m = re.exec(q))) {
-    if (m[1]) { out.phrases.push(m[1].toLowerCase()); continue; }
-    const t = m[2], l = t.toLowerCase();
-    if (l.startsWith('tag:')) { const t = l.slice(4).replace(/^@/, ''); if (t) out.tags.push('@' + t); }
-    else if (l.startsWith('@') && l.length > 1) out.tags.push(l);
-    else if (l.startsWith('before:') && /^\d{4}(-\d{2}){0,2}$/.test(l.slice(7))) out.before = l.slice(7);
-    else if (l.startsWith('after:') && /^\d{4}(-\d{2}){0,2}$/.test(l.slice(6))) out.after = l.slice(6);
-    else if (l.startsWith('has:')) { const h = l.slice(4); if (/^(image|video|audio|media)$/.test(h)) out.has.push(h); }
-    else if (l === 'is:starred') out.starred = true;
-    else out.terms.push(l);
+/* ---------- search grammar ----------
+   words · "exact phrase" · tag:x or @x · before:YYYY[-MM[-DD]] · after:… · has:image|video|audio|media · is:starred
+   A line-for-line port of core/src/search.rs (tokenize, Query::parse, Query::matches): keep the two in
+   step. tools/check_search.js runs the core's own test cases against this copy. */
+const UNICODE_SPACE = /[\t-\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/; // Rust's char::is_whitespace
+/** Whitespace-split, except quoted runs ("two words") come out whole. */
+function tokenize(s) {
+  const tokens = [];
+  let current = '', inQuotes = false;
+  for (const ch of String(s)) {
+    if (ch === '"') { if (current) { tokens.push(current); current = ''; } inQuotes = !inQuotes; }
+    else if (UNICODE_SPACE.test(ch) && !inQuotes) { if (current) { tokens.push(current); current = ''; } }
+    else current += ch;
   }
-  return out;
+  if (current) tokens.push(current);
+  return tokens;
+}
+/** "2026", "2026-03", or "2026-03-15". */
+function isPartialDate(s) {
+  const parts = s.split('-'), widths = [4, 2, 2];
+  return parts.length <= 3 && parts.every((p, i) => p.length === widths[i] && /^[0-9]+$/.test(p));
+}
+function parseQuery(raw) {
+  const q = { terms: [], tags: [], before: null, after: null, has: [], starred: false };
+  for (const token of tokenize(raw)) {
+    const lower = token.toLowerCase();
+    if (lower.startsWith('tag:')) { const name = lower.slice(4); if (name) q.tags.push(name.startsWith('@') ? name : '@' + name); }
+    else if (lower.startsWith('@') && lower.length > 1 && !token.includes(' ')) q.tags.push(lower);
+    else if (lower.startsWith('before:')) { const d = lower.slice(7); if (isPartialDate(d)) q.before = d; }
+    else if (lower.startsWith('after:')) { const d = lower.slice(6); if (isPartialDate(d)) q.after = d; }
+    else if (lower.startsWith('has:')) { const kind = lower.slice(4); if (['image', 'video', 'audio', 'media'].includes(kind)) q.has.push(kind); }
+    else if (lower === 'is:starred') q.starred = true;
+    else if (lower) q.terms.push(lower);
+  }
+  return q;
+}
+const queryIsEmpty = q => !q.terms.length && !q.tags.length && q.before === null && q.after === null && !q.has.length && !q.starred;
+/** The core's link rule (journal.rs LINK_TARGET_RE, is_external, resolve_link) and extras::media_kind, for has: only. */
+const LINK_TARGET_RE = /\]\((\s*)(?:<([^>\n]*)>|((?:[^()\s]|\([^()\s]*\))+))/g;
+const isExternal = p => p.startsWith('#') || p.startsWith('/') || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(p);
+function normalizeRel(p) {
+  const parts = [];
+  for (const c of p.split('/')) {
+    if (c === '' || c === '.') continue;
+    if (c === '..') { if (!parts.length) return null; parts.pop(); } else parts.push(c);
+  }
+  return parts.join('/');
+}
+function resolveLink(fileRel, p) {
+  if (isExternal(p)) return null;
+  const i = fileRel.lastIndexOf('/'), dir = i < 0 ? '' : fileRel.slice(0, i);
+  const joined = () => normalizeRel(dir ? `${dir}/${p}` : p);
+  if (p.startsWith('../') || p.startsWith('./')) return joined();
+  return p.startsWith('assets/') ? normalizeRel(p) : joined();
+}
+const coreMediaKind = path => { const ext = path.split('.').pop().toLowerCase(); return /^(jpg|jpeg|png|gif|webp|heic|bmp|svg|avif)$/.test(ext) ? 'image' : /^(mp4|mov|m4v|webm|mkv)$/.test(ext) ? 'video' : /^(m4a|mp3|wav|aac|ogg|opus|flac|caf)$/.test(ext) ? 'audio' : 'file'; };
+/** The asset paths an entry links (root-relative, under assets/). */
+function mediaPaths(e) {
+  const text = e.raw ?? e.body ?? '';
+  return [...text.matchAll(LINK_TARGET_RE)].map(m => m[2] ?? m[3]).filter(p => p != null && !isExternal(p)).map(p => resolveLink(e.file, p)).filter(p => p != null && p.startsWith('assets/'));
 }
 function matchesQuery(e, q) {
+  if (queryIsEmpty(q)) return false;
+  if (q.terms.length) {
+    const text = `${e.title}\n${e.body}`.toLowerCase();
+    if (q.terms.some(t => !text.includes(t))) return false;
+  }
+  if (q.tags.length) {
+    const present = e.tags.map(t => t.toLowerCase());
+    if (q.tags.some(t => !present.includes(t))) return false;
+  }
+  if (q.before !== null && e.date >= q.before) return false;
+  if (q.after !== null && !(e.date > q.after || e.date.startsWith(q.after))) return false;
   if (q.starred && !e.starred) return false;
-  if (q.before && !(e.date < q.before)) return false;
-  if (q.after && !(e.date > q.after || e.date.startsWith(q.after))) return false;
-  if (q.tags.length) { const tl = e.tags.map(t => t.toLowerCase()); if (!q.tags.every(t => tl.includes(t))) return false; }
-  if (q.has.length) { const kinds = mediaOf(e).map(p => mediaKind(resolveRel(e.file, p))); if (!q.has.every(h => h === 'media' ? kinds.some(k => k !== 'file') : kinds.includes(h))) return false; }
-  if (q.terms.length || q.phrases.length) {
-    const hay = (e.title + '\n' + e.body).toLowerCase();
-    if (!q.terms.every(t => hay.includes(t))) return false;
-    if (!q.phrases.every(p => hay.includes(p))) return false;
+  if (q.has.length) {
+    const paths = mediaPaths(e);
+    for (const want of q.has) {
+      const ok = want === 'media' ? paths.length > 0 : paths.some(p => coreMediaKind(p) === want);
+      if (!ok) return false;
+    }
   }
   return true;
 }
+/** The lists' filter: a query with no usable clause yet (a half-typed before:) filters nothing, instead of emptying the list on every keystroke. */
+const searchFilter = text => { const q = parseQuery(text); return queryIsEmpty(q) ? null : e => matchesQuery(e, q); };
 function journalList() {
   let list = filed();
   if (S.journal === 'main') list = list.filter(e => e.source === 'journal');
@@ -251,13 +390,13 @@ function journalList() {
   if ((S.day || q) && S.journal === 'all') list = [...list, ...inbox().filter(e => !S.day || e.date === S.day)];
   if (S.tag) list = list.filter(e => e.tags.includes(S.tag));
   if (S.day) list = list.filter(e => e.date === S.day);
-  if (q) { const pq = parseQuery(q); list = list.filter(e => matchesQuery(e, pq)); }
+  if (q) { const f = searchFilter(q); if (f) list = list.filter(f); }
   return sorted(list);
 }
 function inboxList() {
   const list = S.ui.sortNewest ? inbox() : inbox().reverse();
-  const q = S.inboxQuery.trim();
-  return q ? list.filter(e => matchesQuery(e, parseQuery(q))) : list;
+  const f = searchFilter(S.inboxQuery.trim());
+  return f ? list.filter(f) : list;
 }
 
 function countTags(list) {
@@ -285,15 +424,41 @@ function renderTabs() {
   }
 }
 
-/** The unreachable-folder banner sits above every view. */
+/** The banners above every view: an unreachable folder, a journal that couldn't be read, a settings file that couldn't be used. */
 function renderMissing() {
   const mb = $('#missing');
   if (mb) {
-    mb.hidden = !S.folderMissing;
     const name = (S.folder || '').split('/').filter(Boolean).pop() || S.folder;
-    mb.innerHTML = S.folderMissing ? `<span>Quire can’t reach “${esc(name)}”. Nothing is being saved until you find the folder again.</span><span class="spacer"></span><button class="btn primary" data-action="locate-folder">Locate folder…</button><button class="btn" data-action="use-sample">Use sample</button>` : '';
+    const rows = [];
+    if (S.notice) rows.push(`<span>${esc(S.notice)}</span><span class="spacer"></span><button class="btn primary" data-action="pick-folder">Choose your journal folder…</button>${S.folder ? '' : '<button class="btn" data-action="use-sample">Use the sample journal</button>'}<button class="btn" data-action="dismiss-notice">Dismiss</button>`);
+    if (S.folderMissing) rows.push(`<span>Quire can’t reach “${esc(name)}”. Nothing is being saved until you find the folder again.</span><span class="spacer"></span><button class="btn primary" data-action="locate-folder">Locate folder…</button><button class="btn" data-action="use-sample">Use sample</button>`);
+    else if (S.loadError && S.folder) rows.push(`<span>${esc(S.loadError)}</span><span class="spacer"></span><button class="btn" data-action="reload">Try again</button>`);
+    const html = rows.map(r => `<div class="banner-row">${r}</div>`).join('');
+    mb.hidden = !rows.length;
+    if (mb.innerHTML !== html) mb.innerHTML = html;
   }
   const nb = $('#topbar [data-action="new"]'); if (nb) nb.disabled = S.folderMissing;
+}
+/** What is in each scrolling pane, so a re-render of the same thing keeps its place and a different thing starts at the top. */
+const draftIds = new WeakMap();
+let draftCount = 0;
+const draftId = d => { if (!draftIds.has(d)) draftIds.set(d, ++draftCount); return draftIds.get(d); };
+const SCROLLERS = [
+  ['.list-pane', () => `${S.view}|${S.journal}|${S.tag || ''}|${S.day || ''}`],
+  ['.entry-pane .page', () => S.mode === 'write' && S.draft ? `write|${draftId(S.draft)}` : S.sel ? `${S.sel.file}|${S.sel.ts}` : `day|${S.printDay || S.day || ''}`],
+  ['.stream', () => `${S.view}|${S.jview}`],
+  ['.settings main', () => 'settings'],
+  ['.lookback', () => `lookback|${S.year}`],
+];
+let scrollKeys = {};
+function keepScroll() {
+  const kept = SCROLLERS.map(([sel]) => { const el = $(sel); return el && scrollKeys[sel] != null ? [sel, scrollKeys[sel], el.scrollTop] : null; }).filter(Boolean);
+  return () => {
+    const next = {};
+    for (const [sel, key] of SCROLLERS) { if ($(sel)) next[sel] = key(); }
+    for (const [sel, key, top] of kept) { const el = $(sel); if (el && next[sel] === key) el.scrollTop = top; }
+    scrollKeys = next;
+  };
 }
 
 function render() {
@@ -309,16 +474,14 @@ function render() {
   app.classList.toggle('show-list', S.narrow && S.view !== 'media' && (S.showList || (!S.sel && S.mode !== 'write')));
   app.classList.toggle('locked', S.locked);
   const body = $('#body');
+  // Keep the reader's place: most actions re-render the whole page.
+  const restoreScroll = keepScroll();
   if (S.locked) body.innerHTML = renderLock();
   else if (S.view === 'media') body.innerHTML = renderMedia();
   else if (S.view === 'lookback') body.innerHTML = renderLookBack();
-  else if (S.view === 'settings') {
-    // Keep the reader's place: actions in Settings re-render the whole page.
-    const prev = $('.settings main'), top = prev ? prev.scrollTop : null;
-    body.innerHTML = renderSettings();
-    const m = $('.settings main'); if (m && top != null) m.scrollTop = top;
-  }
+  else if (S.view === 'settings') body.innerHTML = renderSettings();
   else body.innerHTML = renderList() + renderPane();
+  restoreScroll();
   afterRender();
 }
 
@@ -579,7 +742,7 @@ function renderHome() {
 }
 
 function renderStream() {
-  const q = S.query.trim() ? parseQuery(S.query.trim()) : null;
+  const q = searchFilter(S.query.trim());
   // journalList() already carries drafts for a day or a search; otherwise add them here.
   const drafts = S.journal === 'all' && !S.day && !q ? inbox().filter(e => !S.tag || e.tags.includes(S.tag)) : [];
   const list = sorted([...journalList(), ...drafts]).slice(0, 300);
@@ -650,18 +813,34 @@ function assetOwners() {
   for (const l of m.values()) l.sort((a, b) => a.ts.localeCompare(b.ts));
   return m;
 }
+let assetsLoading = false;
 async function loadAssets() {
+  if (assetsLoading) return;
+  assetsLoading = true;
   try {
-    S.assets = await invoke('assets');
-    await Promise.all(S.assets.filter(a => !S.assetUrls.get(a.rel)).map(async a => { try { S.assetUrls.set(a.rel, fileSrc(await invoke('asset_path', { rel: a.rel }))); } catch { S.assetUrls.set(a.rel, null); } }));
+    // Each asset comes with its path on disk, so there is no call per file.
+    const list = await invoke('assets');
+    for (const a of list) if (!S.assetUrls.get(a.rel)) S.assetUrls.set(a.rel, a.path ? fileSrc(a.path) : null);
+    S.assets = list;
     if ((S.view === 'media' || (S.view === 'journal' && S.jview === 'media')) && S.mode !== 'write') render();
   } catch (e) { S.assets = []; fail(e); }
+  finally { assetsLoading = false; }
 }
+/** URLs for root-relative files, asked for in one call and cached; null for a file that isn't there. */
+async function assetUrlsFor(rels) {
+  const want = [...new Set(rels)].filter(r => !S.assetUrls.has(r));
+  if (want.length) {
+    const paths = await invoke('asset_paths', { rels: want }).catch(() => []);
+    want.forEach((r, i) => S.assetUrls.set(r, paths[i] ? fileSrc(paths[i]) : null));
+  }
+  return rels.map(r => S.assetUrls.get(r) || null);
+}
+const assetUrl = async rel => { const [u] = await assetUrlsFor([rel]); if (!u) { S.assetUrls.delete(rel); throw new Error('No such asset'); } return u; };
 /** Swap every unresolved [data-asset] placeholder on screen (entry, day page, anywhere) for its media; URLs are cached. */
 async function resolveVisibleMedia() {
   const want = [...new Set($$('#body [data-asset]').map(el => el.dataset.asset))].filter(r => !S.assetUrls.has(r));
   if (!want.length) return;
-  await Promise.all(want.map(async rel => { try { S.assetUrls.set(rel, fileSrc(await invoke('asset_path', { rel }))); } catch { S.assetUrls.set(rel, null); } }));
+  await assetUrlsFor(want);
   if (!want.some(r => S.assetUrls.get(r))) return;
   // Re-render just the prose blocks that had placeholders, so nothing else (inputs, scroll) is disturbed.
   for (const pr of $$('#body .prose[data-file]')) {
@@ -680,7 +859,7 @@ function renderWrite() {
     <div class="toolbar">
       ${S.narrow ? '<button class="btn" data-action="show-list">‹ List</button>' : ''}
       ${dateButton(d.ts)}
-      <span class="pill">${isDraft ? (guardCount(d) ? 'Not saved' : d.ref ? 'Draft · saved' : 'New draft') : 'Editing filed entry'}</span>
+      <span class="pill${pillWarn(d) ? ' warn' : ''}">${esc(pillText(d))}</span>
       <span class="spacer"></span>
       <button class="btn" data-action="focus" title="Focus (Ctrl+Alt+F)">Focus</button>
       <button class="btn ${d.starred ? 'star-on' : ''}" data-action="star" aria-label="Star">${icon.star(d.starred)}</button>
@@ -875,58 +1054,120 @@ function acceptTag(i) {
 }
 
 let saveChain = Promise.resolve();
-let saveTimer = null;
+let saveTimer = null, recoveryTimer = null;
 const AUTOSAVE_IDLE_MS = 1200;
 const isDraftRef = d => !!d && (!d.ref || d.ref.source === 'inbox');
-const isDirtyEdit = d => !!d?.ref && d.ref.source !== 'inbox' && makeRaw(d.ts, d.title, d.starred, d.body) !== d.ref.raw.trimEnd();
-/** Header-shaped lines in a draft's body: while there are any (and the user hasn't said "Keep as one"), nothing autosaves. */
+const isDirtyEdit = d => !!d?.ref && d.ref.source !== 'inbox' && composerRaw(d) !== d.ref.raw.trimEnd();
+const emptyDraft = d => !d.title.trim() && !d.body.trim();
+const isStale = e => /changed on disk/i.test(String(e?.message || e));
+/** Header-shaped lines in a draft's body: while there are any (and the user hasn't said "Keep as one"), it isn't saved as an entry; a recovery copy is kept instead. */
 const guardCount = d => isDraftRef(d) && !d.keepOne ? d.body.split('\n').filter(l => HDR_LINE.test(l)).length : 0;
-function guardHtml() {
-  const n = guardCount(S.draft);
-  if (!n) return '';
-  return `<div class="guard-banner" role="alert"><span>This looks like ${plural(n, 'entry', 'entries')} — nothing is saved until you choose.</span><span class="spacer"></span><button class="btn primary" data-action="guard-import">Import</button><button class="btn" data-action="guard-keep">Keep as one</button></div>`;
+const pillWarn = d => !!d && (!!d.conflict || !!d.failed || !!guardCount(d));
+function pillText(d) {
+  if (d.conflict) return 'Not saved · changed elsewhere';
+  if (!isDraftRef(d)) return d.failed ? 'Not saved' : 'Editing filed entry';
+  if (guardCount(d)) return d.recovered ? 'Not saved · recovery copy kept' : 'Not saved';
+  if (d.failed) return d.recovered ? 'Not saved · recovery copy kept' : 'Not saved';
+  return draftSaved(d) ? (d.ref ? 'Draft · saved' : 'New draft') : d.ref ? 'Draft · unsaved' : 'New draft';
 }
-function scheduleSave() {
+function guardHtml() {
+  const d = S.draft;
+  if (!d) return '';
+  if (d.conflict === 'changed') return `<div class="guard-banner" role="alert"><span>This entry was changed somewhere else while you were writing, so your version hasn’t been saved over it.</span><span class="spacer"></span><button class="btn primary" data-action="conflict-mine">Keep mine as a new draft</button><button class="btn" data-action="conflict-theirs">Take theirs</button></div>`;
+  if (d.conflict) return `<div class="guard-banner" role="alert"><span>This entry is no longer where it was: it was deleted or moved somewhere else. Your version hasn’t been saved.</span><span class="spacer"></span><button class="btn primary" data-action="conflict-mine">Keep mine as a new draft</button><button class="btn" data-action="conflict-theirs">Discard mine</button></div>`;
+  const n = guardCount(d);
+  if (!n) return '';
+  return `<div class="guard-banner" role="alert"><span>This looks like ${plural(n, 'entry', 'entries')} — it isn’t in the inbox until you choose.${d.recovered ? ' A recovery copy is kept in .quire/ meanwhile.' : ''}</span><span class="spacer"></span><button class="btn primary" data-action="guard-import">Import</button><button class="btn" data-action="guard-keep">Keep as one</button></div>`;
+}
+/** Text that can't be saved as an entry yet is copied to a sidecar file, so a crash doesn't take it. */
+function keepRecovery(d, delay = 800) {
+  clearTimeout(recoveryTimer);
+  recoveryTimer = setTimeout(async () => {
+    if (S.draft !== d || emptyDraft(d)) return;
+    try { await invoke('save_recovery', { draft: { ts: d.ts, title: d.title, starred: d.starred, body: d.body, savedAt: nowTs() } }); d.recovered = true; }
+    catch (e) { console.warn(e); d.recovered = false; }
+    if (S.draft === d) refreshChrome(false);
+  }, delay);
+}
+function dropRecovery(d) {
+  clearTimeout(recoveryTimer);
+  if (!d?.recovered) return;
+  d.recovered = false;
+  invoke('clear_recovery').catch(e => console.warn(e));
+}
+/** A save the core refused because the entry changed: reload, and let the banner ask which version to keep. */
+async function markConflict(d) {
+  await load().catch(() => {});
+  if (S.draft !== d) return;
+  if (!d.conflict && d.ref && !S.entries.some(e => sameEntry(e, d.ref))) d.conflict = S.entries.some(e => e.file === d.ref.file && e.ts === d.ref.ts) ? 'changed' : 'gone';
+  refreshChrome();
+}
+/** An autosave failed: say so once, keep saying it in the pill, keep a recovery copy, and try again with a growing wait. */
+function saveFailed(d, e) {
+  console.error(e);
+  if (S.draft !== d) { fail(e); return; }
+  d.pendingRaw = null;
+  if (isStale(e)) { markConflict(d); return; }
+  d.failed = (d.failed || 0) + 1;
+  if (d.failed === 1) fail(e);
+  keepRecovery(d, 0);
+  refreshChrome(false);
+  scheduleSave(Math.min(60000, 2000 * 2 ** (d.failed - 1)));
+}
+function scheduleSave(delay = AUTOSAVE_IDLE_MS) {
   clearTimeout(saveTimer);
   const d = S.draft;
-  if (!isDraftRef(d) || guardCount(d) || S.folderMissing) return;
+  if (!isDraftRef(d) || S.folderMissing || d.conflict) return;
+  if (guardCount(d)) { keepRecovery(d); return; }
   saveTimer = setTimeout(() => {
-    saveChain = saveChain.then(() => S.draft === d ? saveDraftNow() : undefined).then(checkGoal).catch(e => {
-      // Drop the reference so the next save re-creates the draft instead of failing on a stale index/raw forever.
-      // An unreachable folder changed nothing on disk, so the reference is still good there.
-      if (S.draft === d && !/unavailable/i.test(String(e))) d.ref = null;
-      fail(e);
-    });
-  }, AUTOSAVE_IDLE_MS);
+    saveChain = saveChain.then(() => S.draft === d ? saveDraftNow() : undefined).then(checkGoal).catch(e => saveFailed(d, e));
+  }, delay);
 }
 
 /** Drafts autosave to their day's file under inbox/. Filed entries save on Ctrl+S, or when you leave them. */
 async function saveDraftNow() {
   const d = S.draft;
-  if (!isDraftRef(d) || guardCount(d)) return;
-  if (!d.title.trim() && !d.body.trim()) return;
-  const raw = makeRaw(d.ts, d.title, d.starred, d.body);
+  if (!isDraftRef(d) || guardCount(d) || d.conflict) return;
+  if (emptyDraft(d)) return; // an emptied draft is never written as an empty entry: leaving asks whether to discard it
+  const raw = composerRaw(d);
   if (d.ref && d.ref.raw.trimEnd() === raw) return;
   S.ignoreWatch = Date.now() + 1500;
-  const r = !d.ref
-    ? await invoke('create_draft', { ts: d.ts, title: d.title, starred: d.starred, body: d.body })
-    : await invoke('update_entry', { file: d.ref.file, index: d.ref.index, expectedRaw: d.ref.raw, ts: d.ts, title: d.title, starred: d.starred, body: d.body });
+  d.pendingRaw = raw;
+  let r;
+  try {
+    r = !d.ref
+      ? await invoke('create_draft', { ts: d.ts, title: d.title, starred: d.starred, body: d.body })
+      : await invoke('update_entry', { file: d.ref.file, index: d.ref.index, expectedRaw: d.ref.raw, ts: d.ts, title: d.title, starred: d.starred, body: d.body });
+  } finally { d.pendingRaw = null; }
   // The back end says exactly where it wrote and what; load() swaps this for the full entry.
   if (S.draft === d) d.ref = { ...(d.ref || {}), file: r.file, index: r.index, raw: r.raw, ts: d.ts, source: 'inbox' };
-  await load();
+  d.failed = 0;
+  dropRecovery(d);
+  // The write is done. A reload that fails is not a failed save: the next one catches up.
+  try { await load(); } catch (e) { console.warn('reload after save failed', e); }
   refreshChrome();
   // The list beside the composer shows the draft once it exists on disk.
   const lp = $('.list-pane'); if (lp && !S.narrow) { const top = lp.scrollTop; const tmp = document.createElement('div'); tmp.innerHTML = renderList(); const nl = tmp.firstElementChild; lp.replaceWith(nl); nl.scrollTop = top; }
   const st = $('#savefile'); if (st && d.ref) st.textContent = d.ref.file;
 }
-/** Is everything in the composer on disk? */
-const draftSaved = d => !d || (isDraftRef(d) ? (!d.title.trim() && !d.body.trim()) || (!!d.ref && d.ref.raw.trimEnd() === makeRaw(d.ts, d.title, d.starred, d.body)) : !isDirtyEdit(d));
+/** Is everything in the composer on disk? A saved draft that has been emptied is not: the text on disk is still there. */
+const draftSaved = d => !d || (isDraftRef(d) ? (emptyDraft(d) ? !d.ref : (!!d.ref && d.ref.raw.trimEnd() === composerRaw(d))) : !isDirtyEdit(d));
 /** Write out whatever the composer holds. true = on disk, false = a save failed, 'stay' = the user chose to keep writing. */
 async function flushDraft(d) {
   clearTimeout(saveTimer);
   try {
+    if (d.conflict) { toast('Choose which version to keep first'); return 'stay'; }
     if (isDraftRef(d)) {
       await saveChain.catch(() => {});
+      if (d.conflict) { toast('Choose which version to keep first'); return 'stay'; }
+      if (d.ref && emptyDraft(d)) {
+        if (!(await askConfirm('Discard this draft? It is empty now, so it will be removed from the inbox.', 'Discard'))) return 'stay';
+        S.ignoreWatch = Date.now() + 1500;
+        await invoke('delete_entry', { file: d.ref.file, index: d.ref.index, expectedRaw: d.ref.raw });
+        d.ref = null;
+        await load().catch(() => {});
+        return true;
+      }
       const n = guardCount(d);
       if (n) {
         if (!(await askConfirm(`This draft looks like ${plural(n, 'entry', 'entries')} and hasn’t been saved yet. Save it as one entry?`, 'Save as one'))) return 'stay';
@@ -938,13 +1179,17 @@ async function flushDraft(d) {
       toast('Saved');
     }
     return draftSaved(d);
-  } catch (e) { console.error(e); return false; }
+  } catch (e) {
+    console.error(e);
+    if (isStale(e)) { await markConflict(d); if (d.conflict) return 'stay'; }
+    return false;
+  }
 }
 function refreshChrome(updateTabs = true) {
   const wc = $('#wc'); if (wc && S.draft) wc.textContent = `${words(S.draft.body)} words`;
   const g = $('#goal'); if (g && S.ui.goalOn) g.innerHTML = goalHtml();
   const pill = $('.toolbar .pill');
-  if (pill && S.draft && isDraftRef(S.draft)) pill.textContent = guardCount(S.draft) ? 'Not saved' : draftSaved(S.draft) ? 'Draft · saved' : S.draft.ref ? 'Draft · unsaved' : 'New draft';
+  if (pill && S.draft) { pill.textContent = pillText(S.draft); pill.classList?.toggle('warn', pillWarn(S.draft)); }
   const fileBtn = $('[data-action="file"]');
   if (fileBtn && S.draft) fileBtn.disabled = !S.draft.body.trim() && !S.draft.title.trim();
   const gb = $('#guard'); if (gb && S.draft) { const h = guardHtml(); if (gb.innerHTML !== h) gb.innerHTML = h; }
@@ -987,19 +1232,44 @@ async function leaveWrite() {
   if (d) {
     const ok = await flushDraft(d);
     if (ok === 'stay') return false;
-    if (!ok && !(await askConfirm('Couldn’t save — discard changes?', 'Discard'))) return false;
+    // Staying after a failed save: keep trying.
+    if (!ok && !(await askConfirm('Couldn’t save — discard changes?', 'Discard'))) { if (S.draft === d) scheduleSave(); return false; }
   }
   const ref = d?.ref;
+  dropRecovery(d);
   S.mode = 'read'; S.draft = null; S.focus = false;
   if (ref) S.sel = S.entries.find(e => sameEntry(e, ref)) || null;
   render();
   return true;
 }
+/** The conflict banner's two answers. Mine: the composer's text becomes a new inbox draft and the entry
+ *  on disk is left as it is. Theirs: the composer takes the version on disk (or closes, if it is gone). */
+async function resolveConflict(mine) {
+  const d = S.draft; if (!d?.conflict) return;
+  const r = d.ref;
+  if (mine) {
+    Object.assign(d, { ref: null, conflict: null, failed: 0, pendingRaw: null, keepOne: d.keepOne });
+    render();
+    $('#bodyta')?.focus();
+    if (!guardCount(d)) { await saveChain.catch(() => {}); await saveDraftNow(); toast('Kept as a new draft in the inbox'); }
+    else scheduleSave();
+    return;
+  }
+  await load().catch(() => {});
+  const theirs = r && (S.entries.find(e => sameEntry(e, r)) || S.entries.find(e => e.file === r.file && e.ts === r.ts));
+  if (S.draft !== d) return;
+  S.composerStale = false;
+  if (theirs) { adoptIntoComposer(d, theirs); render(); $('#bodyta')?.focus(); }
+  else { dropRecovery(d); S.mode = 'read'; S.draft = null; S.focus = false; S.sel = null; render(); }
+}
 /** Esc / Cancel on a filed entry: an explicit cancel, but ask before throwing edits away. */
 async function cancelEdit() {
   const d = S.draft;
   if (isDirtyEdit(d) && !(await askConfirm('Discard your changes to this entry?', 'Discard'))) return;
-  S.mode = 'read'; S.draft = null; S.focus = false; render();
+  const ref = d?.ref;
+  S.mode = 'read'; S.draft = null; S.focus = false;
+  if (ref) S.sel = S.entries.find(e => sameEntry(e, ref)) || S.entries.find(e => e.file === ref.file && e.ts === ref.ts) || null;
+  render();
 }
 /** Same entry after a reload (indexes shift when files change). */
 const reresolve = e => e && (S.entries.find(x => sameEntry(x, e)) || S.entries.find(x => x.file === e.file && x.ts === e.ts) || null);
@@ -1009,12 +1279,14 @@ async function fileCurrent() {
     if (!isDraftRef(S.draft)) return;
     if (guardCount(S.draft)) { toast('Choose Import or Keep as one first'); return; }
     if (S.ui.autoPromote && !S.draft.title.trim()) promoteFirstLine(false);
-    clearTimeout(saveTimer); await saveChain; await saveDraftNow();
+    if (S.draft.conflict) { toast('Choose which version to keep first'); return; }
+    clearTimeout(saveTimer); await saveChain.catch(() => {}); await saveDraftNow();
     if (!draftSaved(S.draft)) throw new Error('Couldn’t save the draft, so it wasn’t filed');
     target = S.draft.ref;
   } else target = S.sel;
   if (!target || target.source !== 'inbox') return;
   const dest = await invoke('file_draft', { file: target.file, index: target.index, expectedRaw: target.raw });
+  dropRecovery(S.draft);
   S.mode = 'read'; S.draft = null; S.focus = false;
   await load();
   S.sel = S.entries.find(e => e.file === dest && e.ts === target.ts) || null;
@@ -1034,15 +1306,22 @@ function promoteFirstLine(rerender = true) {
 }
 /** Save a filed entry being edited; the composer stays as it is. */
 async function saveEditCore(d) {
+  if (d.conflict) throw new Error('This entry was changed somewhere else. Choose which version to keep first.');
   S.ignoreWatch = Date.now() + 1500;
-  const r = await invoke('update_entry', { file: d.ref.file, index: d.ref.index, expectedRaw: d.ref.raw, ts: d.ts, title: d.title, starred: d.starred, body: d.body });
-  await load(r);
-  if (S.draft === d) d.ref = S.entries.find(e => sameEntry(e, r)) || { ...d.ref, ...r };
+  d.pendingRaw = composerRaw(d);
+  let r;
+  try { r = await invoke('update_entry', { file: d.ref.file, index: d.ref.index, expectedRaw: d.ref.raw, ts: d.ts, title: d.title, starred: d.starred, body: d.body }); }
+  finally { d.pendingRaw = null; }
+  // The entry is written: point the composer at it before the reload, so the reload sees its own save.
+  if (S.draft === d) d.ref = { ...d.ref, ...r };
+  try { await load(r); } catch (e) { console.warn('reload after save failed', e); }
+  if (S.draft === d) d.ref = S.entries.find(e => sameEntry(e, r)) || d.ref;
   return r;
 }
 async function saveEdit() {
   const d = S.draft; if (!d?.ref) return;
-  await saveEditCore(d);
+  try { await saveEditCore(d); }
+  catch (e) { if (isStale(e)) { await markConflict(d); if (d.conflict) return; } throw e; }
   S.mode = 'read'; S.draft = null; S.focus = false; toast('Saved'); render();
 }
 /** "Import" on the embedded-header banner: each [header] becomes its own inbox draft; text above the first stays here. */
@@ -1059,7 +1338,8 @@ async function guardImport() {
     try { await invoke('delete_entry', { file: d.ref.file, index: d.ref.index, expectedRaw: d.ref.raw }); }
     catch (e) { fail(e); }
   }
-  if (S.draft === d) { d.ref = null; d.body = lines.slice(0, i).join('\n').replace(/\s+$/, ''); d.keepOne = false; }
+  if (S.draft === d) { d.ref = null; d.body = lines.slice(0, i).join('\n').replace(/\s+$/, ''); d.keepOne = false; d.conflict = null; }
+  dropRecovery(d);
   await load();
   toast(`Imported ${plural(n, 'entry', 'entries')}`);
   render();
@@ -1079,14 +1359,17 @@ async function toggleStar() {
   await load(r);
   render();
 }
-async function toggleTask(e, ix, checked) {
+async function toggleTask(e, ix, checked, pr) {
   let n = 0;
   const body = e.body.split('\n').map(l => { const m = l.match(/^(\s*[-*+]\s+\[)([ xX])(\]\s.*)$/); if (!m) return l; const mine = n++ === ix; return mine ? m[1] + (checked ? 'x' : ' ') + m[3] : l; }).join('\n');
   S.ignoreWatch = Date.now() + 1500;
   const had = sameEntry(S.sel, e);
   const r = await invoke('update_entry', { file: e.file, index: e.index, expectedRaw: e.raw, ts: e.ts, title: e.title, starred: e.starred, body });
   await load(had ? r : undefined); // a tick on the day page shouldn't open the entry
-  render();
+  // Only the ticked entry's text is redrawn, in place: the page keeps its scroll position.
+  const now = S.entries.find(x => x.file === r.file && x.raw.trimEnd() === r.raw.trimEnd());
+  if (pr?.isConnected && now) { pr.dataset.file = now.file; pr.dataset.index = now.index; pr.innerHTML = renderProse(now.body, now.file); if ($('#body [data-asset]')) resolveVisibleMedia().catch(() => {}); }
+  else render();
 }
 function toggleFocus() {
   if (S.mode !== 'write') { if (S.sel) editEntry(S.sel); else startDraft(); }
@@ -1123,10 +1406,7 @@ function openMenu(anchor, ctx) {
 }
 /** items: [label, action, disabled, danger]; no action = heading; no label = rule. */
 function showMenu(r, items) {
-  const layer = $('#popover');
-  layer.innerHTML = `<div class="menu" role="menu" style="left:${Math.max(8, Math.min(r.left, innerWidth - 280))}px;top:${Math.max(8, Math.min(r.bottom + 6, innerHeight - 36 * items.length - 20))}px">${items.map(([l, a, dis, danger]) => a ? `<button role="menuitem" data-menu-item="${a}" ${dis ? 'disabled' : ''} class="${danger ? 'danger' : ''}">${esc(l)}</button>` : l ? `<span class="menu-h">${esc(l)}</span>` : '<span class="menu-rule"></span>').join('')}</div>`;
-  layer.classList.add('open');
-  layer.querySelector('[role="menuitem"]:not([disabled])')?.focus();
+  openPopover(`<div class="menu" role="menu" style="left:${Math.max(8, Math.min(r.left, innerWidth - 280))}px;top:${Math.max(8, Math.min(r.bottom + 6, innerHeight - 36 * items.length - 20))}px">${items.map(([l, a, dis, danger]) => a ? `<button role="menuitem" data-menu-item="${esc(a)}" ${dis ? 'disabled' : ''} class="${danger ? 'danger' : ''}">${esc(l)}</button>` : l ? `<span class="menu-h">${esc(l)}</span>` : '<span class="menu-rule"></span>').join('')}</div>`, '[role="menuitem"]:not([disabled])');
 }
 function openAssetMenu(r, rel) {
   S.menuAsset = rel;
@@ -1150,20 +1430,17 @@ async function assetAction(a, rel) {
   const kind = asset?.kind || mediaKind(rel);
   const owners = assetOwners().get(rel) || [];
   if (a === 'asset-view') {
-    if (kind === 'image') { let url = S.assetUrls.get(rel); if (!url) { url = fileSrc(await invoke('asset_path', { rel })); S.assetUrls.set(rel, url); } openLightbox(rel, url, owners[0] || null); }
-    else await invoke('plugin:opener|open_path', { path: await invoke('asset_path', { rel }) });
+    if (kind === 'image') openLightbox(rel, await assetUrl(rel), owners[0] || null);
+    else await openRel(rel);
   } else if (a === 'asset-reveal') {
-    await invoke('plugin:opener|reveal_item_in_dir', { path: await invoke('asset_path', { rel }) });
+    await openRel(rel, true);
   } else if (a === 'asset-goto') {
     if (owners.length === 1) return openInJournal(owners[0]);
     if (!owners.length) return toast('No entry links this file');
-    const layer = $('#popover');
-    layer.innerHTML = `<div class="popover centered" role="dialog" aria-label="Entries using ${esc(name)}"><h3>Used by ${owners.length} entries</h3>
+    openPopover(`<div class="popover centered" role="dialog" aria-label="Entries using ${esc(name)}"><h3>Used by ${owners.length} entries</h3>
       <div class="pick-list">${byNewest(owners).map(e => `<button class="row" data-action="open-journal" data-file="${esc(e.file)}" data-index="${e.index}"><span class="meta"><span class="mono">${fmtDay(e.date)} · ${e.time}</span>${e.source === 'inbox' ? '<span>draft</span>' : ''}</span><span class="t">${esc(e.title || firstLine(e.body) || 'Untitled')}</span></button>`).join('')}</div>
-      <div class="row2"><span></span><button class="btn" id="ask-no">Close</button></div></div>`;
-    layer.classList.add('open');
+      <div class="row2"><span></span><button class="btn" id="ask-no">Close</button></div></div>`, '.pick-list .row');
     $('#ask-no').onclick = closePopover; askConfirm.cancel = closePopover;
-    layer.querySelector('.pick-list .row')?.focus();
   } else if (a === 'asset-delete') {
     const n = owners.length;
     const msg = n ? `${plural(n, 'entry', 'entries')} link${n === 1 ? 's' : ''} this file, and those links will break. This can’t be undone.` : `<b>${esc(name)}</b> isn’t linked by any entry. This can’t be undone.`;
@@ -1180,9 +1457,9 @@ async function menuAction(a) {
   if (a === 'promote') { promoteFirstLine(); return; }
   if (a.startsWith('tpl:')) { const t = S.templates.find(x => x.name === a.slice(4)); if (t) insertAtCaret(fillTemplate(t.body)); return; }
   if (a === 'attach') {
-    const p = await invoke('plugin:dialog|open', { options: { multiple: false, title: 'Attach a file' } });
+    const p = await pick('file', 'Attach a file');
     if (!p) return;
-    const link = await invoke('attach_file', { src: p, ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' });
+    const link = await invoke('attach_file', { src: p, ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' }); S.assets = null;
     if (S.draft === d) { insertAtCaret(link); toast('Attached'); } else { await navigator.clipboard.writeText(link).catch(() => {}); toast('Attached — the link is on the clipboard'); }
     return;
   }
@@ -1190,12 +1467,13 @@ async function menuAction(a) {
   if (a === 'copy') { const src = S.mode === 'write' ? d : e; await navigator.clipboard.writeText([src.title, src.body].filter(Boolean).join('\n\n')); toast('Copied'); return; }
   if (a === 'print') { window.print(); return; }
   if (a === 'print-day') { S.printDay = e.date; S.sel = null; render(); setTimeout(() => { window.print(); S.printDay = null; S.sel = e; render(); }, 150); return; }
-  if (a === 'open-file') { await invoke('plugin:opener|open_path', { path: S.folder + '/' + e.file }); return; }
-  if (a === 'reveal') { await invoke('plugin:opener|reveal_item_in_dir', { path: S.folder + '/' + e.file }); return; }
+  if (a === 'open-file') { await openRel(e.file); return; }
+  if (a === 'reveal') { await openRel(e.file, true); return; }
   if (a === 'discard') {
     if (!(await askConfirm('Discard this draft? It will be removed from the inbox.', 'Discard'))) return;
     clearTimeout(saveTimer); await saveChain;
     if (d.ref && d.ref.source === 'inbox') await invoke('delete_entry', { file: d.ref.file, index: d.ref.index, expectedRaw: d.ref.raw });
+    dropRecovery(d);
     S.mode = 'read'; S.draft = null; S.focus = false; await load(); S.sel = null; toast('Discarded'); render(); return;
   }
   if (a === 'retime') { const b = $('[data-action="retime"]'); if (b) openRetime(b); return; }
@@ -1220,15 +1498,13 @@ function openRetime(anchor) {
   if (!cur) return;
   const r = anchor.getBoundingClientRect();
   const isFiled = (S.mode === 'write' ? S.draft.ref : S.sel)?.source === 'journal';
-  $('#popover').innerHTML = `<div class="popover" style="left:${Math.min(r.left, innerWidth - 320)}px;top:${r.bottom + 8}px" role="dialog" aria-label="Date and time">
+  openPopover(`<div class="popover" style="left:${Math.min(r.left, innerWidth - 320)}px;top:${r.bottom + 8}px" role="dialog" aria-label="Date and time">
     <h3>Date &amp; time</h3>
     <div class="row2"><label>Date<input type="date" id="rt-date" value="${cur.slice(0, 10)}"></label><label>Time<input type="time" id="rt-time" step="1" value="${cur.slice(11)}"></label></div>
     <div class="quick"><button class="btn" data-rt="now">Now</button><button class="btn" data-rt="yesterday">Yesterday</button></div>
     ${isFiled ? '<div class="note">Changing the date moves the entry to that day’s file, in time order.</div>' : ''}
     <div class="row2"><button class="btn" data-rt="cancel">Cancel</button><button class="btn primary" data-rt="save">Save</button></div>
-  </div>`;
-  $('#popover').classList.add('open');
-  $('#rt-date').focus();
+  </div>`, '#rt-date');
 }
 async function retimeSave() {
   const d = $('#rt-date').value, t = $('#rt-time').value;
@@ -1252,52 +1528,78 @@ const DANGER_TITLES = { Delete: 'Permanent deletion', Discard: 'Changes will be 
 function askConfirm(html, okLabel, opts = {}) {
   const danger = opts.danger ?? (okLabel in DANGER_TITLES);
   return new Promise(resolve => {
-    const layer = $('#popover');
     const head = danger ? `<div class="dz-head"><span class="dz-title">${esc(opts.title || DANGER_TITLES[okLabel] || okLabel)}</span><span class="dz-cols"><span>${esc(opts.what || 'Target')}</span><span>${esc(opts.whereLabel || 'Location')}</span></span></div>` : '';
     const item = danger && opts.item ? `<div class="dz-item"><span class="dz-ico" aria-hidden="true">${icon.trash || '×'}</span><span class="dz-name">${esc(opts.item.name)}</span><span class="dz-meta mono">${esc(opts.item.meta || '')}</span></div>` : '';
     const micro = danger ? `<div class="dz-micro" aria-hidden="true">[WRITE PENDING] [NO UNDO]<br>FILE IO ${'· '.repeat(3)}AWAITING CONFIRMATION…</div>` : '';
-    layer.innerHTML = `<div class="popover centered ${danger ? 'danger-panel' : ''}" role="alertdialog" aria-label="${danger ? 'Confirm ' + esc(okLabel.toLowerCase()) : 'Confirm'}">${head}${item}<div class="dz-body" style="font-size:14px;line-height:1.5">${html}</div>
-      <div class="row2"><button class="btn" id="ask-no">Cancel</button><button class="btn primary ${danger ? 'danger' : ''}" id="ask-yes">${esc(okLabel)}</button></div>${micro}</div>`;
-    layer.classList.add('open');
+    // Destructive choices start on Cancel, so a stray Enter can't delete.
+    openPopover(`<div class="popover centered ${danger ? 'danger-panel' : ''}" role="alertdialog" aria-label="${danger ? 'Confirm ' + esc(okLabel.toLowerCase()) : 'Confirm'}">${head}${item}<div class="dz-body" style="font-size:14px;line-height:1.5">${html}</div>
+      <div class="row2"><button class="btn" id="ask-no">${esc(opts.cancelLabel || 'Cancel')}</button><button class="btn primary ${danger ? 'danger' : ''}" id="ask-yes">${esc(okLabel)}</button></div>${micro}</div>`, danger ? '#ask-no' : '#ask-yes');
     const done = v => { closePopover(); resolve(v); };
     $('#ask-yes').onclick = () => done(true); $('#ask-no').onclick = () => done(false);
     askConfirm.cancel = () => done(false);
-    // Destructive choices start on Cancel, so a stray Enter can't delete.
-    (danger ? $('#ask-no') : $('#ask-yes')).focus();
   });
 }
-function askText(title, placeholder, value = '') {
+function askText(title, placeholder, value = '', opts = {}) {
   return new Promise(resolve => {
-    const layer = $('#popover');
-    layer.innerHTML = `<div class="popover centered" role="dialog"><h3>${esc(title)}</h3><input id="ask-in" placeholder="${esc(placeholder)}" value="${esc(value)}">
-      <div class="row2"><button class="btn" id="ask-no">Cancel</button><button class="btn primary" id="ask-yes">OK</button></div></div>`;
-    layer.classList.add('open');
+    openPopover(`<div class="popover centered" role="dialog" aria-label="${esc(title)}"><h3>${esc(title)}</h3><input id="ask-in" ${opts.password ? 'type="password" autocomplete="off"' : ''} placeholder="${esc(placeholder)}" value="${esc(value)}">
+      <div class="row2"><button class="btn" id="ask-no">Cancel</button><button class="btn primary" id="ask-yes">OK</button></div></div>`, '#ask-in');
     const done = v => { closePopover(); resolve(v); };
     $('#ask-yes').onclick = () => done($('#ask-in').value.trim()); $('#ask-no').onclick = () => done(null);
     $('#ask-in').onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); done($('#ask-in').value.trim()); } };
     askConfirm.cancel = () => done(null);
-    $('#ask-in').focus();
   });
 }
 function openImportText() {
-  const layer = $('#popover');
-  layer.innerHTML = `<div class="popover centered wide" role="dialog"><h3>Import as separate entries</h3>
+  openPopover(`<div class="popover centered wide" role="dialog" aria-label="Import as separate entries"><h3>Import as separate entries</h3>
     <div class="note">Paste text with <span class="mono">[YYYY-MM-DD HH:MM:SS]</span> headers and each becomes an inbox draft. Headerless text becomes one draft dated now.</div>
     <textarea id="imp-text" rows="10" placeholder="Paste here…"></textarea>
-    <div class="row2"><button class="btn" id="ask-no">Cancel</button><button class="btn primary" id="ask-yes">Import</button></div></div>`;
-  layer.classList.add('open');
+    <div class="row2"><button class="btn" id="ask-no">Cancel</button><button class="btn primary" id="ask-yes">Import</button></div></div>`, '#imp-text');
   $('#ask-no').onclick = closePopover;
   askConfirm.cancel = closePopover;
   $('#ask-yes').onclick = async () => { const t = $('#imp-text').value; closePopover(); try { const n = await invoke('import_text', { text: t, nowTs: nowTs() }); await load(); toast(`${plural(n, 'draft')} added to the inbox`); if (S.mode === 'write') refreshChrome(); else render(); } catch (e) { fail(e); } };
-  $('#imp-text').focus();
 }
-function closePopover() { const l = $('#popover'); l.classList.remove('open'); l.innerHTML = ''; }
+/** Every popover (menus, dialogs, the lightbox) opens through here: it remembers what had the focus, marks a
+ *  dialog modal, and focuses `focus` (a selector) or the first control. The keyboard handler keeps Tab inside
+ *  it and moves through a menu with the arrow keys; closePopover gives the focus back. */
+let popoverReturn = null;
+const popoverControls = () => $$('#popover button:not([disabled]), #popover input:not([disabled]), #popover select, #popover textarea, #popover a[href]');
+function openPopover(html, focus) {
+  const layer = $('#popover');
+  if (!layer.classList.contains('open')) popoverReturn = document.activeElement || null;
+  layer.innerHTML = html;
+  layer.classList.add('open');
+  const box = layer.firstElementChild;
+  if (box && /dialog$/.test(box.getAttribute('role') || '')) box.setAttribute('aria-modal', 'true');
+  ((focus && layer.querySelector(focus)) || popoverControls()[0])?.focus();
+  return layer;
+}
+function closePopover() {
+  const l = $('#popover'), back = popoverReturn;
+  popoverReturn = null;
+  l.classList.remove('open'); l.innerHTML = '';
+  if (back && back.isConnected && back !== document.body) back.focus?.();
+}
+/** Tab and the arrow keys while a popover is open. Returns true when it used the key. */
+function popoverKey(ev) {
+  const list = popoverControls(), at = list.indexOf(document.activeElement);
+  if (ev.key === 'Tab') {
+    ev.preventDefault();
+    if (list.length) list[ev.shiftKey ? (at <= 0 ? list.length - 1 : at - 1) : (at < 0 || at === list.length - 1 ? 0 : at + 1)].focus();
+    return true;
+  }
+  if ($('#popover [role="menu"]') && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key)) {
+    const items = $$('#popover [role="menuitem"]:not([disabled])'), i = items.indexOf(document.activeElement);
+    if (!items.length) return false;
+    ev.preventDefault();
+    items[ev.key === 'Home' ? 0 : ev.key === 'End' ? items.length - 1 : ev.key === 'ArrowDown' ? (i + 1) % items.length : (i <= 0 ? items.length - 1 : i - 1)].focus();
+    return true;
+  }
+  return false;
+}
 
 /* ---------- lightbox ---------- */
 function openLightbox(rel, url, owner) {
-  const layer = $('#popover');
-  layer.innerHTML = `<div class="lightbox" role="dialog" aria-label="Image"><img src="${url}" alt=""><div class="lb-bar"><span class="mono">${esc(rel.split('/').pop())}</span><span class="spacer"></span>${owner ? `<button class="btn" data-action="open-journal" data-file="${esc(owner.file)}" data-index="${owner.index}">Open entry</button>` : ''}<button class="btn" data-action="open-asset" data-rel="${esc(rel)}">Open in app</button><button class="btn" id="ask-no">Close</button></div></div>`;
-  layer.classList.add('open');
+  openPopover(`<div class="lightbox" role="dialog" aria-label="Image"><img src="${url}" alt=""><div class="lb-bar"><span class="mono">${esc(rel.split('/').pop())}</span><span class="spacer"></span>${owner ? `<button class="btn" data-action="open-journal" data-file="${esc(owner.file)}" data-index="${owner.index}">Open entry</button>` : ''}<button class="btn" data-action="open-asset" data-rel="${esc(rel)}">Open in app</button><button class="btn" id="ask-no">Close</button></div></div>`, '#ask-no');
   $('#ask-no').onclick = closePopover; askConfirm.cancel = closePopover;
 }
 
@@ -1337,7 +1639,7 @@ async function attachPaths(paths) {
   if (S.mode !== 'write' || !S.draft) { toast('Open a draft first, then drop files onto it'); return; }
   const d = S.draft;
   for (const p of paths) {
-    const link = await invoke('attach_file', { src: p, ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' });
+    const link = await invoke('attach_file', { src: p, ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' }); S.assets = null;
     if (S.draft !== d) { toast('Attached, but the draft was closed first'); return; }
     insertAtCaret(link);
   }
@@ -1385,8 +1687,25 @@ appWindow.onCloseRequested(async ev => {
     ok = await flushDraft(S.draft);
     if (ok === 'stay') return;
     if (!ok) ok = await askConfirm('Couldn’t save — discard changes?', 'Discard');
+    else dropRecovery(S.draft);
   }
-  if (ok) await appWindow.destroy();
+  if (!ok) return;
+  // A backup that is being copied, or one still owed for the last changes, is finished before the window goes.
+  try {
+    let st = await invoke('backup_state');
+    if (st?.running) {
+      toast('Finishing the backup…', 'sticky');
+      if (!(await askConfirm('A backup is still being copied. Wait for it, or close now? Closing now throws the unfinished copy away; Quire takes the backup when it next opens.', 'Close now', { danger: false, cancelLabel: 'Wait' }))) {
+        while ((st = await invoke('backup_state'))?.running) await new Promise(r => setTimeout(r, 500));
+        toast('Backup finished');
+      }
+    } else if (st?.pending) {
+      toast('Backing up your last changes before closing…', 'sticky');
+      try { await invoke('backup_now'); }
+      catch (e) { if (!(await askConfirm(`The backup of your last changes failed: ${esc(String(e?.message || e))}. Close anyway? Quire tries again when it next opens.`, 'Close anyway', { danger: false }))) { toast('Still open'); return; } }
+    }
+  } catch (e) { console.warn(e); }
+  await appWindow.destroy();
 });
 
 T.event.listen('tauri://drag-drop', ev => { const paths = ev.payload?.paths || []; if (paths.length) attachPaths(paths).catch(fail); });
@@ -1402,7 +1721,7 @@ document.addEventListener('keydown', ev => {
   setTimeout(async () => {
     if (pasteSeen || !d) return;
     try {
-      const link = await invoke('paste_image', { ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' });
+      const link = await invoke('paste_image', { ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' }); S.assets = null;
       if (!link) return;
       if (S.draft === d && S.mode === 'write') { insertAtCaret(link); toast('Image attached'); }
       else { navigator.clipboard?.writeText(link).catch(() => {}); toast('Image saved; link copied'); }
@@ -1421,7 +1740,7 @@ document.addEventListener('paste', async ev => {
     ev.preventDefault();
     const d = S.draft; if (!d) return;
     try {
-      const link = await invoke('paste_image', { ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' });
+      const link = await invoke('paste_image', { ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' }); S.assets = null;
       if (!link) return;
       if (S.draft === d && S.mode === 'write') { insertAtCaret(link); toast('Image attached'); }
       else { navigator.clipboard?.writeText(link).catch(() => {}); toast('Image saved; link copied'); }
@@ -1435,7 +1754,7 @@ document.addEventListener('paste', async ev => {
   const ext = MIME_EXT[blob.type] || (blob.type.split('/')[1] || '').replace(/[^a-z0-9]/gi, '') || 'png';
   try {
     const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
-    const link = await invoke('attach_bytes', { name: `pasted.${ext}`, bytesB64: b64, ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' });
+    const link = await invoke('attach_bytes', { name: `pasted.${ext}`, bytesB64: b64, ts: d.ts, entryFile: d.ref ? d.ref.file : 'inbox' }); S.assets = null;
     if (S.draft === d && S.mode === 'write') { insertAtCaret(link); toast('Image attached'); }
     else { await navigator.clipboard.writeText(link).catch(() => {}); toast('Image attached — the link is on the clipboard'); }
   } catch (e) { fail(e); }
@@ -1448,7 +1767,7 @@ function renderLock() {
 }
 async function tryUnlock() {
   const ok = await invoke('pin_check', { pin: $('#pin')?.value || '' });
-  if (ok) { S.locked = false; render(); } else { $('#pin-note').textContent = 'Wrong PIN'; $('#pin').value = ''; $('#pin').focus(); }
+  if (ok) { S.locked = false; render(); offerRecovery(); } else { $('#pin-note').textContent = 'Wrong PIN'; $('#pin').value = ''; $('#pin').focus(); }
 }
 async function lockNow() { if (!S.ui.pinHash) return toast('Set a PIN in Settings › Privacy first'); if (S.mode === 'write' && !(await leaveWrite())) return; S.locked = true; render(); $('#pin')?.focus(); }
 
@@ -1618,8 +1937,7 @@ function renderSettings() {
         <div class="srow"><div class="lbl"><span>Time</span></div><input type="time" id="remind-time" class="picker" value="${esc(S.ui.reminderTime)}" data-input="reminderTime"></div>
       </section>
       <section id="s-privacy"><h2>Privacy</h2>
-        ${sw('lockOn', 'Lock on launch', 'Asks for the PIN when Quire opens. Ctrl+L locks now.')}
-        <div class="srow"><div class="lbl"><span>PIN</span><span class="note">${S.ui.pinHash ? 'A PIN is set.' : 'No PIN yet.'} This keeps a glance away, not an attacker: the files stay plain markdown.</span></div><button class="btn" data-action="set-pin">${S.ui.pinHash ? 'Change PIN' : 'Set PIN'}</button>${S.ui.pinHash ? '<button class="btn ghost" data-action="clear-pin">Remove</button>' : ''}</div>
+        <div class="srow"><div class="lbl"><span>PIN</span><span class="note">${S.ui.pinHash ? 'A PIN is set: Quire asks for it every time it opens, and Ctrl+L locks now. Changing or removing it asks for the current one.' : 'No PIN yet. With one, Quire asks for it every time it opens, and Ctrl+L locks now.'} This keeps a glance away, not an attacker: the files stay plain markdown.</span></div><button class="btn" data-action="set-pin">${S.ui.pinHash ? 'Change PIN' : 'Set PIN'}</button>${S.ui.pinHash ? '<button class="btn ghost" data-action="clear-pin">Remove</button>' : ''}</div>
       </section>
       ${backupSectionHtml()}
       ${mediaSectionHtml()}
@@ -1654,7 +1972,7 @@ function renderSettings() {
         <span><kbd>Ctrl</kbd> <kbd>R</kbd></span><span>Random entry</span>
         <span><kbd>Ctrl</kbd> <kbd>P</kbd></span><span>Print the open entry</span>
         <span><kbd>Ctrl</kbd> <kbd>L</kbd></span><span>Lock</span>
-        <span><kbd>Ctrl</kbd> <kbd>1</kbd>–<kbd>5</kbd></span><span>Today · Inbox · Journal · Starred · Look back</span>
+        <span><kbd>Ctrl</kbd> <kbd>1</kbd>–<kbd>6</kbd></span><span>Today · Inbox · Journal · Starred · Look back · Media Library</span>
         <span><kbd>Ctrl</kbd> <kbd>,</kbd></span><span>Settings</span>
         <span><kbd>↑</kbd> <kbd>↓</kbd> <kbd>↵</kbd></span><span>Move through a list · open / edit</span>
         <span><kbd>Esc</kbd></span><span>Leave focus · stop editing · clear selection</span>
@@ -1690,18 +2008,42 @@ function backupListHtml() {
   if (!S.backupDir) return '';
   if (S.backups === null) return '<div class="empty-note">Reading backups…</div>';
   if (!S.backups.length) return '<div class="empty-note">No backups in that folder yet.</div>';
-  return `<div class="group-label"><span>Backups</span></div><div class="rows">${S.backups.slice(0, 8).map(b => `<div class="srow" style="padding:6px 0"><span class="mono" style="font-size:13px">${esc(b)}</span><span class="spacer"></span><button class="btn ghost" data-action="restore" data-name="${esc(b)}">Restore…</button></div>`).join('')}</div>`;
+  const row = b => `<div class="srow" style="padding:6px 0"><span class="mono" style="font-size:13px">${esc(b.name)}</span>${b.safety ? '<span class="pill">before a restore</span>' : ''}<span class="spacer"></span><button class="btn ghost" data-action="restore" data-name="${esc(b.name)}">Restore…</button></div>`;
+  const regular = S.backups.filter(b => !b.safety), safety = S.backups.filter(b => b.safety);
+  return (regular.length ? `<div class="group-label"><span>Backups</span>${regular.length > 8 ? `<span>newest 8 of ${regular.length}</span>` : ''}</div><div class="rows">${regular.slice(0, 8).map(row).join('')}</div>` : '')
+    + (safety.length ? `<div class="group-label"><span>Before a restore</span></div><div class="note" style="margin-bottom:4px">What the journal held just before each restore. These are never pruned: delete them from the backup folder yourself once you’re sure.</div><div class="rows">${safety.map(row).join('')}</div>` : '');
+}
+/** A finished backup: say where it went, and anything about pruning or recording it that needs saying. */
+function backupDone(d) {
+  if (!d) return;
+  S.backupHeld = d.held || null; S.backupError = null;
+  const name = String(d.path || '').split('/').pop();
+  const more = [d.prune_error && `Older backups couldn’t be pruned: ${d.prune_error}`, d.held && 'No older backup was removed; Settings › Backup says why', d.settings_error && `Its time couldn’t be recorded: ${d.settings_error}`].filter(Boolean);
+  toast(`Backed up to ${name}${more.length ? '. ' + more.join('. ') : ''}`, more.length ? 'error' : '');
+}
+/** A scheduled backup failed: said once a day, and shown under Settings › Backup until one works. */
+function backupFailed(err) {
+  const msg = String(err?.message || err), day = today();
+  S.backupError = msg;
+  let said = null;
+  try { said = localStorage.getItem('quire.backupFailDay'); } catch { /* no storage: say it */ }
+  if (said === day) { console.warn(err); return; }
+  try { localStorage.setItem('quire.backupFailDay', day); } catch { /* fine */ }
+  toast('Backup failed: ' + msg, 'error');
 }
 function backupSectionHtml() {
-  if (S.backups === null && S.backupDir) invoke('backups').then(b => { S.backups = b; const el = $('#backup-list'); if (el) el.innerHTML = backupListHtml(); }).catch(() => { S.backups = []; });
+  if (S.backups === null && S.backupDir) invoke('backups').then(b => { S.backups = b || []; const el = $('#backup-list'); if (el) el.innerHTML = backupListHtml(); }).catch(() => { S.backups = []; });
   const last = S.backupRunning ? 'Backing up…' : S.lastBackup ? `${fmtDate(S.lastBackup.slice(0, 10))} ${S.lastBackup.slice(11, 16)}` : 'Never';
   const iv = [['off', 'Off'], ['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['change', 'On every change']];
-  const note = { off: 'Only when you press Back up now', daily: 'When Quire opens or comes back to the front, if a day has passed', weekly: 'When Quire opens or comes back to the front, if a week has passed', monthly: 'When Quire opens or comes back to the front, if 30 days have passed', change: '30 seconds after your last change, at most once every five minutes' }[S.backupInterval] || '';
+  const note = { off: 'Only when you press Back up now', daily: 'When Quire opens or comes back to the front, if a day has passed', weekly: 'When Quire opens or comes back to the front, if a week has passed', monthly: 'When Quire opens or comes back to the front, if 30 days have passed', change: '30 seconds after your last change, at most once every five minutes; a change still waiting when you close is backed up before the window goes, or when Quire next opens' }[S.backupInterval] || '';
   return `<section id="s-backup"><h2>Backup</h2>
     <div class="srow"><div class="lbl"><span>Backup folder</span><span class="path">${esc(S.backupDir || 'Not set')}</span></div><button class="btn" data-action="pick-backup">Choose…</button>${S.backupDir ? `<button class="btn primary" data-action="backup-now" ${S.backupRunning ? 'disabled' : ''}>Back up now</button>` : ''}</div>
     <div class="srow"><div class="lbl"><span>Automatic</span><span class="note">${note}</span></div><div class="seg" role="group" aria-label="Automatic backup">${iv.map(([v, l]) => `<button data-action="backup-interval" data-v="${v}" aria-pressed="${S.backupInterval === v}">${l}</button>`).join('')}</div></div>
-    <div class="srow"><div class="lbl"><span>Keep last ${S.backupKeep}</span><span class="note">Older Quire backups are pruned; Nook’s are never touched</span></div><div class="stepper" role="group" aria-label="Backups to keep"><button class="btn" data-action="backup-keep" data-d="-1" aria-label="Keep fewer" ${S.backupKeep <= 1 ? 'disabled' : ''}>−</button><span class="mono" aria-live="polite">${S.backupKeep}</span><button class="btn" data-action="backup-keep" data-d="1" aria-label="Keep more" ${S.backupKeep >= 50 ? 'disabled' : ''}>+</button></div></div>
+    <div class="srow"><div class="lbl"><span>Keep last ${S.backupKeep}</span><span class="note">Older Quire backups are pruned; Nook’s and the copies taken before a restore are never touched</span></div><div class="stepper" role="group" aria-label="Backups to keep"><button class="btn" data-action="backup-keep" data-d="-1" aria-label="Keep fewer" ${S.backupKeep <= 1 ? 'disabled' : ''}>−</button><span class="mono" aria-live="polite">${S.backupKeep}</span><button class="btn" data-action="backup-keep" data-d="1" aria-label="Keep more" ${S.backupKeep >= 50 ? 'disabled' : ''}>+</button></div></div>
     <div class="srow"><div class="lbl"><span>Last backup</span></div><span class="mono status-v">${esc(last)}</span></div>
+    ${S.backupError ? `<div class="tool-note">The last automatic backup failed: ${esc(S.backupError)}</div>` : ''}
+    ${S.backupHeld ? `<div class="tool-note">Nothing was pruned after the last backup. ${esc(S.backupHeld)}</div>` : ''}
+    ${S.restoreLeftovers.length ? `<div class="tool-note">A restore was interrupted in this journal. What the journal held before it is still in the journal folder, and may be the only copy of something. Look through ${S.restoreLeftovers.length === 1 ? 'it' : 'them'}, move anything you need back, then delete ${S.restoreLeftovers.length === 1 ? 'the folder' : 'the folders'} yourself:</div><div class="rows">${S.restoreLeftovers.map(n => `<div class="srow" style="padding:6px 0"><span class="mono" style="font-size:13px">${esc(n)}</span><span class="spacer"></span><button class="btn ghost" data-action="reveal-rel" data-rel="${esc(n)}">Show</button></div>`).join('')}</div>` : ''}
     <div id="backup-list">${backupListHtml()}</div>
   </section>`;
 }
@@ -1715,6 +2057,7 @@ function mediaSectionHtml() {
     <div class="srow"><div class="lbl"><span>Data saved</span><span class="note">By Data Saver, on every device that shares this folder</span></div><span class="mono status-v" id="data-saved">${decBytes(S.dataSaved)}</span></div>
     ${tools.map(n => `<div class="tool-note">${esc(n)}</div>`).join('')}
     <div class="srow"><div class="lbl"><span>Compress existing media</span><span class="note">Converts HEIC photos to JPEG and compresses photos, videos and voice memos already in assets/. Files that were already compressed are skipped.</span></div><button class="btn" data-action="compress" id="compress-btn" ${c ? 'disabled' : ''}>${c ? `Compressing ${c.done || 0}/${c.total || 0}` : 'Compress existing media'}</button></div>
+    ${rep?.recovery ? `<div class="tool-note">The originals replaced by the last run are kept in <span class="mono">${esc(rep.recovery)}</span> for 30 days.</div>` : ''}
     ${issues.length ? `<ul class="issue-list">${issues.map(m => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}
   </section>`;
 }
@@ -1727,6 +2070,7 @@ function compressSummary(r) {
   const parts = [];
   if (r.heicConverted) parts.push(`Converted ${plural(r.heicConverted, 'HEIC photo')} to JPEG.`);
   if (r.images || r.videos || r.audio) parts.push(`Compressed ${plural(r.images, 'photo')}, ${plural(r.videos, 'video')}, ${r.audio} audio — saved ${decBytes(r.savedBytes)}.`);
+  if (r.recovery) parts.push(`The originals are kept in ${r.recovery} for 30 days.`);
   return parts.join(' ') || 'No new media to compress.';
 }
 
@@ -1833,8 +2177,14 @@ document.addEventListener('click', async ev => {
     return;
   }
   const a = el.dataset.action;
+  if (S.locked && a !== 'unlock') return; // nothing behind the lock answers a click
   try {
     switch (a) {
+      case 'reload': await load(); render(); break;
+      case 'dismiss-notice': S.notice = null; renderMissing(); break;
+      case 'conflict-mine': await resolveConflict(true); break;
+      case 'conflict-theirs': await resolveConflict(false); break;
+      case 'reveal-rel': await openRel(el.dataset.rel, true); break;
       case 'view': await switchView(el.dataset.view); break;
       case 'new': if (S.mode === 'write' && !(await leaveWrite())) break; startDraft(); break;
       case 'show-list': S.showList = true; render(); break;
@@ -1849,8 +2199,8 @@ document.addEventListener('click', async ev => {
       }
       case 'open-journal': { const e = entryFrom(el); if (e) await openInJournal(e); else closePopover(); break; }
       case 'open-url': ev.preventDefault(); await invoke('plugin:opener|open_url', { url: el.getAttribute('href') }); break;
-      case 'open-asset': { const p = await invoke('asset_path', { rel: el.dataset.rel }); await invoke('plugin:opener|open_path', { path: p }); break; }
-      case 'open-folder': await invoke('plugin:opener|open_path', { path: S.folder }); break;
+      case 'open-asset': await openRel(el.dataset.rel); break;
+      case 'open-folder': await openRel(''); break;
       case 'edit': if (S.sel) editEntry(S.sel); break;
       case 'cancel-edit': await cancelEdit(); break;
       case 'done': await leaveWrite(); break;
@@ -1886,7 +2236,7 @@ document.addEventListener('click', async ev => {
       case 'prompt': S.promptReroll++; paintBackdrop(); $('#bodyta')?.focus(); break;
       case 'timer': toggleTimer(); break;
       case 'tag-accept': acceptTag(+el.dataset.i); break;
-      case 'task': { const pr = el.closest('.prose'); const e = S.entries.find(x => x.file === pr.dataset.file && x.index === +pr.dataset.index); if (e) await toggleTask(e, +el.dataset.ix, el.checked); break; }
+      case 'task': { const pr = el.closest('.prose'); const e = S.entries.find(x => x.file === pr.dataset.file && x.index === +pr.dataset.index); if (e) await toggleTask(e, +el.dataset.ix, el.checked, pr); break; }
       case 'tag': S.tag = S.tag === el.dataset.tag ? null : el.dataset.tag; S.sel = null; render(); break;
       case 'tag-jump': ev.preventDefault(); ev.stopPropagation(); if (S.mode === 'write' && !(await leaveWrite())) break; S.view = 'journal'; S.jview = 'list'; S.tag = el.dataset.tag; S.query = ''; S.day = null; S.sel = null; S.mode = 'read'; S.showList = true; render(); break;
       case 'random-tag': { const t = countTags(filed()); if (t.length) { S.tag = t[Math.floor(Math.random() * t.length)][0]; S.sel = null; render(); } break; }
@@ -1906,11 +2256,11 @@ document.addEventListener('click', async ev => {
       case 'clear-orphans': { const offered = await invoke('orphan_files'), n = offered.length; if (!n) { toast('No orphan media'); break; } if (!(await askConfirm(`Clear ${n} orphan media file${n === 1 ? '' : 's'}? Recovery copies will be kept under .quire/media-cleanup/ for 30 days.`, 'Clear'))) break; const d = await invoke('clear_orphans', { offered }); S.assets = null; toast(`Cleared ${d}; recovery copies kept in .quire/media-cleanup/ for 30 days`); render(); break; }
       case 'system-titlebar': { const m = $('.settings main'), top = m ? m.scrollTop : 0; const custom = await invoke('set_system_titlebar', { on: S.customChrome }); setChrome(custom); render(); const m2 = $('.settings main'); if (m2) m2.scrollTop = top; break; }
       case 'toggle-ui': S.ui[el.dataset.k] = !S.ui[el.dataset.k]; await saveUi(); render(); break;
-      case 'lightbox': { ev.preventDefault(); const rel = el.dataset.rel; let url = S.assetUrls.get(rel); if (!url) { url = fileSrc(await invoke('asset_path', { rel })); S.assetUrls.set(rel, url); } const o = el.dataset.file ? entryFrom(el) || null : null; openLightbox(rel, url, o); break; }
+      case 'lightbox': { ev.preventDefault(); const rel = el.dataset.rel; const url = await assetUrl(rel); const o = el.dataset.file ? entryFrom(el) || null : null; openLightbox(rel, url, o); break; }
       case 'use-jnl-dir': { if (!(await askConfirm('Use your real jnl folder? A copy is safer until you trust Quire.', 'Use it'))) break; await invoke('set_folder', { path: S.jnlDir }); await invoke('rewatch'); S.sel = null; S.assetUrls.clear(); await load(); toast('Folder set'); render(); break; }
       case 'toggle': if (el.dataset.k === 'lockOn' && !S.ui.lockOn && !S.ui.pinHash) { toast('Set a PIN first'); break; } S.ui[el.dataset.k] = !S.ui[el.dataset.k]; applyUi(); await saveUi(); render(); if (el.dataset.k === 'reminderOn') scheduleReminder(); break;
       case 'set': { const v = el.dataset.v; S.ui[el.dataset.k] = /^\d+$/.test(v) ? +v : v; applyUi(); await saveUi(); if (el.dataset.k === 'timerMins') S.timer.left = null; render(); break; }
-      case 'pick-folder': { const p = await invoke('plugin:dialog|open', { options: { directory: true, multiple: false, title: 'Choose your journal folder' } }); if (p) { await invoke('set_folder', { path: p }); await invoke('rewatch'); S.sel = null; S.assetUrls.clear(); await load(); toast('Folder set'); render(); } break; }
+      case 'pick-folder': { const p = await pick('folder', 'Choose your journal folder'); if (p) { await invoke('set_folder', { path: p }); await invoke('rewatch'); S.sel = null; S.assetUrls.clear(); await load(); toast('Folder set'); render(); } break; }
       case 'set-path': { const p = $('#pathin').value.trim(); if (!p) break; await invoke('set_folder', { path: p }); await invoke('rewatch'); S.sel = null; S.assetUrls.clear(); await load(); toast('Folder set'); render(); break; }
       case 'use-sample': if (S.mode === 'write' && !(await leaveWrite())) break; await invoke('use_sample'); await invoke('rewatch'); S.sel = null; S.assetUrls.clear(); await load(); render(); break;
       case 'set-split': await invoke('set_split_tags', { tags: $('#splitin').value }); await load(); toast('Split tags saved'); render(); break;
@@ -1919,14 +2269,23 @@ document.addEventListener('click', async ev => {
       case 'tpl-save': { const name = $('#tpl-name').value.trim(), body = $('#tpl-body').value; if (name !== S.tplEdit) await invoke('rename_template', { from: S.tplEdit, to: name }); await invoke('save_template_cmd', { name, body }); await load(); S.tplEdit = name; toast('Template saved'); render(); break; }
       case 'tpl-delete': { if (!(await askConfirm(`Delete the template “${esc(S.tplEdit)}”?`, 'Delete'))) break; await invoke('delete_template_cmd', { name: S.tplEdit }); S.tplEdit = null; await load(); render(); break; }
       case 'tpl-close': S.tplEdit = null; render(); break;
-      case 'set-pin': { const p = await askText('Choose a PIN', '4 or more digits'); if (!p || p.length < 4) { if (p !== null) toast('Use at least 4 characters'); break; } S.ui.pinHash = await invoke('pin_hash', { pin: p }); await saveUi(); toast('PIN set'); render(); break; }
-      case 'clear-pin': S.ui.pinHash = ''; S.ui.lockOn = false; await saveUi(); render(); break;
+      case 'set-pin': {
+        let current = null;
+        if (S.ui.pinHash) { current = await askText('Current PIN', 'The PIN you use now', '', { password: true }); if (current === null) break; if (!(await invoke('pin_check', { pin: current }))) { toast('That isn’t the current PIN', 'error'); break; } }
+        const p = await askText(S.ui.pinHash ? 'New PIN' : 'Choose a PIN', '4 or more characters', '', { password: true });
+        if (!p || p.length < 4) { if (p !== null) toast('Use at least 4 characters'); break; }
+        S.ui.pinHash = await invoke('set_pin', { current, pin: p }); toast('PIN set'); render(); break;
+      }
+      case 'clear-pin': {
+        const current = await askText('Current PIN', 'Enter it to remove the PIN', '', { password: true }); if (current === null) break;
+        await invoke('set_pin', { current, pin: null }); S.ui.pinHash = ''; S.ui.lockOn = false; toast('PIN removed'); render(); break;
+      }
       case 'unlock': await tryUnlock(); break;
-      case 'pick-backup': { const p = await invoke('plugin:dialog|open', { options: { directory: true, multiple: false, title: 'Choose a backup folder' } }); if (p) { await invoke('set_backup_dir', { path: p }); S.backups = null; await load(); patchSection('s-backup'); } break; }
-      case 'backup-now': { S.backupRunning = true; patchSection('s-backup'); try { const d = await invoke('backup_now'); toast('Backed up to ' + d.split('/').pop()); } finally { S.backups = null; await load().catch(() => {}); S.backupRunning = false; patchSection('s-backup'); } break; }
+      case 'pick-backup': { const p = await pick('folder', 'Choose a backup folder'); if (p) { await invoke('set_backup_dir', { path: p }); S.backups = null; await load(); patchSection('s-backup'); } break; }
+      case 'backup-now': { S.backupRunning = true; patchSection('s-backup'); try { backupDone(await invoke('backup_now')); } finally { S.backups = null; await load().catch(() => {}); S.backupRunning = false; patchSection('s-backup'); } break; }
       case 'backup-interval': { const v = el.dataset.v; await invoke('set_backup_prefs', { interval: v, keep: S.backupKeep }); S.backupInterval = v; patchSection('s-backup'); if (v === 'daily' || v === 'weekly' || v === 'monthly') maybeBackup(); break; }
       case 'backup-keep': { const keep = Math.max(1, Math.min(50, S.backupKeep + +el.dataset.d)); if (keep === S.backupKeep) break; await invoke('set_backup_prefs', { interval: S.backupInterval, keep }); S.backupKeep = keep; patchSection('s-backup'); $(`#s-backup [data-action="backup-keep"][data-d="${el.dataset.d}"]`)?.focus(); break; }
-      case 'restore': { if (!(await askConfirm(`Restore “${esc(el.dataset.name)}” over the current folder? A full copy of the current folder is saved first.`, 'Restore'))) break; const safety = await invoke('restore_backup', { name: el.dataset.name }); S.assetUrls.clear(); S.backups = null; await load(); toast(`Restored. Your previous folder is saved as “${safety}”`); render(); break; }
+      case 'restore': { if (!(await askConfirm(`Restore “${esc(el.dataset.name)}” over the current folder? A full copy of the current folder is saved first.`, 'Restore'))) break; const safety = await invoke('restore_backup', { name: el.dataset.name }); S.assetUrls.clear(); S.assets = null; S.backups = null; await load(); toast(`Restored. Your previous folder is saved as “${safety}”`); render(); break; }
       case 'cleanup': {
         if (!(await askConfirm('Clean up every day file? Entries stored under the wrong day move to theirs, punctuation is normalised, days re-sorted, duplicates removed, and split-tagged entries moved to their split journals.', 'Clean up'))) break;
         const r = await invoke('run_cleanup'); await load();
@@ -1956,7 +2315,7 @@ document.addEventListener('click', async ev => {
         render(); break;
       }
       case 'merge-conflict': { const rel = el.dataset.rel; const n = await invoke('merge_conflict', { rel }); await load(); toast(`Merged ${plural(n, 'entry', 'entries')} from ${rel.split('/').pop()}`); render(); break; }
-      case 'locate-folder': { const p = await invoke('plugin:dialog|open', { options: { directory: true, multiple: false, title: `Find “${(S.folder || '').split('/').filter(Boolean).pop() || 'your journal'}”` } }); if (!p) break; await invoke('set_folder', { path: p }); await invoke('rewatch'); S.sel = null; S.assetUrls.clear(); await load(); toast(S.folderMissing ? 'Still can’t reach that folder' : 'Folder found'); render(); break; }
+      case 'locate-folder': { const p = await pick('folder', `Find “${(S.folder || '').split('/').filter(Boolean).pop() || 'your journal'}”`); if (!p) break; await invoke('set_folder', { path: p }); await invoke('rewatch'); S.sel = null; S.assetUrls.clear(); await load(); toast(S.folderMissing ? 'Still can’t reach that folder' : 'Folder found'); render(); break; }
       case 'data-saver': { const on = !S.dataSaver; await invoke('set_data_saver', { on }); S.dataSaver = on; patchSection('s-media'); break; }
       case 'compress': {
         if (S.compress) break;
@@ -1980,9 +2339,9 @@ document.addEventListener('click', async ev => {
         S.tagPicks = {}; S.tagReview = await invoke('tag_review_cmd').catch(() => S.tagReview); await load();
         toast(`Merged ${plural(done, 'group')} · ${plural(files, 'file')} changed${errs.length ? ' · ' + errs.join('; ') : ''}`); render(); break;
       }
-      case 'export': { const p = await invoke('plugin:dialog|save', { options: { defaultPath: 'export.md', title: 'Export all entries' } }); if (p) { const n = await invoke('export_cmd', { dest: p }); toast(`${n} entries exported`); } break; }
-      case 'import-md': { const p = await invoke('plugin:dialog|open', { options: { directory: true, multiple: false, title: 'Folder of dated markdown files' } }); if (!p) break; const dry = await invoke('import_markdown', { dir: p, dryRun: true }); if (!dry.found) { toast('No dated .md or .txt files found'); break; } if (!(await askConfirm(`${dry.found} entries found; ${dry.written} new, ${dry.skipped} already here. Import the new ones?`, 'Import'))) break; const r = await invoke('import_markdown', { dir: p, dryRun: false }); await load(); toast(`Imported ${r.written}`); render(); break; }
-      case 'import-dayone': { const p = await invoke('plugin:dialog|open', { options: { multiple: false, title: 'Day One export (Journal.json or its folder)' } }); if (!p) break; const dry = await invoke('import_dayone', { path: p, dryRun: true }); if (!(await askConfirm(`${dry.found} entries found; ${dry.written} new, ${dry.skipped} already here. Import the new ones?`, 'Import'))) break; const r = await invoke('import_dayone', { path: p, dryRun: false }); await load(); S.assetUrls.clear(); toast(`Imported ${r.written}`); render(); break; }
+      case 'export': { const p = await pick('save', 'Export all entries', 'export.md'); if (p) { const n = await invoke('export_cmd', { dest: p }); toast(`${n} entries exported`); } break; }
+      case 'import-md': { const p = await pick('folder', 'Folder of dated markdown files'); if (!p) break; const dry = await invoke('import_markdown', { dir: p, dryRun: true }); if (!dry.found) { toast('No dated .md or .txt files found'); break; } if (!(await askConfirm(`${dry.found} entries found; ${dry.written} new, ${dry.skipped} already here. Import the new ones?`, 'Import'))) break; const r = await invoke('import_markdown', { dir: p, dryRun: false }); await load(); toast(`Imported ${r.written}`); render(); break; }
+      case 'import-dayone': { const p = await pick('file', 'Day One export (Journal.json)'); if (!p) break; const dry = await invoke('import_dayone', { path: p, dryRun: true }); if (!(await askConfirm(`${dry.found} entries found; ${dry.written} new, ${dry.skipped} already here. Import the new ones?`, 'Import'))) break; const r = await invoke('import_dayone', { path: p, dryRun: false }); await load(); S.assetUrls.clear(); S.assets = null; toast(`Imported ${r.written}`); render(); break; }
       case 'tag-review': S.tagReview = await invoke('tag_review_cmd'); S.tagPicks = {}; render(); location.hash = '#s-maint'; break;
       case 'welcome': S.ui.welcomed = false; await saveUi(); showWelcome(); break;
     }
@@ -2032,6 +2391,8 @@ document.addEventListener('change', async ev => {
   }
 });
 document.addEventListener('contextmenu', async ev => {
+  // Locked: no menu at all, the webview's own (Reload, Inspect) included.
+  if (S.locked) { ev.preventDefault(); return; }
   const row = ev.target.closest('[data-ctx="entry"]');
   if (row) {
     ev.preventDefault();
@@ -2103,18 +2464,20 @@ function scheduleReminder() {
 /* ---------- automatic backup ---------- */
 /** The back end decides whether a daily/weekly backup is due; called on launch and whenever the window comes forward. */
 let backupCheck = null;
-async function maybeBackup(loud = false) {
+async function maybeBackup() {
   if (!S.backupDir || S.folderMissing || S.backupInterval === 'off' || backupCheck) return;
   backupCheck = invoke('maybe_backup');
   try {
-    const p = await backupCheck;
-    if (p) { S.backups = null; await load().catch(() => {}); toast('Backed up to ' + String(p).split('/').pop()); if (S.view === 'settings') patchSection('s-backup'); }
-  } catch (e) { if (loud) fail(e); else console.warn(e); }
+    const d = await backupCheck;
+    if (d) { S.backups = null; await load().catch(() => {}); backupDone(d); if (S.view === 'settings') patchSection('s-backup'); }
+  } catch (e) { backupFailed(e); if (S.view === 'settings') patchSection('s-backup'); }
   finally { backupCheck = null; }
 }
 T.event.listen('backup-finished', async ev => {
   const p = ev.payload || {};
-  if (!p.ok && p.error) toast('Backup failed: ' + p.error);
+  if (!p.ok && p.error) backupFailed(p.error);
+  // An "on change" backup that worked says nothing, unless pruning has something to report.
+  else if (p.done) { S.backupError = null; S.backupHeld = p.done.held || null; if (p.done.prune_error || p.done.held || p.done.settings_error) backupDone(p.done); }
   S.backups = null;
   try { await load(); } catch { /* keep what we have */ }
   if (S.view === 'settings') patchSection('s-backup');
@@ -2134,7 +2497,9 @@ T.event.listen('media-compressed', async ev => {
   if (old) {
     // Same path, new bytes: a cache-busting URL makes the webview fetch it again.
     try {
-      const url = fileSrc(await invoke('asset_path', { rel })) + '?v=' + Date.now();
+      const [path] = await invoke('asset_paths', { rels: [rel] });
+      if (!path) throw new Error('gone');
+      const url = fileSrc(path) + '?v=' + Date.now();
       S.assetUrls.set(rel, url);
       $$('#body img, #body video, #body audio, #popover img').forEach(el => { if (el.getAttribute('src') === old) el.setAttribute('src', url); });
     } catch { S.assetUrls.delete(rel); }
@@ -2145,13 +2510,11 @@ T.event.listen('media-compressed', async ev => {
 
 /* ---------- welcome ---------- */
 function showWelcome() {
-  const layer = $('#popover');
-  layer.innerHTML = `<div class="popover corner" role="dialog"><h3>Welcome to Quire</h3>
+  openPopover(`<div class="popover corner" role="dialog" aria-label="Welcome to Quire"><h3>Welcome to Quire</h3>
     <div class="note" style="font-size:14px;line-height:1.6;color:var(--ink)">
       <p style="margin:0 0 10px">Your words live in a plain folder of markdown, one file a day: <span class="mono">inbox/YYYY/MM/DD.md</span> for drafts and <span class="mono">journal/YYYY/MM/DD.md</span> for filed days, in jnl's format. An <span class="mono">inbox.md</span> from jnl or Nook is folded in when Quire opens the folder. Nothing here is locked in.</p>
       <p style="margin:0">Write with <kbd>Ctrl</kbd>+<kbd>N</kbd>, file with <kbd>Ctrl</kbd>+<kbd>J</kbd>, and <kbd>Ctrl</kbd>+<kbd>,</kbd> opens Settings.</p></div>
-    <div class="row2"><span></span><button class="btn primary" id="ask-yes">Begin</button></div></div>`;
-  layer.classList.add('open');
+    <div class="row2"><span></span><button class="btn primary" id="ask-yes">Begin</button></div></div>`, '#ask-yes');
   $('#ask-yes').onclick = async () => { closePopover(); S.ui.welcomed = true; await saveUi(); };
   askConfirm.cancel = () => { closePopover(); S.ui.welcomed = true; saveUi(); };
 }
@@ -2160,11 +2523,12 @@ function showWelcome() {
 document.addEventListener('keydown', async ev => {
   if (ev.isComposing || ev.keyCode === 229) return;
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
-  const ctrl = ev.ctrlKey || ev.metaKey;
+  const ctrl = ev.ctrlKey; // Ctrl only: Super belongs to the desktop
   try {
     if (S.locked) { if (ev.key === 'Enter') { ev.preventDefault(); await tryUnlock(); } return; }
     if ($('#popover').classList.contains('open')) {
       const isAsk = !!($('#ask-yes') || $('#ask-no'));
+      if (popoverKey(ev)) return;
       if (ev.key === 'Escape') { ev.preventDefault(); if (isAsk && askConfirm.cancel) askConfirm.cancel(); else closePopover(); }
       if (ev.key === 'Enter' && !isAsk && $('#rt-date')) { ev.preventDefault(); await retimeSave(); }
       return;
@@ -2175,7 +2539,7 @@ document.addEventListener('keydown', async ev => {
       const k = ev.key.toLowerCase();
       const ta = document.activeElement?.id === 'bodyta' ? document.activeElement : null;
       if (ta && k === 'b') { ev.preventDefault(); wrapSelection(ta, '**'); return; }
-      if (ta && k === 'i') { ev.preventDefault(); wrapSelection(ta, '__'); return; }
+      if (ta && k === 'i') { ev.preventDefault(); wrapSelection(ta, '_'); return; } // _x_, as the terminal app writes it
       if (ta && k === '`') { ev.preventDefault(); wrapSelection(ta, '`'); return; }
       if (k === 'n') { ev.preventDefault(); if (S.mode === 'write' && !(await leaveWrite())) return; startDraft(); return; }
       if (k === 'j') { ev.preventDefault(); await fileCurrent(); return; }
@@ -2188,7 +2552,11 @@ document.addEventListener('keydown', async ev => {
         if (S.mode === 'write' && S.draft?.ref && S.draft.ref.source !== 'inbox') await saveEdit();
         else if (S.mode === 'write' && S.draft) {
           if (guardCount(S.draft)) { toast('Choose Import or Keep as one first'); return; }
-          clearTimeout(saveTimer); await saveChain; await saveDraftNow(); if (S.draft?.ref) toast('Saved');
+          if (S.draft.conflict) { toast('Choose which version to keep first'); return; }
+          clearTimeout(saveTimer); await saveChain.catch(() => {});
+          const d = S.draft;
+          try { await saveDraftNow(); } catch (e) { saveFailed(d, e); return; }
+          if (S.draft?.ref && draftSaved(S.draft)) toast('Saved');
         }
         return;
       }
@@ -2247,28 +2615,53 @@ const busyInput = () => S.view === 'settings' || !!document.activeElement?.close
 async function externalChange() {
   if (S.ignoreWatch && Date.now() < S.ignoreWatch) return;
   try {
-    await load();
+    const changed = await load();
     renderMissing();
+    // Nothing on disk differs from what is on screen: leave the page (and where it is scrolled to) alone.
+    if (!changed) return;
     if (S.mode === 'write') { refreshChrome(); return; }
     // Don't wipe in-progress input; the fresh data shows on the next navigation.
     if (busyInput()) { S.stale = true; renderTabs(); return; }
     render();
-  } catch (e) { /* keep what we have */ }
+  } catch (e) { /* keep what we have; the banner says why */ }
 }
 T.event.listen('journal-changed', externalChange);
 window.addEventListener('focus', () => {
   restampIfFloating(false);
   maybeBackup();
+  offerRecovery();
   if (S.mode !== 'write') externalChange();
 });
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyUi());
 
+/** Text the composer couldn't save before Quire last closed (a crash, a power cut): offered once, when nothing else is open. */
+async function offerRecovery() {
+  if (S.recoveryOffered || S.locked || S.folderMissing || !S.folder || S.mode === 'write' || $('#popover').classList.contains('open')) return;
+  S.recoveryOffered = true;
+  const r = await invoke('read_recovery').catch(() => null);
+  if (!r || typeof r.body !== 'string' || !(r.body.trim() || String(r.title || '').trim())) return;
+  const line = String(r.title || '').trim() || firstLine(r.body);
+  if (!(await askConfirm(`Quire closed before some writing was saved${r.savedAt ? ` (${esc(String(r.savedAt).slice(0, 16))})` : ''}: “${esc(line)}”. Open it as a draft? If not, the copy stays in .quire/ and Quire asks again next time.`, 'Open it'))) return;
+  if (S.mode === 'write' && !(await leaveWrite())) return;
+  startDraft(r.body, String(r.title || ''));
+  const d = S.draft; if (!d) return;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(r.ts || '')) { d.ts = r.ts; d.retimed = true; d.floating = false; }
+  d.starred = !!r.starred;
+  d.recovered = true; // cleared, and the file removed, once the draft is saved as an entry
+  render(); $('#bodyta')?.focus();
+  scheduleSave(0);
+}
+
 /* ---------- boot ---------- */
 (async function boot() {
-  try { await load(); } catch (e) { S.view = 'settings'; toast(String(e)); }
-  if (S.ui.lockOn && S.ui.pinHash) S.locked = true;
+  // A settings file that couldn't be used is said in a banner; Quire never quietly opens the sample journal instead.
+  S.notice = await invoke('startup_notice').catch(() => null) || null;
+  try { await load(); } catch (e) { S.view = 'settings'; if (!S.notice) toast(String(e), 'error'); }
+  // A PIN locks every launch, so closing and reopening the window is no way round Ctrl+L.
+  if (S.ui.pinHash) S.locked = true;
   render();
-  if (!S.ui.welcomed && !S.locked) showWelcome();
+  if (!S.ui.welcomed && !S.locked && !S.notice) showWelcome();
   scheduleReminder();
-  maybeBackup(true);
+  maybeBackup();
+  offerRecovery();
 })();

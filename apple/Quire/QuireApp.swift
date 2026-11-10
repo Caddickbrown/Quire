@@ -230,7 +230,6 @@ struct QuireApp: App {
     @AppStorage("colorScheme") private var colorSchemeRaw: String = AppColorScheme.auto.rawValue
     @AppStorage("accentColor") private var accentRaw: String = AccentTheme.blue.rawValue
     @Environment(\.scenePhase) private var scenePhase
-
     #if canImport(UIKit)
     @UIApplicationDelegateAdaptor(QuireAppDelegate.self) private var delegate
     #endif
@@ -263,6 +262,9 @@ struct QuireApp: App {
                         Task { await ResurfacingScheduler.ensureScheduled(store: store) }
                     case .background:
                         AppLockManager.shared.didEnterBackground()
+                        // The rebuild an open editor was holding back: nobody
+                        // is typing now, and the widgets want today's words.
+                        store.settlePendingRebuild()
                     case .inactive:
                         // The app-switcher snapshot is taken on the way out —
                         // the veil has to be up before .background arrives.
@@ -344,10 +346,8 @@ struct QuireApp: App {
                 #if canImport(CoreSpotlight)
                 // A tapped Spotlight result (Settings → Privacy → Spotlight).
                 .onContinueUserActivity(CSSearchableItemActionType) { activity in
-                    guard let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
-                          let (entry, source) = SpotlightIndexer.resolve(identifier: id, store: store)
-                    else { return }
-                    nav.open(entry, source: source)
+                    guard let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String else { return }
+                    openSpotlight(id)
                 }
                 #endif
                 #if canImport(UIKit)
@@ -372,25 +372,20 @@ struct QuireApp: App {
         .commands { AppCommands(nav: nav) }
     }
 
-    /// Resolve an entry reference (from a deep link or notification) and open
-    /// it: named split journal first, then dated → its day file, otherwise the
-    /// inbox. The weekly resurfacing note draws from all three, so leaving the
-    /// split journals out meant a tap that opened nothing.
+    /// An entry reference from a deep link or a notification. The navigation
+    /// model holds it until the journal's index is built (a cold launch), then
+    /// looks in the named split journal, the day, every split journal and the
+    /// inbox: `NavigationModel.openLink`.
     private func openEntry(date: String?, ts: String?, journal: String? = nil) {
         guard let ts, !ts.isEmpty else { return }
-        if let journal, !journal.isEmpty,
-           let entry = store.entries(inJournal: journal).first(where: { $0.ts == ts }) {
-            nav.open(entry, source: .journal(name: journal))
-            return
-        }
-        if let date, !date.isEmpty,
-           let entry = store.entries(for: date).first(where: { $0.ts == ts }) {
-            nav.open(entry, source: .archive(date: date))
-            return
-        }
-        if let draft = store.inboxDrafts.first(where: { $0.ts == ts }) {
-            nav.open(draft, source: .inbox)
-        }
+        nav.openLink(date: date, ts: ts, journal: journal)
+    }
+
+    /// A tapped Spotlight result, by its identifier; held the same way.
+    private func openSpotlight(_ id: String) {
+        #if canImport(CoreSpotlight)
+        nav.openWhenIndexed { store in SpotlightIndexer.resolve(identifier: id, store: store) }
+        #endif
     }
 
     private static func registerBundledFonts() {

@@ -15,6 +15,7 @@ From the repository root:
 ```sh
 make apple       # Rust XCFramework, generated bindings/project, macOS + iOS Simulator
 make apple-test  # hostless XCTest against the Rust core on macOS
+make -C apple uitest  # XCUITest over the writing page in an iPhone simulator (software keyboard on)
 ```
 
 Or `make -C apple open` prepares the Rust library and opens
@@ -80,7 +81,8 @@ saves after retiming, same-second drafts, split journals and conflict recovery);
 `make test`, `make check` and Apple project wiring validation also pass. The iPhone app has been
 built signed and run on a device with a real journal. iCloud, widgets, share
 capture, media capture and the external display still need a signed-device
-check; the iPad and Mac shells have not had the design pass.
+check; the Mac shell has not had its design pass (the iPad has: a sidebar at
+regular width, as above).
 
 The imported Swift sources retain Nook's MIT notice in `LICENSE.nook`; Lato's
 font license is included in `Quire/fonts/OFL.txt`. The iPhone design bundles
