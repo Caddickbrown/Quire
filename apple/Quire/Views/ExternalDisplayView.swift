@@ -76,9 +76,15 @@ struct ExternalRow: Equatable, Identifiable {
     let starred: Bool
     /// "08:12", and the start of the entry, for the preview beside the list.
     let time: String
+    /// "33": the header's seconds, so hidden mode's preview shows the
+    /// timestamp as it is in the file, not with ":00".
+    var seconds = "00"
     let body: String
 
     static let maxRows = 300
+    /// The preview's text, cut here. Hidden mode shows a whole entry as its
+    /// file; 1,500 characters cut long ones off mid-sentence.
+    static let maxBody = 12_000
 
     static func rows(from entries: [Entry]) -> [ExternalRow] {
         entries.prefix(maxRows).map {
@@ -87,7 +93,8 @@ struct ExternalRow: Equatable, Identifiable {
                         title: $0.preview,
                         starred: $0.isStarred,
                         time: String($0.ts.dropFirst(11).prefix(5)),
-                        body: String($0.shownBody.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1500)))
+                        seconds: $0.seconds,
+                        body: Entry.excerpt($0.shownBody, limit: maxBody))
         }
     }
 }

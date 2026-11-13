@@ -86,6 +86,9 @@ private struct VSFile {
     var preview = false
     var tree: [VSTreeRow]
     var selectedRow: String?
+    /// Dim words after the header line, like an editor's inlay hint: the
+    /// entry's day of the week. Not part of the file.
+    var headerHint: String? = nil
 }
 
 private enum VSPage {
@@ -142,7 +145,8 @@ private enum VSFiles {
             VSTreeRow(id: "\(top)/\(year)/\(month)/\(name)", depth: 3, name: name, kind: .file),
         ]
         return VSFile(path: [top, year, month], name: name, lines: [header] + body, caret: caretAt,
-                      selection: selected, tree: tree(open: top, children: children), selectedRow: "\(top)/\(year)/\(month)/\(name)")
+                      selection: selected, tree: tree(open: top, children: children), selectedRow: "\(top)/\(year)/\(month)/\(name)",
+                      headerHint: weekday.string(from: date))
     }
 
     /// A list as folders of files, the selected entry open in a preview tab.
@@ -163,11 +167,12 @@ private enum VSFiles {
             return VSFile(path: [top], name: "", lines: [], tree: tree(open: top, children: children))
         }
         let row = rows[selected]
-        let header = "[\(row.date)\(row.time.isEmpty ? "" : " " + row.time + ":00")]" + (row.title.isEmpty ? "" : " " + row.title)
+        let header = "[\(row.date)\(row.time.isEmpty ? "" : " " + row.time + ":" + row.seconds)]" + (row.title.isEmpty ? "" : " " + row.title)
             + (row.starred ? " *" : "")
         return VSFile(path: [top, String(row.date.prefix(4)), String(row.date.dropFirst(5).prefix(2))],
                       name: fileName(row), lines: [header] + row.body.components(separatedBy: "\n"),
-                      preview: true, tree: tree(open: top, children: children), selectedRow: selectedID)
+                      preview: true, tree: tree(open: top, children: children), selectedRow: selectedID,
+                      headerHint: QDate.date(row.date).map { weekday.string(from: $0) })
     }
 
     /// `29-a-walk-by-the-river.md`, or `29-0812.md` untitled.
@@ -182,6 +187,10 @@ private enum VSFiles {
 
     static let stamp: DateFormatter = {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; return f
+    }()
+    /// "Thursday", for the header's hint.
+    static let weekday: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_GB"); f.dateFormat = "EEEE"; return f
     }()
 }
 
@@ -884,6 +893,13 @@ private struct VSEditor: View {
         return lo < hi ? lo..<hi : nil
     }
 
+    /// The header line's inlay hint (the day of the week), dim and apart from
+    /// the text, as VS Code draws one. Nothing on any other line.
+    private func hint(_ i: Int) -> Text {
+        guard i == 0, let words = file.headerHint, !words.isEmpty else { return Text("") }
+        return Text("   " + words).font(.system(size: s.code * 0.9, design: .monospaced).italic()).foregroundColor(VS.lineNumber)
+    }
+
     private func lineView(_ i: Int, _ line: String) -> some View {
         let current = file.caret?.line == i
         let shade = selected(i, line)
@@ -895,7 +911,7 @@ private struct VSEditor: View {
                 if current, let col = file.caret?.col {
                     TimelineView(.periodic(from: moved, by: 0.53)) { t in
                         let on = Int(max(0, t.date.timeIntervalSince(moved)) / 0.53) % 2 == 0
-                        Text(VSMarkdown.styled(line, s: s, caret: col, caretOn: on, selected: shade))
+                        (Text(VSMarkdown.styled(line, s: s, caret: col, caretOn: on, selected: shade)) + hint(i))
                             .overlay(alignment: .topLeading) {
                                 if col == 0 {
                                     Rectangle().fill(on ? VS.caret : .clear)
@@ -905,7 +921,7 @@ private struct VSEditor: View {
                             }
                     }
                 } else {
-                    Text(VSMarkdown.styled(line, s: s, caret: nil, caretOn: false, selected: shade))
+                    Text(VSMarkdown.styled(line, s: s, caret: nil, caretOn: false, selected: shade)) + hint(i)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

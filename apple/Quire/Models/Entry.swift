@@ -89,6 +89,19 @@ struct Entry: Identifiable, Hashable {
         return unguardText(body: body)
     }
 
+    /// "33" from the header's "HH:MM:SS"; "00" when the timestamp has none.
+    var seconds: String {
+        let s = String(ts.dropFirst(17).prefix(2))
+        return s.count == 2 && s.allSatisfy(\.isNumber) ? s : "00"
+    }
+
+    /// `text` trimmed, whole up to `limit` characters, then cut with "…".
+    static func excerpt(_ text: String, limit: Int) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > limit else { return trimmed }
+        return String(trimmed.prefix(limit)) + "…"
+    }
+
     /// A short one-line preview for list rows: the title (sans star) if present,
     /// else the first non-empty body line.
     var preview: String {
