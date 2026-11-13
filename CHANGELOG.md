@@ -27,10 +27,13 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: Today is on screen at launch, drawn from what it showed last time while the journal is read; a new day starts empty, never with yesterday's figures.
 - **Apple**: a page Quire closed on before it was saved is offered back at the next launch or unlock: save it to the Inbox, copy its text, or discard it. The save-failure banner has "Copy text".
 - **Apple**: a tap anywhere below the words on the writing page puts the cursor after the last one; the text fills the page.
+- **Apple**: Settings has a Macros page: Clean Up, Sort Inbox, File All Drafts, File transfer.md, Merge Conflict Copies and Merge Ex-Split Journals, each with an icon, out of Import and export.
+- **Apple**: the monitor's hidden mode names the day of the week after an entry's header, shows the header's real seconds in the list's preview (not `:00`), and previews long entries whole.
 - **Terminal**: `^k` in the composer keeps your text as a new draft when a save is refused because the entry changed on disk.
 - **Releases**: `make bump V=x.y.z` sets the version in all four fields, `Cargo.lock` and `linux/package-lock.json`, and regenerates the Xcode project.
 
 ### Changed
+- **Apple**: the title bar keeps the Calendar beside Search on every page; the Media Library and Random buttons, which come and go, sit to its left.
 - **Apple**: on the monitor, Esc from an open entry steps back to the list you came from, with your place in it kept, and the next Esc goes to Today. The hint bar says Back on an open entry.
 - **Core**: Data Saver keeps each original it replaces in `.quire/media-cleanup/` for 30 days (Apple too, and for deletes from the Media Library and cleared unused media), skips animated PNGs and multi-page TIFFs, and encodes video as yuv420p. HEICs it converts are moved there instead of deleted.
 - **Core**: the copy taken before a restore is named `Quire before-restore …`, is listed and restorable, and is never pruned. A backup is copied under a hidden `.partial` name and renamed when complete, so an interrupted one is never listed or restored.
@@ -51,6 +54,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Docs**: CLAUDE.md, AGENTS.md, the Linux and Apple READMEs and the plan match the code again; CI is described as it is, run when asked and on a release tag. `docs/fix-spec.md` is the review these changes come from.
 
 ### Fixed
+- **Apple**: ^t opens the date picker on the monitor from a new page too: the title, where a new page starts, took it as "transpose".
+- **Apple**: the writing page checks after each edit that its first line still starts at the top, and lays the text out again if TextKit 2 left it a line low (the keyboard's "…" with a tag on the line below).
 - **Apple**: typing on an iPad keeps up again. Each autosave no longer regroups the whole Journal list beneath the page, the editor measures its height once per change instead of twice, and the word count, caret and tag list stop redrawing the page on every keystroke.
 - **Apple**: typing no longer stalls on each pause: an autosave doesn't re-read the inbox or walk the journal, the rebuild waits until the page closes, iCloud's echo of your own save no longer reloads everything, and a keystroke redraws only the body and measures one paragraph.
 - **Apple**: the title and the body no longer compete for the keyboard, and markdown styling is applied in the same edit as the characters, with the paragraph laid out again after the keyboard replaces text in it (the body sitting a line low after `...` became `…`).

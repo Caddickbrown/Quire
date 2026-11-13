@@ -641,3 +641,90 @@ final class OnThisDayYearsTests: XCTestCase {
         XCTAssertEqual(years[0].hidden, 0)
     }
 }
+
+// MARK: - 13 November: hidden mode, the title bar, Settings' macros
+
+final class ThirteenNovemberTests: XCTestCase {
+    private func source(_ path: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
+    }
+
+    private func entry(_ ts: String) -> Entry {
+        Entry(date: String(ts.prefix(10)), ts: ts, suffix: "", body: "words", raw: "[\(ts)]\nwords")
+    }
+
+    /// Hidden mode's preview shows the header's own seconds, not ":00".
+    func testSecondsComeFromTheTimestamp() {
+        XCTAssertEqual(entry("2026-11-12 08:12:33").seconds, "33")
+        XCTAssertEqual(entry("2026-11-12 08:12:00").seconds, "00")
+        XCTAssertEqual(entry("2026-11-12 08:12").seconds, "00")
+    }
+
+    /// A long entry's preview is whole up to the limit, and says when it is cut.
+    func testExcerptKeepsLongEntriesWhole() {
+        let long = String(repeating: "word ", count: 600)   // 3,000 characters
+        XCTAssertEqual(Entry.excerpt(long, limit: 12_000), long.trimmingCharacters(in: .whitespaces))
+        let cut = Entry.excerpt(long, limit: 100)
+        XCTAssertEqual(cut.count, 101)
+        XCTAssertTrue(cut.hasSuffix("…"))
+        XCTAssertEqual(Entry.excerpt("\n  hello \n", limit: 100), "hello")
+    }
+
+    func testHiddenModeUsesTheRealSecondsAndTheWeekday() throws {
+        let code = try source("Quire/Design/DeskCode.swift")
+        XCTAssertFalse(code.contains("row.time + \":00\""), "no made-up seconds")
+        XCTAssertTrue(code.contains("row.time + \":\" + row.seconds"))
+        XCTAssertTrue(code.contains("headerHint: weekday.string(from: date)"), "an open entry names its day")
+        let rows = try source("Quire/Views/ExternalDisplayView.swift")
+        XCTAssertFalse(rows.contains("prefix(1500)"), "long previews are no longer cut at 1,500 characters")
+    }
+
+    /// A new page starts in the title; ^t must reach the composer from there.
+    func testTheTitleFieldDeclaresTheComposerChords() throws {
+        let composer = try source("Quire/Design/ComposerScreen.swift")
+        let field = try XCTUnwrap(composer.range(of: "final class EscapingTextField: UITextField {"))
+        let rest = composer[field.lowerBound...]
+        XCTAssertTrue(rest.contains("KeyCommandRouter.chords.map"))
+        XCTAssertTrue(rest.contains("wantsPriorityOverSystemBehavior = true"))
+    }
+
+    /// The buttons that come and go sit left of the Calendar, in every layout.
+    func testTheCalendarComesAfterTheButtonsThatComeAndGo() throws {
+        let masthead = try source("Quire/Design/QuireComponents.swift")
+        let start = try XCTUnwrap(masthead.range(of: "@ViewBuilder private var masthead: some View {"))
+        let end = try XCTUnwrap(masthead.range(of: "private func icon("))
+        let body = String(masthead[start.upperBound..<end.lowerBound])
+        let lines = body.components(separatedBy: "\n")
+        func index(_ needle: String, after: Int) -> Int? {
+            lines.indices.first { $0 > after && lines[$0].contains(needle) }
+        }
+        var from = -1
+        var layouts = 0
+        while let calendar = index("\"Calendar\", \"calendar\"", after: from) {
+            let block = lines[max(0, calendar - 4)..<calendar].joined(separator: "\n")
+            let next = lines[calendar..<min(lines.count, calendar + 3)].joined(separator: "\n")
+            XCTAssertFalse(next.contains("onMedia") || next.contains("onRandom"), "nothing that comes and goes after the Calendar")
+            XCTAssertTrue(block.contains("onRandom"), "Random sits before the Calendar")
+            layouts += 1
+            from = calendar
+        }
+        XCTAssertEqual(layouts, 3, "the sidebar, Marathon and plain title bars")
+    }
+
+    /// The maintenance macros have a Settings page of their own, each with an icon.
+    func testMacrosHaveTheirOwnSettingsPageWithIcons() throws {
+        let settings = try source("Quire/Views/SettingsView.swift")
+        XCTAssertTrue(settings.contains("case looks, reminders, privacy, display, journal, folder, media, macros, maintenance, help"))
+        let start = try XCTUnwrap(settings.range(of: "if shows(.macros) {"))
+        let end = try XCTUnwrap(settings.range(of: "QLabel(\"Macros\")"))
+        let section = String(settings[start.upperBound..<end.lowerBound])
+        for name in ["cleanUpButton", "Sort Inbox", "File All Drafts", "File transfer.md", "Merge Conflict Copies", "mergeExSplitButton"] {
+            XCTAssertTrue(section.contains(name), "\(name) is a macro")
+        }
+        XCTAssertFalse(section.contains("{ Text(\""), "every macro has an icon")
+        XCTAssertFalse(section.contains("Button(\""), "every macro has an icon")
+        let phone = try source("Quire/Design/PhoneSettings.swift")
+        XCTAssertTrue(phone.contains("(.macros, \"Macros\""))
+    }
+}
