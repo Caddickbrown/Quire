@@ -153,6 +153,7 @@ final class EditorUITests: XCTestCase {
     private enum Placement: String, CaseIterable {
         case alone = "alone on line one"
         case tagBelow = "end of line one, @tag line below"
+        case midLineTagBelow = "mid line one, @tag line below"
         case midParagraph = "mid-paragraph"
         case wrapped = "in a wrapped paragraph"
     }
@@ -176,6 +177,11 @@ final class EditorUITests: XCTestCase {
             step("type two lines") { app.typeText("walking home in the rain\n@tag") }
             let b = body.frame
             step("tap the end of line one") { point(b.maxX - 4, b.minY + 12).tap() }
+        case .midLineTagBelow:
+            step("type two lines") { app.typeText("walking home in the rain\n@tag") }
+            let b = body.frame
+            // Between "walking" and "home": a third of the way along the line.
+            step("tap mid line one") { point(b.minX + 70, b.minY + 12).tap() }
         case .midParagraph:
             step("type a paragraph") { app.typeText(Self.long) }
             let b = body.frame
@@ -219,6 +225,9 @@ final class EditorUITests: XCTestCase {
         switch placement {
         case .alone: XCTAssertEqual(afterDots, substituted ? "…" : "...", name)
         case .tagBelow: XCTAssertTrue(afterDots.hasSuffix("\n@tag") && !afterDots.hasPrefix("…"), "\(name): the periods went in at the end of line one")
+        case .midLineTagBelow: XCTAssertTrue(afterDots.hasSuffix("\n@tag") && !afterDots.hasPrefix("…")
+                                             && !afterDots.components(separatedBy: "\n")[0].hasSuffix("…"),
+                                             "\(name): the periods went in mid line one")
         case .midParagraph: XCTAssertFalse(afterDots.hasSuffix("…") || afterDots.hasSuffix("."), "\(name): the periods went in mid-paragraph")
         case .wrapped: XCTAssertTrue(afterDots.hasSuffix("…") || afterDots.hasSuffix("..."), "\(name): the periods went in at the end")
         }

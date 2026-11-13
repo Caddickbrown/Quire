@@ -496,10 +496,10 @@ final class PastingTextView: NSTextView {
 #elseif os(iOS)
 import UIKit
 import Combine
-#if DEBUG
 import os
+/// The editor's own notes (Console, subsystem com.caddickbrown.quire): only
+/// when the first line had dropped and was laid out again.
 private let editorLog = Logger(subsystem: "com.caddickbrown.quire", category: "editor")
-#endif
 
 private func platformFont(_ raw: String, _ size: CGFloat, scaled: Bool = true) -> UIFont {
     let base: UIFont
@@ -905,7 +905,7 @@ struct WritingTextEditor: UIViewRepresentable {
             guard editedMask.contains(.editedCharacters), !isStyling, !swapping, let style else { return }
             let tv = textView
             // An edit that replaced or removed something, not just added to it.
-            if editedRange.length - delta > 0, !isMirror { scheduleRepair(at: editedRange.location) }
+            if !isMirror { scheduleRepair(at: editedRange.length - delta > 0 ? editedRange.location : nil) }
             // An input method is composing: its marked text carries attributes
             // of its own, so the paragraph is left alone until it commits.
             if tv?.markedTextRange != nil { restyleOwed = true; return }
@@ -996,8 +996,10 @@ struct WritingTextEditor: UIViewRepresentable {
 
         // MARK: Layout repair
 
-        private func scheduleRepair(at location: Int) {
-            repairAt = min(repairAt ?? location, location)
+        /// `location`: where an edit replaced or removed text. Nil for any
+        /// other edit, which still gets the check for a dropped first line.
+        private func scheduleRepair(at location: Int?) {
+            if let location { repairAt = min(repairAt ?? location, location) }
             guard !repairScheduled else { return }
             repairScheduled = true
             // On the next turn: never from inside the storage's own callback.
@@ -1005,44 +1007,67 @@ struct WritingTextEditor: UIViewRepresentable {
         }
 
         /// TextKit 2 can keep a paragraph's old geometry after the keyboard
-        /// swaps characters under it. Throw that paragraph's layout away and
-        /// lay the visible part out again. `textLayoutManager` is nil on a view
-        /// that fell back to TextKit 1, where none of this applies.
+        /// swaps characters under it: Dan's editor log (9 Nov) had the view,
+        /// offset, insets, font and line height all unchanged after "..." became
+        /// "…" with a tag on the line below, and the first line laid out a line
+        /// low until the next key. So, a turn after an edit:
+        ///
+        /// 1. Where text was replaced, that paragraph's layout is thrown away
+        ///    and everything from the top down to it laid out again for real,
+        ///    not from TextKit 2's estimates, then the viewport redrawn.
+        /// 2. After any edit, the first line is checked: in this view it always
+        ///    starts at the top. If it doesn't, the whole layout is thrown away
+        ///    and redone. Reading the first fragment and the caret at the start
+        ///    is cheap; the full relayout only runs when the text has dropped.
+        ///
+        /// `textLayoutManager` is nil on a view that fell back to TextKit 1,
+        /// where none of this applies.
         private func repairLayout() {
             repairScheduled = false
-            guard let at = repairAt, let tv = textView else { return }
+            let at = repairAt
             repairAt = nil
-            guard tv.markedTextRange == nil, tv.window != nil,
+            guard !isMirror, let tv = textView, tv.markedTextRange == nil, tv.window != nil,
                   let layout = tv.textLayoutManager, let content = layout.textContentManager else { return }
-            let ns = tv.textStorage.mutableString
-            let paragraph = ns.paragraphRange(for: NSRange(location: min(max(at, 0), ns.length), length: 0))
-            guard paragraph.length > 0,
-                  let start = content.location(content.documentRange.location, offsetBy: paragraph.location),
-                  let end = content.location(start, offsetBy: paragraph.length),
-                  let range = NSTextRange(location: start, end: end) else { return }
-            #if DEBUG
-            let before = Self.firstFragmentMinY(layout)
-            #endif
-            layout.invalidateLayout(for: range)
-            layout.textViewportLayoutController.layoutViewport()
-            #if DEBUG
-            let after = Self.firstFragmentMinY(layout)
-            editorLog.debug("repair at \(paragraph.location)+\(paragraph.length): first fragment minY \(Double(before ?? -1)) -> \(Double(after ?? -1))")
-            #endif
+            let viewport = layout.textViewportLayoutController
+            if let at {
+                let ns = tv.textStorage.mutableString
+                let paragraph = ns.paragraphRange(for: NSRange(location: min(max(at, 0), ns.length), length: 0))
+                let docStart = content.documentRange.location
+                if paragraph.length > 0,
+                   let start = content.location(docStart, offsetBy: paragraph.location),
+                   let end = content.location(start, offsetBy: paragraph.length),
+                   let range = NSTextRange(location: start, end: end),
+                   let upTo = NSTextRange(location: docStart, end: end) {
+                    layout.invalidateLayout(for: range)
+                    layout.ensureLayout(for: upTo)
+                    viewport.layoutViewport()
+                }
+            }
+            // Half a line: the bug moves a whole one, and a caret's own top can
+            // sit a point or two below the line's.
+            let threshold = (style?.font.lineHeight ?? 16) * 0.5
+            guard let dropped = Self.firstLineDrop(tv, layout), dropped > threshold else { return }
+            layout.invalidateLayout(for: layout.documentRange)
+            layout.ensureLayout(for: layout.documentRange)
+            viewport.layoutViewport()
+            tv.setNeedsDisplay()
+            editorLog.notice("first line was \(Double(dropped)) pt low; laid out again: now \(Double(Self.firstLineDrop(tv, layout) ?? -1))")
         }
 
-        #if DEBUG
-        /// Where the first laid-out line sits: 0 unless the text has dropped.
-        /// Reads what is already laid out; forces nothing.
-        private static func firstFragmentMinY(_ layout: NSTextLayoutManager) -> CGFloat? {
+        /// How far below the top the first line sits: 0 unless the text has
+        /// dropped. The first layout fragment's frame, or the caret at the start
+        /// of the text, whichever is lower. Nil with nothing laid out.
+        private static func firstLineDrop(_ tv: UITextView, _ layout: NSTextLayoutManager) -> CGFloat? {
             var y: CGFloat?
             layout.enumerateTextLayoutFragments(from: layout.documentRange.location, options: []) { fragment in
                 y = fragment.layoutFragmentFrame.minY
                 return false
             }
-            return y
+            guard tv.textStorage.length > 0 else { return y }
+            let caret = tv.caretRect(for: tv.beginningOfDocument).minY - tv.textContainerInset.top
+            guard caret.isFinite else { return y }
+            return max(y ?? 0, caret)
         }
-        #endif
 
         // MARK: Measuring
 
