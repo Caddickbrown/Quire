@@ -102,7 +102,7 @@ struct ReaderScreen: View {
                         _ = store.returnToInbox(entry, source: ref.source); close()
                     }
                 }
-                action("trash", "Delete", color: q.mutedColor) { askDelete() }
+                action("trash", "Delete", color: .red) { askDelete() }
                 action("pencil", "Edit", color: q.inkColor, bold: true) { onEdit(current) }
             }
             .padding(.horizontal, 20)
