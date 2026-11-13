@@ -1029,7 +1029,10 @@ struct QEscapingField: UIViewRepresentable {
     }
 }
 
-/// Declares Esc and ⌘. ahead of the text system and hands them to the router.
+/// Declares Esc and ⌘. ahead of the text system and hands them to the router,
+/// and the composer's control chords too: a new page starts in this field, and
+/// without them the field's own text system took ^t (transpose) and the date
+/// picker never opened on the monitor.
 final class EscapingTextField: UITextField {
     /// Told when the field joins a window: a focus request made before it was
     /// on screen is acted on then.
@@ -1042,10 +1045,19 @@ final class EscapingTextField: UITextField {
 
     override var keyCommands: [UIKeyCommand]? {
         let esc = EscapeChord.declared(composing: markedTextRange != nil).map { $0.keyCommand(action: #selector(quireEscape)) }
-        return (super.keyCommands ?? []) + esc + [CommandKeys.toggle]
+        let own = (super.keyCommands ?? []) + esc + [CommandKeys.toggle]
+        guard KeyCommandRouter.shared.wantsChords else { return own }
+        return own + KeyCommandRouter.chords.map {
+            let c = UIKeyCommand(input: $0, modifierFlags: .control, action: #selector(quireChord(_:)))
+            c.wantsPriorityOverSystemBehavior = true
+            return c
+        }
     }
 
     @objc private func quireEscape() { KeyCommandRouter.shared.clear() }
+    @objc private func quireChord(_ command: UIKeyCommand) {
+        if let input = command.input { KeyCommandRouter.shared.chord(input) }
+    }
 }
 
 /// ^t: the date and time of the page.
