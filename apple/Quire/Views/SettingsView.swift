@@ -97,7 +97,7 @@ struct SettingsView: View {
          """
          The Tags section is a rail of coloured chips — tap one to see its entries \
          (inbox drafts show an "Inbox" badge). Search filters the rail; Random picks a \
-         tag. Settings → Tag Review finds tags that differ only by case (@tags/@Tags) or \
+         tag. Settings → Macros → Tag Review finds tags that differ only by case (@tags/@Tags) or \
          a single letter, and merges the ones you choose in one pass.
          """),
         ("Photos, video & audio",
@@ -144,7 +144,7 @@ struct SettingsView: View {
          """),
         ("Importing another journal",
          """
-         Settings → Maintenance → "Import from Day One" reads a Day One JSON export \
+         Settings → Import and export → "Import from Day One" reads a Day One JSON export \
          (unzip it first, then pick the folder or its Journal.json): dates, text, photos \
          and tags all come across as ordinary filed entries. "Import Markdown Folder" \
          does the same for a folder of dated .md/.txt files (Obsidian daily notes work). \
@@ -178,7 +178,7 @@ struct SettingsView: View {
          (inbox, journal, split journals, assets) into a timestamped folder there. \
          Everything is plain files, so a backup is a full, openable copy.
          """),
-        ("Maintenance",
+        ("Macros, import and export",
          """
          Clean Up normalises punctuation (… and straight quotes), reorders entries by \
          time, removes exact duplicates, and retroactively moves any entry matching a \
@@ -647,11 +647,15 @@ struct SettingsView: View {
                     maintenanceButton(.transfer) { Label("File transfer.md…", systemImage: "doc.badge.arrow.up") }
                     maintenanceButton(.conflicts) { Label("Merge Conflict Copies…", systemImage: "doc.on.doc") }
                     mergeExSplitButton
+                    compressMediaButton
+                    transcribeAllButton
+                    tagReviewButton
+                    clearOrphanButton
                 }
             } header: {
                 QLabel("Macros")
             } footer: {
-                Text("Clean Up tidies every file as jnl does: punctuation, order, duplicates, split tags. Sort Inbox puts drafts in date order. File All Drafts moves every draft into the journal; File transfer.md files jnl's batch file. Merge Conflict Copies folds sync-conflict files back in, keeping both versions of anything that differs.")
+                Text("Clean Up tidies every file as jnl does: punctuation, order, duplicates, split tags. Sort Inbox puts drafts in date order. File All Drafts moves every draft into the journal; File transfer.md files jnl's batch file. Merge Conflict Copies folds sync-conflict files back in, keeping both versions of anything that differs. Compress Existing Media shrinks media already attached; Transcribe All Voice Memos writes out any memo without a transcript; Tag Review finds tags that differ only by case; Clear Orphan Media moves files no entry uses out of assets/, keeping recovery copies.")
             }
             .qRowBackground()
             }
@@ -659,17 +663,13 @@ struct SettingsView: View {
             if shows(.maintenance) {
             Section {
                 buttonRow {
-                    compressMediaButton
-                    transcribeAllButton
-                    tagReviewButton
-                    clearOrphanButton
                     exportButton
                     exportPDFButton
                     importDayOneButton
                     importFolderButton
                 }
             } header: {
-                QLabel("Maintenance")
+                QLabel("Import and export")
             } footer: {
                 Text("Export combines all filed entries into one markdown file (Export PDF typesets them instead). Import brings a Day One JSON export or a folder of dated markdown/text files in as ordinary filed entries — photos and tags included; re-running an import never duplicates. Drafts still in the Inbox aren't included in exports until you file them.")
             }

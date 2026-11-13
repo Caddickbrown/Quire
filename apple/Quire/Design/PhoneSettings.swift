@@ -23,8 +23,8 @@ struct PhoneSettings: View {
 
     private static let pages: [(group: SettingsGroup, title: String, detail: String)] = [
         (.folder, "Folder and backups", "Where the journal lives; backups, restore"),
-        (.macros, "Macros", "Clean up, sort the Inbox, file every draft, merge copies"),
-        (.maintenance, "Import and export", "Day One, markdown; export; media; tags"),
+        (.macros, "Macros", "Clean up, file drafts, merge copies; media, transcripts, tags"),
+        (.maintenance, "Import and export", "Day One and markdown in; markdown and PDF out"),
         (.looks, "Writing and display", "Type, dates, calendar, writing aids, goal"),
         (.reminders, "Reminders", "A daily line; \u{201C}From your journal\u{201D} each week"),
         (.privacy, "Privacy", "Face ID lock, Spotlight"),
