@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
 
 /// The pages the settings are split into on the phone; each shows only its own sections.
 enum SettingsGroup: String, CaseIterable, Identifiable {
-    case looks, reminders, privacy, display, journal, folder, media, maintenance, help
+    case looks, reminders, privacy, display, journal, folder, media, macros, maintenance, help
     var id: String { rawValue }
 }
 
@@ -638,17 +638,29 @@ struct SettingsView: View {
             .qRowBackground()
             }
 
-            if shows(.maintenance) {
+            if shows(.macros) {
             Section {
                 buttonRow {
                     cleanUpButton
-                    Button("Sort Inbox") { store.sortInbox() }
-                    maintenanceButton(.fileAll) { Text("File All Drafts…") }
-                    maintenanceButton(.transfer) { Text("File transfer.md…") }
-                    maintenanceButton(.conflicts) { Text("Merge Conflict Copies…") }
+                    Button { store.sortInbox() } label: { Label("Sort Inbox", systemImage: "arrow.up.arrow.down") }
+                    maintenanceButton(.fileAll) { Label("File All Drafts…", systemImage: "tray.and.arrow.down") }
+                    maintenanceButton(.transfer) { Label("File transfer.md…", systemImage: "doc.badge.arrow.up") }
+                    maintenanceButton(.conflicts) { Label("Merge Conflict Copies…", systemImage: "doc.on.doc") }
+                    mergeExSplitButton
+                }
+            } header: {
+                QLabel("Macros")
+            } footer: {
+                Text("Clean Up tidies every file as jnl does: punctuation, order, duplicates, split tags. Sort Inbox puts drafts in date order. File All Drafts moves every draft into the journal; File transfer.md files jnl's batch file. Merge Conflict Copies folds sync-conflict files back in, keeping both versions of anything that differs.")
+            }
+            .qRowBackground()
+            }
+
+            if shows(.maintenance) {
+            Section {
+                buttonRow {
                     compressMediaButton
                     transcribeAllButton
-                    mergeExSplitButton
                     tagReviewButton
                     clearOrphanButton
                     exportButton
