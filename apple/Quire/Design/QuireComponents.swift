@@ -128,8 +128,9 @@ struct QMasthead: View {
         if besideSidebar {
             HStack {
                 Spacer()
-                if calendarEntries != nil { icon("Calendar", "calendar") { showingCalendar = true } }
+                // The variable one first, so the Calendar never moves.
                 if let onRandom { icon(randomLabel, "dice", onRandom) }
+                if calendarEntries != nil { icon("Calendar", "calendar") { showingCalendar = true } }
             }
         } else if q.isMarathon {
             HStack(spacing: 0) {
@@ -142,11 +143,11 @@ struct QMasthead: View {
                 .background(q.signalColor, ignoresSafeAreaEdges: []).foregroundStyle(q.onSignalColor)
                 .accessibilityElement(children: .combine).accessibilityLabel("Quire")
                 Spacer(minLength: 0)
-                // Random beside Search, so the Media Library coming and going
-                // never moves it.
-                if calendarEntries != nil { cell("Calendar", "calendar") { showingCalendar = true } }
+                // The buttons that come and go (Media Library, Random) on the
+                // left, so the Calendar beside Search never moves, on any page.
                 if let onMedia { cell("Media Library", "photo.on.rectangle", onMedia) }
                 if let onRandom { cell(randomLabel, "dice", onRandom) }
+                if calendarEntries != nil { cell("Calendar", "calendar") { showingCalendar = true } }
                 cell("Search", "magnifyingglass", onSearch)
                 cell("Settings", "gearshape", onSettings)
             }
@@ -160,9 +161,10 @@ struct QMasthead: View {
                 }
                 Spacer()
                 HStack(spacing: 0) {
-                    if calendarEntries != nil { icon("Calendar", "calendar") { showingCalendar = true } }
+                    // As above: what comes and goes on the left of the Calendar.
                     if let onMedia { icon("Media Library", "photo.on.rectangle", onMedia) }
                     if let onRandom { icon(randomLabel, "dice", onRandom) }
+                    if calendarEntries != nil { icon("Calendar", "calendar") { showingCalendar = true } }
                     icon("Search", "magnifyingglass", onSearch)
                     icon("Settings", "gearshape", onSettings)
                 }
