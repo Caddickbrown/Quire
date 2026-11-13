@@ -13,6 +13,21 @@
 
 import SwiftUI
 
+/// A solid strip of the page behind the status bar. The faces have no bar of
+/// their own, so their lists scrolled up visibly under it (Dan, 13 Nov). A
+/// zero-height view whose background grows into the safe area: a frame of zero
+/// height set before `ignoresSafeArea` would stay zero tall.
+struct TopCover: ViewModifier {
+    let color: Color
+
+    func body(content: Content) -> some View {
+        content.safeAreaInset(edge: .top, spacing: 0) {
+            Color.clear.frame(height: 0)
+                .background(color.ignoresSafeArea(edges: .top))
+        }
+    }
+}
+
 struct ComposeTarget: Identifiable {
     let id = UUID()
     /// nil: a new draft. Otherwise the entry being edited, wherever it lives.
@@ -349,6 +364,7 @@ struct PhoneRoot: View {
                         }
                     }
                 }
+                .modifier(TopCover(color: q.pageColor))
                 .environment(\.qBesideSidebar, true)
             }
             .background(q.pageColor)
@@ -387,6 +403,7 @@ struct PhoneRoot: View {
                 }
             }
             .background(q.pageColor)
+            .modifier(TopCover(color: q.pageColor))
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: EntryRef.self) { ref in
                 ReaderScreen(ref: ref, onEdit: { composing = ComposeTarget(ref: $0) },
