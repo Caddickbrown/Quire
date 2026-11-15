@@ -30,8 +30,9 @@ is the review of what to do next, with what has been done marked at its top.
                            files per tag (Quire 0.7+)
   <tag>.md                 the one-file split journal jnl and Nook write; read
                            when present and folded into split/<tag>/ by
-                           migrate_legacy_splits (root .md files with no entries
-                           are not journals and are left alone)
+                           migrate_legacy_splits, but only when one of its entries
+                           carries @<tag> (root .md files with no entries are not
+                           journals; an export or a log is left where it is)
   transfer.md              jnl's batch file
   assets/YYYY/MM/…         media, linked as ![](assets/…) from entry bodies
   .quire/                  sidecars: templates/, searches.json, datasaver-<id>.json,
@@ -74,7 +75,9 @@ core/               quire-core
                     NSFileCoordinator and Android can use the Storage Access
                     Framework. Media transcoding and backups need real paths
                     (Journal::local / Journal::path) and are native on shells
-                    whose vault has none.
+                    whose vault has none. FsVault refuses absolute paths and `..`;
+                    walks of inbox/, journal/ and split/ follow a linked folder
+                    and skip hidden ones.
   src/journal.rs    the format (pure functions) + the Journal handle: load,
                     locate, insert_entries, write_file_entries, and the shared
                     operations new_draft / update_entry / delete_entry /
@@ -90,8 +93,10 @@ core/               quire-core
                     inventory/read, verified copies, backed-up markdown, reference
                     rewrites, then removal of old paths; recovery originals under
                     .quire/media-cleanup/<UTC run time>/, pruned after RECOVERY_DAYS
-                    (30) when cleanup or orphan clearing next runs (never in the
-                    background). Missing/ambiguous links are reported,
+                    (30) when cleanup or orphan clearing next runs, when Data
+                    Saver compresses an attachment and when an asset is deleted
+                    (never in the background). delete_asset parks the file under
+                    deleted/ there; backups leave the recovery folder out. Missing/ambiguous links are reported,
                     unreferenced assets kept unless the user confirms clearing them
                     (default no; rechecked and archived into recovery first);
                     existing YYYY/MM assets left in place.
@@ -105,7 +110,9 @@ core/               quire-core
                     split journals are counted apart and together by `split_stats`, shown
                     as "Split journals" on Look back and in `quire stats`
   src/editing.rs    ↩ in a list, wrap toggling, word_at — the editor macros
-  src/settings.rs   ~/.config/quire/settings.json, shared by Linux and the TUI
+  src/settings.rs   settings.json in dirs::config_dir()/quire: ~/.config/quire/ on
+                    Linux, ~/Library/Application Support/quire/ on a Mac (or
+                    $QUIRE_CONFIG_DIR); shared by Linux and the TUI
   src/prompts.rs    Nook's PromptDeck; prompt_of_day
   src/themes.rs     Theme struct + themes()/theme(id)/rgb/mix
 tui/                quire-tui: lib + two bins (src/bin/quire.rs, src/bin/jnl.rs)
@@ -143,11 +150,14 @@ apple/              Quire SwiftUI app + widget/share extensions from Nook
 tools/
   migrate_journal.py   inbox.md → inbox/, .nook/ → .quire/, from outside the app
   test_migrate_journal.py  its tests (make check)
+  test_install.py      install.sh: syntax, shellcheck where installed, and dry runs in a
+                       scratch home that must leave it unchanged (make check). A dry run
+                       is the only way the installer is ever started by a test
   drive_tui.py         pseudo-terminal smoke test of every screen (make smoke); each check
                        looks only at what its own action drew. Runs the app in a scratch
                        home (HOME, XDG_CONFIG_HOME, QUIRE_CONFIG_DIR), never the real settings
   check_tui_settings.py  backup, retention and keyboard settings in a pty, in the same kind of
-                       scratch home; by hand, and its keys were last checked against 0.7
+                       scratch home; by hand, and its keys were last checked against 0.11
   bump_version.py      the version in its four fields and both lock files (make bump V=x.y.z)
   validate_apple.py    the Xcode project's wiring, on any host (make check)
   check_linux_editor.js, check_media_library.js, check_search.js, check_linux_views.js
@@ -174,6 +184,8 @@ legacy/             Nook and Wander, kept for reference: nothing builds from the
   reports it in the snapshot (`migration`, `migration_error`). The front end
   keys everything off `entry.source` ("inbox" | "journal" | "split") and
   `entry.file`, so day files under `inbox/` needed no view changes.
+  The composer's recovery copy lives beside settings.json (`recovery-<device>.json`),
+  not in the journal folder. `cargo check -p quire-desktop` works on macOS too.
   The composer title wraps visually but remains one header line on disk. Drafts
   autosave after 1.2 seconds idle and flush on navigation/close; create/update
   commands run on a blocking worker. Editor paints are batched per animation frame,
@@ -185,8 +197,10 @@ legacy/             Nook and Wander, kept for reference: nothing builds from the
   Inbox (review) and Browse (the same year/month/day/entries
   columns, each with its own place through `App::nav`; Browse adds the Main/split/all picker),
   Write, Look back, Search; a help overlay; a one-line modal for date & time
-  and confirmations. Autosave 700 ms after the last keystroke, on Esc, and
-  on quit. Mouse: `ui` records a `Hit` for each clickable cell as it draws
+  and confirmations (`y` only; ↵ does not confirm). Esc on Today does not quit
+  (`q` does). Autosave 700 ms after the last keystroke (at least every 5 s while
+  typing), on Esc, on quit, and on SIGHUP/SIGTERM. `tui/tests/cli.rs` runs the
+  built binary in a scratch home. Mouse: `ui` records a `Hit` for each clickable cell as it draws
   (`App::hits`, last drawn wins); `app` turns clicks and the wheel into the
   same actions as keys. F2 toggles capture (`terminalMouse`). Bracketed paste
   is on: dropped media paths and `^v` clipboard images go through
@@ -301,21 +315,27 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   deleted and pushed again; a published tag is never moved or reused, and a
   bad release is fixed by the next patch.
 - **Pipeline** (`.github/workflows/release.yml`): pushing a `v*` tag runs
-  `ci.yml` on it, checks the tag against the four version fields and that
+  `ci.yml` on it, checks that the tagged commit is on `main` (`git merge-base
+  --is-ancestor`), checks the tag against the four version fields and that
   CHANGELOG has the section under a dated heading with nothing left in
   `[Unreleased]`, then
   builds on Ubuntu 22.04 x86_64 and arm64 and publishes the release with the
   CHANGELOG section as notes:
   `quire-<target>.tar.gz` (+ `.sha256`) holding `quire` and `jnl`, and the
   desktop app as `Quire_<v>_<arch>.AppImage`, `.deb` and `.rpm` (+
-  `SHA256SUMS-desktop-<arch>`). Asset names for the terminal app carry no
+  `SHA256SUMS-desktop-<arch>`). With the signing secrets set, each AppImage and
+  each terminal tarball also gets a `<file>.sig` (the updater's key; base64 of
+  a minisign signature). The SHA-256 files prove a download arrived whole, not
+  who made it: they sit in the same release. Asset names for the terminal app carry no
   version, so `releases/latest/download/quire-<target>.tar.gz` is stable.
 - **Terminal updates**: `quire update --main` (also `jnl update --main`) runs
   `cargo install --git … --branch main` into the folder it runs from, for a fix
   that isn't in a release yet; terminal app only, needs cargo. Otherwise
   `quire update` (also `jnl update`; `--check` only reports) reads the latest release from the GitHub API, compares its tag
   with `CARGO_PKG_VERSION`, downloads the tarball for the target baked in as
-  `QUIRE_RELEASE_TARGET`, checks the SHA-256 and renames the new binaries over
+  `QUIRE_RELEASE_TARGET` (https from GitHub's hosts only), checks the SHA-256 and,
+  when the release has one, the `.sig` against the updater's public key (a failed
+  signature stops the update; a release without one is noted), and renames the new binaries over
   the old ones (`tui/src/update.rs`). A build without `QUIRE_RELEASE_TARGET`
   came from source (every Mac, for now) and rebuilds the release tag with `cargo install`,
   or is told to re-run `install.sh` if it has no cargo or isn't in a `bin` folder. It updates the desktop
@@ -332,7 +352,10 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   release and checks it against `plugins.updater.pubkey` in tauri.conf.json;
   with an empty pubkey the check is disabled. Signing needs the repo secrets
   `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`); without them the release still
-  builds but has no `latest.json`. One-time setup: `cd linux && npx tauri
+  builds but has no `latest.json`. Only the `sign` job sees the key: the build
+  jobs make everything unsigned, and `sign` downloads their files and runs
+  `tauri signer sign` on them (the CLI installed with `--ignore-scripts`), so
+  no build script or proc-macro ever runs with the key in its environment. One-time setup: `cd linux && npx tauri
   signer generate -w ~/.tauri/quire.key`; the public key goes in
   `plugins.updater.pubkey` (committed), the private key and its password in
   the two secrets. Lose the private key and existing AppImages can never
@@ -366,9 +389,12 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   `split/<tag>/YYYY/MM/DD.md`, `.quire/`. `journal/` stays where jnl puts it.
   Don't add a third sidecar name, a second place for drafts, or a second
   place for split journals.
-- `make test` (core, TUI and bindings tests), `make check` (clippy, keep it clean; it covers
-  the desktop app too where WebKitGTK is installed, plus the front-end, migration and Apple
-  project checks), `make smoke`
+- `make test` (core, TUI and bindings tests; the desktop crate's too where WebKitGTK is
+  installed), `make check` (clippy, keep it clean; it covers
+  the desktop app too where WebKitGTK is installed, plus the front-end, migration, installer and Apple
+  project checks; `make check-scripts` is the part that needs no Rust build). A part this
+  machine can't run is printed as `SKIPPED: …`; with `QUIRE_CHECK_STRICT=1`, which `ci.yml` sets
+  (it installs WebKitGTK), a skip is a failure. `audit.yml` runs `cargo audit` when asked. `make smoke`
   (the pty driver, must pass 23/23 at 100×30 and 80×24) before a push. Nothing runs them for
   you on a push: `.github/workflows/ci.yml` runs the three only when asked (`workflow_dispatch`:
   Actions → CI → Run workflow, or `gh workflow run ci.yml`), and `release.yml` runs them on a

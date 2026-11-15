@@ -18,7 +18,8 @@ Quire/
   bindings/    UniFFI bindings to the core, for the Apple shell
   themes.json  the looks, one source for every shell
   tools/       migrate_journal.py (inbox.md → inbox/, .nook/ → .quire/), the
-               pseudo-terminal smoke test, the icon generator
+               pseudo-terminal smoke test, the installer's dry-run tests, the
+               icon generator
   sample/      a sample journal the Linux app opens on first launch
   docs/        the consolidation plan: what came from where, and what is next
   legacy/      Nook and Wander, the apps Quire replaced, kept for reference;
@@ -54,7 +55,7 @@ draft verified before the original is moved, never deleted), a root
 is read until the first write renames it `.quire/`. jnl and Nook will not
 see drafts in `inbox/` or split entries in `split/` until taught to;
 `tools/migrate_journal.py` does the same moves from outside the app, dry run
-by default.
+by default (close Quire before `--apply`).
 
 ## Native iOS and macOS
 
@@ -89,11 +90,14 @@ Swift Mac app passes its Apple build checks; see `apple/README.md`.) Then, all q
   default).
 - **Backs up** that journal to `~/quire-preinstall-<stamp>.tar.gz`.
 - **Downloads the latest release** on Linux (x86_64, arm64), each file checked
-  against its published SHA-256, and checks it runs: the terminal app into
-  `~/.local/bin` (onto your PATH if it isn't; `quire update` keeps it
-  current), the desktop app as the AppImage + launcher entry, which updates
-  itself from Settings › About. An installed .deb/.rpm is offered the switch;
-  `fuse3` and optionally ffmpeg + HEIC tools are offered when missing.
+  against its published SHA-256: the terminal app into `~/.local/bin` (onto
+  your PATH if it isn't; `quire update` keeps it current), run once before
+  anything is replaced; the desktop app as the AppImage + launcher entry,
+  which updates itself from Settings › About. The desktop app is checked as a
+  file and never started by the installer. An installed .deb/.rpm is offered
+  the switch; `fuse3` and optionally ffmpeg + HEIC tools are offered when
+  missing. An old `jnl` sitting where Quire's goes is moved aside only once
+  Quire's own is downloaded and checked (or built).
 - **Or builds from source** with `--build` (and on macOS, or with `--source`
   or `QUIRE_REF`): Rust (rustup), the Xcode command-line tools, WebKitGTK and
   friends via apt / dnf / pacman / zypper, Tauri's CLI (Node if you have it,
@@ -104,9 +108,23 @@ Swift Mac app passes its Apple build checks; see `apple/README.md`.) Then, all q
 - **Only then removes the old apps**, defaulting to yes for what your choice
   replaces (jnl → terminal; Nook, Wander → desktop) and no for the rest, and
   always no for Nook on the Mac (its widgets, share sheet and iCloud set-up
-  have no Quire equivalent yet). Removed apps go to the Trash (or
-  `~/.local/state/quire/`), never `rm`. Journal folders, jnl's config, and
-  any settings folder holding a journal are never touched.
+  have no Quire equivalent yet). Removed apps and their settings go to the
+  Trash (or `~/.local/state/quire/`); they are not deleted. The only things
+  the installer deletes are its own: its download folder, and the launcher
+  entry an earlier Quire left under its old name (`quire.desktop`). Journal
+  folders, jnl's config, and any settings folder holding a journal are never
+  touched.
+
+**What the checksum proves.** The SHA-256 files are published in the same
+GitHub release as the files they describe. A match means the download arrived
+whole; it does not prove who built it, since anyone able to replace a release
+file could replace its checksum too. The AppImage is also signed with a key
+that is not on GitHub, and the desktop app checks that signature every time it
+updates itself from Settings › About. `install.sh` and `quire update` check
+the SHA-256 only. Releases built by the current pipeline put a `.sig` beside
+each AppImage and each terminal tarball (the updater's key; base64 of a
+minisign signature), so the stronger check can be made by hand, and by
+`quire update` once it is taught to.
 
 Without a checkout:
 `curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash`.
@@ -127,11 +145,11 @@ jnl log 2026-09-30              # every jnl command keeps its spelling
 | Screen | Keys |
 |---|---|
 | Today | `n` new · `↵` write from the prompt · `p` another · `i` inbox · `j` journal · `l` look back · `/` search · `r` random · `q` quit |
-| Review | `↑↓` drafts · `f` file · `e` edit · `*` star · `t` date & time · `d` delete |
-| Browse | `← →` columns · `↑↓` move · `↵` open · `/` filter · `s` main / split / all · `u` return to inbox |
-| Write | `^j` file · `^s` save · `^t` date & time · `^f` focus · `^p` prompt · `^o` timer (start · pause · resume, `alt-o` resets) · `^b ^i ^g` bold / italic / code · `@` tag autocomplete · `↹` indent · `↵↵` ends a list · `^v` paste (a clipboard image is attached) · `esc` back (saved) |
+| Review | `↑↓` drafts · `space` / `PgUp` read on / back · `f` file · `e` edit · `*` star · `t` date & time · `d` delete |
+| Browse | `← →` columns · `↑↓` move · `space` / `PgUp` read on / back · `↵` open · `/` filter · `s` main / split / all · `u` return to inbox |
+| Write | `^j` file · `^s` save · `^t` date & time · `^f` focus · `^p` prompt · `^o` timer (start · pause · resume, `alt-o` resets) · `^b ^g` bold / code (`^i` italic, where the terminal can tell it from `↹`) · `@` tag autocomplete · `↹` indent · `↵↵` ends a list · `^v` paste (a clipboard image is attached) · `esc` back (saved) |
 | Look back | `← →` year |
-| Anywhere | `?` or `F1` keys · `esc` back |
+| Anywhere | `?` or `F1` keys · `esc` back (it never quits; `q` on Today does) · questions take `y` only |
 
 The folder is `--folder`, else `$JNL_DIR`, else Quire's settings, else
 jnl's config, else `~/notes`. The theme is Quire's setting or `--theme`
@@ -162,7 +180,7 @@ type. Drafts save after 1.2 seconds without typing and immediately when leaving
 or closing; filed entries save on Ctrl+S or when leaving the editor.
 
 ```sh
-cd linux && npm install && npx tauri build      # → linux/src-tauri/target/release/bundle/
+cd linux && npm install && npx tauri build      # → target/release/bundle/ (the workspace's target folder)
 ```
 
 `linux/README.md` has the features, the themes, and the keys.
@@ -171,7 +189,8 @@ cd linux && npm install && npx tauri build      # → linux/src-tauri/target/rel
 
 ```sh
 make test        # Rust core, terminal app and native bindings tests
-make check       # clippy, the frontend checks, the Apple project wiring
+make check       # clippy, the frontend checks, the Apple project wiring, the installer's dry runs
+make check-scripts   # the part of check that needs no Rust build
 make smoke       # drive the terminal app through every screen in a pseudo-terminal
 make apple-test  # hostless XCTest against the Rust core (macOS with Xcode)
 make tui         # a release build of quire and jnl into target/release/
