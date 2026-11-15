@@ -7,7 +7,7 @@ use unicode_normalization::UnicodeNormalization;
 
 /// The folder inside the sidecar where recovery copies go, one folder per run
 /// named for its UTC time.
-const RECOVERY_NAME: &str = "media-cleanup";
+pub(crate) const RECOVERY_NAME: &str = "media-cleanup";
 
 /// The recovery folder to write into. Asking the journal for its sidecar
 /// means a journal that only has `.nook/` gets it renamed to `.quire/` first,
@@ -30,8 +30,14 @@ pub(crate) fn new_recovery_run(j: &Journal) -> Result<String, String> {
 /// only. Returns the recovery path.
 pub(crate) fn park_file(j: &Journal, run: &str, section: &str, rel: &str, take: bool) -> Result<String, String> {
     let dest = format!("{run}/{section}/{rel}");
-    check_parents(j, &dest)?;
-    let (from, to) = (j.path(rel)?, j.path(&dest)?);
+    park_at(j, &dest, rel, take)?;
+    Ok(dest)
+}
+
+/// `park_file` with the recovery path spelled out.
+fn park_at(j: &Journal, dest: &str, rel: &str, take: bool) -> Result<(), String> {
+    check_parents(j, dest)?;
+    let (from, to) = (j.path(rel)?, j.path(dest)?);
     let size = std::fs::symlink_metadata(&from).map_err(|e| format!("{rel}: {e}"))?.len();
     if let Some(dir) = to.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{dest}: {e}"))?;
@@ -47,20 +53,124 @@ pub(crate) fn park_file(j: &Journal, run: &str, section: &str, rel: &str, take: 
     if take && placed.is_err() {
         std::fs::remove_file(&from).map_err(|e| format!("{rel}: {e}"))?;
     }
-    Ok(dest)
+    Ok(())
+}
+
+/// True when two files hold the same bytes. Read a piece at a time, so a
+/// video of any size is compared without being held in memory; two names for
+/// one file (a hard link) are the same without reading.
+fn files_equal(a: &std::path::Path, b: &std::path::Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    let (ma, mb) = (std::fs::symlink_metadata(a)?, std::fs::symlink_metadata(b)?);
+    if !ma.is_file() || !mb.is_file() || ma.len() != mb.len() {
+        return Ok(false);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if ma.dev() == mb.dev() && ma.ino() == mb.ino() {
+            return Ok(true);
+        }
+    }
+    let (mut fa, mut fb) = (std::fs::File::open(a)?, std::fs::File::open(b)?);
+    let (mut ba, mut bb) = (vec![0u8; 1 << 16], vec![0u8; 1 << 16]);
+    loop {
+        let n = fa.read(&mut ba)?;
+        if n == 0 {
+            // Same length, so `b` is at its end too unless it grew meanwhile.
+            return Ok(fb.read(&mut bb)? == 0);
+        }
+        fb.read_exact(&mut bb[..n])?;
+        if ba[..n] != bb[..n] {
+            return Ok(false);
+        }
+    }
+}
+
+/// Whether `a` and `b` hold the same bytes; a missing file is not the same as
+/// anything. On a local folder nothing is read into memory.
+fn same_bytes(j: &Journal, a: &str, b: &str) -> Result<bool, String> {
+    if let (Ok(pa), Ok(pb)) = (j.path(a), j.path(b)) {
+        return match files_equal(&pa, &pb) {
+            Ok(same) => Ok(same),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(format!("{a}: {e}")),
+        };
+    }
+    let (x, y) = (j.vault().read(a)?, j.vault().read(b)?);
+    Ok(x.is_some() && x == y)
+}
+
+/// Keep the file at `rel` as `dest` in the recovery folder, leaving `rel`
+/// where it is. On a local folder this is `park_file`'s link (or copy), with
+/// nothing read into memory; through any other vault the bytes are written
+/// and read back.
+fn keep_copy(j: &Journal, rel: &str, dest: &str) -> Result<(), String> {
+    if j.local().is_ok() {
+        return park_at(j, dest, rel, false);
+    }
+    let bytes = j.vault().read(rel)?.ok_or_else(|| format!("File disappeared: {rel}"))?;
+    verified_write(j, dest, &bytes)
+}
+
+/// Copy the file at `rel` to `dest`, a file of its own (never a link: the
+/// organised file and its recovery copy must not be one file under two
+/// names), and check the copy. `dest` must not exist: on a disk that ignores
+/// case a name that only looks new would otherwise be written over. A copy
+/// that fails is removed again. On a local folder the copy is the system's,
+/// so nothing is held in memory and a filesystem that can share the blocks
+/// does.
+fn copy_verified(j: &Journal, rel: &str, dest: &str) -> Result<(), String> {
+    check_parents(j, dest)?;
+    let (Ok(from), Ok(to)) = (j.path(rel), j.path(dest)) else {
+        if j.is_file(dest) || j.is_dir(dest) {
+            return Err(format!("{dest} already exists; originals kept"));
+        }
+        let bytes = j.vault().read(rel)?.ok_or_else(|| format!("File disappeared: {rel}"))?;
+        return verified_write(j, dest, &bytes).inspect_err(|_| {
+            let _ = j.vault().remove(dest);
+        });
+    };
+    if std::fs::symlink_metadata(&to).is_ok() {
+        return Err(format!("{dest} already exists; originals kept"));
+    }
+    if let Some(dir) = to.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{dest}: {e}"))?;
+    }
+    let copied = std::fs::copy(&from, &to).map_err(|e| format!("{dest}: {e}")).and_then(|_| match files_equal(&from, &to) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!("Verification failed: {dest}")),
+        Err(e) => Err(format!("Verification failed: {dest}: {e}")),
+    });
+    if copied.is_err() {
+        let _ = std::fs::remove_file(&to);
+    }
+    copied
+}
+
+/// Bytes held in the recovery folder: the originals media cleanup, orphan
+/// clearing, Data Saver and a deleted asset leave for `RECOVERY_DAYS`.
+pub(crate) fn recovery_bytes(j: &Journal) -> u64 {
+    j.tree_bytes(&format!("{}/{RECOVERY_NAME}", j.sidecar()))
+}
+
+/// True for a path inside the recovery folder of either sidecar.
+pub(crate) fn in_recovery(rel: &str) -> bool {
+    [crate::journal::SIDECAR, crate::journal::LEGACY_SIDECAR].iter().any(|s| rel.strip_prefix(s).and_then(|r| r.strip_prefix('/')).and_then(|r| r.strip_prefix(RECOVERY_NAME)).is_some_and(|r| r.is_empty() || r.starts_with('/')))
 }
 
 /// How names are compared when deciding whether something still points at a
 /// file: composed (NFC) and lower-cased. macOS hands back a name in whatever
 /// form it was created with and matches it in any case, so a link that works
 /// there can differ from the listing in both.
-fn fold(s: &str) -> String {
+pub(crate) fn fold(s: &str) -> String {
     s.nfc().collect::<String>().to_lowercase()
 }
-/// Recovery copies older than this are pruned the next time media cleanup or
-/// orphan clearing runs: long enough to notice a mistake (backups' monthly
-/// interval), short enough that the folder, which backups and sync carry too,
-/// can't grow without bound.
+/// Recovery copies older than this are pruned the next time media cleanup,
+/// orphan clearing or Data Saver (one file after an attach, or the whole
+/// journal) runs: long enough to notice a mistake (backups' monthly
+/// interval), short enough that the folder, which sync carries too, can't
+/// grow without bound.
 pub const RECOVERY_DAYS: i64 = 30;
 
 #[derive(Default, Debug, Serialize)]
@@ -255,11 +365,7 @@ pub fn archive_orphan_media(j: &Journal, offered: &[String]) -> Result<(usize, S
     let backup = format!("{}/orphans", new_recovery_run(j)?);
     let selected: Vec<_> = offered.iter().filter(|p| current.contains(*p)).collect();
     for source in &selected {
-        let bytes = j
-            .vault()
-            .read(source)?
-            .ok_or_else(|| format!("File disappeared: {source}"))?;
-        verified_write(j, &format!("{backup}/{source}"), &bytes)?;
+        keep_copy(j, source, &format!("{backup}/{source}"))?;
     }
     let current: BTreeSet<_> = orphan_media(j)?.into_iter().collect();
     let mut cleared = 0;
@@ -267,11 +373,11 @@ pub fn archive_orphan_media(j: &Journal, offered: &[String]) -> Result<(usize, S
         if !current.contains(source) {
             continue;
         }
-        let saved = j
-            .vault()
-            .read(&format!("{backup}/{source}"))?
-            .ok_or_else(|| format!("Recovery copy missing for {source}; original kept"))?;
-        if j.vault().read(source)?.as_deref() != Some(saved.as_slice()) {
+        let saved = format!("{backup}/{source}");
+        if !j.is_file(&saved) {
+            return Err(format!("Recovery copy missing for {source}; original kept"));
+        }
+        if !same_bytes(j, source, &saved)? {
             return Err(format!(
                 "{source} changed during cleanup; original kept; recovery: {backup}"
             ));
@@ -355,7 +461,9 @@ pub fn cleanup_media(j: &Journal) -> Result<MediaCleanupReport, String> {
         }
     }
     let mut swaps = BTreeMap::new();
-    let mut reserved = files.clone();
+    // Names taken, compared folded: on a disk that ignores case `IMG.jpg` and
+    // `img.jpg` from two folders are one name in the month they both move to.
+    let mut reserved: BTreeSet<String> = files.iter().map(|f| fold(f)).collect();
     for file in &files {
         if !file.starts_with("assets/") || file.rsplit('/').next().unwrap_or("").starts_with('.') {
             continue;
@@ -378,7 +486,7 @@ pub fn cleanup_media(j: &Journal) -> Result<MediaCleanupReport, String> {
         let mut dest = format!("assets/{month}/{name}");
         let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
         let mut n = 2;
-        while reserved.contains(&dest) || j.is_file(&dest) || j.is_dir(&dest) {
+        while reserved.contains(&fold(&dest)) || j.is_file(&dest) || j.is_dir(&dest) {
             dest = if ext.is_empty() {
                 format!("assets/{month}/{stem}-{n}")
             } else {
@@ -386,7 +494,7 @@ pub fn cleanup_media(j: &Journal) -> Result<MediaCleanupReport, String> {
             };
             n += 1;
         }
-        reserved.insert(dest.clone());
+        reserved.insert(fold(&dest));
         swaps.insert(file.clone(), dest);
     }
     if swaps.is_empty() {
@@ -395,14 +503,21 @@ pub fn cleanup_media(j: &Journal) -> Result<MediaCleanupReport, String> {
     }
     let backup = new_recovery_run(j)?;
     report.backup = Some(backup.clone());
+    // Nothing links the organised copies until the references are rewritten
+    // below, so if one can't be made (a full disk, say) those already made are
+    // taken away again: left behind, the next run would find their names taken
+    // and write `name-2.ext` beside each.
+    let mut made: Vec<&String> = Vec::new();
     for (source, dest) in &swaps {
-        let bytes = j
-            .vault()
-            .read(source)?
-            .ok_or_else(|| format!("File disappeared: {source}"))?;
         // Back up media too: a failed or interrupted operation retains originals.
-        verified_write(j, &format!("{backup}/{source}"), &bytes)?;
-        verified_write(j, dest, &bytes)?;
+        let copied = keep_copy(j, source, &format!("{backup}/{source}")).and_then(|_| copy_verified(j, source, dest));
+        if let Err(e) = copied {
+            for dest in made {
+                let _ = j.remove(dest);
+            }
+            return Err(e);
+        }
+        made.push(dest);
     }
     let mut updated = BTreeMap::new();
     // Media still linked from a file that changed under us and was left alone.
@@ -459,11 +574,11 @@ pub fn cleanup_media(j: &Journal) -> Result<MediaCleanupReport, String> {
         }
     }
     for (source, dest) in swaps {
-        let original_bytes = j
-            .vault()
-            .read(&format!("{backup}/{source}"))?
-            .ok_or_else(|| format!("Recovery copy missing for {source}; original kept"))?;
-        if j.vault().read(&dest)?.as_deref() != Some(original_bytes.as_slice()) {
+        let saved = format!("{backup}/{source}");
+        if !j.is_file(&saved) {
+            return Err(format!("Recovery copy missing for {source}; original kept"));
+        }
+        if !same_bytes(j, &dest, &saved)? {
             return Err(format!(
                 "{dest} changed during cleanup; original media kept; backup: {backup}"
             ));
@@ -483,7 +598,7 @@ pub fn cleanup_media(j: &Journal) -> Result<MediaCleanupReport, String> {
             ));
             continue;
         }
-        if j.vault().read(&source)?.as_deref() != Some(original_bytes.as_slice()) {
+        if !same_bytes(j, &source, &saved)? {
             report
                 .issues
                 .push(format!("{source} changed during cleanup; original kept"));
@@ -822,6 +937,80 @@ mod tests {
         let offered = orphan_media(&j).unwrap();
         assert_eq!(archive_orphan_media(&j, &offered).unwrap().0, 2);
         assert!(j.is_file("assets/2026/09/image(1).jpg") && j.is_file("assets/2026/09/image((2)).jpg"));
+    }
+
+    // M5
+    #[test]
+    fn names_that_differ_only_in_case_do_not_land_on_one_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let j = Journal::open(temp.path());
+        put(&j, "assets/a/IMG.jpg", b"first");
+        put(&j, "assets/b/img.jpg", b"second");
+        put(&j, "journal/2026/09/30.md", b"[2026-09-30 10:00:00]\n![](assets/a/IMG.jpg)\n\n[2026-09-30 11:00:00]\n![](assets/b/img.jpg)\n");
+        let r = cleanup_media(&j).unwrap();
+        assert!(r.issues.is_empty(), "{:?}", r.issues);
+        assert_eq!(r.organised, 2);
+        assert_eq!(j.vault().read("assets/2026/09/IMG.jpg").unwrap().unwrap(), b"first");
+        assert_eq!(j.vault().read("assets/2026/09/img-2.jpg").unwrap().unwrap(), b"second");
+        let text = j.read("journal/2026/09/30.md");
+        assert!(text.contains("<assets/2026/09/IMG.jpg>") && text.contains("<assets/2026/09/img-2.jpg>"), "{text}");
+    }
+
+    // M2
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_that_fails_takes_back_the_copies_before_it_so_a_retry_is_clean() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let j = Journal::open(temp.path());
+        put(&j, "assets/a.jpg", b"a");
+        put(&j, "assets/b.jpg", b"b");
+        put(&j, "journal/2026/09/30.md", b"[2026-09-30 10:00:00]\n![](assets/a.jpg)\n");
+        put(&j, "journal/2026/10/01.md", b"[2026-10-01 10:00:00]\n![](assets/b.jpg)\n");
+        // The second copy can't be made: its month is a link out of the journal.
+        std::fs::create_dir_all(temp.path().join("assets/2026")).unwrap();
+        let link = temp.path().join("assets/2026/10");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        assert!(cleanup_media(&j).unwrap_err().contains("Unsafe destination"));
+        assert!(j.is_file("assets/a.jpg") && j.is_file("assets/b.jpg"));
+        assert!(!j.is_file("assets/2026/09/a.jpg"), "the first copy was taken back");
+        assert!(j.read("journal/2026/09/30.md").contains("](assets/a.jpg)"));
+        std::fs::remove_file(&link).unwrap();
+        let r = cleanup_media(&j).unwrap();
+        assert_eq!(r.organised, 2, "{r:?}");
+        assert!(j.is_file("assets/2026/09/a.jpg") && j.is_file("assets/2026/10/b.jpg"));
+        assert!(!j.is_file("assets/2026/09/a-2.jpg"));
+    }
+
+    // M2
+    #[test]
+    fn an_organised_file_is_not_its_recovery_copy_under_another_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let j = Journal::open(temp.path());
+        put(&j, "assets/a.jpg", b"original");
+        put(&j, "journal/2026/09/30.md", b"[2026-09-30 10:00:00]\n![](assets/a.jpg)\n");
+        let backup = cleanup_media(&j).unwrap().backup.unwrap();
+        // Written in place, as another program might: the recovery copy holds.
+        use std::io::Write;
+        std::fs::OpenOptions::new().write(true).open(temp.path().join("assets/2026/09/a.jpg")).unwrap().write_all(b"CHANGED!").unwrap();
+        assert_eq!(j.vault().read(&format!("{backup}/assets/a.jpg")).unwrap().unwrap(), b"original");
+    }
+
+    #[test]
+    fn files_are_compared_without_being_held_whole() {
+        let temp = tempfile::tempdir().unwrap();
+        let big = vec![7u8; (1 << 17) + 5];
+        let mut other = big.clone();
+        *other.last_mut().unwrap() = 8;
+        let p = |n: &str| temp.path().join(n);
+        std::fs::write(p("a"), &big).unwrap();
+        std::fs::write(p("b"), &big).unwrap();
+        std::fs::write(p("c"), &other).unwrap();
+        std::fs::write(p("d"), &big[..big.len() - 1]).unwrap();
+        assert!(files_equal(&p("a"), &p("b")).unwrap());
+        assert!(!files_equal(&p("a"), &p("c")).unwrap());
+        assert!(!files_equal(&p("a"), &p("d")).unwrap());
+        assert!(files_equal(&p("a"), &p("missing")).is_err());
     }
 
     // C15

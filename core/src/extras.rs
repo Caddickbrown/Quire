@@ -206,8 +206,14 @@ fn reference_files(j: &Journal) -> Vec<String> {
 }
 
 pub fn link_index(j: &Journal) -> Result<LinkIndex, String> {
+    link_index_texts(j).map(|(idx, _)| idx)
+}
+
+/// `link_index`, with each file's text beside it.
+fn link_index_texts(j: &Journal) -> Result<(LinkIndex, Vec<(String, String)>), String> {
     let mut refs: HashMap<String, Vec<String>> = HashMap::new();
     let mut all_text = String::new();
+    let mut texts = Vec::new();
     for rel in reference_files(j) {
         let text = j.try_read(&rel)?;
         for p in link_targets(&text) {
@@ -220,8 +226,9 @@ pub fn link_index(j: &Journal) -> Result<LinkIndex, String> {
         }
         all_text.push_str(&text);
         all_text.push('\n');
+        texts.push((rel, text));
     }
-    Ok(LinkIndex { refs, all_text })
+    Ok((LinkIndex { refs, all_text }, texts))
 }
 
 /// Back-compat: the set of referenced root-relative paths.
@@ -241,19 +248,70 @@ pub struct Asset {
 }
 
 pub fn list_assets(j: &Journal) -> Result<Vec<Asset>, String> {
-    let idx = link_index(j)?;
+    let (idx, texts) = link_index_texts(j)?;
     let orphans: HashSet<_> = crate::orphan_media(j)?.into_iter().collect();
+    // `referenced` comes from the careful check (`orphan_media`: any case,
+    // either accent form, HTML, reference links, a bare name in prose), and
+    // `owners` must not say less: a file shown as in use by nothing is one
+    // somebody deletes. So a file in use that no link names exactly gets the
+    // files that check would have found it in. Worked out only when needed.
+    let mut loose: Option<LooseOwners> = None;
     Ok(j.walk_files("assets")
         .into_iter()
         .filter(|rel| !rel.rsplit('/').next().unwrap_or(rel).starts_with('.'))
-        .map(|rel| Asset {
-            kind: media_kind(&rel),
-            bytes: j.len(&rel),
-            referenced: !orphans.contains(&rel),
-            owners: idx.refs.get(&rel).cloned().unwrap_or_default(),
-            rel,
+        .map(|rel| {
+            let referenced = !orphans.contains(&rel);
+            let mut owners = idx.refs.get(&rel).cloned().unwrap_or_default();
+            if referenced && owners.is_empty() {
+                owners = loose.get_or_insert_with(|| LooseOwners::new(&idx, &texts)).of(&rel);
+            }
+            Asset { kind: media_kind(&rel), bytes: j.len(&rel), referenced, owners, rel }
         })
         .collect())
+}
+
+/// Who mentions a file, by `orphan_media`'s looser rules.
+struct LooseOwners {
+    /// Folded link target → the files linking it.
+    refs: HashMap<String, Vec<String>>,
+    /// Per file: its text folded (as written and percent-decoded), and the
+    /// same with the parsed link targets taken out.
+    texts: Vec<(String, String, String)>,
+}
+
+impl LooseOwners {
+    fn new(idx: &LinkIndex, texts: &[(String, String)]) -> LooseOwners {
+        use crate::media_cleanup::fold;
+        let mut refs: HashMap<String, Vec<String>> = HashMap::new();
+        for (target, owners) in &idx.refs {
+            let list = refs.entry(fold(target)).or_default();
+            for o in owners {
+                if !list.contains(o) {
+                    list.push(o.clone());
+                }
+            }
+        }
+        let texts = texts
+            .iter()
+            .map(|(file, text)| {
+                let whole = format!("{}\n{}", fold(text), fold(&percent_decode(text)));
+                (file.clone(), whole, fold(&percent_decode(&LINK_TARGET_RE.replace_all(text, ""))))
+            })
+            .collect();
+        LooseOwners { refs, texts }
+    }
+
+    fn of(&self, rel: &str) -> Vec<String> {
+        use crate::media_cleanup::fold;
+        let (path, name) = (fold(rel), fold(rel.rsplit('/').next().unwrap_or(rel)));
+        let mut owners = self.refs.get(&path).cloned().unwrap_or_default();
+        for (file, whole, loose) in &self.texts {
+            if !owners.contains(file) && (whole.contains(&path) || loose.contains(&name)) {
+                owners.push(file.clone());
+            }
+        }
+        owners
+    }
 }
 
 /// Copy a file into `assets/YYYY/MM/DD-HHMMSS[-n].ext` and return its
@@ -361,7 +419,11 @@ pub fn delete_orphans(j: &Journal) -> Result<usize, String> {
     crate::archive_orphan_media(j, &offered).map(|(count, _)| count)
 }
 
-/// Delete one file under assets/.
+/// Delete one file under assets/. On a local folder the file is moved to the
+/// recovery folder (`<sidecar>/media-cleanup/<run>/deleted/<its path>`) and
+/// goes for good with that folder after `RECOVERY_DAYS`, like an orphan that
+/// was cleared: a file can look unused and not be. Through any other vault it
+/// is removed outright.
 pub fn delete_asset(j: &Journal, rel: &str) -> Result<(), String> {
     let rel = check_rel(rel)?;
     if !rel.starts_with("assets/") {
@@ -369,6 +431,14 @@ pub fn delete_asset(j: &Journal, rel: &str) -> Result<(), String> {
     }
     if j.is_dir(&rel) {
         return Err("That's a folder, not an asset".into());
+    }
+    if j.local().is_ok() {
+        if !j.is_file(&rel) {
+            return Err("No such asset".into());
+        }
+        let _ = crate::prune_media_recovery(j, crate::RECOVERY_DAYS);
+        let run = crate::media_cleanup::new_recovery_run(j)?;
+        return crate::media_cleanup::park_file(j, &run, "deleted", &rel, true).map(|_| ());
     }
     match j.remove(&rel)? {
         true => Ok(()),
@@ -857,21 +927,68 @@ pub fn export_all(j: &Journal, dest: &Path) -> Result<usize, String> {
 }
 
 /// Copy a folder tree. Symlinks are recreated as links (Unix) or skipped,
-/// never followed. With `skip_hidden_top`, top-level dot-items other than
-/// the sidecars (`.quire`, `.nook`) are left out.
+/// never followed. With `skip_hidden_top`, the tree is a journal being backed
+/// up: top-level dot-items other than the sidecars (`.quire`, `.nook`) are
+/// left out, and so is the sidecars' recovery folder (`media-cleanup/`:
+/// originals kept for `RECOVERY_DAYS`, which would otherwise make every
+/// backup carry each compressed video twice).
 pub fn copy_tree(from: &Path, to: &Path, skip_hidden_top: bool) -> Result<(), String> {
     copy_tree_counted(from, to, skip_hidden_top).map(|_| ())
+}
+
+/// Where a tree walk is: `Journal` is the top of a journal being backed up,
+/// `Sidecar` one of its sidecars, `All` anywhere nothing is left out.
+#[derive(Clone, Copy, PartialEq)]
+enum Walk {
+    All,
+    Journal,
+    Sidecar,
+}
+
+impl Walk {
+    fn top(skip_hidden_top: bool) -> Walk {
+        if skip_hidden_top {
+            Walk::Journal
+        } else {
+            Walk::All
+        }
+    }
+
+    /// Whether the item called `name` here is left out.
+    fn skips(self, name: &str) -> bool {
+        match self {
+            Walk::All => false,
+            Walk::Journal => name.starts_with('.') && name != SIDECAR && name != LEGACY_SIDECAR,
+            Walk::Sidecar => name == crate::media_cleanup::RECOVERY_NAME,
+        }
+    }
+
+    /// The walk inside the folder called `name` here.
+    fn into(self, name: &str) -> Walk {
+        if self == Walk::Journal && (name == SIDECAR || name == LEGACY_SIDECAR) {
+            Walk::Sidecar
+        } else {
+            Walk::All
+        }
+    }
 }
 
 /// `copy_tree`, returning how many files it copied and how many bytes each
 /// copy reported: what the copy should hold, whatever happens to the original
 /// afterwards.
 fn copy_tree_counted(from: &Path, to: &Path, skip_hidden_top: bool) -> Result<(u64, u64), String> {
+    copy_tree_walk(from, to, Walk::top(skip_hidden_top))
+}
+
+fn copy_tree_walk(from: &Path, to: &Path, walk: Walk) -> Result<(u64, u64), String> {
     fs::create_dir_all(to).map_err(|e| e.to_string())?;
     let (mut files, mut bytes) = (0, 0);
-    for e in fs::read_dir(from).map_err(|e| e.to_string())?.flatten() {
+    for e in fs::read_dir(from).map_err(|e| format!("{}: {}", e, from.display()))? {
+        // A listing that fails partway is an error: skipped, the files it
+        // didn't give would be missing from a copy that still checks out.
+        let e = e.map_err(|e| format!("{}: {}", e, from.display()))?;
         let name = e.file_name().to_string_lossy().to_string();
-        if skip_hidden_top && name.starts_with('.') && name != SIDECAR && name != LEGACY_SIDECAR {
+        if walk.skips(&name) {
             continue;
         }
         let t = to.join(&name);
@@ -883,7 +1000,7 @@ fn copy_tree_counted(from: &Path, to: &Path, skip_hidden_top: bool) -> Result<(u
                 std::os::unix::fs::symlink(target, &t).map_err(|e| e.to_string())?;
             }
         } else if ft.is_dir() {
-            let (f, b) = copy_tree_counted(&e.path(), &t, false)?;
+            let (f, b) = copy_tree_walk(&e.path(), &t, walk.into(&name))?;
             files += f;
             bytes += b;
         } else {
@@ -905,16 +1022,20 @@ fn copy_tree_counted(from: &Path, to: &Path, skip_hidden_top: bool) -> Result<(u
 /// Count the files in a tree and add up their bytes, walking it the way
 /// `copy_tree` does, so a copy can be checked against what it was copied from.
 fn tree_stats(root: &Path, skip_hidden_top: bool) -> Result<(u64, u64), String> {
+    tree_stats_walk(root, Walk::top(skip_hidden_top))
+}
+
+fn tree_stats_walk(root: &Path, walk: Walk) -> Result<(u64, u64), String> {
     let (mut files, mut bytes) = (0, 0);
     for e in fs::read_dir(root).map_err(|e| e.to_string())? {
         let e = e.map_err(|e| e.to_string())?;
         let name = e.file_name().to_string_lossy().to_string();
-        if skip_hidden_top && name.starts_with('.') && name != SIDECAR && name != LEGACY_SIDECAR {
+        if walk.skips(&name) {
             continue;
         }
         let ft = e.file_type().map_err(|e| e.to_string())?;
         if ft.is_dir() {
-            let (f, b) = tree_stats(&e.path(), false)?;
+            let (f, b) = tree_stats_walk(&e.path(), walk.into(&name))?;
             files += f;
             bytes += b;
         } else if ft.is_file() {
@@ -1099,7 +1220,8 @@ pub struct Pruned {
     pub held: Option<String>,
 }
 
-/// Keep only the `keep` newest "Quire backup …" folders. Nook's backups,
+/// Keep only the `keep` newest "Quire backup …" folders (by the time in the
+/// name; the one made last is kept whatever its name says). Nook's backups,
 /// restore safety copies and anything else are left alone. Returns the number
 /// removed. See `prune_backups_checked` for when it removes nothing.
 pub fn prune_backups(dest_dir: &Path, keep: usize) -> Result<usize, String> {
@@ -1132,8 +1254,16 @@ pub fn prune_backups_checked(dest_dir: &Path, keep: usize) -> Result<Pruned, Str
             });
         }
     }
+    // The names carry local time, so after the clocks go back (or a flight
+    // west) the backup just made can sort as the oldest. The folder made last
+    // is told by the disk's own clock instead, and is never the one removed.
+    let made = |n: &String| fs::metadata(dest_dir.join(n)).and_then(|m| m.modified()).ok();
+    let latest = names.iter().filter(|n| made(n).is_some()).max_by_key(|n| made(n));
     let mut removed = 0;
     for name in names.iter().skip(keep) {
+        if Some(name) == latest {
+            continue;
+        }
         fs::remove_dir_all(dest_dir.join(name)).map_err(|e| e.to_string())?;
         removed += 1;
     }
@@ -1402,17 +1532,29 @@ fn first_valid_date(s: &str) -> Option<String> {
     None
 }
 
+/// The day a file with no date in its name is filed under: the earlier of
+/// its created and modified times. Created alone is when the file arrived on
+/// this disk (an unzipped or synced folder would all be filed on the day it
+/// was copied); copying keeps the modified time, which is then the earlier.
 fn file_date(p: &Path) -> Option<String> {
     let md = fs::metadata(p).ok()?;
-    let t = md.created().or_else(|_| md.modified()).ok()?;
+    let t = match (md.created().ok(), md.modified().ok()) {
+        (Some(c), Some(m)) => c.min(m),
+        (c, m) => c.or(m)?,
+    };
     Some(chrono::DateTime::<Local>::from(t).format("%Y-%m-%d").to_string())
 }
 
 /// A folder of markdown/text files (Obsidian daily notes and the like).
-/// Date: first valid YYYY-MM-DD in the file name, else the file's created
-/// (fallback modified) date. Time: 12:00:00, +1 s for each further file on
-/// the same date. Title: the file stem unless it is just the date. Files
-/// already in jnl format import their entries verbatim.
+/// Date: first valid YYYY-MM-DD in the file name, else the earlier of the
+/// file's created and modified dates. Time: 12:00:00, +1 s for each further
+/// file on the same date. Title: the file stem unless it is just the date.
+/// Files already in jnl format import their entries verbatim.
+///
+/// That time is made up, and which second a note gets depends on what else
+/// is in the folder, so a note is taken to be imported already when the
+/// journal holds an entry of the same day, title and text at any time:
+/// importing a folder again after adding a file to it adds only that file.
 ///
 /// Folders and files whose names start with a dot are not read (`.trash/`,
 /// `.stversions/`, `.obsidian/`: other tools' leftovers, not notes). In a
@@ -1420,7 +1562,14 @@ fn file_date(p: &Path) -> Option<String> {
 /// own, dated like a plain file.
 pub fn import_markdown_folder(j: &Journal, dir: &Path, dry_run: bool) -> Result<ImportReport, String> {
     let mut rep = ImportReport::default();
-    let mut have = existing_key_counts(j)?;
+    // What is there already: by exact time for entries that carry their own,
+    // by day alone for notes whose time is made up here, and the times taken.
+    let (mut have, mut have_on_day, mut taken) = (HashMap::new(), HashMap::new(), HashSet::new());
+    for e in j.try_load_all()? {
+        *have.entry(dedupe_key(&e.ts, &e.title, &e.body)).or_default() += 1;
+        *have_on_day.entry(dedupe_key(&e.date, &e.title, &e.body)).or_default() += 1;
+        taken.insert(e.ts);
+    }
     let mut files = Vec::new();
     walk_visible(dir, &mut files);
     files.sort();
@@ -1442,27 +1591,37 @@ pub fn import_markdown_folder(j: &Journal, dir: &Path, dry_run: bool) -> Result<
         // Text with no header of its own: the whole of a plain note, or what
         // sits above the first entry of a file in jnl's format.
         let loose = if parsed.is_empty() { text.trim().to_string() } else { leading_preamble(&text).trim().to_string() };
-        let mut items: Vec<(String, String, String)> = Vec::new();
         if !loose.is_empty() {
             if let Some(date) = first_valid_date(&name).or_else(|| file_date(&f)) {
-                let n = per_date.entry(date.clone()).or_insert(0);
-                let ts = add_secs(&format!("{} 12:00:00", date), *n)?;
-                *n += 1;
                 let stem = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
                 let title = if stem.trim() == date { String::new() } else { stem };
-                let raw = make_raw(&ts, &title, false, &loose);
-                let e = parse_entries(&raw).remove(0);
-                items.push((dedupe_key(&ts, &strip_star(&e.suffix), &e.body), journal_rel(&date), raw));
+                // Read back as it would be written, for the key (the time
+                // doesn't change what the title and body read as).
+                let e = parse_entries(&make_raw(&format!("{} 12:00:00", date), &title, false, &loose)).remove(0);
+                rep.found += 1;
+                if take(&mut have_on_day, &dedupe_key(&date, &strip_star(&e.suffix), &e.body)) {
+                    rep.skipped += 1;
+                } else {
+                    // The next second of the day nothing else has.
+                    let n = per_date.entry(date.clone()).or_insert(0);
+                    let mut ts = add_secs(&format!("{} 12:00:00", date), *n)?;
+                    while taken.contains(&ts) && ts.starts_with(&date) {
+                        *n += 1;
+                        ts = add_secs(&format!("{} 12:00:00", date), *n)?;
+                    }
+                    *n += 1;
+                    groups.entry(journal_rel(&date)).or_default().push(make_raw(&ts, &title, false, &loose));
+                    rep.written += 1;
+                }
             }
         }
-        items.extend(parsed.into_iter().map(|e| (dedupe_key(&e.ts, &strip_star(&e.suffix), &e.body), journal_rel(&e.date), e.raw.trim_end().to_string())));
-        for (key, file, raw) in items {
+        for e in parsed {
             rep.found += 1;
-            if take(&mut have, &key) {
+            if take(&mut have, &dedupe_key(&e.ts, &strip_star(&e.suffix), &e.body)) {
                 rep.skipped += 1;
                 continue;
             }
-            groups.entry(file).or_default().push(raw);
+            groups.entry(journal_rel(&e.date)).or_default().push(e.raw.trim_end().to_string());
             rep.written += 1;
         }
     }
@@ -1536,6 +1695,8 @@ pub fn import_day_one(j: &Journal, path: &Path, dry_run: bool) -> Result<ImportR
     let mut have = existing_key_counts(j)?;
     let mut rep = ImportReport::default();
     let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Media copied into assets/ by this run: (asset, the day file it is for).
+    let mut copied: Vec<(String, String)> = Vec::new();
     let s = |e: &serde_json::Value, k: &str| e.get(k).and_then(|x| x.as_str()).map(|x| x.to_string());
     for e in entries {
         rep.found += 1;
@@ -1574,6 +1735,10 @@ pub fn import_day_one(j: &Journal, path: &Path, dry_run: bool) -> Result<ImportR
                 if !safe_part(&md5) || !safe_part(&ext) {
                     continue;
                 }
+                // A media folder that is a link leads out of the export.
+                if !fs::symlink_metadata(base.join(kind)).map(|m| m.is_dir()).unwrap_or(false) {
+                    continue;
+                }
                 media.push((s(m, "identifier").unwrap_or_default(), base.join(kind).join(format!("{}.{}", md5, ext))));
             }
         }
@@ -1597,11 +1762,21 @@ pub fn import_day_one(j: &Journal, path: &Path, dry_run: bool) -> Result<ImportR
         if dry_run {
             continue;
         }
+        let target = journal_rel(&ts[..10]);
         for (id, src) in media {
-            if !src.is_file() {
+            // A regular file only: a link in the export's media folder could
+            // point at any file this user can read, and would be copied in.
+            if !fs::symlink_metadata(&src).map(|m| m.is_file()).unwrap_or(false) {
                 continue;
             }
-            let rel = attach_rel(j, &src, &ts)?;
+            let rel = match attach_rel(j, &src, &ts) {
+                Ok(rel) => rel,
+                Err(e) => {
+                    remove_unlinked(j, &copied);
+                    return Err(e);
+                }
+            };
+            copied.push((rel.clone(), target.clone()));
             rep.media += 1;
             let link = format!("![]({})", rel);
             let re = (!id.is_empty())
@@ -1612,25 +1787,44 @@ pub fn import_day_one(j: &Journal, path: &Path, dry_run: bool) -> Result<ImportR
                 _ => body = format!("{}\n\n{}", body.trim(), link).trim().to_string(),
             }
         }
-        groups.entry(journal_rel(&ts[..10])).or_default().push(make_raw(&ts, &title, starred, &body));
+        groups.entry(target).or_default().push(make_raw(&ts, &title, starred, &body));
     }
     if !dry_run {
-        write_groups(j, groups)?;
+        if let Err(e) = write_groups(j, groups) {
+            remove_unlinked(j, &copied);
+            return Err(e);
+        }
     }
     Ok(rep)
+}
+
+/// After an import that stopped partway: take back the media it copied in for
+/// entries that were never written, so they aren't left as orphans and a
+/// retry doesn't copy each again as `-2`. `copied` is (asset, the day file its
+/// entry was bound for); a file whose day file names it, or can't be read to
+/// tell, is kept.
+fn remove_unlinked(j: &Journal, copied: &[(String, String)]) {
+    for (rel, file) in copied {
+        if j.try_read(file).is_ok_and(|text| !text.contains(rel.as_str())) {
+            let _ = j.remove(rel);
+        }
+    }
 }
 
 static PARA_SPLIT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\n[ \t\r]*\n").unwrap());
 
 /// transfer.md: a batch of entries to file straight in (jnl's cmdTransfer).
 /// With headers, each entry is filed and any preamble stays in transfer.md.
-/// Without headers, each paragraph becomes an entry at `now_ts`, +1 s each.
+/// Without headers, each paragraph becomes an entry at `now_ts`, +1 s each,
+/// and transfer.md is first rewritten with those headers: the times are then
+/// on disk, so a retry after a failure files the same entries, not copies of
+/// them stamped a minute later.
 /// Routing: split tags, else the day file (time-ordered insert); links are
-/// rebased. transfer.md is only rewritten when every destination wrote, and
+/// rebased. transfer.md is only emptied when every destination wrote, and
 /// a retry skips entries already filed.
 pub fn import_transfer(j: &Journal, now_ts: &str, split_tags: &[String]) -> Result<usize, String> {
     check_ts(now_ts)?;
-    let text = j.try_read("transfer.md")?;
+    let mut text = j.try_read("transfer.md")?;
     if text.trim().is_empty() {
         return Ok(0);
     }
@@ -1642,6 +1836,11 @@ pub fn import_transfer(j: &Journal, now_ts: &str, split_tags: &[String]) -> Resu
         for (i, para) in PARA_SPLIT_RE.split(&text).map(|s| s.trim()).filter(|s| !s.is_empty()).enumerate() {
             let ts = add_secs(now_ts, i as i64)?;
             v.extend(parse_entries(&make_raw(&ts, "", false, para)));
+        }
+        if !v.is_empty() {
+            let stamped = render("", &v.iter().map(|e| e.raw.clone()).collect::<Vec<_>>());
+            j.replace_text("transfer.md", &text, &stamped)?;
+            text = stamped;
         }
         (String::new(), v)
     };
@@ -1764,8 +1963,10 @@ fn not_prose(s: &str) -> Vec<std::ops::Range<usize>> {
 }
 
 /// Replace whole `@tag` tokens in `s` (case-insensitive match against
-/// `from`), skipping any preceded by a letter/digit, `.` or `/` (emails, URLs)
-/// and any inside a link target, a code span or a fenced code block.
+/// `from`), skipping any preceded by a letter/digit, `.` or `/` (emails, URLs),
+/// any running straight on into an accented or other non-ASCII letter (`@caf`
+/// in `@café`), and any inside a link target, a code span or a fenced code
+/// block.
 pub fn replace_tags(s: &str, from: &[String], to: &str) -> String {
     let skip = not_prose(s);
     let mut out = String::with_capacity(s.len());
@@ -1773,7 +1974,10 @@ pub fn replace_tags(s: &str, from: &[String], to: &str) -> String {
     for m in TAG_RE.find_iter(s) {
         out.push_str(&s[last..m.start()]);
         let prev = s[..m.start()].chars().next_back();
-        let blocked = prev.map(|c| c.is_alphanumeric() || c == '.' || c == '/').unwrap_or(false) || skip.iter().any(|r| r.contains(&m.start()));
+        // A letter straight after is the rest of a word the tag pattern
+        // (ASCII) stopped short of: `@caf` is not a whole token in `@café`.
+        let cut_short = s[m.end()..].chars().next().is_some_and(|c| c.is_alphanumeric());
+        let blocked = cut_short || prev.map(|c| c.is_alphanumeric() || c == '.' || c == '/').unwrap_or(false) || skip.iter().any(|r| r.contains(&m.start()));
         if !blocked && from.iter().any(|f| f.eq_ignore_ascii_case(m.as_str())) {
             out.push_str(to);
         } else {
@@ -1821,13 +2025,26 @@ pub struct Sizes {
     pub video: u64,
     pub audio: u64,
     pub other: u64,
+    /// The recovery folder (`<sidecar>/media-cleanup/`): originals kept for
+    /// `RECOVERY_DAYS` after Data Saver, media cleanup or a delete. Counted
+    /// in none of the figures above.
+    #[serde(default)]
+    pub recovery: u64,
+}
+
+/// Bytes in the recovery folder: what Data Saver's "saved" figure has not
+/// freed yet, since each replaced original waits there for `RECOVERY_DAYS`.
+pub fn media_recovery_bytes(j: &Journal) -> u64 {
+    crate::media_cleanup::recovery_bytes(j)
 }
 
 pub fn sizes(j: &Journal) -> Sizes {
     let mut s = Sizes::default();
     for rel in j.walk_files("") {
         let b = j.len(&rel);
-        if rel.starts_with("assets/") {
+        if crate::media_cleanup::in_recovery(&rel) {
+            s.recovery += b;
+        } else if rel.starts_with("assets/") {
             match media_kind(&rel) {
                 "image" => s.image += b,
                 "video" => s.video += b,
@@ -2070,6 +2287,193 @@ mod tests {
         assert!(es[0].body.contains("@day-trip"), "{}", day);
         assert!(!es[0].body.contains("@9lives") && !es[0].body.contains("dayone-moment"));
         assert_eq!(list_assets(&jn(d.path())).unwrap().iter().filter(|a| !a.referenced).count(), 0);
+    }
+
+    // M6
+    #[test]
+    fn the_backup_just_made_is_kept_when_its_name_sorts_oldest() {
+        let d = tmp();
+        let root = d.path().join("journal-root");
+        fs::create_dir_all(&root).unwrap();
+        w(&root, "inbox.md", "[2026-09-30 08:00:00] x\n");
+        let dest = d.path().join("backups");
+        // Backups named for a time still ahead: the clocks went back, or the
+        // laptop flew west, since they were made.
+        for day in ["2999-01-01", "2999-01-02", "2999-01-03"] {
+            fs::create_dir_all(dest.join(format!("Quire backup {day}-000000"))).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+        let made = PathBuf::from(backup(&jn(&root), &dest).unwrap()).file_name().unwrap().to_string_lossy().to_string();
+        assert_eq!(list_backups(&dest).last(), Some(&made), "by name it is the oldest");
+        assert_eq!(prune_backups(&dest, 2).unwrap(), 1);
+        let left = list_backups(&dest);
+        assert_eq!(left, vec!["Quire backup 2999-01-03-000000".to_string(), "Quire backup 2999-01-02-000000".to_string(), made.clone()]);
+        assert_eq!(read(&dest.join(&made).join("inbox.md")), "[2026-09-30 08:00:00] x\n");
+    }
+
+    // M1
+    #[test]
+    fn a_backup_leaves_out_the_recovery_folder_and_sizes_count_it() {
+        let d = tmp();
+        let root = d.path().join("journal-root");
+        w(&root, "inbox.md", "[2026-09-30 08:00:00] x\n");
+        w(&root, ".quire/templates/daily.md", "A template");
+        w(&root, ".quire/media-cleanup/20261020T101500.123456789/datasaver/assets/2026/10/clip.mov", "the original");
+        w(&root, ".quire/media-cleanup/20261020T101500.123456789/journal/2026/10/20.md", "[2026-10-20 08:00:00] before\n");
+        w(&root, "assets/2026/10/media-cleanup/clip.mov", "not the recovery folder");
+        let j = jn(&root);
+        let s = sizes(&j);
+        assert_eq!(s.recovery, ("the original".len() + "[2026-10-20 08:00:00] before\n".len()) as u64);
+        assert_eq!(s.recovery, media_recovery_bytes(&j));
+        assert_eq!(s.text, ("[2026-09-30 08:00:00] x\n".len() + "A template".len()) as u64, "recovery copies of day files are not the journal's text");
+        assert_eq!(s.video, "not the recovery folder".len() as u64);
+        let dest = d.path().join("backups");
+        let made = PathBuf::from(backup(&j, &dest).unwrap());
+        assert!(made.join(".quire/templates/daily.md").is_file() && made.join("assets/2026/10/media-cleanup/clip.mov").is_file());
+        assert!(!made.join(".quire/media-cleanup").exists());
+        // A restore's safety copy is the whole folder, recovery copies too.
+        let safety = restore(&j, &dest, &made.file_name().unwrap().to_string_lossy()).unwrap();
+        assert!(dest.join(&safety).join(".quire/media-cleanup/20261020T101500.123456789/datasaver/assets/2026/10/clip.mov").is_file());
+    }
+
+    // M7
+    #[test]
+    fn a_file_in_use_always_has_an_owner_and_a_deleted_one_can_be_got_back() {
+        let d = tmp();
+        for n in ["Photo.JPG", "shot.png", "unused.jpg"] {
+            w(d.path(), &format!("assets/2026/09/{n}"), "x");
+        }
+        w(d.path(), "journal/2026/09/30.md", "[2026-09-30 08:00:00]\n![](assets/2026/09/photo.jpg)\n<img src=\"../../../assets/2026/09/shot.png\">\n");
+        let j = jn(d.path());
+        let list = list_assets(&j).unwrap();
+        for a in &list {
+            let used = !a.rel.ends_with("unused.jpg");
+            assert_eq!(a.referenced, used, "{}", a.rel);
+            assert_eq!(a.owners, if used { vec!["journal/2026/09/30.md".to_string()] } else { Vec::<String>::new() }, "{}", a.rel);
+        }
+        delete_asset(&j, "assets/2026/09/shot.png").unwrap();
+        assert!(!j.is_file("assets/2026/09/shot.png"));
+        let kept: Vec<String> = j.walk_files(".quire/media-cleanup").into_iter().filter(|p| p.ends_with("/deleted/assets/2026/09/shot.png")).collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(j.read(&kept[0]), "x");
+        assert!(delete_asset(&j, "assets/2026/09/shot.png").unwrap_err().contains("No such asset"));
+        assert!(delete_asset(&j, "journal/2026/09/30.md").is_err());
+    }
+
+    // M3
+    #[test]
+    fn markdown_folder_import_again_after_adding_a_file_adds_only_that_file() {
+        let d = tmp();
+        let (src, root) = (d.path().join("src"), d.path().join("root"));
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(src.join("2026-09-30 b.md"), "Bee").unwrap();
+        fs::write(src.join("2026-09-30 c.md"), "Sea").unwrap();
+        let r = import_markdown_folder(&jn(&root), &src, false).unwrap();
+        assert_eq!((r.found, r.written), (2, 2));
+        // Sorts first, so the two already imported would each move a second on.
+        fs::write(src.join("2026-09-30 a.md"), "Ay").unwrap();
+        let dry = import_markdown_folder(&jn(&root), &src, true).unwrap();
+        assert_eq!((dry.found, dry.written, dry.skipped), (3, 1, 2));
+        let r = import_markdown_folder(&jn(&root), &src, false).unwrap();
+        assert_eq!((r.found, r.written, r.skipped), (3, 1, 2));
+        let day = parse_entries(&read(&root.join("journal/2026/09/30.md")));
+        assert_eq!(
+            day.iter().map(|e| (e.ts.as_str(), e.suffix.as_str())).collect::<Vec<_>>(),
+            vec![("2026-09-30 12:00:00", "2026-09-30 b"), ("2026-09-30 12:00:01", "2026-09-30 c"), ("2026-09-30 12:00:02", "2026-09-30 a")]
+        );
+        let r = import_markdown_folder(&jn(&root), &src, false).unwrap();
+        assert_eq!((r.written, r.skipped), (0, 3));
+    }
+
+    // M3
+    #[test]
+    fn an_undated_note_is_filed_by_the_earlier_of_its_two_times() {
+        let d = tmp();
+        let f = d.path().join("note.md");
+        fs::write(&f, "old").unwrap();
+        // Copied in today, last written in 2001: the day it was written.
+        let then = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        fs::File::options().write(true).open(&f).unwrap().set_modified(then).unwrap();
+        let day = file_date(&f).unwrap();
+        assert!(day == "2001-09-09" || day == "2001-09-08", "{day}");
+    }
+
+    // M8, M11
+    #[cfg(unix)]
+    #[test]
+    fn dayone_import_that_fails_takes_back_its_media_and_never_follows_a_link() {
+        let d = tmp();
+        let (exp, root) = (d.path().join("export"), d.path().join("root"));
+        fs::create_dir_all(exp.join("photos")).unwrap();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(exp.join("photos/abc.jpeg"), b"img").unwrap();
+        fs::write(d.path().join("private.txt"), b"a private file").unwrap();
+        std::os::unix::fs::symlink(d.path().join("private.txt"), exp.join("photos/key.jpeg")).unwrap();
+        // A whole media folder that is a link is not read either.
+        fs::create_dir_all(d.path().join("elsewhere")).unwrap();
+        fs::write(d.path().join("elsewhere/clip.mov"), b"not the export's").unwrap();
+        std::os::unix::fs::symlink(d.path().join("elsewhere"), exp.join("videos")).unwrap();
+        fs::write(
+            exp.join("Journal.json"),
+            r#"{"entries":[
+              {"creationDate":"2026-09-30T08:00:00Z","timeZone":"UTC","text":"one","photos":[{"identifier":"P1","md5":"abc","type":"jpeg"},{"identifier":"P2","md5":"key","type":"jpeg"}],"videos":[{"identifier":"V1","md5":"clip","type":"mov"}]}
+            ]}"#,
+        )
+        .unwrap();
+        // The day file can't be written: something else is where its folder goes.
+        fs::write(root.join("journal"), b"in the way").unwrap();
+        assert!(import_day_one(&jn(&root), &exp, false).is_err());
+        assert!(jn(&root).walk_files("assets").is_empty(), "{:?}", jn(&root).walk_files("assets"));
+        fs::remove_file(root.join("journal")).unwrap();
+        let r = import_day_one(&jn(&root), &exp, false).unwrap();
+        assert_eq!((r.written, r.media), (1, 1));
+        assert_eq!(jn(&root).walk_files("assets"), vec!["assets/2026/09/30-080000.jpeg"], "no -2, no linked file");
+        assert!(read(&root.join("journal/2026/09/30.md")).contains("![](assets/2026/09/30-080000.jpeg)"));
+    }
+
+    // M9
+    #[test]
+    fn plain_transfer_paragraphs_keep_their_times_across_a_retry() {
+        let d = tmp();
+        w(d.path(), "transfer.md", "one\n\ntwo @work\n");
+        // The split journal can't be written: something else is where its folder goes.
+        w(d.path(), "split", "in the way");
+        assert!(import_transfer(&jn(d.path()), "2026-10-01 10:00:00", &["work".into()]).is_err());
+        assert_eq!(read(&d.path().join("transfer.md")), "[2026-10-01 10:00:00]\none\n\n[2026-10-01 10:00:01]\ntwo @work\n", "the times are on disk now");
+        fs::remove_file(d.path().join("split")).unwrap();
+        // A retry, later: the same entries, each filed once.
+        assert_eq!(import_transfer(&jn(d.path()), "2026-10-01 10:05:00", &["work".into()]).unwrap(), 2);
+        assert_eq!(read(&d.path().join("journal/2026/10/01.md")), "[2026-10-01 10:00:00]\none\n");
+        assert_eq!(read(&d.path().join("split/work/2026/10/01.md")), "[2026-10-01 10:00:01]\ntwo @work\n");
+        assert_eq!(read(&d.path().join("transfer.md")), "");
+    }
+
+    // M12
+    #[test]
+    fn tag_rename_leaves_a_longer_accented_word_alone() {
+        assert_eq!(replace_tags("@caf @caf\u{e9} @caf. (@caf) @caf\u{f1}on @CAF", &["@caf".into()], "@x"), "@x @caf\u{e9} @x. (@x) @caf\u{f1}on @x");
+    }
+
+    // M10
+    #[cfg(unix)]
+    #[test]
+    fn a_backup_fails_when_a_folder_cannot_be_listed() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tmp();
+        let root = d.path().join("journal-root");
+        w(&root, "inbox.md", "[2026-09-30 08:00:00] x\n");
+        w(&root, "journal/2026/09/30.md", "[2026-09-30 08:00:00] filed\n");
+        let locked = root.join("journal/2026");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = fs::read_dir(&locked).is_err();
+        let made = backup(&jn(&root), &d.path().join("backups"));
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        // Root reads anything; the check only means something otherwise.
+        if unreadable {
+            assert!(made.is_err());
+            assert!(list_backups(&d.path().join("backups")).is_empty());
+        }
     }
 
     #[test]

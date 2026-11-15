@@ -27,7 +27,7 @@ use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType as PngFilter, PngEncoder};
 use image::codecs::tiff::TiffEncoder;
 use image::imageops::FilterType;
-use image::{ColorType, DynamicImage, ImageDecoder, ImageFormat, ImageReader};
+use image::{ColorType, DynamicImage, ImageDecoder, ImageEncoder, ImageFormat, ImageReader};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -168,18 +168,21 @@ fn image_format_for(ext: &str) -> Option<ImageFormat> {
     }
 }
 
-fn decode_oriented(bytes: &[u8], fallback: ImageFormat) -> Option<DynamicImage> {
+/// The picture, turned the way its EXIF says, and the colour profile it
+/// carries (a Display P3 photo shown without one reads as sRGB: flatter).
+fn decode_oriented(bytes: &[u8], fallback: ImageFormat) -> Option<(DynamicImage, Option<Vec<u8>>)> {
     let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?;
     if reader.format().is_none() {
         reader.set_format(fallback);
     }
     let mut decoder = reader.into_decoder().ok()?;
     let orientation = decoder.orientation().ok();
+    let icc = decoder.icc_profile().ok().flatten().filter(|p| !p.is_empty());
     let mut img = DynamicImage::from_decoder(decoder).ok()?;
     if let Some(o) = orientation {
         img.apply_orientation(o);
     }
-    Some(img)
+    Some((img, icc))
 }
 
 fn to_8bit(img: &DynamicImage, allow_alpha: bool) -> DynamicImage {
@@ -192,7 +195,17 @@ fn to_8bit(img: &DynamicImage, allow_alpha: bool) -> DynamicImage {
     }
 }
 
-fn encode(img: &DynamicImage, format: ImageFormat) -> Option<Vec<u8>> {
+/// `icc` is the source's colour profile, written into the result where the
+/// format has a place for one (JPEG, PNG, TIFF). A profile describes colour or
+/// grey, not both, and none of the conversions here turns one into the other.
+fn encode(img: &DynamicImage, format: ImageFormat, icc: Option<&[u8]>) -> Option<Vec<u8>> {
+    // An encoder that can't take the profile still writes the picture.
+    fn tagged<E: ImageEncoder>(mut enc: E, icc: Option<&[u8]>) -> E {
+        if let Some(p) = icc {
+            let _ = enc.set_icc_profile(p.to_vec());
+        }
+        enc
+    }
     let mut buf = Vec::new();
     match format {
         ImageFormat::Jpeg => {
@@ -201,17 +214,12 @@ fn encode(img: &DynamicImage, format: ImageFormat) -> Option<Vec<u8>> {
                 ColorType::L8 | ColorType::Rgb8 => img.clone(),
                 _ => to_8bit(img, false),
             };
-            img.write_with_encoder(JpegEncoder::new_with_quality(&mut buf, JPEG_QUALITY)).ok()?;
+            img.write_with_encoder(tagged(JpegEncoder::new_with_quality(&mut buf, JPEG_QUALITY), icc)).ok()?;
         }
         ImageFormat::Png => {
             let try_write = |im: &DynamicImage| -> Option<Vec<u8>> {
                 let mut out = Vec::new();
-                im.write_with_encoder(PngEncoder::new_with_quality(
-                    &mut out,
-                    CompressionType::Best,
-                    PngFilter::Adaptive,
-                ))
-                .ok()?;
+                im.write_with_encoder(tagged(PngEncoder::new_with_quality(&mut out, CompressionType::Best, PngFilter::Adaptive), icc)).ok()?;
                 Some(out)
             };
             buf = try_write(img).or_else(|| try_write(&to_8bit(img, true)))?;
@@ -219,7 +227,7 @@ fn encode(img: &DynamicImage, format: ImageFormat) -> Option<Vec<u8>> {
         ImageFormat::Tiff => {
             let try_write = |im: &DynamicImage| -> Option<Vec<u8>> {
                 let mut out = Cursor::new(Vec::new());
-                im.write_with_encoder(TiffEncoder::new(&mut out)).ok()?;
+                im.write_with_encoder(tagged(TiffEncoder::new(&mut out), icc)).ok()?;
                 Some(out.into_inner())
             };
             buf = try_write(img).or_else(|| try_write(&to_8bit(img, true)))?;
@@ -286,13 +294,13 @@ fn recompress(bytes: &[u8], ext: &str, cap_edge: bool) -> Option<Vec<u8>> {
     if has_many_frames(bytes, format) {
         return None;
     }
-    let mut img = decode_oriented(bytes, format)?;
+    let (mut img, icc) = decode_oriented(bytes, format)?;
     let oversized = img.width().max(img.height()) > MAX_IMAGE_EDGE;
     if oversized {
         // resize() keeps aspect ratio and fits inside the box.
         img = img.resize(MAX_IMAGE_EDGE, MAX_IMAGE_EDGE, FilterType::Lanczos3);
     }
-    let out = encode(&img, format)?;
+    let out = encode(&img, format, icc.as_deref())?;
     if out.len() < bytes.len() || (cap_edge && oversized) {
         Some(out)
     } else {
@@ -681,9 +689,13 @@ pub fn compress_file_in_place(path: &Path) -> Result<Option<i64>, String> {
 /// in `<sidecar>/media-cleanup/<run>/datasaver/<its path>` before it is
 /// replaced, and stays there for `RECOVERY_DAYS`: Data Saver's re-encode drops
 /// things a person may want back (a photo's EXIF, stereo sound, full size).
+/// Recovery folders past that age are pruned here first, so the originals of
+/// someone who attaches media and never opens Maintenance still go after
+/// `RECOVERY_DAYS` (a prune that fails is left for the next run).
 /// Results as for `compress_file_in_place`.
 pub fn compress_asset(root: &Path, path: &Path) -> Result<Option<i64>, String> {
     let j = Journal::open(root);
+    let _ = crate::prune_media_recovery(&j, crate::RECOVERY_DAYS);
     compress_path(path, Some(&Park::new(&j))).map_err(MediaError::into_string)
 }
 
@@ -1389,7 +1401,7 @@ mod tests {
     #[test]
     fn tiny_image_returns_none() {
         let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(4, 4, Rgb([10, 20, 30])));
-        let src = encode(&img, ImageFormat::Png).unwrap(); // already best-compressed
+        let src = encode(&img, ImageFormat::Png, None).unwrap(); // already best-compressed
         assert!(compress_image_bytes(&src, "png").is_none());
     }
 
@@ -1552,7 +1564,7 @@ mod tests {
         fs::write(root.join("assets/done.jpg"), &big).unwrap();
         fs::write(root.join("assets/._tmp_leftover.jpg"), &big).unwrap();
         fs::write(root.join("assets/anim.gif"), b"GIF89a").unwrap();
-        let tiny = encode(&DynamicImage::ImageRgb8(RgbImage::new(2, 2)), ImageFormat::Png).unwrap();
+        let tiny = encode(&DynamicImage::ImageRgb8(RgbImage::new(2, 2)), ImageFormat::Png, None).unwrap();
         fs::write(root.join("assets/tiny.png"), &tiny).unwrap();
         fs::create_dir_all(root.join(".nook")).unwrap();
         fs::write(root.join(".nook/datasaver-phone.json"), r#"{"savedBytes":5,"assets":["done"]}"#).unwrap();
@@ -1872,6 +1884,52 @@ mod tests {
         assert_eq!(crate::prune_media_recovery(&j, crate::RECOVERY_DAYS).unwrap(), 0);
         assert_eq!(crate::prune_media_recovery(&j, -1).unwrap(), 2);
         assert!(j.walk_files(".quire/media-cleanup").is_empty());
+    }
+
+    // M1
+    #[test]
+    fn compressing_one_attachment_prunes_old_recovery_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("journal");
+        let j = Journal::open(&root);
+        let stamp = |days: i64| (chrono::Utc::now() - chrono::Duration::days(days)).format("%Y%m%dT%H%M%S%.9f").to_string();
+        let (old, recent) = (stamp(crate::RECOVERY_DAYS + 1), stamp(1));
+        j.vault().write(&format!(".quire/media-cleanup/{old}/datasaver/assets/2026/09/clip.mov"), b"an old original").unwrap();
+        j.vault().write(&format!(".quire/media-cleanup/{recent}/datasaver/assets/2026/11/clip.mov"), b"a recent original").unwrap();
+        let photo = root.join("assets/2026/11/09-080000.jpg");
+        fs::create_dir_all(photo.parent().unwrap()).unwrap();
+        fs::write(&photo, encode_jpeg_q(&photo_like(1200, 900), 100)).unwrap();
+        // Nobody opened Maintenance: an attachment's own compression is enough.
+        assert!(compress_asset(&root, &photo).unwrap().is_some());
+        assert!(!j.is_dir(&format!(".quire/media-cleanup/{old}")));
+        assert!(j.is_file(&format!(".quire/media-cleanup/{recent}/datasaver/assets/2026/11/clip.mov")));
+        assert_eq!(j.walk_files(".quire/media-cleanup").iter().filter(|p| p.ends_with("09-080000.jpg")).count(), 1);
+    }
+
+    // M4
+    #[test]
+    fn the_colour_profile_survives_recompression() {
+        // Any bytes do: the codecs carry a profile without reading it.
+        let profile: Vec<u8> = (0..600u32).map(|i| (i % 251) as u8).collect();
+        let img = photo_like(2600, 1200);
+        let profile_of = |bytes: &[u8], format| decode_oriented(bytes, format).unwrap().1;
+        let mut jpeg = Vec::new();
+        let mut enc = JpegEncoder::new_with_quality(&mut jpeg, 100);
+        enc.set_icc_profile(profile.clone()).unwrap();
+        img.write_with_encoder(enc).unwrap();
+        assert_eq!(profile_of(&jpeg, ImageFormat::Jpeg).as_deref(), Some(profile.as_slice()));
+        let out = compress_image_bytes(&jpeg, "jpg").unwrap();
+        assert_eq!(dims(&out), (2048, 945));
+        assert_eq!(profile_of(&out, ImageFormat::Jpeg).as_deref(), Some(profile.as_slice()));
+        let mut png = Vec::new();
+        let mut enc = PngEncoder::new(&mut png);
+        enc.set_icc_profile(profile.clone()).unwrap();
+        img.write_with_encoder(enc).unwrap();
+        let out = compress_image_bytes(&png, "png").unwrap();
+        assert_eq!(profile_of(&out, ImageFormat::Png).as_deref(), Some(profile.as_slice()));
+        // A picture with no profile gets none.
+        let plain = compress_image_bytes(&encode_jpeg_q(&img, 100), "jpg").unwrap();
+        assert_eq!(profile_of(&plain, ImageFormat::Jpeg), None);
     }
 
     // C2

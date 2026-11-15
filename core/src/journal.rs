@@ -91,6 +91,9 @@ const EDIT_PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
 /// another writer changed it mid-fold, before the migration is left for the
 /// next open.
 const MIGRATE_ATTEMPTS: usize = 5;
+/// How far below `inbox/`, `journal/` or `split/` a linked folder is still
+/// followed: `split/<tag>/YYYY/MM` is the deepest folder a day file sits in.
+const LINK_DEPTH: usize = 4;
 /// A random wait that grows with each lost attempt, so writers that collided
 /// don't collide again in step.
 fn backoff(attempt: u64) -> std::time::Duration {
@@ -175,13 +178,18 @@ pub fn safe_rel(root: &Path, rel: &str) -> Result<PathBuf, String> {
 }
 
 /// check_rel plus: must be a `.md` file outside the sidecars and `assets/`
-/// (an entry file: an inbox file, a day file or a split journal).
+/// (an entry file: an inbox file, a day file or a split journal), and not one
+/// of the preamble files. Compared without case, so `.Quire/…` and
+/// `Assets/…` don't get through on a disk that ignores it.
 pub fn check_entry_rel(rel: &str) -> Result<String, String> {
     let r = check_rel(rel)?;
-    if !r.to_lowercase().ends_with(".md")
-        || r.starts_with(&format!("{}/", SIDECAR))
-        || r.starts_with(&format!("{}/", LEGACY_SIDECAR))
-        || r.starts_with("assets/")
+    let l = r.to_lowercase();
+    if !l.ends_with(".md")
+        || l.starts_with(&format!("{}/", SIDECAR))
+        || l.starts_with(&format!("{}/", LEGACY_SIDECAR))
+        || l.starts_with("assets/")
+        || l == INBOX_PREAMBLE
+        || is_split_preamble(&l)
     {
         return Err(format!("{:?} is not an entry file", rel));
     }
@@ -715,8 +723,11 @@ impl Journal {
         self.vault.list(rel).unwrap_or_default()
     }
 
-    /// Every regular file under `dir` (rel paths, sorted), never following
-    /// symlinks, hidden files included.
+    /// Every regular file under `dir` (rel paths, sorted), hidden files
+    /// included. Links are never followed, with one exception: a walk that
+    /// starts in `inbox/`, `journal/` or `split/` goes into a linked folder,
+    /// because writes there go through the link and a day filed into one
+    /// would otherwise vanish from view.
     pub fn walk_files(&self, dir: &str) -> Vec<String> {
         self.walk_files_with(dir, false).unwrap_or_default()
     }
@@ -737,15 +748,38 @@ impl Journal {
     }
 
     fn walk_files_with(&self, dir: &str, strict: bool) -> Result<Vec<String>, String> {
+        self.walk(dir, strict, false)
+    }
+
+    /// The walk behind `walk_files` and `walk_md`. `entries_only` leaves out
+    /// hidden folders (a sync tool's `journal/.trash/` or versions folder
+    /// holds old copies, not entries).
+    fn walk(&self, dir: &str, strict: bool, entries_only: bool) -> Result<Vec<String>, String> {
+        let start = dir.trim_end_matches('/').to_string();
+        // Only the entry trees follow a link to a folder. Their day files sit
+        // at a known depth, so a link is followed no deeper than that and a
+        // link that points back up its own tree cannot loop.
+        let follows = [INBOX_DIR, JOURNAL_DIR, SPLIT_DIR].iter().any(|t| start == *t || start.starts_with(&format!("{}/", t)));
+        let base_depth = start.split('/').count();
         let mut out = Vec::new();
-        let mut stack = vec![dir.trim_end_matches('/').to_string()];
+        let mut stack = vec![start];
         while let Some(d) = stack.pop() {
             for it in self.list_with(&d, strict)? {
+                if entries_only && it.is_dir && it.name.starts_with('.') {
+                    continue;
+                }
                 let rel = join_rel_parts(&d, &it.name);
                 if it.is_dir {
                     stack.push(rel);
                 } else if it.is_file {
                     out.push(rel);
+                } else if follows
+                    && !(entries_only && it.name.starts_with('.'))
+                    && rel.split('/').count() - base_depth <= LINK_DEPTH
+                    && self.vault.is_dir(&rel)
+                    && !self.links_back(&d, &rel)
+                {
+                    stack.push(rel);
                 }
             }
         }
@@ -753,20 +787,32 @@ impl Journal {
         Ok(out)
     }
 
+    /// True when the linked folder `rel` is `dir`, the folder it is in, or
+    /// one above it: following it would read the same day files again under
+    /// a longer name. Only a vault with real paths can tell; the depth limit
+    /// covers the rest.
+    fn links_back(&self, dir: &str, rel: &str) -> bool {
+        let real = |r: &str| self.vault.local_path(r).and_then(|p| p.canonicalize().ok());
+        match (real(dir), real(rel)) {
+            (Some(dir), Some(target)) => dir.starts_with(target),
+            _ => false,
+        }
+    }
+
     /// Total bytes of the files under `dir`.
     pub fn tree_bytes(&self, dir: &str) -> u64 {
         self.walk_files(dir).iter().map(|f| self.vault.len(f)).sum()
     }
 
-    /// Every `.md` under `dir` (no symlinked folders), hidden files and
-    /// conflict copies excluded, sorted.
+    /// Every `.md` under `dir`, sorted: hidden files, anything in a hidden
+    /// folder and conflict copies excluded. Linked folders as `walk_files`.
     pub fn walk_md(&self, dir: &str) -> Vec<String> {
         self.walk_md_with(dir, false).unwrap_or_default()
     }
 
     fn walk_md_with(&self, dir: &str, strict: bool) -> Result<Vec<String>, String> {
         Ok(self
-            .walk_files_with(dir, strict)?
+            .walk(dir, strict, true)?
             .into_iter()
             .filter(|rel| {
                 let name = rel.rsplit('/').next().unwrap_or(rel);
@@ -883,7 +929,7 @@ impl Journal {
             .map(|it| it.name)
             .collect();
         for dir in [INBOX_DIR, JOURNAL_DIR, SPLIT_DIR] {
-            out.extend(self.walk_files(dir).into_iter().filter(|rel| {
+            out.extend(self.walk(dir, false, true).unwrap_or_default().into_iter().filter(|rel| {
                 let name = rel.rsplit('/').next().unwrap_or(rel);
                 name.to_lowercase().ends_with(".md") && is_conflict_name(name)
             }));
@@ -912,7 +958,45 @@ impl Journal {
                 out.push(to_entry(r, &rel, i, source, split.clone()));
             }
         }
-        Ok(out)
+        Ok(Self::without_folded(out))
+    }
+
+    /// `entries` without those of a legacy `inbox.md` or root `<tag>.md` that
+    /// are already in the day files. A fold copies first and retires the
+    /// legacy file last, so one that stops in between (a day file that can't
+    /// be read back, a sidecar that can't be written) leaves both; shown
+    /// together, every draft would be there twice. The legacy file is not
+    /// touched, and the next fold still finds everything in it.
+    fn without_folded(mut entries: Vec<Entry>) -> Vec<Entry> {
+        let legacy = |e: &Entry| !e.file.contains('/') && e.source != "journal";
+        if !entries.iter().any(legacy) {
+            return entries;
+        }
+        let mut have: HashMap<(Option<String>, String), usize> = HashMap::new();
+        for e in entries.iter().filter(|e| e.file.contains('/') && e.source != "journal") {
+            *have.entry((e.split.clone(), e.raw.trim_end().to_string())).or_default() += 1;
+        }
+        if have.is_empty() {
+            return entries;
+        }
+        entries.retain(|e| {
+            if !legacy(e) {
+                return true;
+            }
+            let dest = match &e.split {
+                Some(tag) => split_rel(tag, &e.date),
+                None => inbox_rel(&e.date),
+            };
+            let folded = rebase_links(e.raw.trim_end(), &e.file, &dest);
+            match have.get_mut(&(e.split.clone(), folded.trim_end().to_string())) {
+                Some(n) if *n > 0 => {
+                    *n -= 1;
+                    false
+                }
+                _ => true,
+            }
+        });
+        entries
     }
 
     /// The entries of one file.
@@ -1008,13 +1092,19 @@ impl Journal {
         Ok(())
     }
 
-    /// Add a preamble to a preamble file unless it is already in there.
+    /// Add a preamble to a preamble file unless it is already in there, as a
+    /// whole block: `# Notes` is not "in" a file that holds `# Notes 2025`.
     fn keep_preamble(&self, file: &str, pre: &str) -> Result<(), String> {
+        // Blank lines around it carry nothing, and are what blocks are told
+        // apart by.
+        let block = |s: &str| s.trim_end().split('\n').skip_while(|l| l.trim().is_empty()).collect::<Vec<_>>().join("\n");
+        let pre = block(pre);
         self.edit_file(file, |existing| {
-            if existing.contains(pre.trim()) {
+            let have = block(existing);
+            if pre.is_empty() || format!("\n\n{}\n\n", have).contains(&format!("\n\n{}\n\n", pre)) {
                 return Ok((None, ()));
             }
-            let text = if existing.trim().is_empty() { format!("{}\n", pre) } else { format!("{}\n\n{}\n", existing.trim_end(), pre) };
+            let text = if have.is_empty() { format!("{}\n", pre) } else { format!("{}\n\n{}\n", existing.trim_end(), pre) };
             Ok((Some(text), ()))
         })
     }
@@ -1260,6 +1350,10 @@ impl Journal {
     /// Pasted text into drafts: one per `[header]` when present, else one
     /// draft dated `now_ts`. Text above the first header is kept as a draft of
     /// its own, dated `now_ts`. Returns how many drafts were made.
+    ///
+    /// One write per day, and a draft whose exact text is already in its day
+    /// file is not made again: a paste that failed partway can be pasted
+    /// again without doubling what the first try wrote.
     pub fn import_text(&self, text: &str, now_ts: &str) -> Result<usize, String> {
         check_ts(now_ts)?;
         let text = normalise_outside(text);
@@ -1271,14 +1365,29 @@ impl Journal {
             self.insert_sorted(&inbox_rel(&now_ts[..10]), &make_raw(now_ts, "", false, text.trim()))?;
             return Ok(1);
         }
-        let mut n = parsed.len();
+        let mut by_day: Vec<(String, Vec<String>)> = Vec::new();
+        let mut add = |date: &str, raw: String| match by_day.iter_mut().find(|(d, _)| d == date) {
+            Some((_, v)) => v.push(raw),
+            None => by_day.push((date.to_string(), vec![raw])),
+        };
+        for e in &parsed {
+            add(&e.date, rebuild(e));
+        }
+        // The text above the first header is dated now, so a second try would
+        // not recognise it: its day is written last, after every write that
+        // could fail and send the user back to paste again.
         let pre = leading_preamble(&text);
         if !pre.trim().is_empty() {
-            self.insert_sorted(&inbox_rel(&now_ts[..10]), &make_raw(now_ts, "", false, pre.trim()))?;
-            n += 1;
+            let today = &now_ts[..10];
+            add(today, make_raw(now_ts, "", false, pre.trim()));
+            if let Some(i) = by_day.iter().position(|(d, _)| d == today) {
+                let day = by_day.remove(i);
+                by_day.push(day);
+            }
         }
-        for e in parsed {
-            self.insert_sorted(&inbox_rel(&e.date), &rebuild(&e))?;
+        let mut n = 0;
+        for (date, raws) in &by_day {
+            n += self.insert_entries(&inbox_rel(date), raws, true)?.iter().filter(|i| i.is_some()).count();
         }
         Ok(n)
     }
@@ -1292,7 +1401,9 @@ impl Journal {
         Ok(self.insert_entries(&file, &raws, true)?.iter().filter(|i| i.is_some()).count())
     }
 
-    /// Fold a legacy `inbox.md` into `inbox/` day files. Every draft is
+    /// Fold a legacy `inbox.md` into `inbox/` day files, links rebased as a
+    /// move between files does (`./assets/a.jpg` means something else three
+    /// folders down). Every draft is
     /// re-read from the day files before `inbox.md` is moved (never deleted)
     /// to `<sidecar>/migration/inbox-<stamp>.md`; preamble text goes to
     /// `inbox/preamble.md`. `Ok(None)` when there is no `inbox.md`. Safe to
@@ -1313,15 +1424,19 @@ impl Journal {
             let entries = parse_entries(&content);
             let pre = leading_preamble(&content);
             let mut by_day: Vec<(String, Vec<String>)> = Vec::new();
+            let mut want: Vec<(String, String)> = Vec::new();
             for e in &entries {
-                match by_day.iter_mut().find(|(d, _)| *d == e.date) {
-                    Some((_, v)) => v.push(e.raw.clone()),
-                    None => by_day.push((e.date.clone(), vec![e.raw.clone()])),
+                let dest = inbox_rel(&e.date);
+                let raw = rebase_links(e.raw.trim_end(), LEGACY_INBOX, &dest);
+                want.push((e.ts.clone(), raw.trim_end().to_string()));
+                match by_day.iter_mut().find(|(d, _)| *d == dest) {
+                    Some((_, v)) => v.push(raw),
+                    None => by_day.push((dest, vec![raw])),
                 }
             }
             let (mut moved, mut skipped) = (0, 0);
-            for (date, raws) in &by_day {
-                let res = self.insert_entries(&inbox_rel(date), raws, true)?;
+            for (dest, raws) in &by_day {
+                let res = self.insert_entries(dest, raws, true)?;
                 moved += res.iter().filter(|r| r.is_some()).count();
                 skipped += res.iter().filter(|r| r.is_none()).count();
             }
@@ -1338,10 +1453,10 @@ impl Journal {
                     *have.entry(e.raw.trim_end().to_string()).or_default() += 1;
                 }
             }
-            for e in &entries {
-                match have.get_mut(e.raw.trim_end()) {
+            for (ts, raw) in &want {
+                match have.get_mut(raw) {
                     Some(c) if *c > 0 => *c -= 1,
-                    _ => return Err(format!("inbox.md was not moved: the draft {:?} could not be read back from inbox/", e.ts)),
+                    _ => return Err(format!("inbox.md was not moved: the draft {:?} could not be read back from inbox/", ts)),
                 }
             }
             if let Some(backup) = self.retire_legacy(LEGACY_INBOX, &bytes, "inbox")? {
@@ -1357,9 +1472,21 @@ impl Journal {
     /// remove the original only if it still holds exactly those bytes.
     /// `Ok(None)` when it has changed since: the copy is taken away again and
     /// the caller folds the new text.
+    ///
+    /// A copy with exactly these bytes that an earlier fold kept is used
+    /// again instead of adding another: a sync that keeps bringing the same
+    /// `inbox.md` back would otherwise add a file to `migration/` every open.
     fn retire_legacy(&self, file: &str, bytes: &[u8], label: &str) -> Result<Option<String>, String> {
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         let dir = format!("{}/migration", self.sidecar_mut()?);
+        let prefix = format!("{}-", label);
+        for it in self.list(&dir) {
+            let kept = format!("{}/{}", dir, it.name);
+            let same_label = it.name.strip_prefix(&prefix).is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+            if it.is_file && same_label && it.len == bytes.len() as u64 && self.vault.read(&kept).ok().flatten().as_deref() == Some(bytes) {
+                return Ok(self.vault.replace_if_unchanged(file, Some(bytes), None)?.then_some(kept));
+            }
+        }
         let mut backup = format!("{}/{}-{}.md", dir, label, stamp);
         let mut n = 1;
         while self.vault.is_file(&backup) {
@@ -1385,7 +1512,19 @@ impl Journal {
     /// `<sidecar>/migration/split-<tag>-<stamp>.md`. A root `.md` with no
     /// entries is not a journal and is left alone. `Ok(None)` when there was
     /// nothing to fold. Safe to run again: entries already there are skipped.
+    ///
+    /// A root file is only folded when one of its entries carries `@<name>`,
+    /// which is how jnl and Nook put entries in it: an export saved into the
+    /// journal folder, or a `log.md` of timestamped lines, has entries too
+    /// and is not a split journal. It is left where it is.
     pub fn migrate_legacy_splits(&self) -> Result<Option<SplitMigration>, String> {
+        self.migrate_legacy_splits_for(&[])
+    }
+
+    /// `migrate_legacy_splits`, also folding `<tag>.md` for each of
+    /// `split_tags` (the configured ones, with or without `@`) whatever its
+    /// entries carry.
+    pub fn migrate_legacy_splits_for(&self, split_tags: &[String]) -> Result<Option<SplitMigration>, String> {
         let mut rep = SplitMigration::default();
         for name in self.legacy_split_files() {
             let tag = split_tag_of(&name).unwrap_or_default();
@@ -1399,7 +1538,9 @@ impl Journal {
                 };
                 let content = Self::decoded(&name, Some(&bytes))?;
                 let entries = parse_entries(&content);
-                if entries.is_empty() {
+                let configured = split_tags.iter().any(|t| t.trim().trim_start_matches('@').eq_ignore_ascii_case(&tag));
+                let carried = || entries.iter().any(|e| TAG_RE.find_iter(&e.raw).any(|m| m.as_str()[1..].eq_ignore_ascii_case(&tag)));
+                if entries.is_empty() || !(configured || carried()) {
                     done = true;
                     break;
                 }
@@ -1572,11 +1713,13 @@ pub fn link_targets(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Rewrite file-relative links (`../…`, `./…`) that resolve into `assets/`
-/// as base-relative `assets/…`, so the entry can live in any file. Other
-/// links (base-relative, external, or not under assets/) are left alone.
-/// `to_rel` is the destination file (base-relative links work from anywhere).
-pub fn rebase_links(raw: &str, from_rel: &str, _to_rel: &str) -> String {
+/// Rewrite file-relative links (`../…`, `./…`) for an entry moving from
+/// `from_rel` to `to_rel`. One that resolves into `assets/` becomes
+/// base-relative `assets/…`, which works from any file. Any other is written
+/// again relative to the destination's folder, so it still names the same
+/// file. Base-relative and external links, bare names, and links that climb
+/// out of the journal are left alone.
+pub fn rebase_links(raw: &str, from_rel: &str, to_rel: &str) -> String {
     LINK_TARGET_RE
         .replace_all(raw, |c: &regex::Captures| {
             let ws = &c[1];
@@ -1588,18 +1731,34 @@ pub fn rebase_links(raw: &str, from_rel: &str, _to_rel: &str) -> String {
             if !(p.starts_with("../") || p.starts_with("./")) {
                 return c[0].to_string();
             }
-            match resolve_link(from_rel, p) {
-                Some(r) if r.starts_with("assets/") => {
-                    if angle {
-                        format!("]({}<{}>", ws, r)
-                    } else {
-                        format!("]({}{}", ws, r)
-                    }
-                }
-                _ => c[0].to_string(),
+            let r = match resolve_link(from_rel, p) {
+                Some(r) if r.starts_with("assets/") => r,
+                Some(r) if dir_of(from_rel) != dir_of(to_rel) => relative_from(dir_of(to_rel), &r),
+                _ => return c[0].to_string(),
+            };
+            if angle {
+                format!("]({}<{}>", ws, r)
+            } else {
+                format!("]({}{}", ws, r)
             }
         })
         .into_owned()
+}
+
+/// Root-relative `target` as a link written in a file in folder `dir`:
+/// always `./…` or `../…`, the two forms that are read as file-relative.
+fn relative_from(dir: &str, target: &str) -> String {
+    let from: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
+    let to: Vec<&str> = target.split('/').filter(|p| !p.is_empty()).collect();
+    // A file has no folder in common with itself past its own folder.
+    let shared = from.iter().zip(to.iter().take(to.len().saturating_sub(1))).take_while(|(a, b)| a == b).count();
+    let ups = from.len() - shared;
+    let rest = to[shared..].join("/");
+    if ups == 0 {
+        format!("./{}", rest)
+    } else {
+        format!("{}{}", "../".repeat(ups), rest)
+    }
 }
 
 #[cfg(test)]
@@ -1763,6 +1922,11 @@ mod tests {
         assert!(safe_entry_rel(r, "inbox.md").is_ok());
         assert!(safe_entry_rel(r, "inbox/2026/01/02.md").is_ok());
         assert!(safe_entry_rel(r, "inbox.txt").is_err());
+        // 14 November review, C8: without case, and never a preamble file.
+        for rel in [".Quire/templates/a.md", ".NOOK/a.md", "Assets/x.md", "inbox/preamble.md", "Inbox/Preamble.md", "split/work/preamble.md"] {
+            assert!(check_entry_rel(rel).is_err(), "{rel}");
+        }
+        assert!(check_entry_rel("split/work/2026/01/02.md").is_ok() && check_entry_rel("Work.MD").is_ok());
         assert_eq!(check_rel("./a/b.md").unwrap(), "a/b.md");
     }
 
@@ -2076,8 +2240,40 @@ mod tests {
 
         let raw = "[2026-09-30 08:00:00]\n![](../../../assets/2026/09/a.jpg) [f](<../../../assets/2026/09/b c.pdf> \"t\") ![](assets/2026/09/d.jpg) [w](https://x.org/../a) ![](../../../notes/x.jpg)";
         let out = rebase_links(raw, f, "inbox.md");
-        assert_eq!(out, "[2026-09-30 08:00:00]\n![](assets/2026/09/a.jpg) [f](<assets/2026/09/b c.pdf> \"t\") ![](assets/2026/09/d.jpg) [w](https://x.org/../a) ![](../../../notes/x.jpg)");
-        assert_eq!(rebase_links(&out, f, "inbox.md"), out);
+        assert_eq!(out, "[2026-09-30 08:00:00]\n![](assets/2026/09/a.jpg) [f](<assets/2026/09/b c.pdf> \"t\") ![](assets/2026/09/d.jpg) [w](https://x.org/../a) ![](./notes/x.jpg)");
+        let assets_only = out.replace(" ![](./notes/x.jpg)", "");
+        assert_eq!(rebase_links(&assets_only, f, "inbox.md"), assets_only);
+    }
+
+    // 14 November review, C9: a file-relative link that isn't under assets/
+    // still names the same file after its entry moves.
+    #[test]
+    fn a_relative_link_outside_assets_follows_its_entry() {
+        let f = "journal/2026/09/30.md";
+        let same = |raw: &str, from: &str, to: &str| {
+            let moved = rebase_links(raw, from, to);
+            let (a, b): (Vec<_>, Vec<_>) = (link_targets(raw).iter().map(|p| resolve_link(from, p)).collect(), link_targets(&moved).iter().map(|p| resolve_link(to, p)).collect());
+            assert_eq!(a, b, "{raw} from {from} to {to} gave {moved}");
+            moved
+        };
+        // Another month, another tree, a deeper tree, a root file.
+        assert_eq!(same("![](./sketch.png)", f, "journal/2026/10/01.md"), "![](../09/sketch.png)");
+        assert_eq!(same("![](./sketch.png) [n](<../notes/a b.md>)", f, "inbox/2026/09/30.md"), "![](../../../journal/2026/09/sketch.png) [n](<../../../journal/2026/notes/a b.md>)");
+        assert_eq!(same("![](../../../photos/a.jpg)", f, "split/work/2026/09/30.md"), "![](../../../../photos/a.jpg)");
+        assert_eq!(same("![](./photos/a.jpg)", "work.md", "split/work/2026/09/30.md"), "![](../../../../photos/a.jpg)");
+        assert_eq!(same("![](../../../photos/a.jpg)", f, "work.md"), "![](./photos/a.jpg)");
+        // The same folder: nothing to do. Same depth, climbing to the root: the same text.
+        assert_eq!(rebase_links("![](./sketch.png)", f, "journal/2026/09/29.md"), "![](./sketch.png)");
+        assert_eq!(same("![](../../../photos/a.jpg)", f, "inbox/2026/09/30.md"), "![](../../../photos/a.jpg)");
+        // Left alone: a bare name, a link out of the journal, an external one.
+        for raw in ["[n](notes)", "![](../../../../elsewhere/a.jpg)", "[w](https://x.org/./a)"] {
+            assert_eq!(rebase_links(raw, f, "inbox/2026/09/30.md"), raw);
+        }
+        // Through the store: a retimed entry keeps its picture.
+        let (_d, j) = tmp();
+        j.write(f, "[2026-09-30 08:00:00] t\n![](./sketch.png)\n").unwrap();
+        let w = j.update_entry(f, 0, "[2026-09-30 08:00:00] t\n![](./sketch.png)", "2026-10-01 08:00:00", "t", false, "![](./sketch.png)").unwrap();
+        assert_eq!(j.read(&w.file), "[2026-10-01 08:00:00] t\n![](../09/sketch.png)\n");
     }
 
     // ----- the inbox folder -----
@@ -2552,5 +2748,199 @@ mod tests {
         assert_eq!(link_targets("(see [x](assets/a.jpg)) [y](assets/b_(c)_d.png \"t\")"), vec!["assets/a.jpg", "assets/b_(c)_d.png"]);
         let raw = "[2026-09-30 08:00:00]\n![](../../../assets/2026/09/image(1).jpg)";
         assert_eq!(rebase_links(raw, "journal/2026/09/30.md", "inbox.md"), "[2026-09-30 08:00:00]\n![](assets/2026/09/image(1).jpg)");
+    }
+
+    // ----- fixes from the 2026-11-14 review -----
+
+    // C1
+    #[test]
+    fn a_root_file_with_entries_is_only_folded_when_it_is_a_split_journal() {
+        let (_d, j) = tmp();
+        let export = "[2026-10-13 17:00:00] Retro\nGood week.\n\n[2026-10-14 09:00:00] Standup @work\n";
+        j.write("journal-2026.md", export).unwrap();
+        j.write("log.md", "[2026-10-14 09:00:00] deploy started\n[2026-10-14 09:05:00] deploy done\n").unwrap();
+        assert!(j.migrate_legacy_splits().unwrap().is_none());
+        assert_eq!(j.read("journal-2026.md"), export, "an export saved into the folder is left as it is");
+        assert!(j.is_file("log.md") && !j.is_dir("split") && !j.is_dir(".quire"));
+        assert_eq!(j.try_load_all().unwrap().len(), 4, "and is still read where it is");
+        // jnl's own: entries are in <tag>.md because they carry @<tag>, whatever the case.
+        j.write("Work.md", "[2026-10-14 09:00:00] Standup @work\n\n[2026-10-15 09:00:00] untagged since\n").unwrap();
+        let rep = j.migrate_legacy_splits().unwrap().unwrap();
+        assert_eq!((rep.journals, rep.moved), (1, 2));
+        assert!(!j.is_file("Work.md") && j.is_file("split/Work/2026/10/15.md"));
+        // A configured tag folds its file whatever the entries carry.
+        assert!(j.migrate_legacy_splits_for(&["@home".into()]).unwrap().is_none());
+        let rep = j.migrate_legacy_splits_for(&["@Log".into()]).unwrap().unwrap();
+        assert_eq!((rep.journals, rep.moved), (1, 2));
+        assert!(j.is_file("journal-2026.md") && !j.is_file("log.md"));
+    }
+
+    // C2
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_folder_of_entries_is_read_as_it_is_written() {
+        use std::os::unix::fs::symlink;
+        let (d, j) = tmp();
+        let elsewhere = tempfile::tempdir().unwrap();
+        // journal/ itself a link, and a year inside inbox/ a link.
+        std::fs::create_dir_all(elsewhere.path().join("filed/2026/10")).unwrap();
+        std::fs::write(elsewhere.path().join("filed/2026/10/01.md"), MINE).unwrap();
+        symlink(elsewhere.path().join("filed"), d.path().join("journal")).unwrap();
+        std::fs::create_dir_all(elsewhere.path().join("drafts-2026")).unwrap();
+        std::fs::create_dir_all(d.path().join("inbox")).unwrap();
+        symlink(elsewhere.path().join("drafts-2026"), d.path().join("inbox/2026")).unwrap();
+        // A year in journal/ that is a link too, with an entry already in it.
+        std::fs::create_dir_all(elsewhere.path().join("old/10")).unwrap();
+        std::fs::write(elsewhere.path().join("old/10/01.md"), "[2025-10-01 08:00:00] last year\n").unwrap();
+        symlink(elsewhere.path().join("old"), elsewhere.path().join("filed/2025")).unwrap();
+
+        let w = j.new_draft("2026-10-02 08:00:00", "draft", false, "x").unwrap();
+        assert!(elsewhere.path().join("drafts-2026/10/02.md").is_file(), "the write went through the link");
+        let titles = |j: &Journal| j.try_load_all().unwrap().iter().map(|e| e.title.clone()).collect::<Vec<_>>();
+        assert_eq!(titles(&j), vec!["draft", "last year", "mine"]);
+        assert_eq!(j.file_draft(&w.file, w.index, &w.raw, &[]).unwrap(), "journal/2026/10/02.md");
+        assert_eq!(titles(&j), vec!["last year", "mine", "draft"], "a filed draft is still in view");
+        assert_eq!(j.walk_md(JOURNAL_DIR), vec!["journal/2025/10/01.md", "journal/2026/10/01.md", "journal/2026/10/02.md"]);
+
+        // A link that points back up its own tree is not followed round again.
+        symlink(elsewhere.path().join("filed"), elsewhere.path().join("filed/2026/again")).unwrap();
+        assert_eq!(titles(&j), vec!["last year", "mine", "draft"]);
+        // Two links that lead to each other end at the depth limit.
+        std::fs::create_dir_all(elsewhere.path().join("ring")).unwrap();
+        symlink(elsewhere.path().join("ring"), elsewhere.path().join("filed/2027")).unwrap();
+        symlink(elsewhere.path().join("old"), elsewhere.path().join("ring/a")).unwrap();
+        symlink(elsewhere.path().join("ring"), elsewhere.path().join("old/b")).unwrap();
+        assert!(j.try_load_all().is_ok());
+        // Outside the entry trees a link is still never followed.
+        std::fs::create_dir_all(d.path().join("assets")).unwrap();
+        symlink(elsewhere.path().join("filed"), d.path().join("assets/linked")).unwrap();
+        assert!(j.walk_files("assets").is_empty());
+        assert!(j.walk_files("").iter().all(|f| !f.starts_with("journal/")), "nor by a walk from the root");
+    }
+
+    // C10
+    #[test]
+    fn hidden_folders_in_the_entry_trees_hold_no_entries() {
+        let (_d, j) = tmp();
+        j.write(DAY, MINE).unwrap();
+        j.write("journal/.trash/2026/10/01.md", THEIRS).unwrap();
+        j.write("journal/2026/.stversions/10/01.md", THEIRS).unwrap();
+        j.write("inbox/.sync/2026/10/01.md", THEIRS).unwrap();
+        j.write("split/work/.versions/2026/10/01.md", THEIRS).unwrap();
+        j.write("split/.trash/work/2026/10/01.md", THEIRS).unwrap();
+        j.write("journal/.trash/01.sync-conflict-1-2-X.md", THEIRS).unwrap();
+        let all = j.try_load_all().unwrap();
+        assert_eq!(all.iter().map(|e| e.file.as_str()).collect::<Vec<_>>(), vec![DAY]);
+        assert!(j.conflict_files().is_empty());
+        assert_eq!(j.walk_files("journal").len(), 4, "walk_files still sees every file");
+    }
+
+    // C3
+    #[test]
+    fn a_fold_that_stopped_after_copying_does_not_show_every_draft_twice() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("inbox.md"), "[2026-01-05 09:00:00] a\n![](./assets/a.jpg)\n\n[2026-01-06 09:00:00] b\n").unwrap();
+        std::fs::write(d.path().join("work.md"), "[2026-01-05 09:00:00] w @work\n![](./assets/w.jpg)\n").unwrap();
+        // Neither legacy file can be retired.
+        let j = Hooked { root: d.path().into(), swap: Some(Box::new(|rel| (!rel.contains('/')).then_some(Ok(false)))), ..Default::default() }.journal();
+        assert!(j.migrate_legacy_inbox().is_err() && j.migrate_legacy_splits().is_err());
+        assert!(j.is_file("inbox.md") && j.is_file("work.md") && j.is_file("inbox/2026/01/05.md") && j.is_file("split/work/2026/01/05.md"));
+        let all = j.try_load_all().unwrap();
+        let files: Vec<&str> = all.iter().map(|e| e.file.as_str()).collect();
+        assert_eq!(files, vec!["inbox/2026/01/05.md", "inbox/2026/01/06.md", "split/work/2026/01/05.md"], "each once, from the day files");
+        assert_eq!(j.load_all().len(), 3);
+        // A draft only in inbox.md (jnl added it since) is still shown, with its own index.
+        std::fs::write(d.path().join("inbox.md"), "[2026-01-05 09:00:00] a\n![](./assets/a.jpg)\n\n[2026-01-07 09:00:00] new from jnl\n").unwrap();
+        let all = j.try_load_all().unwrap();
+        let legacy: Vec<(&str, usize, &str)> = all.iter().filter(|e| e.file == "inbox.md").map(|e| (e.file.as_str(), e.index, e.title.as_str())).collect();
+        assert_eq!(legacy, vec![("inbox.md", 1, "new from jnl")]);
+        // Two of the same in inbox.md and one in the day file: one is still to fold.
+        std::fs::write(d.path().join("inbox.md"), "[2026-01-06 09:00:00] b\n\n[2026-01-06 09:00:00] b\n").unwrap();
+        assert_eq!(j.try_load_all().unwrap().iter().filter(|e| e.title == "b").count(), 2);
+    }
+
+    // C4
+    #[test]
+    fn a_paste_is_one_write_a_day_and_can_be_pasted_again_after_a_failure() {
+        let d = tempfile::tempdir().unwrap();
+        let text = "above the first header\n\n[2026-09-01 08:00:00] a\n\n[2026-09-02 08:00:00] b\n\n[2026-09-01 09:00:00] c\n\n[2026-09-03 08:00:00] d\n";
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (count, failed) = (writes.clone(), std::sync::atomic::AtomicBool::new(false));
+        let j = Hooked {
+            root: d.path().into(),
+            swap: Some(Box::new(move |rel| {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                (rel == "inbox/2026/09/03.md" && !failed.swap(true, std::sync::atomic::Ordering::SeqCst)).then(|| Err("the disk went away".to_string()))
+            })),
+            ..Default::default()
+        }
+        .journal();
+        assert!(j.import_text(text, "2026-09-30 09:00:00").is_err());
+        assert_eq!(j.load_all().len(), 3, "the first two days were written");
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 3, "one write a day, not one an entry");
+        // Pasted again, a minute later: only what is missing is made.
+        assert_eq!(j.import_text(text, "2026-09-30 09:01:00").unwrap(), 2);
+        let all = j.load_all();
+        assert_eq!(all.iter().map(|e| e.title.as_str()).collect::<Vec<_>>(), vec!["a", "c", "b", "d", ""]);
+        assert_eq!(all[4].body, "above the first header");
+        // The same entry twice in one paste is still two drafts.
+        let (_d, j) = tmp();
+        assert_eq!(j.import_text("[2026-09-01 08:00:00] a\n\n[2026-09-01 08:00:00] a\n", "2026-09-30 09:00:00").unwrap(), 2);
+    }
+
+    // C11
+    #[test]
+    fn the_same_inbox_md_coming_back_keeps_one_copy() {
+        let (_d, j) = tmp();
+        let text = "[2026-01-05 09:00:00] a\nx\n";
+        j.write("inbox.md", text).unwrap();
+        let first = j.migrate_legacy_inbox().unwrap().unwrap();
+        for _ in 0..3 {
+            // A sync brings the old file back, unchanged.
+            j.write("inbox.md", text).unwrap();
+            let again = j.migrate_legacy_inbox().unwrap().unwrap();
+            assert_eq!((again.moved, again.skipped, again.backup.as_str()), (0, 1, first.backup.as_str()));
+            assert!(!j.is_file("inbox.md"));
+        }
+        assert_eq!(j.walk_files(".quire/migration"), vec![first.backup.clone()]);
+        // Different text is a different copy.
+        j.write("inbox.md", "[2026-01-06 09:00:00] b\n").unwrap();
+        let other = j.migrate_legacy_inbox().unwrap().unwrap();
+        assert_ne!(other.backup, first.backup);
+        assert_eq!(j.walk_files(".quire/migration").len(), 2);
+        assert_eq!(j.read(&first.backup), text);
+    }
+
+    // C12
+    #[test]
+    fn a_preamble_is_kept_unless_the_whole_of_it_is_there() {
+        let (_d, j) = tmp();
+        j.keep_preamble(INBOX_PREAMBLE, "# Notes 2025").unwrap();
+        j.keep_preamble(INBOX_PREAMBLE, "# Notes").unwrap();
+        assert_eq!(j.read(INBOX_PREAMBLE), "# Notes 2025\n\n# Notes\n", "a shorter one that is part of a line is not already there");
+        for again in ["# Notes", "# Notes 2025", "\n\n# Notes\n\n", ""] {
+            j.keep_preamble(INBOX_PREAMBLE, again).unwrap();
+        }
+        assert_eq!(j.read(INBOX_PREAMBLE), "# Notes 2025\n\n# Notes\n");
+        j.keep_preamble(INBOX_PREAMBLE, "two\n\nparagraphs").unwrap();
+        j.keep_preamble(INBOX_PREAMBLE, "two\n\nparagraphs").unwrap();
+        assert_eq!(j.read(INBOX_PREAMBLE), "# Notes 2025\n\n# Notes\n\ntwo\n\nparagraphs\n");
+    }
+
+    // Open since the 9 November review: inbox.md's file-relative links.
+    #[test]
+    fn folding_inbox_md_rebases_its_links() {
+        let (_d, j) = tmp();
+        let text = "[2026-01-05 09:00:00] a\n![](./assets/2026/01/a.jpg) ![](assets/2026/01/b.jpg) [n](./notes/n.md)\n";
+        j.write("inbox.md", text).unwrap();
+        let rep = j.migrate_legacy_inbox().unwrap().unwrap();
+        assert_eq!((rep.moved, rep.skipped), (1, 0));
+        assert_eq!(j.read("inbox/2026/01/05.md"), "[2026-01-05 09:00:00] a\n![](assets/2026/01/a.jpg) ![](assets/2026/01/b.jpg) [n](../../../notes/n.md)\n");
+        assert_eq!(j.read(&rep.backup), text);
+        // jnl writes it again: found as the one already folded.
+        j.write("inbox.md", text).unwrap();
+        let rep = j.migrate_legacy_inbox().unwrap().unwrap();
+        assert_eq!((rep.moved, rep.skipped), (0, 1));
+        assert_eq!(j.load_all().len(), 1);
     }
 }
