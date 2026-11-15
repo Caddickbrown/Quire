@@ -18,9 +18,16 @@
 #   curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash
 #
 # The order is the safety: every question first, then back up the journal,
-# install what it needs, download or build Quire and check it runs, set it
-# up — and only then remove the old apps. A failed build never leaves you
-# without a journal app.
+# install what it needs, download or build Quire, check the terminal app
+# runs (the desktop app is checked as a file: it is never started here), set
+# it up — and only then remove the old apps. A failed download or build
+# never leaves you without a journal app: an old jnl is moved out of the way
+# only once Quire's own is downloaded and checked, or built.
+#
+# What the SHA-256 check proves: that a download arrived whole. The checksum
+# is published in the same release as the file, so it does not prove who
+# made it. The AppImage also carries a signature, which the desktop app
+# checks whenever it updates itself; this script does not check it.
 #
 # Bash 3.2 compatible (macOS's /bin/bash): no associative arrays, no mapfile.
 
@@ -103,6 +110,15 @@ case "$(uname -s)" in
   *) echo "Quire's installer supports Linux and macOS." >&2; exit 1 ;;
 esac
 
+# Run as yourself. Under `sudo ./install.sh` the settings, the log and the
+# apps would be root's files in your home (or go to root's home); the steps
+# that need root ask for sudo themselves. Root with no SUDO_USER (a
+# container) is fine. Said before anything is written, the log included.
+if [ "$(id -u)" = 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+  echo "Run this as yourself, not with sudo: it asks for sudo for the steps that need it." >&2
+  exit 1
+fi
+
 # ---------- output, prompts, and the one place commands run ----------
 
 if [ -t 1 ]; then
@@ -132,6 +148,16 @@ cleanup() {
   return 0
 }
 trap cleanup EXIT
+# An interrupt stops the script here. Without this, a child that catches
+# Ctrl-C and exits by itself (sudo, cargo) would let bash carry on to the
+# next step. bash runs the trap once that child has returned.
+interrupted() {
+  trap - INT TERM HUP
+  printf '\n%s! Interrupted — stopped here. Running it again is safe.%s\n' "$W" "$R" >&2
+  log "INTERRUPTED"
+  exit 130
+}
+trap interrupted INT TERM HUP
 say() { printf '%s\n' "$*"; log "$*"; }
 head1() { printf '\n%s%s%s\n' "$B$A" "$*" "$R"; log "== $*"; }
 warn() { printf '%s! %s%s\n' "$W" "$*" "$R"; log "! $*"; }
@@ -237,20 +263,33 @@ inside() {
 }
 
 # Out of the way, not deleted: the Trash, or a dated folder in the state dir.
+# Two things of one name (a jnl in ~/bin and one in ~/go/bin) get two names
+# in the Trash: a counter is added while the name is taken, on disk or by an
+# earlier move of this run (ASIDE_USED, which is what a dry run goes by).
+ASIDE_USED="|"
 move_aside() {
-  local p=$1 dest
+  local p=$1 dest base n
   [ -e "$p" ] || [ -L "$p" ] || return 0
   if [ $OS = mac ]; then
-    dest="$HOME/.Trash/$(basename "$p") $STAMP"
+    base="$HOME/.Trash/$(basename "$p") $STAMP"
+    dest=$base; n=1
+    while [ -e "$dest" ] || [ -L "$dest" ] || case "$ASIDE_USED" in *"|$dest|"*) true ;; *) false ;; esac; do
+      n=$((n + 1)); dest="$base ($n)"
+    done
   elif have gio && [ -w "$(dirname "$p")" ]; then
     run gio trash "$p"; return
   else
     dest="$STASH${p}"
   fi
+  ASIDE_USED="$ASIDE_USED$dest|"
+  # The folder it goes into is in your home and is made as you, so a move
+  # that needs sudo never leaves a root-owned folder for later moves to
+  # fail in; only the move itself runs as root.
+  run mkdir -p "$(dirname "$dest")" || return 1
   if [ -w "$(dirname "$p")" ]; then
-    run mkdir -p "$(dirname "$dest")" && run mv "$p" "$dest"
+    run mv "$p" "$dest"
   else
-    run $SUDO mkdir -p "$(dirname "$dest")" && run $SUDO mv "$p" "$dest"
+    run $SUDO mv "$p" "$dest"
   fi
 }
 
@@ -408,12 +447,39 @@ $(find "$dir" -maxdepth 2 -type f -iname "$glob" 2>/dev/null)
 EOF
   done
   # Launcher entries an AppImage integration tool (or a hand-made one) left.
+  # The name alone proves nothing (another app can be called Nook): the
+  # entry is this app's when it carries the bundle id or starts something
+  # found above; otherwise it is asked about with the default no.
   [ -d "$APPS_DIR" ] || return 0
   while IFS= read -r f; do
-    [ -n "$f" ] && add_item "$app" file "$f" "$app launcher entry — $f" y
+    [ -n "$f" ] || continue
+    if launcher_is_ours "$app" "$id" "$f"; then
+      add_item "$app" file "$f" "$app launcher entry — $f" y
+    else
+      add_item "$app" file "$f" "a launcher entry named $app — $f" n
+    fi
   done <<EOF
 $(grep -l -i -E "^Name=$app\$" "$APPS_DIR"/*.desktop 2>/dev/null)
 EOF
+}
+
+# Does launcher entry $3 belong to app $1 (bundle id $2)? Yes when it names
+# the bundle id, or its Exec line starts a file already recognised as the
+# app's, or the binary of the app's installed package.
+launcher_is_ours() {
+  local app=$1 id=$2 f=$3 i=0 bin
+  grep -q -F "$id" "$f" 2>/dev/null && return 0
+  bin=$(printf '%s' "$app" | tr 'A-Z' 'a-z')
+  while [ $i -lt ${#ITEM_APP[@]} ]; do
+    if [ "${ITEM_APP[$i]}" = "$app" ] && [ "${ITEM_SURE[$i]}" = y ]; then
+      case "${ITEM_KIND[$i]}" in
+        file) grep '^Exec=' "$f" 2>/dev/null | grep -F "${ITEM_WHAT[$i]}" >/dev/null && return 0 ;;
+        dpkg|rpm) grep -q -E "^Exec=(env +)?(/usr/bin/)?$bin( |\$)" "$f" 2>/dev/null && return 0 ;;
+      esac
+    fi
+    i=$((i + 1))
+  done
+  return 1
 }
 
 # macOS app bundles by bundle id, where apps are installed (not Xcode's
@@ -659,21 +725,48 @@ fetch_checked() {
   say "  ${D}✓ $name matches its SHA-256${R}"
 }
 
-# The terminal app from the release tarball, into $TUI_DIR. `quire update`
-# keeps it current from then on.
-install_tui_release() {
-  local tb="quire-$ARCH-unknown-linux-gnu.tar.gz"
+# The terminal app from the release tarball: downloaded, checked, unpacked
+# and run once in $DL. Nothing outside $DL is touched, so a download that
+# fails, or a binary this system can't run, stops here with the old jnl
+# still where it was.
+fetch_tui_release() {
+  local tb="quire-$ARCH-unknown-linux-gnu.tar.gz" d
+  d="$DL/quire-$ARCH-unknown-linux-gnu"
   fetch_checked "$tb" "$tb.sha256"
   run tar -xzf "$DL/$tb" -C "$DL" || die "couldn't unpack $tb"
+  [ $DRY -eq 1 ] && return 0
+  [ -f "$d/quire" ] && [ -f "$d/jnl" ] || die "$tb doesn't hold quire and jnl — Quire wasn't installed and no old app was touched"
+  chmod 755 "$d/quire" "$d/jnl" 2>/dev/null
+  # In a scratch folder: every quire run folds an inbox.md, and that is the
+  # user's call (asked above), not a side effect of checking the download.
+  PROBE=$(mktemp -d 2>/dev/null || echo "$STATE_DIR/probe-$STAMP")
+  mkdir -p "$PROBE"
+  if ! "$d/quire" --folder "$PROBE" help >/dev/null 2>&1 </dev/null; then
+    die "the downloaded quire doesn't run here (release builds need glibc 2.35 or newer; this system has $(getconf GNU_LIBC_VERSION 2>/dev/null || echo 'another C library')). Quire wasn't installed and no old app was touched — run it again with --build to build from source"
+  fi
+  rm -rf "$PROBE"; PROBE=""
+}
+
+# …and from $DL into $TUI_DIR. `quire update` keeps it current from then on.
+install_tui_release() {
   run mkdir -p "$TUI_DIR"
   run install -m 755 "$DL/quire-$ARCH-unknown-linux-gnu/quire" "$DL/quire-$ARCH-unknown-linux-gnu/jnl" "$TUI_DIR/" \
-    || die "couldn't install into $TUI_DIR"
+    || die "couldn't install into $TUI_DIR$(aside_note)"
+}
+
+# For a failure after clear_tui_dir: where the old ones went.
+aside_note() {
+  [ $MOVED_OLD -gt 0 ] || return 0
+  if [ $OS = mac ] || have gio; then printf ' — the jnl that was there is in the Trash'
+  else printf ' — the jnl that was there is under %s' "$STASH"; fi
 }
 
 # An older jnl (or anything else called quire or jnl) sitting where Quire's
 # binaries are about to go is moved aside first, never written over; its
 # entry in the removal list is marked done, so the removal step can't take
-# the new one for it.
+# the new one for it. Called only once Quire's own binaries are downloaded
+# and checked, or built: a download or build that fails leaves the old jnl
+# in place.
 clear_tui_dir() {
   local name p i
   for name in quire jnl; do
@@ -1038,6 +1131,11 @@ install_main() {
     say "  Nothing to remove."
   elif [ $WANT_REMOVE -eq 0 ]; then
     say "  --keep-old: leaving them installed."
+    i=0
+    while [ $i -lt ${#ITEM_APP[@]} ]; do
+      in_tui_way $i && say "  ${D}Except ${ITEM_WHAT[$i]}: Quire's own goes there, so it is moved aside (kept, not deleted).${R}"
+      i=$((i + 1))
+    done
   else
     say "  Apps only. Journal folders are never touched; settings are asked about after."
     local def why
@@ -1054,6 +1152,13 @@ install_main() {
               else why="no Quire desktop app here or chosen"; fi ;;
       esac
       [ "${ITEM_SURE[$i]}" = n ] && { def=n; why="not recognised — check before removing"; }
+      if in_tui_way $i; then
+        # Not a question: answering no could not keep it there.
+        say "  ${ITEM_DESC[$i]}"
+        say "  ${D}sits where Quire's own goes, so it is moved aside (kept, not deleted) when Quire's is${R}"
+        say "  ${D}installed. To keep it in place, answer no at the end, or install with --gui.${R}"
+        i=$((i + 1)); continue
+      fi
       say "  ${D}${why}${R}"
       if ask "Remove ${ITEM_DESC[$i]}?" $def; then ITEM_PICK[$i]=y; fi
       i=$((i + 1))
@@ -1113,9 +1218,16 @@ install_main() {
   if [ $DO_BACKUP -eq 1 ]; then
     head1 "Backing up"
     # The whole journal in one file: readable by you alone.
-    (umask 077; run tar -czf "$HOME/quire-preinstall-$STAMP.tar.gz" -C "$(dirname "$FOLDER")" "$(basename "$FOLDER")") \
+    # Written under a .partial name, read back, and only then given its real
+    # name: an interrupted or unreadable backup is never taken for a good one.
+    local bk="$HOME/quire-preinstall-$STAMP.tar.gz"
+    (umask 077; run tar -czf "$bk.partial" -C "$(dirname "$FOLDER")" "$(basename "$FOLDER")") \
       || die "backup failed — nothing else was changed"
-    run chmod 600 "$HOME/quire-preinstall-$STAMP.tar.gz" || die "couldn't make the backup private — nothing else was changed"
+    # shellcheck disable=SC2016
+    run sh -c 'tar -tzf "$1" >/dev/null' sh "$bk.partial" \
+      || die "the backup couldn't be read back ($bk.partial) — nothing else was changed"
+    run chmod 600 "$bk.partial" || die "couldn't make the backup private — nothing else was changed"
+    run mv "$bk.partial" "$bk" || die "couldn't name the backup $bk — nothing else was changed"
     say "  → ~/quire-preinstall-$STAMP.tar.gz  ${D}(readable only by you)${R}"
   fi
 
@@ -1180,13 +1292,21 @@ install_main() {
   # ----- 5. download or build, and install -----
   if [ $WANT_TUI -eq 1 ]; then
     head1 "The terminal app"
-    clear_tui_dir
+    # Download (or build) first; only with Quire's binaries in hand is an
+    # old jnl moved out of their way.
     if [ $FROM = release ]; then
       say "  Downloading Quire $REL_VER…"
+      fetch_tui_release
+      clear_tui_dir
       install_tui_release
     else
       say "  Building (a minute or two the first time)…"
-      run_loud cargo install --locked --force --path "$SRC/tui" || die "the terminal app didn't build — see $LOG"
+      run_loud cargo build --release --locked --manifest-path "$SRC/Cargo.toml" -p quire-tui \
+        || die "the terminal app didn't build — Quire wasn't installed and no old app was touched; see $LOG"
+      clear_tui_dir
+      # The same build, from the same target folder: this step copies it.
+      run_loud cargo install --locked --force --path "$SRC/tui" \
+        || die "the terminal app built but didn't install$(aside_note) — see $LOG"
     fi
     if [ $DRY -eq 0 ]; then
       [ -x "$TUI_DIR/quire" ] && [ -x "$TUI_DIR/jnl" ] || die "the install finished but $TUI_DIR/quire isn't there"
@@ -1348,6 +1468,14 @@ install_main() {
   [ $DRY -eq 0 ] && say "  Log              $LOG"
   [ $DRY -eq 1 ] && say "  ${D}Dry run: nothing was changed.${R}"
   return 0
+}
+
+# Is old app $1 (an index) a file sitting where Quire's quire or jnl is about
+# to be installed? clear_tui_dir moves those aside whatever is answered.
+in_tui_way() {
+  [ "${WANT_TUI:-0}" -eq 1 ] && [ "${ITEM_KIND[$1]}" = file ] || return 1
+  case "${ITEM_WHAT[$1]}" in "$TUI_DIR/quire"|"$TUI_DIR/jnl") return 0 ;; esac
+  return 1
 }
 
 # Will any step need root? Package installs and removals.

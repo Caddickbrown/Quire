@@ -1,0 +1,23 @@
+name: Audit
+# cargo audit over Cargo.lock: known vulnerabilities fail the run; unmaintained
+# and unsound crates are listed as warnings. Like CI, it runs when asked
+# (Actions → Audit → Run workflow, or `gh workflow run audit.yml`); nothing
+# runs it for you. Worth a run before each release.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # the stable branch, 2026-11-09
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Rust dependencies (Cargo.lock)
+        run: cargo audit
+      - name: The Tauri CLI and its dependencies (linux/package-lock.json)
+        working-directory: linux
+        run: npm audit --audit-level=high

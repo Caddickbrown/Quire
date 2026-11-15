@@ -4,9 +4,11 @@ run-name: Release ${{ inputs.tag || github.ref_name }}
 # Pushing a tag vX.Y.Z builds Linux x86_64 and aarch64 releases and publishes
 # them on GitHub Releases: the terminal app (quire + jnl, one tarball per
 # target, with a .sha256 beside it) and the desktop app (AppImage, .deb,
-# .rpm). With the TAURI_SIGNING_PRIVATE_KEY secret set, the AppImages are
-# signed and latest.json lets the AppImage update itself. See "Releases" in
-# CLAUDE.md for cutting one.
+# .rpm). With the TAURI_SIGNING_PRIVATE_KEY secret set, the AppImages and the
+# terminal tarballs are signed (a .sig beside each) and latest.json lets the
+# AppImage update itself. The key is seen by one job only, `sign`, which
+# builds nothing. The tag must be on main. See "Releases" in CLAUDE.md for
+# cutting one.
 on:
   push:
     tags: ['v*']
@@ -32,9 +34,18 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.TAG }}
+          # All of history: the next step asks whether main contains the tag.
+          fetch-depth: 0
+      - name: The tag is on main
+        # A tag on a branch, or on a commit that never reached main, publishes
+        # nothing, whatever its version fields say.
+        run: |
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main \
+            || { echo "::error::$TAG ($(git rev-parse --short HEAD)) is not on main: merge the release commit to main, then tag that commit"; exit 1; }
       - name: The tag matches every version field
         id: v
         run: |
@@ -67,7 +78,7 @@ jobs:
           # Bullets still under [Unreleased] would be left out of the notes.
           left=$(awk '/^## \[/ { on = ($0 == "## [Unreleased]"); next } on && /^- /' CHANGELOG.md | wc -l)
           [ "$left" -eq 0 ] || { echo "::error::$left bullet(s) are still under [Unreleased]: fold them into [$v] before tagging"; exit 1; }
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: notes
           path: notes.md
@@ -81,7 +92,7 @@ jobs:
           - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm }
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.TAG }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # the stable branch, 2026-11-09
@@ -97,7 +108,7 @@ jobs:
           "$name/quire" --version
           tar czf "$name.tar.gz" "$name"
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: terminal-${{ matrix.target }}
           path: quire-${{ matrix.target }}.tar.gz*
@@ -111,61 +122,104 @@ jobs:
           - { arch: aarch64, runner: ubuntu-22.04-arm }
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.TAG }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # the stable branch, 2026-11-09
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          # No dependency cache in a job that holds the signing key.
           package-manager-cache: false
       - name: System libraries
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libwebkit2gtk-4.1-dev build-essential file libxdo-dev \
             libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf pkg-config
-      # A step of its own, without the signing key: install scripts of the
-      # dependencies never see it.
       - name: Front-end dependencies
         working-directory: linux
         run: npm ci --no-fund --no-audit
+      # Built unsigned. The signing key is never in this job: the build runs
+      # the build scripts and proc-macros of several hundred crates, and the
+      # Tauri CLI. The `sign` job below signs the finished AppImage, which is
+      # the file the updater downloads and checks.
       - name: Build the AppImage, .deb and .rpm
         working-directory: linux
         env:
           QUIRE_RELEASE: '1'
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          extra=()
-          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            [ -n "$(jq -r '.plugins.updater.pubkey' src-tauri/tauri.conf.json)" ] \
-              || { echo "::error::the signing key is set but plugins.updater.pubkey in tauri.conf.json is empty"; exit 1; }
-            extra=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
-          else
-            echo "::warning::no TAURI_SIGNING_PRIVATE_KEY secret: the AppImage won't be able to update itself"
-          fi
-          npx tauri build --bundles appimage,deb,rpm "${extra[@]}"
+        run: npx tauri build --bundles appimage,deb,rpm
       - name: Collect
         run: |
           mkdir out
           b=target/release/bundle
           cp $b/appimage/*.AppImage $b/deb/*.deb $b/rpm/*.rpm out/
-          cp $b/appimage/*.AppImage.sig out/ 2>/dev/null || true
           (cd out && sha256sum * > ../SHA256SUMS-desktop-${{ matrix.arch }} && mv ../SHA256SUMS-desktop-${{ matrix.arch }} .)
           ls -l out
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-${{ matrix.arch }}
           path: out/*
 
-  publish:
+  # The only job that holds the updater's signing key. It compiles nothing
+  # and runs no build script: it downloads what the two build jobs made and
+  # signs each AppImage and each terminal tarball with the Tauri CLI
+  # (`tauri signer sign` writes <file>.sig, the format the updater reads:
+  # base64 of a minisign signature). The CLI is installed with
+  # --ignore-scripts, in a step that doesn't have the key.
+  sign:
     needs: [verify, terminal, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: The Tauri CLI, as package-lock.json pins it
+        working-directory: linux
+        run: npm ci --no-fund --no-audit --ignore-scripts
+      - name: Sign the AppImages and the terminal tarballs
+        working-directory: linux
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          mkdir ../signatures
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::warning::no TAURI_SIGNING_PRIVATE_KEY secret: nothing is signed, and the AppImage won't be able to update itself"
+            exit 0
+          fi
+          [ -n "$(jq -r '.plugins.updater.pubkey' src-tauri/tauri.conf.json)" ] \
+            || { echo "::error::the signing key is set but plugins.updater.pubkey in tauri.conf.json is empty"; exit 1; }
+          n=0
+          for f in ../dist/*.AppImage ../dist/quire-*.tar.gz; do
+            [ -f "$f" ] || { echo "::error::nothing to sign matches $f"; exit 1; }
+            npx tauri signer sign "$f" >/dev/null
+            [ -s "$f.sig" ] || { echo "::error::no signature was written for $f"; exit 1; }
+            mv "$f.sig" ../signatures/
+            n=$((n + 1))
+          done
+          # Two AppImages and two tarballs, one of each per architecture.
+          [ "$n" -eq 4 ] || { echo "::error::signed $n files, expected 4"; exit 1; }
+          ls -l ../signatures
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signatures
+          path: signatures/*.sig
+          if-no-files-found: ignore
+
+  publish:
+    needs: [verify, terminal, desktop, sign]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           merge-multiple: true

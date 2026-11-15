@@ -1,20 +1,38 @@
-.PHONY: test check smoke tui install setup linux migrate fmt bump
+.PHONY: test check check-scripts smoke tui install setup linux migrate fmt bump
 
-# The core and the terminal app (the default workspace members).
+# A part of test or check that this machine can't run (no node, no WebKitGTK,
+# no shellcheck) is skipped, and the skip is printed with SKIPPED in front so
+# it can't be taken for a pass. With QUIRE_CHECK_STRICT=1, as CI sets, a skip
+# is a failure: there "clean" means everything ran.
+skip = echo "SKIPPED: $(1)"; if [ -n "$(QUIRE_CHECK_STRICT)" ]; then echo "QUIRE_CHECK_STRICT is set: a skipped check is a failure"; exit 1; fi
+
+# The core, the terminal app and the bindings; the desktop app's tests too
+# when this machine can build it (libwebkit2gtk-4.1-dev).
 test:
 	cargo test -p quire-core -p quire-tui -p quire-bindings
+	@if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then \
+		echo "cargo test -p quire-desktop"; cargo test -p quire-desktop; \
+	else \
+		$(call skip,quire-desktop's tests: no webkit2gtk-4.1 (see linux/README.md)); \
+	fi
 
-# The desktop app too when this machine can build it (libwebkit2gtk-4.1-dev).
-check:
+# Everything in check that needs no Rust build: a minute or so. The installer
+# is only read and dry-run in a scratch home (tools/test_install.py).
+check-scripts:
 	python3 tools/validate_apple.py
 	python3 tools/test_migrate_journal.py
-	@if command -v node >/dev/null 2>&1; then node --check linux/src/app.js && node tools/check_media_library.js && node tools/check_linux_editor.js && node tools/check_search.js && node tools/check_linux_views.js; else echo "skipping frontend checks: node is not installed"; fi
+	python3 -I tools/test_install.py
+	@if command -v shellcheck >/dev/null 2>&1; then :; else $(call skip,shellcheck on install.sh: shellcheck is not installed); fi
+	@if command -v node >/dev/null 2>&1; then node --check linux/src/app.js && node tools/check_media_library.js && node tools/check_linux_editor.js && node tools/check_search.js && node tools/check_linux_views.js; else $(call skip,the frontend checks: node is not installed); fi
+
+# The desktop app too when this machine can build it (libwebkit2gtk-4.1-dev).
+check: check-scripts
 	cargo clippy -p quire-core -p quire-tui -- -D warnings
 	cargo clippy -p quire-bindings --all-targets --all-features -- -D warnings
 	@if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then \
 		cargo clippy -p quire-desktop -- -D warnings; \
 	else \
-		echo "skipping quire-desktop: no webkit2gtk-4.1 (see linux/README.md)"; \
+		$(call skip,clippy on quire-desktop: no webkit2gtk-4.1 (see linux/README.md)); \
 	fi
 
 # Drive every screen of the terminal app in a pseudo-terminal, twice: a roomy

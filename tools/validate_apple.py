@@ -25,6 +25,18 @@ for _, rel in generator["widget_swift_files"] + generator["share_swift_files"] +
     assert (APPLE / rel).is_file(), f"missing target source: {rel}"
 for _, rel in generator["uitest_swift_files"]:
     assert (APPLE / rel).is_file(), f"missing UI test source: {rel}"
+# The generator lists sources by name, so a Swift file that exists and is
+# not listed would simply be left out of every target. Generated and build
+# folders are not sources.
+listed = {(APPLE / "Quire" / rel).resolve() for _, rel, _ in generator["swift_files"]}
+for name in ["widget_swift_files", "share_swift_files", "test_swift_files", "uitest_swift_files"]:
+    listed |= {(APPLE / rel).resolve() for _, rel in generator[name]}
+unlisted = sorted(
+    str(path.relative_to(APPLE)) for path in APPLE.rglob("*.swift")
+    if path.resolve() not in listed
+    and not {"Generated", "Frameworks", "DerivedData", "build", ".build"} & set(path.relative_to(APPLE).parts)
+)
+assert not unlisted, "Swift files on disk that apple/gen_pbxproj.py does not list (add them, or delete them): " + ", ".join(unlisted)
 ids = generator["IDs"]
 ui_target = re.search(rf'{ids["uitestsTarget"]} /\* QuireUITests \*/ = \{{(.*?)\n\t\t\}};', project, re.S).group(1)
 assert 'productType = "com.apple.product-type.bundle.ui-testing";' in ui_target and ids["uitestsDep"] in ui_target
