@@ -48,6 +48,18 @@ const CORE_CASES = [
   ['match', FULL, entry('2024-12-31', 'Morning *', 'coffee @work ![](assets/a.png)'), false],
   ['match', '"exact phrase"', entry('2026-01-01', '', 'an exact phrase here'), true],
   ['match', '"exact phrase"', entry('2026-01-01', '', 'exact other phrase'), false],
+  // Smart punctuation: a phone types “ ” for ", and they quote the same.
+  ['tokenize', '\u201Cexact phrase\u201D \u00ABdeux mots\u00BB \u201Ezwei\u201C', ['exact phrase', 'deux mots', 'zwei']],
+  ['parse', '\u201Cexact phrase\u201D', { terms: ['exact phrase'], tags: [], before: null, after: null, has: [], starred: false }],
+  ['match', '\u201Cexact phrase\u201D', entry('2026-01-01', '', 'an exact phrase here'), true],
+  ['match', '\u201Cexact phrase\u201D', entry('2026-01-01', '', 'exact other phrase'), false],
+  // Anything quoted is text, never an operator.
+  ['parse', '"is:starred"', { terms: ['is:starred'], starred: false }],
+  ['match', '"is:starred"', entry('2026-01-01', '', 'type is:starred to filter'), true],
+  ['parse', '"tag:work stuff" "@home" "before:2026"', { terms: ['tag:work stuff', '@home', 'before:2026'], tags: [], before: null }],
+  // An operator with a value that can't be used is searched as text, so the search never comes back wider than what was asked.
+  ['parse', 'coffee before:March has:pdf tag:', { terms: ['coffee', 'before:march', 'has:pdf', 'tag:'], tags: [], before: null, has: [] }],
+  ['match', 'coffee before:March has:pdf tag:', entry('2026-01-01', '', 'coffee'), false],
   ['match', 'after:2026-03', entry('2026-03-01', '', 'x'), true],
   ['parse', 'Before:2026-03', { before: '2026-03' }],
   ['parse', 'TAG:Work', { tags: ['@work'] }],
@@ -68,20 +80,20 @@ const MORE = [
   ['match', '"exact phr', entry('2026-01-01', '', 'an exact phrase here'), true],
   // A quote ends the token before it, and an empty pair gives nothing.
   ['tokenize', 'ab"cd"ef ""', ['ab', 'cd', 'ef']],
-  // Clauses are read on every token, quoted ones too.
-  ['parse', '"tag:work"', { terms: [], tags: ['@work'] }],
-  ['parse', '"is:starred"', { terms: [], starred: true }],
-  // A quoted @phrase with a space is a term, not a tag.
+  // A quoted token is a term whatever it looks like; an unclosed quote still quotes.
+  ['parse', '"tag:work"', { terms: ['tag:work'], tags: [] }],
   ['parse', '"@work stuff"', { terms: ['@work stuff'], tags: [] }],
+  ['parse', '"@work', { terms: ['@work'], tags: [] }],
   ['parse', '@', { terms: ['@'], tags: [] }],
-  ['parse', 'tag:@Work tag:', { terms: [], tags: ['@work'] }],
-  // A before:/after:/has: that isn't valid yet is ignored: not a term, not a filter.
-  ['parse', 'coffee before:202', { terms: ['coffee'], before: null }],
-  ['parse', 'after:2026-3 before:2026-03-1x', { terms: [], before: null, after: null }],
-  ['parse', 'has:pdf has:', { terms: [], has: [] }],
+  ['parse', 'tag:@Work tag: tag:@', { terms: ['tag:', 'tag:@'], tags: ['@work'] }],
+  // A before:/after:/has: whose value isn't usable (yet) is a term, not a filter.
+  ['parse', 'coffee before:202', { terms: ['coffee', 'before:202'], before: null }],
+  ['parse', 'after:2026-3 before:2026-03-1x', { terms: ['after:2026-3', 'before:2026-03-1x'], before: null, after: null }],
+  ['parse', 'has:pdf has:', { terms: ['has:pdf', 'has:'], has: [] }],
   ['parse', 'before:2026 before:2025-01', { before: '2025-01' }],
   ['parse', 'is:star', { terms: ['is:star'], starred: false }],
-  ['empty', 'before:202', true],
+  ['empty', 'before:202', false],
+  ['empty', '"" \u201C\u201D', true],
   ['partial-date', '2026-03-15', true],
   ['partial-date', '2026-03-15-01', false],
   ['partial-date', '', false],
@@ -118,7 +130,7 @@ for (const [kind, input, a, b] of [...CORE_CASES, ...MORE]) {
   else throw new Error(`unknown case ${kind}`);
   n++;
 }
-// The lists: a query with nothing usable in it yet filters nothing, rather than emptying the list.
-assert.equal(vm.runInContext("searchFilter('before:202')", context), null);
-assert.equal(vm.runInContext("typeof searchFilter('coffee before:202')", context), 'function');
+// The lists: an empty query filters nothing; a half-typed operator is text, as in the core, and filters.
+assert.equal(vm.runInContext("searchFilter('  \"\" ')", context), null);
+assert.equal(vm.runInContext("typeof searchFilter('before:202')", context), 'function');
 console.log(`Search checks passed: ${CORE_CASES.length} core cases and ${MORE.length} more against the Linux parseQuery (${n} in all).`);

@@ -95,7 +95,8 @@ const run = text => vm.runInContext(text, context);
   assert.equal(run('draftSaved(S.draft)'),true);
 
   // ----- reloads, another device's edits, and saves that can't land -----
-  nodes.set('#toast', { textContent: '', classList: { toggle: noop, add: noop, remove: noop } });
+  const toastEl = { textContent: '', attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, classList: { toggle: noop, add: noop, remove: noop } };
+  nodes.set('#toast', toastEl);
   run('load = realLoad');
   const mk = (index, body, extra = {}) => { const ts = '2026-10-21 09:00:00', title = 'Shared'; return { file: 'inbox/2026/10/21.md', index, source: 'inbox', ts, date: ts.slice(0, 10), time: ts.slice(11), title, starred: false, body, tags: [], words: 2, raw: `[${ts}] ${title}\n${body}`, ...extra }; };
   const other = { file: 'inbox/2026/10/21.md', index: 0, source: 'inbox', ts: '2026-10-21 08:00:00', date: '2026-10-21', time: '08:00:00', title: 'Earlier', starred: false, body: 'x', tags: [], words: 1, raw: '[2026-10-21 08:00:00] Earlier\nx' };
@@ -127,7 +128,11 @@ const run = text => vm.runInContext(text, context);
   const before = writes.length;
   timers.clear(); // the toast's own timer
   run('scheduleSave()');
-  assert.equal(timers.size, 0, 'no autosave while the versions conflict');
+  assert.deepEqual([...timers.values()].map(x => x.delay), [800], 'no autosave while the versions conflict: only the recovery copy is due');
+  calls.length = 0;
+  for (const x of [...timers.values()]) { timers.clear(); await x.cb(); }
+  assert.ok(calls.includes('save_recovery') && !calls.includes('update_entry'), 'the unsaved version is kept as a recovery copy meanwhile');
+  timers.clear();
   // "Keep mine": a new draft is created; the entry on disk is not written over.
   hooks.load = async () => snap([mk(0, 'theirs, from the phone')]);
   run('render=()=>{}');
@@ -189,7 +194,7 @@ const run = text => vm.runInContext(text, context);
   for (const t of [...timers.values()]) { timers.clear(); await t.cb(); }
   assert.ok(calls.includes('save_recovery'));
   assert.ok(!calls.includes('create_draft'));
-  assert.match(run('guardHtml()'), /recovery copy is kept in \.quire/);
+  assert.match(run('guardHtml()'), /recovery copy is kept meanwhile/);
   assert.equal(run('pillText(S.draft)'), 'Not saved · recovery copy kept');
 
   // A failing autosave keeps its reference, says "Not saved", and tries again with a growing wait.
@@ -224,5 +229,150 @@ const run = text => vm.runInContext(text, context);
   run(`showMenu({left:0,bottom:0}, [['x', 'tpl:a" onmouseover="alert(1)']])`);
   assert.doesNotMatch(layer.innerHTML, /" onmouseover="/);
   assert.match(layer.innerHTML, /data-menu-item="tpl:a&quot; onmouseover=&quot;alert\(1\)"/);
-  console.log('Linux editor checks passed: wrapping title, inline emphasis/caret, batched painting, isolated Inbox search, Journal landing, safe idle saves, reloads and conflicts, recovery copies and save retries.');
+
+  // ----- the 14 November review -----
+  // An error toast is an alert; anything else a status.
+  run("toast('ok')"); assert.equal(toastEl.attrs.role, 'status');
+  run("toast('bad', 'error')"); assert.equal(toastEl.attrs.role, 'alert');
+  timers.clear();
+
+  // L1: an edit to a filed entry is never autosaved, but every pause keeps a recovery copy that names the entry.
+  const filed = { file: 'journal/2026/10/22.md', index: 0, source: 'journal', ts: '2026-10-22 09:00:00', date: '2026-10-22', time: '09:00:00', title: 'Filed', starred: false, body: 'as filed', tags: [], words: 2, raw: '[2026-10-22 09:00:00] Filed\nas filed' };
+  context.filedEntry = filed;
+  hooks.load = async () => snap([filed]);
+  let copy = null;
+  hooks.save_recovery = async a => { copy = a.draft; return 'x'; };
+  run("S.entries=[filedEntry]; S.folder='/j'; render=()=>{}; editEntry(filedEntry)");
+  assert.equal(run('isDirtyEdit(S.draft)'), false);
+  calls.length = 0; timers.clear();
+  run("S.draft.body='as filed, and half an hour more'; scheduleSave()");
+  assert.deepEqual([...timers.values()].map(x => x.delay), [800]);
+  for (const x of [...timers.values()]) { timers.clear(); await x.cb(); }
+  assert.ok(!calls.includes('update_entry') && !calls.includes('create_draft'), 'a filed edit is not written until Ctrl+S or leaving');
+  assert.equal(copy.body, 'as filed, and half an hour more');
+  assert.equal(JSON.stringify(copy.entry), JSON.stringify({ file: filed.file, raw: filed.raw }));
+  assert.equal(copy.folder, '/j');
+  assert.equal(run('S.draft.recovered'), true);
+  // Typed and taken back: the copy goes.
+  calls.length = 0;
+  run("S.draft.body='as filed'; scheduleSave()");
+  for (const x of [...timers.values()]) { timers.clear(); await x.cb(); }
+  assert.ok(calls.includes('clear_recovery') && !calls.includes('save_recovery'));
+  // Saved: the copy goes with the save.
+  run("S.draft.body='as filed, then saved'; scheduleSave()");
+  for (const x of [...timers.values()]) { timers.clear(); await x.cb(); }
+  calls.length = 0;
+  hooks.update_entry = async a => ({ file: filed.file, index: 0, raw: run('makeRaw')(a.ts, a.title, a.starred, a.body) });
+  hooks.load = async () => snap([{ ...filed, body: 'as filed, then saved', raw: '[2026-10-22 09:00:00] Filed\nas filed, then saved' }]);
+  await run('saveEditCore(S.draft)');
+  assert.ok(calls.includes('clear_recovery'));
+  assert.equal(run('isDirtyEdit(S.draft)'), false);
+  delete hooks.update_entry; timers.clear();
+  // The copy comes back as an edit to its entry while that entry still reads the same; otherwise as a new draft.
+  hooks.load = async () => snap([filed]);
+  await run('load()');
+  layer.classList.contains = () => false;
+  context.askConfirm = async () => true; run('askConfirm = globalThis.askConfirm');
+  hooks.read_recovery = async () => ({ ...copy, body: 'recovered text' });
+  run("S.mode='read'; S.draft=null; S.recoveryOffered=false; S.locked=false; S.folderMissing=false");
+  await run('offerRecovery()');
+  assert.equal(run('S.draft.ref.file'), filed.file, 'the composer is on the filed entry');
+  assert.equal(run('S.draft.body'), 'recovered text');
+  assert.equal(run('isDirtyEdit(S.draft)'), true);
+  hooks.read_recovery = async () => ({ ...copy, body: 'recovered text', entry: { file: filed.file, raw: 'something else now' } });
+  run("S.mode='read'; S.draft=null; S.recoveryOffered=false");
+  await run('offerRecovery()');
+  assert.equal(run('S.draft.ref'), null, 'the entry changed since: a new draft, not an edit over it');
+  // A copy made in another journal is not offered in this one.
+  hooks.read_recovery = async () => ({ ...copy, folder: '/elsewhere' });
+  run("S.mode='read'; S.draft=null; S.recoveryOffered=false");
+  await run('offerRecovery()');
+  assert.equal(run('S.draft'), null);
+  delete hooks.read_recovery; delete hooks.save_recovery; timers.clear();
+
+  // An entry edited by hand reads back unlike Quire's own writing of it: opening and leaving it rewrites nothing.
+  const hand = { ...filed, title: 'Two  spaces', raw: '[2026-10-22 09:00:00] Two  spaces\n\nas filed' };
+  context.handEntry = hand;
+  hooks.load = async () => snap([hand]);
+  run("S.entries=[handEntry]; editEntry(handEntry)");
+  assert.notEqual(run('composerRaw(S.draft)'), hand.raw, 'the case: Quire would write it differently');
+  assert.equal(run('isDirtyEdit(S.draft)'), false);
+  const writesBefore = writes.length; calls.length = 0;
+  assert.equal(await run('flushDraft(S.draft)'), true);
+  assert.equal(writes.length, writesBefore);
+  assert.ok(!calls.includes('update_entry'));
+  await run('load()');
+  assert.equal(run('S.draft.conflict || null'), null, 'and a reload does not call it a conflict');
+
+  // L2: a row drawn before a reload still finds its own entry after a sync put another one ahead of it.
+  const ea = { ...filed, index: 0, body: 'first', raw: '[2026-10-22 09:00:00] Filed\nfirst' };
+  const eb = { ...filed, index: 1, ts: '2026-10-22 10:00:00', time: '10:00:00', body: 'second', raw: '[2026-10-22 10:00:00] Filed\nsecond' };
+  context.ea = ea; context.eb = eb;
+  run("S.mode='read'; S.draft=null; S.sel=null; S.entries=[ea, eb]");
+  const attrs = html => Object.fromEntries([...html.matchAll(/data-([a-z]+)="([^"]*)"/g)].map(m => [m[1], m[2]]));
+  context.rowA = { dataset: attrs(run('entryAttrs(ea)')) };
+  const synced = { ...filed, index: 0, ts: '2026-10-22 08:00:00', time: '08:00:00', body: 'from the phone', raw: '[2026-10-22 08:00:00] Filed\nfrom the phone' };
+  context.es = synced;
+  run("S.entries=[es, {...ea, index:1}, {...eb, index:2}]");
+  assert.equal(run('entryFrom(rowA).body'), 'first', 'not whatever now sits at the old index');
+  assert.equal(run('entryFrom(rowA, true).index'), 1);
+  // Rewritten elsewhere: opening finds it by its time; an action that rewrites it does not.
+  run("S.entries=[es, {...ea, index:1, body:'first, edited', raw:'[2026-10-22 09:00:00] Filed\\nfirst, edited'}]");
+  assert.equal(run('entryFrom(rowA).body'), 'first, edited');
+  assert.equal(run('entryFrom(rowA, true)'), null);
+  run("S.entries=[es]");
+  assert.equal(run('entryFrom(rowA)'), null);
+
+  // L3: a save asked for while the autosave is in flight waits its turn, so a new draft is made once.
+  let onDiskNow = [];
+  const asEntry = (args, raw) => ({ file: 'inbox/2026/10/23.md', index: 0, source: 'inbox', ts: args.ts, date: args.ts.slice(0, 10), time: args.ts.slice(11), title: args.title, starred: false, body: args.body, tags: [], words: 2, raw });
+  hooks.load = async () => snap(onDiskNow);
+  delete hooks.create_draft;
+  let release; const gate = new Promise(r => { release = r; });
+  const sent = [];
+  hooks.create_draft = async args => { sent.push('create_draft'); await gate; const raw = run('makeRaw')(args.ts, args.title, args.starred, args.body); onDiskNow = [asEntry(args, raw)]; return { file: 'inbox/2026/10/23.md', index: 0, raw }; };
+  hooks.update_entry = async args => { sent.push('update_entry'); const raw = run('makeRaw')(args.ts, args.title, args.starred, args.body); onDiskNow = [asEntry(args, raw)]; return { file: 'inbox/2026/10/23.md', index: 0, raw }; };
+  timers.clear();
+  run("S.entries=[]; S.mode='write'; S.draft={ref:null,ts:'2026-10-23 10:00:00',title:'',body:'slow folder',starred:false,keepOne:false}; scheduleSave()");
+  const idle = [...timers.values()][0]; timers.clear(); idle.cb();          // the autosave starts and hangs
+  await Promise.resolve(); await Promise.resolve();
+  run("S.draft.body='slow folder, and more'");
+  const asked = run('saveDraftQueued()');                                    // Ctrl+S while it hangs
+  await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(sent, ['create_draft'], 'the second save has not started');
+  release(); await asked;
+  assert.deepEqual(sent, ['create_draft', 'update_entry'], 'one draft made, then updated: never two drafts');
+  assert.equal(run('draftSaved(S.draft)'), true);
+  delete hooks.create_draft; delete hooks.update_entry; timers.clear();
+
+  // L14: a watcher event inside the window after our own save is looked at afterwards, not dropped.
+  calls.length = 0;
+  run("S.mode='read'; S.draft=null; S.ignoreWatch = Date.now() + 1500");
+  await run('externalChange()');
+  assert.ok(!calls.includes('load'));
+  assert.equal(timers.size, 1, 'a second look is due');
+  timers.clear(); run('S.ignoreWatch = 0');
+
+  // L16: text and a picture of it on the clipboard is a paste of the text.
+  assert.equal(run("pasteIsImage(true, 'A1\tB1')"), false);
+  assert.equal(run("pasteIsImage(true, '')"), true);
+  assert.equal(run("pasteIsImage(false, '')"), false);
+
+  // Custom accents are fitted to the theme until they read as text; one that reads already is left alone.
+  for (const acc of Object.values(run('ACCENTS')).filter(Boolean)) {
+    context.acc = acc;
+    const fitted = run("readableAccent(acc, '#1F1A14', ['#F7F1E4', '#F5F0E6', '#EFE8DB', '#FFFDF8'])");
+    context.fitted = fitted;
+    assert.ok(run("Math.min(...['#F7F1E4', '#F5F0E6', '#EFE8DB', '#FFFDF8'].map(g => contrast(fitted, g)))") >= 4.5, `${acc} on Almanac`);
+    const dark = run("readableAccent(acc, '#EDE6D8', ['#16130F', '#242019'])"); context.fitted = dark;
+    assert.ok(run("Math.min(contrast(fitted, '#16130F'), contrast(fitted, '#242019'))") >= 4.5, `${acc} on Cinema`);
+  }
+  assert.equal(run("readableAccent('#8E2F1C', '#1F1A14', ['#F7F1E4'])"), '#8E2F1C');
+
+  // A draft begun on a past day's page is dated that day.
+  run("S.mode='read'; S.draft=null; S.view='journal'; startDraft('', '', '2026-03-04')");
+  assert.match(run('S.draft.ts'), /^2026-03-04 \d\d:\d\d:\d\d$/);
+  assert.equal(run('S.draft.floating'), false);
+  run("S.mode='read'; S.draft=null");
+  console.log('Linux editor checks passed: wrapping title, inline emphasis/caret, batched painting, isolated Inbox search, Journal landing, safe idle saves, reloads and conflicts, recovery copies and save retries, filed-edit recovery, hand-edited entries, rows after a reload, queued saves, deferred watcher events, pastes and accents.');
 })().catch(e => { console.error(e); process.exitCode=1; });

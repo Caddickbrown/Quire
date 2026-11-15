@@ -119,4 +119,70 @@ assert.doesNotMatch(one, /(?<!\d)1 (entries|days|words)\b/);
 run('S.year = 2019');
 assert.match(run('renderLookBack()'), /<option selected>2019<\/option>/);
 
-console.log('Linux view checks passed: On this day and Look back without split journals, the Split journals panel, impossible dates, bracketed links, plurals, yesterday and the year picker.');
+// ----- the 14 November review -----
+// The reader: headings by level, a rule, fenced code kept whole, nested lists; the task numbering still counts every task line.
+const md = run("renderProse('# One\\n\\n## Two\\n\\n#### Four\\n\\n---\\n\\n```js\\nconst a = 1 < 2;\\n\\n- [ ] not a task here\\n```\\n\\n- top\\n  - nested\\n    - deeper\\n\\n- [ ] first real task', 'journal/2026/06/15.md')");
+assert.match(md, /<h2>One<\/h2>/); assert.match(md, /<h3>Two<\/h3>/); assert.match(md, /<h4>Four<\/h4>/);
+assert.match(md, /<hr>/);
+assert.match(md, /<pre><code>const a = 1 &lt; 2;\n\n- \[ \] not a task here<\/code><\/pre>/, 'a blank line inside a fence does not end it, and its text is escaped');
+assert.match(md, /<li class="">top<\/li><li class="d1">nested<\/li><li class="d2">deeper<\/li>/);
+assert.match(md, /data-ix="1"/, 'the task after the fence is the second task-shaped line, as toggleTask counts');
+assert.doesNotMatch(md, /data-ix="0"/);
+
+// Hostile text through every page that draws entries: nothing a title, a body, a tag or a file name holds becomes markup.
+const evil = '<img src=x onerror=alert(1)>"\'';
+context.evil = evil;
+run(`S.entries = [
+  {file:'journal/2026/10/11.md', index:0, source:'journal', ts:'2026-10-11 08:00:00', date:'2026-10-11', time:'08:00', title: evil, body: evil + ' [x](javascript:alert(1)) ![' + evil + '](assets/' + evil + '.png)', raw:'[2026-10-11 08:00:00] ' + evil, words:1, tags:['@a'], starred:true},
+  {file:'split/' + evil + '/2026/10/12.md', index:0, source:'split', split: evil, ts:'2026-10-12 08:00:00', date:'2026-10-12', time:'08:00', title:'', body: evil, raw:'[2026-10-12 08:00:00]\\n' + evil, words:1, tags:[], starred:false},
+  {file:'inbox/2026/10/12.md', index:0, source:'inbox', ts:'2026-10-12 09:00:00', date:'2026-10-12', time:'09:00', title: evil, body: evil, raw:'[2026-10-12 09:00:00] ' + evil, words:1, tags:[], starred:false}
+]; S.templates = [{name: evil, body: evil}]; S.searches = [{name: evil, query: evil}]; S.folder = evil; S.year = 2026; S.query = ''; S.day = null; S.tag = null; S.sel = null; S.mode = 'read'; S.draft = null; S.assets = [{rel:'assets/' + evil + '.png', kind:'image', bytes:1, referenced:true}];`);
+const pages = {
+  today: "S.view='today'; renderList() + renderHome()",
+  inbox: "S.view='inbox'; renderList()",
+  journal: "S.view='journal'; S.jview='list'; S.journal='all'; renderList()",
+  stream: "S.view='journal'; S.journal='all'; renderStream()",
+  read: "renderRead(S.entries[0])",
+  day: "renderDayPage('2026-10-12')",
+  write: "S.draft={ref:null,ts:'2026-10-12 10:00:00',title:evil,body:evil,starred:false}; const h = renderWrite(); S.draft=null; h",
+  lookback: "S.view='lookback'; renderLookBack()",
+  media: "S.view='media'; renderMedia()",
+  settings: "S.view='settings'; S.tplEdit=evil; renderSettings()",
+  print: "renderPrintJournal()",
+};
+for (const [name, code] of Object.entries(pages)) {
+  const html = run(code);
+  assert.doesNotMatch(html, /<img src=x/, `${name}: raw markup from journal text`);
+  assert.doesNotMatch(html, /="[^"<>]*"'/, `${name}: a quote ended an attribute`);
+  assert.doesNotMatch(html, /href="javascript:/i, `${name}: a script link`);
+}
+
+// A list that stops says so.
+run(`S.entries = Array.from({length: 520}, (_, i) => ({file:'journal/2026/01/01.md', index:i, source:'journal', ts:'2026-01-01 08:00:00', date:'2026-01-01', time:'08:00', title:'T' + i, body:'x', raw:'[2026-01-01 08:00:00] T' + i, words:1, tags:[], starred:false})); S.view='journal'; S.jview='list'; S.journal='main'; S.templates=[]; S.searches=[]; S.tplEdit=null; S.folder='/j';`);
+assert.match(run('renderList()'), /Showing the first 500 of 520/);
+assert.match(run('renderStream()'), /Showing the first 300 of 520/);
+
+// The stylesheet's theme tokens are themes.json's, and so is the picker's copy: nothing drifts unnoticed.
+const themes = JSON.parse(fs.readFileSync('themes.json', 'utf8')).themes;
+const css = fs.readFileSync('linux/src/style.css', 'utf8');
+const lum = hex => { const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+const ratio = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+const picker = JSON.parse(run('JSON.stringify(THEMES)'));
+for (const t of themes) {
+  const at = css.indexOf(`[data-theme="${t.id}"] {`);
+  assert.ok(at >= 0, `style.css has a block for ${t.id}`);
+  const block = css.slice(at, css.indexOf('}', at));
+  for (const [key, value] of Object.entries(t)) {
+    if (typeof value !== 'string' || !/^#[0-9A-F]{6}$/i.test(value)) continue;
+    const m = block.match(new RegExp(`--${key.replace(/_/g, '-')}: (#[0-9A-Fa-f]{6});`));
+    assert.ok(m, `style.css sets --${key.replace(/_/g, '-')} for ${t.id}`);
+    assert.equal(m[1].toUpperCase(), value.toUpperCase(), `${t.id} ${key}: style.css and themes.json differ`);
+  }
+  const row = picker.find(x => x[0] === t.id);
+  assert.deepEqual(row.slice(2, 5).map(x => x.toUpperCase()), [t.page, t.ink, t.accent].map(x => x.toUpperCase()), `${t.id}: the theme picker's colours`);
+  // Text colours pass WCAG AA (4.5:1) on the page and on a card: ink, muted, the accent, and faint, which placeholders use.
+  for (const key of ['ink', 'muted', 'faint', 'accent']) for (const ground of ['page', 'card'])
+    assert.ok(ratio(t[key], t[ground]) >= 4.5, `${t.id}: ${key} on ${ground} is ${ratio(t[key], t[ground]).toFixed(2)}:1`);
+}
+
+console.log('Linux view checks passed: reader markdown, escaping on every page, list limits, theme tokens against themes.json and their contrast, On this day and Look back without split journals, the Split journals panel, impossible dates, bracketed links, plurals, yesterday and the year picker.');

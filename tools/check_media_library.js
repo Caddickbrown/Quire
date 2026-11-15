@@ -43,4 +43,9 @@ run("S.assetQuery=''; S.assetFilter='all'; S.ui.assetGroup='month'");
 assert.match(run('renderMedia()'), /September 2026/);
 assert.match(run('renderMedia()'), /October 2026/);
 assert.match(run('renderMedia()'), /Not linked to an entry/);
+// Storage shows what the recovery folder holds, beside the sizes it is counted in none of.
+run("S.sizes = {text:10, image:2048, video:0, audio:0, other:0, recovery: 3 * 1024 * 1024}");
+assert.match(run('sizesHtml()'), /Recovery copies, kept for 30 days: 3\.0 MB/);
+run("S.sizes.recovery = 0");
+assert.doesNotMatch(run('sizesHtml()'), /Recovery copies/);
 console.log('Media library checks passed: navigation, cleaned links, exact owners, filters, grouping and empty states.');

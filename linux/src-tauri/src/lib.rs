@@ -507,32 +507,47 @@ fn settings_set_aside() -> Option<String> {
 
 // ----- the composer's recovery copy -----
 
-/// Text the composer can't save as an entry yet (it holds header-shaped
-/// lines, or the save keeps failing) is kept here, one file per device, in
-/// the sidecar: never in an entry file.
-fn recovery_rel(j: &Journal, device: &str, write: bool) -> Result<String, String> {
-    let dir = if write { j.sidecar_mut()? } else { j.sidecar() };
-    Ok(format!("{}/recovery-{}.json", dir, device))
+/// Text the composer hasn't saved as an entry (it holds header-shaped lines,
+/// the save keeps failing, or it is an unsaved edit to a filed entry) is kept
+/// here, one file per device, beside the settings file and not in the journal
+/// folder: when the folder is the trouble (an unmounted drive, a sync that
+/// hasn't arrived) a copy inside it could not be written either. The page
+/// puts the journal's folder in the copy, and offers it back there only.
+fn recovery_path(device: &str) -> PathBuf {
+    Settings::path().with_file_name(format!("recovery-{}.json", device))
+}
+
+/// Where earlier versions kept it: the journal's sidecar. Still read, and
+/// removed along with the new one, so a copy from before an update is offered.
+fn legacy_recovery_rel(j: &Journal, device: &str) -> String {
+    format!("{}/recovery-{}.json", j.sidecar(), device)
 }
 
 #[tauri::command]
 async fn save_recovery(state: State<'_, AppState>, draft: Value) -> Result<String, String> {
-    let j = root(&state)?;
     let device = device_id(&state);
     blocking(move || {
-        let rel = recovery_rel(&j, &device, true)?;
-        j.write(&rel, &serde_json::to_string_pretty(&draft).map_err(|e| e.to_string())?)?;
-        Ok(rel)
+        let path = recovery_path(&device);
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        journal::write_atomic(&path, &serde_json::to_string_pretty(&draft).map_err(|e| e.to_string())?)?;
+        Ok(path.display().to_string())
     })
     .await
 }
 
 #[tauri::command]
 async fn read_recovery(state: State<'_, AppState>) -> Result<Option<Value>, String> {
-    let j = root_r(&state)?;
+    let j = root_r(&state).ok();
     let device = device_id(&state);
     blocking(move || {
-        let rel = recovery_rel(&j, &device, false)?;
+        let path = recovery_path(&device);
+        if path.is_file() {
+            return Ok(serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?).ok());
+        }
+        let Some(j) = j else { return Ok(None) };
+        let rel = legacy_recovery_rel(&j, &device);
         if !j.is_file(&rel) {
             return Ok(None);
         }
@@ -543,12 +558,18 @@ async fn read_recovery(state: State<'_, AppState>) -> Result<Option<Value>, Stri
 
 #[tauri::command]
 async fn clear_recovery(state: State<'_, AppState>) -> Result<(), String> {
-    let j = root(&state)?;
+    let j = root(&state).ok();
     let device = device_id(&state);
     blocking(move || {
-        let rel = recovery_rel(&j, &device, false)?;
-        if j.is_file(&rel) {
-            j.remove(&rel)?;
+        let path = recovery_path(&device);
+        if path.is_file() {
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        if let Some(j) = j {
+            let rel = legacy_recovery_rel(&j, &device);
+            if j.is_file(&rel) {
+                j.remove(&rel)?;
+            }
         }
         Ok(())
     })
@@ -661,6 +682,11 @@ fn set_split_tags(state: State<AppState>, tags: String) -> Result<(), String> {
 #[tauri::command]
 fn set_backup_dir(state: State<AppState>, path: Option<String>) -> Result<(), String> {
     let path = path.map(|p| expand_home(p.trim())).filter(|p| !p.is_empty());
+    // Only a folder the person chose in the dialog, as for every other path
+    // outside the journal: the page can't name one of its own.
+    if let Some(p) = &path {
+        approved(&state, p)?;
+    }
     if let (Some(p), Ok(j)) = (&path, root(&state)) {
         check_backup_dir(j.root(), Path::new(p))?;
     }
@@ -1156,13 +1182,18 @@ fn start_watcher(app: AppHandle, folder: PathBuf) -> Result<notify::RecommendedW
         let nook = folder.join(LEGACY_SIDECAR);
         let quire = folder.join(SIDECAR);
         let assets = folder.join("assets");
+        // In the sidecar, but on the page: templates and saved searches
+        // changed on another device are news, like an entry.
+        let shown = [quire.join("templates"), quire.join("searches.json"), nook.join("templates"), nook.join("searches.json")];
         move |ev: &Result<notify::Event, notify::Error>| match ev {
-            // Sidecar and media writes, and temp files, never change entries.
+            // Other sidecar writes, media writes and temp files never change
+            // what the window shows.
             Ok(e) => {
                 !e.paths.is_empty()
                     && e.paths.iter().all(|p| {
                         let n = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                        p.starts_with(&nook) || p.starts_with(&quire) || p.starts_with(&assets) || n.ends_with(".tmp") || n.starts_with("._tmp_")
+                        let sidecar = (p.starts_with(&nook) || p.starts_with(&quire)) && !shown.iter().any(|s| p.starts_with(s));
+                        sidecar || p.starts_with(&assets) || n.ends_with(".tmp") || n.starts_with("._tmp_")
                     })
             }
             Err(_) => false,
@@ -1220,12 +1251,26 @@ fn set_system_titlebar(app: AppHandle, state: State<AppState>, on: bool) -> Resu
 
 const RELEASES_URL: &str = "https://github.com/Caddickbrown/Quire/releases";
 
+/// The AppImage this process was started from, if it was one: `APPIMAGE`
+/// names the file and the running binary is inside `APPDIR`, where the
+/// AppImage is mounted or unpacked. `APPIMAGE` alone is not enough: a .deb or
+/// source build started from a terminal that is itself an AppImage inherits
+/// the variable, and would rewrite the launcher to open that other app and
+/// offer to replace its file with Quire.
+fn running_appimage() -> Option<String> {
+    let appimage = std::env::var("APPIMAGE").ok().filter(|p| !p.is_empty())?;
+    let appdir = PathBuf::from(std::env::var_os("APPDIR").filter(|d| !d.is_empty())?);
+    let exe = std::env::current_exe().ok()?;
+    let inside = exe.starts_with(&appdir) || matches!((exe.canonicalize(), appdir.canonicalize()), (Ok(e), Ok(d)) if e.starts_with(&d));
+    inside.then_some(appimage)
+}
+
 /// How this copy was installed, which decides what an update can do: an
 /// AppImage replaces itself; a .deb or .rpm belongs to the package manager;
 /// a source build is updated by re-running install.sh. CI release builds set
 /// QUIRE_RELEASE.
 fn install_kind() -> &'static str {
-    if std::env::var_os("APPIMAGE").is_some() {
+    if running_appimage().is_some() {
         "appimage"
     } else if option_env!("QUIRE_RELEASE").is_some() {
         "package"
@@ -1321,7 +1366,7 @@ fn desktop_exec_arg(arg: &str) -> String {
 
 #[cfg(target_os = "linux")]
 fn ensure_launcher() {
-    let Ok(appimage) = std::env::var("APPIMAGE") else { return };
+    let Some(appimage) = running_appimage() else { return };
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
     let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share"));
     let apps = data.join("applications");
