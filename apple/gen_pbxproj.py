@@ -157,7 +157,8 @@ test_swift_files = [
 # dependencies; a view type leaking in is the signal it belongs in Models.
 test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListContinuation', 'CommandPalette',
                       'EscapeChord', 'OnThisDayYears',
-                      'JournalStore', 'CoreJournal', 'AppleVault', 'QuireCore', 'QuireShared', 'Reminders', 'SpotlightIndexer']
+                      'JournalStore', 'CoreJournal', 'AppleVault', 'QuireCore', 'QuireShared', 'Reminders', 'SpotlightIndexer',
+                      'Transcription', 'YearReview']
 
 # UI tests: iOS only, driving the real app in a simulator (XCUITest). They are
 # not part of the Quire scheme (whose Test action runs hostless on a Mac); the

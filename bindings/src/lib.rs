@@ -19,6 +19,14 @@ impl From<String> for BridgeError {
         Self::Failure { message }
     }
 }
+/// An error the shell's vault threw that isn't a `BridgeError` (an ordinary
+/// Cocoa error, say). Without this UniFFI panics inside the callback, and the
+/// person is shown "Callback interface failure" for a file that was only busy.
+impl From<uniffi::UnexpectedUniFFICallbackError> for BridgeError {
+    fn from(e: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::Failure { message: e.reason }
+    }
+}
 type Result<T> = std::result::Result<T, BridgeError>;
 
 #[derive(Clone, uniffi::Record)]
@@ -114,6 +122,11 @@ impl core::Vault for CallbackVault {
 enum Request {
     Load,
     Inbox,
+    /// `load`, with a file that can't be decoded named and left out instead of
+    /// failing the whole snapshot.
+    LoadLenient,
+    /// `inbox`, the same way.
+    InboxLenient,
     Migrate,
     New {
         ts: String,
@@ -216,6 +229,41 @@ fn json<T: Serialize>(value: T) -> std::result::Result<String, String> {
     serde_json::to_string(&value).map_err(|e| e.to_string())
 }
 
+/// A snapshot that leaves out the files it couldn't decode, and names them.
+#[derive(Serialize)]
+struct Snapshot {
+    entries: Vec<core::Entry>,
+    unreadable: Vec<Unreadable>,
+}
+#[derive(Serialize)]
+struct Unreadable {
+    file: String,
+    error: String,
+}
+
+/// The entries of `files`, for a shell to show. Only a file whose bytes were
+/// read and aren't text (not UTF-8) is set aside: a file or folder the vault
+/// can't read at all (an evicted iCloud document, a drive that has gone) still
+/// fails the snapshot, so it is never shown as a journal with days missing.
+/// Nothing here writes; an edit to a file set aside is refused by the core's
+/// own strict read.
+fn snapshot(j: &core::Journal, files: Vec<String>) -> std::result::Result<Snapshot, String> {
+    let mut out = Snapshot { entries: Vec::new(), unreadable: Vec::new() };
+    for file in files {
+        match j.try_load_file(&file) {
+            Ok(entries) => out.entries.extend(entries),
+            Err(error) => {
+                // Read, but not text: name it. Not read: the whole thing fails.
+                if j.vault().read(&file)?.is_none() {
+                    return Err(error);
+                }
+                out.unreadable.push(Unreadable { file, error });
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn strict_tree(vault: &dyn core::Vault, rel: &str) -> std::result::Result<(), String> {
     for item in vault.list(rel)? {
         if item.is_dir {
@@ -285,6 +333,13 @@ impl NativeJournal {
                 }
                 json(entries)
             }
+            // The usual case is one strict pass, exactly as `load`; the files
+            // are only gone through one at a time when that fails.
+            Request::LoadLenient => match j.try_load_all() {
+                Ok(entries) => json(Snapshot { entries, unreadable: Vec::new() }),
+                Err(_) => json(snapshot(j, j.try_entry_files()?.into_iter().map(|f| f.0).collect())?),
+            },
+            Request::InboxLenient => json(snapshot(j, j.try_inbox_files()?)?),
             Request::Migrate => {
                 j.migrate_legacy_inbox()?;
                 j.migrate_legacy_splits()?;
@@ -356,7 +411,8 @@ impl NativeJournal {
                 expected,
                 content,
             } => {
-                j.replace_text(&core::check_rel(&file)?, &expected, &content)?;
+                // An entry file only: never a sidecar, an asset or a preamble.
+                j.replace_text(&core::check_entry_rel(&file)?, &expected, &content)?;
                 json(true)
             }
             Request::Sidecar { write } => json(if write { j.sidecar_mut()? } else { j.sidecar() }),
@@ -503,9 +559,14 @@ mod tests {
     struct TestVault {
         fs: core::FsVault,
         fail_list: bool,
+        /// A file the vault can't give at all (evicted, still downloading).
+        fail_read: Option<&'static str>,
     }
     impl NativeVault for TestVault {
         fn read(&self, rel: String) -> Result<Option<Vec<u8>>> {
+            if self.fail_read == Some(rel.as_str()) {
+                return Err("Journal files are downloading".to_string().into());
+            }
             self.fs.read(&rel).map_err(Into::into)
         }
         fn write(&self, rel: String, bytes: Vec<u8>) -> Result<()> {
@@ -560,6 +621,7 @@ mod tests {
         NativeJournal::new(Box::new(TestVault {
             fs: core::FsVault::new(d.path()),
             fail_list: false,
+            fail_read: None,
         }))
     }
     fn call(j: &NativeJournal, request: Value) -> Value {
@@ -673,6 +735,7 @@ mod tests {
         let j = NativeJournal::new(Box::new(TestVault {
             fs,
             fail_list: true,
+            fail_read: None,
         }));
         assert!(j
             .execute(json!({"op":"load"}).to_string())
@@ -812,6 +875,7 @@ mod tests {
         let j = NativeJournal::new(Box::new(TestVault {
             fs,
             fail_list: true,
+            fail_read: None,
         }));
         assert!(j
             .execute(json!({"op":"inbox"}).to_string())
@@ -826,5 +890,83 @@ mod tests {
         let body = core::parse_entries(&stored).remove(0).body;
         assert_eq!(body, "body\n\\[2026-10-16 08:00:00] pasted");
         assert_eq!(unguard_text(body), "body\n[2026-10-16 08:00:00] pasted");
+    }
+
+    /// A file that isn't text is named and left out; everything else is shown.
+    /// A file or folder that can't be read at all still fails the snapshot.
+    #[test]
+    fn lenient_snapshots_name_a_file_that_is_not_text_and_fail_for_one_not_read() {
+        let d = tempfile::tempdir().unwrap();
+        let fs = core::FsVault::new(d.path());
+        fs.write("journal/2026/10/14.md", b"[2026-10-14 08:00:00] kept\n").unwrap();
+        fs.write("journal/2026/10/15.md", &[0xff, 0xfe]).unwrap();
+        fs.write("inbox/2026/10/15.md", &[0xff]).unwrap();
+        fs.write("inbox/2026/10/16.md", b"[2026-10-16 08:00:00] draft\n").unwrap();
+        let j = journal(&d);
+        assert!(j.execute(json!({"op":"load"}).to_string()).is_err(), "the strict load is as it was");
+        let all = call(&j, json!({"op":"load_lenient"}));
+        let titles: Vec<&str> = all["entries"].as_array().unwrap().iter().map(|e| e["title"].as_str().unwrap()).collect();
+        assert_eq!(titles, ["draft", "kept"]);
+        let named: Vec<&str> = all["unreadable"].as_array().unwrap().iter().map(|u| u["file"].as_str().unwrap()).collect();
+        assert_eq!(named, ["inbox/2026/10/15.md", "journal/2026/10/15.md"]);
+        let inbox = call(&j, json!({"op":"inbox_lenient"}));
+        assert_eq!(inbox["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(inbox["unreadable"][0]["file"], "inbox/2026/10/15.md");
+        // Nothing is written into a file that was set aside.
+        assert!(j
+            .execute(json!({"op":"new","ts":"2026-10-15 09:00:00","title":"x","body":"y"}).to_string())
+            .is_err());
+        assert_eq!(fs.read("inbox/2026/10/15.md").unwrap().unwrap(), vec![0xff]);
+
+        // With every file readable it is the strict load's answer.
+        fs.remove("journal/2026/10/15.md").unwrap();
+        fs.remove("inbox/2026/10/15.md").unwrap();
+        let all = call(&j, json!({"op":"load_lenient"}));
+        assert_eq!(all["entries"], call(&j, json!({"op":"load"})));
+        assert_eq!(all["unreadable"].as_array().unwrap().len(), 0);
+
+        // Not read at all (evicted, downloading): no snapshot, short or otherwise.
+        let j = NativeJournal::new(Box::new(TestVault {
+            fs: core::FsVault::new(d.path()),
+            fail_list: false,
+            fail_read: Some("journal/2026/10/14.md"),
+        }));
+        for op in ["load_lenient", "load"] {
+            assert!(j.execute(json!({"op":op}).to_string()).unwrap_err().to_string().contains("downloading"));
+        }
+        let j = NativeJournal::new(Box::new(TestVault {
+            fs: core::FsVault::new(d.path()),
+            fail_list: true,
+            fail_read: None,
+        }));
+        for op in ["load_lenient", "inbox_lenient"] {
+            assert!(j.execute(json!({"op":op}).to_string()).unwrap_err().to_string().contains("Cloud folder unavailable"));
+        }
+    }
+    #[test]
+    fn an_unexpected_callback_error_is_a_failure_with_its_reason() {
+        let e: BridgeError = uniffi::UnexpectedUniFFICallbackError::new("The file is busy").into();
+        assert_eq!(e.to_string(), "The file is busy");
+    }
+    /// `rewrite` is for entry files: the sidecar, assets and the preamble
+    /// files are refused, whatever the case of the name.
+    #[test]
+    fn rewrite_is_for_entry_files_only() {
+        let d = tempfile::tempdir().unwrap();
+        let fs = core::FsVault::new(d.path());
+        fs.write("journal/2026/10/15.md", b"[2026-10-15 08:00:00] a\n").unwrap();
+        fs.write(".quire/searches.json", b"[]").unwrap();
+        fs.write("assets/note.md", b"x").unwrap();
+        let j = journal(&d);
+        call(&j, json!({"op":"rewrite","file":"journal/2026/10/15.md","expected":"[2026-10-15 08:00:00] a\n","content":"[2026-10-15 08:00:00] b\n"}));
+        assert_eq!(fs.read("journal/2026/10/15.md").unwrap().unwrap(), b"[2026-10-15 08:00:00] b\n");
+        for (file, expected) in [(".quire/searches.json", "[]"), (".Quire/searches.json", "[]"), ("assets/note.md", "x"), ("Assets/note.md", "x"), ("../out.md", "")] {
+            assert!(
+                j.execute(json!({"op":"rewrite","file":file,"expected":expected,"content":"gone"}).to_string()).is_err(),
+                "{file}"
+            );
+        }
+        assert_eq!(fs.read(".quire/searches.json").unwrap().unwrap(), b"[]");
+        assert_eq!(fs.read("assets/note.md").unwrap().unwrap(), b"x");
     }
 }

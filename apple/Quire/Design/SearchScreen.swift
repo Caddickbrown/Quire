@@ -62,7 +62,10 @@ struct SearchScreen: View {
         .qKeyList(entries: shownResults.map(\.entry), index: $selected, listTitle: "Search", autoSelect: true,
                   onOpen: { entry in if let ref = shownResults.first(where: { $0.entry.id == entry.id }) { onOpen(ref) } },
                   // Back to the query from the results.
-                  letter: { _, k in if k == "/" { focused = true; return true }; return false })
+                  letter: { _, k in if k == "/" { focused = true; return true }; return false },
+                  // And with nothing found, when the field has been left: `/` had
+                  // no row to belong to, and went nowhere.
+                  emptyLetter: { k in if k == "/" { focused = true; return true }; return false })
         .onChange(of: query) { _, _ in selected = nil; mirror() }
         .onChange(of: focused) { _, _ in mirror() }
         .onAppear {
@@ -79,8 +82,10 @@ struct SearchScreen: View {
             }
             Button("Cancel", role: .cancel) { }
         } message: { Text("It stays here, on the search page, until you remove it.") }
+        // The pinned searches are a file, read through the core: when the journal
+        // changes, not on every letter typed.
+        .task(id: store.revision) { saved = store.savedSearches() }
         .task(id: "\(query)#\(store.revision)") {
-            saved = store.savedSearches()
             // A beat, so typing doesn't rescan on every keystroke.
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }

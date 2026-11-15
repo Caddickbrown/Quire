@@ -113,10 +113,10 @@ struct JournalScreen: View {
                 title(count: months.reduce(0) { $0 + $1.count })
                 filters
                 if months.isEmpty {
-                    Text(!store.indexed ? (store.foldingLegacy ? "Moving your journal into day files…" : "Loading your journal…")
+                    Text(!store.indexed ? store.qReadingLine + "…"
                          : starredOnly ? "Nothing matches."
                          : splitName != nil ? "Nothing in this journal yet."
-                         : "Nothing is filed yet. File a draft from the inbox and it lands here.")
+                         : "Nothing is filed yet. File a draft from the Inbox and it lands here.")
                         .font(q.writing(18)).foregroundStyle(q.mutedColor)
                 }
                 ForEach(months) { month in

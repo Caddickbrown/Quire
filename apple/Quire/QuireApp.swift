@@ -285,9 +285,12 @@ struct QuireApp: App {
                 #endif
                 .tint(accent)
                 .environment(\.accent, accent)
+                // The setting can only be changed on the Mac; on iOS the theme decides.
+                #if os(macOS)
                 .preferredColorScheme(
                     AppColorScheme(rawValue: colorSchemeRaw)?.resolved
                 )
+                #endif
                 // Deep links: quire://write (composer), quire://timer (start a
                 // session), quire://entry?date=…&ts=… (open one entry — the
                 // widget's On This Day line and notifications land here),

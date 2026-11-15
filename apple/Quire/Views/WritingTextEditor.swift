@@ -35,8 +35,9 @@ import SwiftUI
 
 private let tagRegex = try! NSRegularExpression(pattern: #"@[a-zA-Z][a-zA-Z0-9_-]*"#)
 /// `_text_` or `__text__` → italicised while editing. The backreference makes
-/// the closing run of underscores match the opening.
-private let emphasisRegex = try! NSRegularExpression(pattern: #"(_{1,2})(.+?)\1"#)
+/// the closing run of underscores match the opening. Not an underscore inside
+/// a word: `snake_case_name` is a name, here as in the reader.
+private let emphasisRegex = try! NSRegularExpression(pattern: #"(?<![\w])(_{1,2})(?![\s_])(.+?)(?<![\s_])\1(?![\w])"#)
 /// `*text*` → italicised too, as markdown (and the reader) has it. Not `**`,
 /// which is bold, and not a `* ` list bullet or a lone `a * b`.
 private let starEmphasisRegex = try! NSRegularExpression(pattern: #"(?<![*\w])\*(?![\s*])(.+?)(?<![\s*])\*(?![*\w])"#)
@@ -232,8 +233,10 @@ struct WritingTextEditor: NSViewRepresentable {
     private func styleParagraph(_ tv: NSTextView, around range: NSRange?) {
         let ns = tv.string as NSString
         guard let range else { apply(to: tv); return }
+        // One past the edit: a ↩ ends its own paragraph, and the half of the
+        // line it split off is the next one, which still wears the old styling.
         let clamped = NSRange(location: min(range.location, ns.length),
-                              length: min(range.length, ns.length - min(range.location, ns.length)))
+                              length: min(range.length + 1, ns.length - min(range.location, ns.length)))
         let target = ns.paragraphRange(for: clamped)
         let font = platformFont(fontRaw, size)
         let color = NSColor(textColor)
@@ -626,6 +629,8 @@ struct WritingTextEditor: UIViewRepresentable {
         let coordinator = context.coordinator
         tv.delegate = coordinator
         tv.accessibilityIdentifier = identifier
+        // VoiceOver said only "text field": which one, on a page with a title too.
+        if !mirror { tv.accessibilityLabel = "Entry text" }
         tv.backgroundColor = .clear
         tv.showsVerticalScrollIndicator = false
         tv.showsHorizontalScrollIndicator = false
@@ -733,11 +738,15 @@ struct WritingTextEditor: UIViewRepresentable {
         let shortest = min(old.length, incoming.length)
         var prefix = 0
         while prefix < shortest, old.character(at: prefix) == incoming.character(at: prefix) { prefix += 1 }
+        // Never between the two halves of one character (an emoji typed before
+        // another that starts the same): the edit would leave half of each.
+        if prefix > 0, UTF16.isLeadSurrogate(old.character(at: prefix - 1)) { prefix -= 1 }
         var suffix = 0
         while suffix < shortest - prefix,
               old.character(at: old.length - 1 - suffix) == incoming.character(at: incoming.length - 1 - suffix) {
             suffix += 1
         }
+        if suffix > 0, UTF16.isTrailSurrogate(old.character(at: old.length - suffix)) { suffix -= 1 }
         let range = NSRange(location: prefix, length: old.length - prefix - suffix)
         let replacement = incoming.substring(with: NSRange(location: prefix, length: incoming.length - prefix - suffix))
         tv.textStorage.replaceCharacters(in: range, with: replacement)
@@ -910,7 +919,11 @@ struct WritingTextEditor: UIViewRepresentable {
             // of its own, so the paragraph is left alone until it commits.
             if tv?.markedTextRange != nil { restyleOwed = true; return }
             isStyling = true
-            Self.applyStyle(textStorage, paragraphsCovering: editedRange, with: style)
+            // One past the edit: a ↩ ends its own paragraph, and the half of the
+            // line it split off is the next one, which still wore the old styling.
+            let reach = NSRange(location: editedRange.location,
+                                length: min(editedRange.length + 1, max(0, textStorage.length - editedRange.location)))
+            Self.applyStyle(textStorage, paragraphsCovering: reach, with: style)
             isStyling = false
         }
 
@@ -1243,6 +1256,9 @@ struct WritingTextEditor: UIViewRepresentable {
                 tv.inputAccessoryView = nil
                 tv.reloadInputViews()
             }
+            // An input method is composing: reloading the input views now would
+            // take its candidates away. The bar is brought up to date when it commits.
+            guard tv.markedTextRange == nil else { return }
             guard !tagSuggestions.isEmpty,
                   let token = quireTagToken(in: tv.textStorage.mutableString, caret: tv.selectedRange.location) else {
                 clear(); return
@@ -1261,18 +1277,30 @@ struct WritingTextEditor: UIViewRepresentable {
         }
 
         private func makeTagBar(_ tv: UITextView, matches: [String]) -> UIView {
-            let bar = UIScrollView(frame: CGRect(x: 0, y: 0, width: max(tv.bounds.width, 320), height: 40))
-            bar.backgroundColor = .secondarySystemBackground
+            // In Quire's own dress: the page's paper under a hairline, the tags as
+            // words in the accent (Plex Sans; DM Mono in Marathon), each 44 points tall.
+            let scheme: ColorScheme = tv.traitCollection.userInterfaceStyle == .dark ? .dark : .light
+            let q = QuireTheme.resolve(UserDefaults.standard.string(forKey: QuireTheme.storageKey) ?? QuireTheme.auto,
+                                       scheme: scheme)
+            let face = UIFont(name: q.isMarathon ? "DMMono-Regular" : "IBMPlexSans-Regular", size: 15)
+                ?? .systemFont(ofSize: 15)
+            let font = UIFontMetrics(forTextStyle: .footnote).scaledFont(for: face, maximumPointSize: 22)
+            let bar = UIScrollView(frame: CGRect(x: 0, y: 0, width: max(tv.bounds.width, 320), height: 48))
+            bar.backgroundColor = UIColor(q.pageColor)
             bar.showsHorizontalScrollIndicator = false
+            let rule = UIView()
+            rule.backgroundColor = UIColor(q.lineColor)
+            rule.translatesAutoresizingMaskIntoConstraints = false
+            bar.addSubview(rule)
             let stack = UIStackView()
             stack.axis = .horizontal
-            stack.spacing = 8
+            stack.spacing = 6
             stack.translatesAutoresizingMaskIntoConstraints = false
             for name in matches {
-                var config = UIButton.Configuration.gray()
-                config.title = "@\(name)"
-                config.cornerStyle = .capsule
-                config.buttonSize = .small
+                var config = UIButton.Configuration.plain()
+                config.attributedTitle = AttributedString("@\(name)", attributes: AttributeContainer([.font: font]))
+                config.baseForegroundColor = UIColor(q.accentColor)
+                config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10)
                 let button = UIButton(configuration: config, primaryAction: UIAction { [weak self, weak tv] _ in
                     guard let self, let tv,
                           // Re-derive the token at tap time — the text may have
@@ -1284,14 +1312,19 @@ struct WritingTextEditor: UIViewRepresentable {
                                 selection: NSRange(location: token.range.location + (replacement as NSString).length, length: 0))
                 })
                 button.accessibilityLabel = "Complete tag \(name)"
+                button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
                 stack.addArrangedSubview(button)
             }
             bar.addSubview(stack)
             NSLayoutConstraint.activate([
+                rule.topAnchor.constraint(equalTo: bar.frameLayoutGuide.topAnchor),
+                rule.leadingAnchor.constraint(equalTo: bar.frameLayoutGuide.leadingAnchor),
+                rule.trailingAnchor.constraint(equalTo: bar.frameLayoutGuide.trailingAnchor),
+                rule.heightAnchor.constraint(equalToConstant: 1),
                 stack.leadingAnchor.constraint(equalTo: bar.contentLayoutGuide.leadingAnchor, constant: 10),
                 stack.trailingAnchor.constraint(equalTo: bar.contentLayoutGuide.trailingAnchor, constant: -10),
                 stack.centerYAnchor.constraint(equalTo: bar.frameLayoutGuide.centerYAnchor),
-                stack.heightAnchor.constraint(equalToConstant: 32),
+                stack.heightAnchor.constraint(equalToConstant: 44),
                 bar.contentLayoutGuide.heightAnchor.constraint(equalTo: bar.frameLayoutGuide.heightAnchor),
             ])
             return bar
@@ -1301,6 +1334,8 @@ struct WritingTextEditor: UIViewRepresentable {
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange,
                       replacementText replacement: String) -> Bool {
             guard replacement == "\n", range.length == 0 else { return true }
+            // ↩ while an input method is composing chooses its candidate.
+            guard textView.markedTextRange == nil else { return true }
             let ns = textView.textStorage.mutableString
             guard range.location <= ns.length else { return true }
             let lineRange = ns.lineRange(for: NSRange(location: range.location, length: 0))
@@ -1395,6 +1430,13 @@ final class PastingTextView: UITextView {
         if window != nil { onWindow?() }
     }
 
+    /// Never under App Lock: a focus handed back late (the monitor's date
+    /// picker or ⌘K closing as the lock comes down) would leave a hardware
+    /// keyboard typing into the page behind the veil.
+    override var canBecomeFirstResponder: Bool {
+        !AppLockManager.shared.showsVeil && super.canBecomeFirstResponder
+    }
+
     /// A sized-to-fit editor (the composer) never scrolls inside itself: the
     /// page around it does. UIKit still nudged the offset on some edits: Dan's
     /// recording showed the whole body dropping a few points after the
@@ -1413,10 +1455,14 @@ final class PastingTextView: UITextView {
     /// page, not above it, so nothing it declares is in this responder chain.
     /// Priority over the text system, which reads ^f ^p ^d ^t as cursor edits.
     override var keyCommands: [UIKeyCommand]? {
-        var own = (super.keyCommands ?? []) + [CommandKeys.toggle]
+        // The monitor's own keys too (⌥⌘P pauses it): the hint bar lists them here.
+        var own = (super.keyCommands ?? []) + [CommandKeys.toggle] + DisplayKeys.commands
         // With a monitor showing this text, ↑/↓ move by the monitor's lines;
-        // the phone keeps its own wrapping for how the text looks.
-        if ExternalDisplayModel.shared.isConnected, ExternalDisplayModel.shared.bodyLayout != nil {
+        // the phone keeps its own wrapping for how the text looks. Not while an
+        // input method is composing: the arrows are then its own, to move
+        // through its candidates.
+        if markedTextRange == nil,
+           ExternalDisplayModel.shared.isConnected, ExternalDisplayModel.shared.bodyLayout != nil {
             own += [UIKeyCommand.inputUpArrow, UIKeyCommand.inputDownArrow].map {
                 let c = UIKeyCommand(input: $0, modifierFlags: [], action: #selector(quireLine(_:)))
                 c.wantsPriorityOverSystemBehavior = true
@@ -1617,7 +1663,7 @@ final class MirrorTextView: UITextView {
         guard caret.minY < visibleTop || caret.maxY > visibleBottom else { return }
         let target = caret.midY - height * 0.45
         let maxY = max(0, contentSize.height + contentInset.bottom - height)
-        setContentOffset(CGPoint(x: 0, y: min(max(0, target), maxY)), animated: true)
+        setContentOffset(CGPoint(x: 0, y: min(max(0, target), maxY)), animated: !UIAccessibility.isReduceMotionEnabled)
     }
 }
 #endif

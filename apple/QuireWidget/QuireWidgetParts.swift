@@ -247,7 +247,7 @@ struct WidgetSegments: View {
         let filled = Int((fraction * 10).rounded(.down))
         HStack(spacing: 3) {
             ForEach(0..<10, id: \.self) { i in
-                Rectangle().fill(i < filled ? q.signalColor : q.lineColor).frame(height: 10)
+                Rectangle().fill(i < filled ? q.markColor : q.lineColor).frame(height: 10)
             }
         }
         .widgetAccentable()

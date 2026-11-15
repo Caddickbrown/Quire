@@ -12,7 +12,10 @@ import Foundation
 
 /// Relative asset paths referenced by markdown media links in some content.
 enum MediaLinks {
-    private static let regex = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\(\s*(?:<([^>\n]*)>|([^\s)]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?(?:\s*\)|[ \t]*(?=\r?\n|$))"#)
+    /// A bare target may hold balanced brackets, as CommonMark allows and the
+    /// core's `LINK_TARGET_RE` reads them: `assets/2026/09/image(1).jpg` is one
+    /// target, where this used to stop at the first `)` and find `image(1`.
+    private static let regex = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\(\s*(?:<([^>\n]*)>|((?:[^\s()]|\([^\s()]*\))+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?(?:\s*\)|[ \t]*(?=\r?\n|$))"#)
 
     static func paths(in content: String) -> [String] {
         let ns = content as NSString

@@ -123,7 +123,7 @@ struct TodayScreen: View {
         .onAppear(perform: takeCapture)
         .onChange(of: nav.phoneRequest) { _, _ in takeCapture() }
         .background(alignment: .topTrailing) {
-            if q.isMarathon { QDotField(color: q.signalColor).opacity(0.55).frame(width: 170, height: 120).padding(.top, 150).padding(.trailing, 14) }
+            if q.isMarathon { QDotField(color: q.markColor).opacity(0.55).frame(width: 170, height: 120).padding(.top, 150).padding(.trailing, 14) }
         }
         .onChange(of: store.indexed) { _, indexed in if indexed { openPending() } }
     }
@@ -160,6 +160,9 @@ struct TodayScreen: View {
             .lineSpacing(5)
             .onTapGesture { if drafts > 0 { showInbox() } }
             .accessibilityElement(children: .combine)
+            // With drafts waiting the sentence is a way into the Inbox: said so.
+            .accessibilityAddTraits(drafts > 0 ? .isButton : [])
+            .accessibilityHint(drafts > 0 ? "Opens the Inbox" : "")
             .overlay(alignment: .bottomTrailing) { goalStamp(words: words) }
             .qArrive()
     }
@@ -190,7 +193,7 @@ struct TodayScreen: View {
         if n == 0 {
             if store.indexed || snapshot != nil { return "Nothing filed yet" }
             // A jnl or Nook journal, opened for the first time.
-            return store.foldingLegacy ? "Moving your journal into day files" : "Loading your journal"
+            return store.qReadingLine
         }
         return n == 1 ? "One entry filed" : "\(Self.word(n)) entries filed"
     }
@@ -281,14 +284,16 @@ struct TodayScreen: View {
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
                     Text(String(format: "%03d", words)).foregroundStyle(q.accentColor)
                         .contentTransition(.numericText(value: Double(words)))
-                        .animation(QMotion.standard, value: words)
+                        .animation(reduceMotion ? nil : QMotion.standard, value: words)
                     if goalOn { Text("/\(goal)").foregroundStyle(q.faintColor) }
                 }
                 .font(q.display(24)).lineLimit(1).minimumScaleFactor(0.5)
                 if goalOn {
                     Rectangle().fill(q.line2Color).frame(height: 4)
                         .overlay(alignment: .leading) {
-                            GeometryReader { g in Rectangle().fill(q.signalColor).frame(width: g.size.width * fill) }
+                            // A mark, not a fill: Marathon Day's lime on its pale paper
+                            // could not be seen (see `markColor`).
+                            GeometryReader { g in Rectangle().fill(q.markColor).frame(width: g.size.width * fill) }
                         }
                 }
             }
@@ -308,6 +313,7 @@ struct TodayScreen: View {
         .overlay(alignment: .top) { QRule() }
         .overlay(alignment: .bottom) { QRule() }
         .onTapGesture { if drafts > 0 { showInbox() } }
+        .accessibilityAction(named: "Open the Inbox") { if drafts > 0 { showInbox() } }
         .qArrive()
     }
 
@@ -328,7 +334,7 @@ struct TodayScreen: View {
         let entries = snapshot?.totalEntries ?? stats.entries
         let words = snapshot?.totalWords ?? stats.words
         return VStack(spacing: 8) {
-            QHazard(color: q.signalColor).opacity(0.9)
+            QHazard(color: q.markColor).opacity(0.9)
             HStack {
                 Text("~/JOURNAL")
                 Spacer()
@@ -351,7 +357,7 @@ struct TodayScreen: View {
                 .onSubmit(saveLine)
                 .frame(minHeight: 44)
             if !line.trimmingCharacters(in: .whitespaces).isEmpty {
-                QLink(title: "Save to inbox", emphasised: true, action: saveLine)
+                QLink(title: "Save to Inbox", emphasised: true, action: saveLine)
                     .transition(.opacity.combined(with: .offset(x: 8)))
             }
         }
@@ -389,12 +395,14 @@ struct TodayScreen: View {
                 let ref = live ? EntryRef(entry: entry, source: .archive(date: today)) : nil
                 QEntryRow(entry: entry, onOpen: { open(id: entry.id, ref: ref) },
                           onDelete: live ? { _ = store.deleteFiledEntry(date: entry.date, entry: entry) } : nil)
-                    // A just-filed entry is set down on the page.
-                    .transition(.asymmetric(insertion: .scale(scale: 0.96, anchor: .topLeading).combined(with: .opacity),
-                                            removal: .opacity))
+                    // A just-filed entry is set down on the page; with Reduce Motion
+                    // it is simply there.
+                    .transition(reduceMotion ? .opacity
+                                : .asymmetric(insertion: .scale(scale: 0.96, anchor: .topLeading).combined(with: .opacity),
+                                              removal: .opacity))
             }
         }
-        .animation(QMotion.settle, value: filedToday.map(\.id))
+        .animation(reduceMotion ? nil : QMotion.settle, value: filedToday.map(\.id))
     }
 
     private func onThisDaySection(_ years: [OnThisDayYears.Year<Memory>]) -> some View {

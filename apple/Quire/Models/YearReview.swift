@@ -37,36 +37,50 @@ extension JournalStore {
         Array(Set(archiveDays.map(\.year))).sorted(by: >)
     }
 
-    /// Build the review for one year, off-main (reads every day file of that year).
+    /// The filed days of the main journal, for the passes below: the index in
+    /// memory once there is one, and before that one read through the core.
+    /// Never the day files themselves: read directly, a conflict copy
+    /// (`14 2.md`) counted as a day of its own, and nothing went through the
+    /// vault or the core's parser.
+    func filedDays() async -> [(date: String, entries: [Entry])] {
+        if indexed { return archiveEntries }
+        guard let base = baseURL else { return [] }
+        return await Task.detached(priority: .userInitiated) { Self.filedDays(base: base) }.value
+    }
+
+    nonisolated static func filedDays(base: URL) -> [(date: String, entries: [Entry])] {
+        guard let all = try? CoreJournal(base: base).loadLenient().entries else { return [] }
+        return Dictionary(grouping: all.filter { $0.source == "journal" }, by: \.date)
+            .map { (date: $0.key, entries: $0.value.map(\.entry)) }
+            .sorted { $0.date > $1.date }
+    }
+
+    /// Build the review for one year, off-main.
     func yearReview(for year: String) async -> YearReview {
-        guard let base = baseURL else { return YearReview(year: year) }
+        let days = await filedDays()
         return await Task.detached(priority: .userInitiated) {
-            Self.computeYearReview(base: base, year: year)
+            Self.computeYearReview(days: days, year: year)
         }.value
     }
 
     nonisolated static func computeYearReview(base: URL, year: String) -> YearReview {
-        let fm = FileManager.default
-        var review = YearReview(year: year)
-        let yearDir = base.appendingPathComponent("journal", isDirectory: true)
-            .appendingPathComponent(year, isDirectory: true)
-        var files: [URL] = []
-        if let en = fm.enumerator(at: yearDir, includingPropertiesForKeys: nil) {
-            for case let u as URL in en where u.pathExtension == "md" { files.append(u) }
-        }
-        files.sort { staticFileToDate($0) < staticFileToDate($1) }
+        computeYearReview(days: filedDays(base: base), year: year)
+    }
 
+    /// The review of `year` from filed days (any order, any years).
+    nonisolated static func computeYearReview(days: [(date: String, entries: [Entry])], year: String) -> YearReview {
+        var review = YearReview(year: year)
         let ymd = DateFormatter()
         ymd.dateFormat = "yyyy-MM-dd"
         ymd.locale = Locale(identifier: "en_US_POSIX")
 
         var tagMap: [String: Int] = [:]
         var dates: [Date] = []
-        for url in files {
-            guard let content = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            let entries = JournalParser.parseEntries(content)
+        for day in days.filter({ $0.date.hasPrefix(year + "-") }).sorted(by: { $0.date < $1.date }) {
+            let entries = day.entries
             guard !entries.isEmpty else { continue }
-            let date = staticFileToDate(url)
+            let date = day.date
+            let content = entries.map(\.raw).joined(separator: "\n\n")
             let dayWords = entries.reduce(0) { $0 + $1.wordCount }
             review.daysWritten += 1
             review.entries += entries.count
@@ -126,14 +140,18 @@ struct TrendsData: Sendable, Equatable {
 extension JournalStore {
     /// Words and tag counts for the trailing `monthsBack` months.
     func trends(monthsBack: Int = 12) async -> TrendsData {
-        guard let base = baseURL else { return TrendsData() }
+        let days = await filedDays()
         return await Task.detached(priority: .userInitiated) {
-            Self.computeTrends(base: base, monthsBack: monthsBack)
+            Self.computeTrends(days: days, monthsBack: monthsBack)
         }.value
     }
 
     nonisolated static func computeTrends(base: URL, monthsBack: Int) -> TrendsData {
-        let fm = FileManager.default
+        computeTrends(days: filedDays(base: base), monthsBack: monthsBack)
+    }
+
+    /// The trailing `monthsBack` months, counted from `now`, from filed days.
+    nonisolated static func computeTrends(days: [(date: String, entries: [Entry])], monthsBack: Int, now: Date = Date()) -> TrendsData {
         var data = TrendsData()
 
         // The window's months, oldest first.
@@ -143,7 +161,7 @@ extension JournalStore {
         ym.locale = Locale(identifier: "en_US_POSIX")
         var months: [String] = []
         for back in stride(from: monthsBack - 1, through: 0, by: -1) {
-            if let d = cal.date(byAdding: .month, value: -back, to: Date()) {
+            if let d = cal.date(byAdding: .month, value: -back, to: now) {
                 months.append(ym.string(from: d))
             }
         }
@@ -152,18 +170,16 @@ extension JournalStore {
 
         var tagTotals: [String: Int] = [:]
         var tagMonthly: [String: [String: Int]] = [:]
-        let journalDir = base.appendingPathComponent("journal", isDirectory: true)
-        if let en = fm.enumerator(at: journalDir, includingPropertiesForKeys: nil) {
-            for case let url as URL in en where url.pathExtension == "md" {
-                let month = String(staticFileToDate(url).prefix(7))
-                guard window.contains(month),
-                      let content = try? String(contentsOf: url, encoding: .utf8) else { continue }
-                let words = content.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
-                data.monthWords[month, default: 0] += words
-                for tag in JournalParser.splitTags(content) {
-                    tagTotals[tag, default: 0] += 1
-                    tagMonthly[tag, default: [:]][month, default: 0] += 1
-                }
+        for day in days {
+            let month = String(day.date.prefix(7))
+            guard window.contains(month), !day.entries.isEmpty else { continue }
+            // The day's text as the index counts it (`buildIndex`).
+            let content = day.entries.map(\.raw).joined(separator: "\n\n")
+            let words = content.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
+            data.monthWords[month, default: 0] += words
+            for tag in JournalParser.splitTags(content) {
+                tagTotals[tag, default: 0] += 1
+                tagMonthly[tag, default: [:]][month, default: 0] += 1
             }
         }
         data.topTags = tagTotals

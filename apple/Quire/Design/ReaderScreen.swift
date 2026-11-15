@@ -29,6 +29,9 @@ struct ReaderScreen: View {
 
     @State private var entry: Entry
     @State private var confirmDelete = false
+    /// A File, Return to Inbox or Delete that didn't happen: said under the
+    /// actions, on the page, which stays open.
+    @State private var failure: String?
     @State private var routerID = UUID()
     @State private var visible = false
     @State private var scroller = QScrollHandle()
@@ -96,11 +99,9 @@ struct ReaderScreen: View {
                     store.toggleStar(entry, source: ref.source); refresh()
                 }
                 if isDraft {
-                    action("archivebox", "File", color: q.accentColor, bold: true) { store.fileDraft(entry); close() }
+                    action("archivebox", "File", color: q.accentColor, bold: true) { file() }
                 } else {
-                    action("tray.and.arrow.up", "Return to inbox", color: q.mutedColor) {
-                        _ = store.returnToInbox(entry, source: ref.source); close()
-                    }
+                    action("tray.and.arrow.up", "Return to Inbox", color: q.mutedColor) { unfile() }
                 }
                 action("trash", "Delete", color: .red) { askDelete() }
                 action("pencil", "Edit", color: q.inkColor, bold: true) { onEdit(current) }
@@ -110,10 +111,16 @@ struct ReaderScreen: View {
                 Text("\(QDate.fullDay(entry.date)), \(QDate.time(entry.ts))")
                     .font(q.ui(13)).foregroundStyle(q.inkColor)
                     .underline(pattern: .dot)
-                    .frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 36)
-                    .padding(.horizontal, 26)
+                    .frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 44)
+                    .padding(.horizontal, 26).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityHint("Changes the date and time")
+            if let failure {
+                Text(failure).font(q.ui(13)).foregroundStyle(q.accentColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 26).padding(.bottom, 10)
+            }
             QRule()
         }
     }
@@ -159,8 +166,8 @@ struct ReaderScreen: View {
                 case "k": scroll(-1); return true
                 case "e": onEdit(current); return true
                 case "*": store.toggleStar(entry, source: ref.source); refresh(); return true
-                case "f": if isDraft { store.fileDraft(entry); close() }; return isDraft
-                case "u": if !isDraft { _ = store.returnToInbox(entry, source: ref.source); close() }; return !isDraft
+                case "f": if isDraft { file() }; return isDraft
+                case "u": if !isDraft { unfile() }; return !isDraft
                 case "t": (onRetimeKey ?? onRetime)(current); return true
                 case "d": askDelete(); return true
                 default: return false
@@ -175,18 +182,36 @@ struct ReaderScreen: View {
                                                  question: isDraft ? "Delete this draft?" : "Delete this entry?",
                                                  detail: DeskConfirm.describe(entry), when: DeskConfirm.when(entry),
                                                  action: "Delete"), owner: routerID) {
-            delete(); return nil
+            // A delete that failed is said on the panel, which stays up.
+            delete() ? nil : (store.lastWriteError ?? "The entry could not be deleted.")
         }
         if !asked { confirmDelete = true }
     }
 
-    private func delete() {
+    /// The three actions that take the entry off this page close it only when
+    /// they happened. They used to close it whatever the store said, so a write
+    /// that failed looked the same as one that landed.
+    private func file() {
+        finish(store.fileDraft(entry) != nil, or: "The draft could not be filed.")
+    }
+
+    private func unfile() {
+        finish(store.returnToInbox(entry, source: ref.source), or: "The entry could not be returned to the Inbox.")
+    }
+
+    @discardableResult private func delete() -> Bool {
+        let done: Bool
         switch ref.source {
-        case .inbox: store.deleteDraft(entry)
-        case .archive(let d): _ = store.deleteFiledEntry(date: d, entry: entry)
-        case .journal(let n): _ = store.deleteJournalEntry(name: n, entry: entry)
+        case .inbox: done = store.deleteEditorDraft(entry)
+        case .archive(let d): done = store.deleteFiledEntry(date: d, entry: entry)
+        case .journal(let n): done = store.deleteJournalEntry(name: n, entry: entry)
         }
-        close()
+        return finish(done, or: "The entry could not be deleted.")
+    }
+
+    @discardableResult private func finish(_ done: Bool, or message: String) -> Bool {
+        if done { failure = nil; close() } else { failure = store.lastWriteError ?? message }
+        return done
     }
 
     private func close() {

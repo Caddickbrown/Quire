@@ -111,6 +111,8 @@
 		B69FA96A064551F585B6B186 /* QuireShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73CB28DCB3C5538DBCC5535A /* QuireShared.swift */; };
 		A7B4F425B1E5555F904A50F7 /* Reminders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CFBD196DC8953FCB63F140B /* Reminders.swift */; };
 		3D2C11ADD6095B2A88F51477 /* SpotlightIndexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44504DC9F5CB5F6DB8F22888 /* SpotlightIndexer.swift */; };
+		3E78D170C9825A0EAF4A9EBF /* Transcription.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F904588828450EAB3C8BF43 /* Transcription.swift */; };
+		FF370810D729517F8220E1F8 /* YearReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = C715D61641055EA986669831 /* YearReview.swift */; };
 		7D15359C0F4B5840A30F6A51 /* EditorUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B7314093A595840B7C7737E /* EditorUITests.swift */; };
 		9EC6FF84DFC35ED9BEFD7584 /* QuireCoreFFI.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1A0DBFECFB8E5C67AE6CC256; };
 		4B2ED63375C0513EA5E07558 /* QuireCoreFFI.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1A0DBFECFB8E5C67AE6CC256; };
@@ -773,6 +775,8 @@
 				B69FA96A064551F585B6B186 /* QuireShared.swift in Sources */,
 				A7B4F425B1E5555F904A50F7 /* Reminders.swift in Sources */,
 				3D2C11ADD6095B2A88F51477 /* SpotlightIndexer.swift in Sources */,
+				3E78D170C9825A0EAF4A9EBF /* Transcription.swift in Sources */,
+				FF370810D729517F8220E1F8 /* YearReview.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

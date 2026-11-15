@@ -62,9 +62,14 @@ enum SpotlightIndexer {
     /// The first pass after launch replaces the domain; later ones send only
     /// what changed (and remove what went), where every rebuild used to delete
     /// and re-add every entry in the journal.
+    ///
+    /// With the app lock on nothing is indexed, and what was is cleared: a
+    /// title and 400 characters of each entry in system search is the journal
+    /// read without unlocking it. (The widgets carry no text then either.)
     static func scheduleReindex(source: () -> [IndexableEntry]) {
         pending?.cancel()
-        guard UserDefaults.standard.bool(forKey: enabledKey) else {
+        guard mayIndex(enabled: UserDefaults.standard.bool(forKey: enabledKey),
+                       appLock: UserDefaults.standard.bool(forKey: JournalStore.appLockKey)) else {
             pending = nil
             lastIndexed = nil
             CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [domain])
@@ -88,6 +93,9 @@ enum SpotlightIndexer {
             await Task.detached(priority: .utility) { update(changed: changed, removed: Array(removed)) }.value
         }
     }
+
+    /// Whether entries may be in the system index: asked for, and no app lock.
+    nonisolated static func mayIndex(enabled: Bool, appLock: Bool) -> Bool { enabled && !appLock }
 
     nonisolated private static func searchableItems(for entries: [IndexableEntry]) -> [CSSearchableItem] {
         let f = DateFormatter()

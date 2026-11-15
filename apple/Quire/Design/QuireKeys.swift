@@ -19,22 +19,28 @@ extension View {
     /// `autoSelect` adopts the first row only while a monitor is connected.
     /// `publishesEmpty` false: with no rows the monitor is left alone rather than
     /// shown an empty list (Look back's "On this day", which is one part of a page).
+    /// `emptyLetter`: letters that still act with no rows (Search's `/`); without
+    /// it an empty list hands every key to the screen beneath.
     func qKeyList(entries: [Entry],
                   index: Binding<Int?>,
                   listTitle: String,
                   autoSelect: Bool = false,
                   publishesEmpty: Bool = true,
                   onOpen: @escaping (Entry) -> Void,
-                  letter: @escaping (Entry, String) -> Bool = { _, _ in false }) -> some View {
+                  letter: @escaping (Entry, String) -> Bool = { _, _ in false },
+                  emptyLetter: ((String) -> Bool)? = nil) -> some View {
         modifier(QKeyList(entries: entries, index: index, listTitle: listTitle, autoSelect: autoSelect,
-                          publishesEmpty: publishesEmpty, onOpen: onOpen, letter: letter))
+                          publishesEmpty: publishesEmpty, onOpen: onOpen, letter: letter, emptyLetter: emptyLetter))
     }
 
     /// While a sheet or full-screen page is up, keep every key away from the list
     /// beneath it. `onEscape` closes it: a page with no Esc of its own must never
     /// be a dead end on the monitor, where it may be the only way out.
-    func qKeyBlocker(active: Bool, onEscape: @escaping () -> Void = {}) -> some View {
-        modifier(QKeyBlocker(active: active, onEscape: onEscape))
+    /// `coversMonitor`: the sheet shows nothing of its own on the monitor (Settings,
+    /// the Media Library, a calendar or date sheet opened by touch), so the monitor
+    /// is told and its hint bar lists Esc rather than the keys of the page beneath.
+    func qKeyBlocker(active: Bool, onEscape: @escaping () -> Void = {}, coversMonitor: Bool = false) -> some View {
+        modifier(QKeyBlocker(active: active, onEscape: onEscape, coversMonitor: coversMonitor))
     }
 
     /// ↑/↓ and j/k scroll the page this sits in, for a page with no rows to
@@ -58,6 +64,8 @@ extension View {
         let top = -inset.top
         let bottom = max(top, scroll.contentSize.height + inset.bottom - scroll.bounds.height)
         let y = min(bottom, max(top, scroll.contentOffset.y + CGFloat(direction) * scroll.bounds.height / 3))
+        // At once with Reduce Motion on.
+        guard !UIAccessibility.isReduceMotionEnabled else { scroll.contentOffset.y = y; return }
         UIView.animate(withDuration: 0.12, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
             scroll.contentOffset.y = y
         }
@@ -118,8 +126,12 @@ private struct QKeyScroll: ViewModifier {
                         if k == "k" { handle.step(-1); return true }
                         return false
                     }))
+                ExternalDisplayModel.shared.setScrollPage(true, by: id)
             }
-            .onDisappear { KeyCommandRouter.shared.unregister(id) }
+            .onDisappear {
+                KeyCommandRouter.shared.unregister(id)
+                ExternalDisplayModel.shared.setScrollPage(false, by: id)
+            }
     }
 }
 
@@ -131,6 +143,7 @@ private struct QKeyList: ViewModifier {
     let publishesEmpty: Bool
     let onOpen: (Entry) -> Void
     let letter: (Entry, String) -> Bool
+    let emptyLetter: ((String) -> Bool)?
 
     @ObservedObject private var monitor = ExternalDisplayModel.shared
 
@@ -195,7 +208,19 @@ private struct QKeyList: ViewModifier {
         // still goes to the Journal).
         // It keeps its place in the stack (see `deactivate`), so its first row
         // doesn't lift it above the composer.
-        guard !entries.isEmpty else { KeyCommandRouter.shared.deactivate(routerID); return }
+        guard !entries.isEmpty else {
+            // Unless the page has a letter of its own that needs no row: it keeps
+            // that one and Esc, and the arrows and ↩ have nothing to act on.
+            if let emptyLetter {
+                KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
+                    moveUp: {}, moveDown: {}, open: {},
+                    clear: { KeyCommandRouter.shared.onBack?() },
+                    key: emptyLetter))
+            } else {
+                KeyCommandRouter.shared.deactivate(routerID)
+            }
+            return
+        }
         KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
             moveUp: { move(-1) },
             moveDown: { move(1) },
@@ -247,13 +272,17 @@ private struct QKeyList: ViewModifier {
 private struct QKeyBlocker: ViewModifier {
     let active: Bool
     let onEscape: () -> Void
+    let coversMonitor: Bool
     @State private var id = UUID()
 
     func body(content: Content) -> some View {
         content
             .onChange(of: active) { _, on in apply(on) }
             .onAppear { apply(active) }
-            .onDisappear { KeyCommandRouter.shared.unregister(id) }
+            .onDisappear {
+                KeyCommandRouter.shared.unregister(id)
+                if coversMonitor { ExternalDisplayModel.shared.setCovered(false, by: id) }
+            }
     }
 
     private func apply(_ on: Bool) {
@@ -263,6 +292,7 @@ private struct QKeyBlocker: ViewModifier {
         } else {
             KeyCommandRouter.shared.unregister(id)
         }
+        if coversMonitor { ExternalDisplayModel.shared.setCovered(on, by: id) }
     }
 }
 

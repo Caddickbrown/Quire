@@ -69,7 +69,9 @@ import UIKit
         previousKey?.makeKey()
         let field = wasTyping
         wasTyping = nil
-        DispatchQueue.main.async { field?.becomeFirstResponder() }
+        // Not under App Lock, which closes the menu as it comes down: the page
+        // behind the veil must not get the keyboard back.
+        DispatchQueue.main.async { if !AppLockManager.shared.showsVeil { field?.becomeFirstResponder() } }
     }
 
     func press(_ key: CommandPalette.Key) {
@@ -83,6 +85,17 @@ import UIKit
             // On the next turn, not inside the key's own handling.
             DispatchQueue.main.async { [weak self] in self?.perform?(action) }
         }
+    }
+
+    /// A row tapped or clicked: the selection goes to it and ↩ is pressed, so a
+    /// touch or a trackpad does exactly what the keys do.
+    func choose(_ row: CommandRow) {
+        guard var palette = menu, palette.rows.contains(where: { $0.id == row.id }) else { return }
+        // The list wraps, so at most once round it.
+        for _ in palette.rows where palette.selected != row.id { _ = palette.press(.down) }
+        guard palette.selected == row.id else { return }
+        menu = palette
+        press(.enter)
     }
 
     func type(_ text: String) { menu?.type(text) }
@@ -169,7 +182,8 @@ private final class CommandField: UITextView, UITextViewDelegate {
 
     required init?(coder: NSCoder) { fatalError("Built in code.") }
 
-    override var keyCommands: [UIKeyCommand]? { CommandKeys.open }
+    /// The menu's keys, and the monitor's own (⌥⌘P pauses it) while it is up.
+    override var keyCommands: [UIKeyCommand]? { CommandKeys.open + DisplayKeys.commands }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -209,7 +223,7 @@ private struct CommandMenuOverlay: View {
                 .onTapGesture { host.close() }
                 .accessibilityLabel("Close the menu")
             if let menu = host.menu, !host.onMonitor {
-                CommandMenuPanel(menu: menu, showsKeys: true)
+                CommandMenuPanel(menu: menu, showsKeys: true, onChoose: { host.choose($0) })
                     .padding(.horizontal, 16).padding(.top, 24)
             }
             CommandCatcher().frame(width: 1, height: 1).allowsHitTesting(false).accessibilityHidden(true)
@@ -225,6 +239,8 @@ struct CommandMenuPanel: View {
     var z: CGFloat = 1
     /// The monitor has its hint bar for this.
     var showsKeys = false
+    /// A row tapped or clicked, where the menu can be touched (not on the monitor).
+    var onChoose: ((CommandRow) -> Void)? = nil
 
     private var rowHeight: CGFloat { 54 * z }
 
@@ -273,6 +289,10 @@ struct CommandMenuPanel: View {
                 VStack(spacing: 0) {
                     ForEach(menu.rows) { row in
                         CommandMenuRow(row: row, lit: row.id == menu.selected, z: z).frame(height: rowHeight).id(row.id)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onChoose?(row) }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityAddTraits(onChoose == nil ? [] : .isButton)
                     }
                 }
             }

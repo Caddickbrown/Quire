@@ -34,21 +34,22 @@ struct SearchQuery: Equatable {
         searchMatches(query: rawQuery, raw: entry.raw, file: entry.file ?? "inbox.md")
     }
 
-    /// Whitespace-split, except quoted runs ("two words") come out whole.
+    /// The characters that open or close a quoted run, as the core's `QUOTES`
+    /// (a phone's keyboard types the curly ones).
+    static let quotes: Set<Character> = ["\"", "\u{201C}", "\u{201D}", "\u{201E}", "\u{00AB}", "\u{00BB}"]
+
+    /// Whitespace-split, except quoted runs ("two words") come out whole. The
+    /// core's `tokenize`, for anything that wants the words without a parse;
+    /// `parse` and `matches` are the core's own.
     static func tokenize(_ s: String) -> [String] {
         var tokens: [String] = []
         var current = ""
         var inQuotes = false
         for ch in s {
-            if ch == "\"" {
-                if inQuotes {
-                    if !current.isEmpty { tokens.append(current); current = "" }
-                    inQuotes = false
-                } else {
-                    if !current.isEmpty { tokens.append(current); current = "" }
-                    inQuotes = true
-                }
-            } else if ch == " " || ch == "\n" || ch == "\t", !inQuotes {
+            if quotes.contains(ch) {
+                if !current.isEmpty { tokens.append(current); current = "" }
+                inQuotes.toggle()
+            } else if ch.isWhitespace, !inQuotes {
                 if !current.isEmpty { tokens.append(current); current = "" }
             } else {
                 current.append(ch)

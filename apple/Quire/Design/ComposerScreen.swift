@@ -96,11 +96,14 @@ struct ComposerScreen: View {
     /// A brief word in the footer (a refused drop).
     @State private var notice: String?
     @State private var leaving = false
+    /// Where the keyboard was when a sheet or picker came up over the page, to go
+    /// back there when it closes.
+    @State private var refocus: Field?
 
     /// Today's prompt, when Settings → Writing prompts is on.
     private static var prompt: String {
-        let day = Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 0
-        return PromptDeck.prompts[day % PromptDeck.prompts.count]
+        // The day's prompt as Today and the widgets have it, `p`'s rerolls included.
+        QuirePrompts.prompt(offset: QuirePrompts.offset)
     }
 
     private var editing: EntryRef? { target.ref }
@@ -128,6 +131,11 @@ struct ComposerScreen: View {
                         Button("Save a copy to Inbox") { recoverCopy = true }
                         Button("Copy text") { copyText() }
                     }.font(q.ui(14))
+                    // With the folder out of reach neither of those can work, and
+                    // Close and Done wait on a save: this is the way out by touch.
+                    Button("Close and keep for later") { closeKeeping() }.font(q.ui(14))
+                        .frame(minHeight: 44, alignment: .leading)
+                        .accessibilityHint("Closes the page. Quire keeps the words and offers them again.")
                 }.padding(.horizontal, 20).padding(.vertical, 8)
             }
             ScrollView {
@@ -203,9 +211,14 @@ struct ComposerScreen: View {
         } message: {
             Text("Your edits will be saved as a new Inbox draft. The original entry will be kept.")
         }
-        .sheet(isPresented: $showStamp) {
+        .sheet(isPresented: $showStamp, onDismiss: restoreFocus) {
             StampSheet(initial: stampDate) { applyStamp($0) }.environment(\.quire, q)
         }
+        // A sheet or picker takes the keyboard from the text; where it was is
+        // noted as one comes up, and given back when the last has gone.
+        .onChange(of: overPage) { _, up in if up { refocus = focus ?? refocus } }
+        .onChange(of: showingPhotoPicker) { _, up in if !up { restoreFocus() } }
+        .onChange(of: showingFilePicker) { _, up in if !up { restoreFocus() } }
         .confirmationDialog("Discard this draft?", isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button("Discard", role: .destructive) { discard() }
         }
@@ -224,15 +237,31 @@ struct ComposerScreen: View {
             if case .success(let urls) = result, let url = urls.first,
                let rel = Attach.file(url, into: store) { link(rel) }
         }
-        .sheet(isPresented: $showingPhotoCapture) {
+        .sheet(isPresented: $showingPhotoCapture, onDismiss: restoreFocus) {
             PhotoCaptureView { url in if let rel = store.importAsset(from: url) { link(rel) } }
         }
-        .sheet(isPresented: $showingVideoRecorder) {
+        .sheet(isPresented: $showingVideoRecorder, onDismiss: restoreFocus) {
             VideoRecorderView { url in if let rel = store.importAsset(from: url) { link(rel) } }
         }
         .onDrop(of: [.image, .movie, .audio, .fileURL], isTargeted: nil) { providers in
             Attach.drop(providers, into: store, link: link,
                         refused: { say("Only images, video and audio attach") })
+        }
+    }
+
+    /// Something of the page's own is up over it and has the keyboard.
+    private var overPage: Bool {
+        showStamp || showingPhotoPicker || showingFilePicker || showingPhotoCapture || showingVideoRecorder
+    }
+
+    /// The keyboard back where it was before a sheet or picker (see `refocus`),
+    /// a moment after, so the sheet has let go of it. Never under App Lock.
+    private func restoreFocus() {
+        guard let was = refocus, !overPage else { return }
+        refocus = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            if !leaving, !overPage, focus == nil, !AppLockManager.shared.showsVeil,
+               !DeskDatePicker.shared.isOpen, !DeskConfirm.shared.isOpen { focus = was }
         }
     }
 
@@ -252,7 +281,9 @@ struct ComposerScreen: View {
             Button { showStamp = true } label: {
                 Text("[\(stampText)]").font(q.mono(12)).foregroundStyle(q.mutedColor).underline(pattern: .dot)
                     .frame(minHeight: 44)
-            }.buttonStyle(.plain).accessibilityLabel("Change date and time")
+            }.buttonStyle(.plain)
+                .accessibilityLabel("\(QDate.longDay(stampDate)), \(QDate.time(stampText))")
+                .accessibilityHint("Changes the date and time")
             Spacer()
             Button { starred.toggle() } label: {
                 Image(systemName: starred ? "star.fill" : "star").font(.system(size: 18))
@@ -414,8 +445,13 @@ struct ComposerScreen: View {
               let url = store.assetURL(forRelative: rel) else { return }
         Task { @MainActor in
             guard let transcript = try? await Transcriber.transcribe(url: url) else { return }
+            // The page closed while it was being worked out, or the memo's link has
+            // gone: there is nowhere to put the words, so the memo is not marked
+            // done and Transcribe All (Settings, Macros) still finds it.
+            let with = Transcriber.insert(transcript: transcript, after: rel, in: text)
+            guard !scratch.closing, with != text else { return }
             // Beneath its link, wherever the caret has got to since.
-            edit(to: Transcriber.insert(transcript: transcript, after: rel, in: text), moveCaret: false)
+            edit(to: with, moveCaret: false)
             store.markTranscribed(assetID: ((rel as NSString).lastPathComponent as NSString).deletingPathExtension)
         }
     }
@@ -574,7 +610,8 @@ struct ComposerScreen: View {
     /// Before each write to the journal, the page goes to a small file in the
     /// app's own container. If the write fails and the app is then killed, the
     /// words are there at the next launch (`ComposerRecovery.pending()`).
-    private func keepForRecovery(stamp: String, composed: String) {
+    @discardableResult
+    private func keepForRecovery(stamp: String, composed: String) -> Bool {
         let sourceName: String
         switch source {
         case .inbox: sourceName = "inbox"
@@ -585,7 +622,9 @@ struct ComposerScreen: View {
                                       starred: starred, stamp: stamp, composed: composed,
                                       file: current?.file, index: current?.fileIndex, raw: current?.raw,
                                       source: current == nil ? nil : sourceName)
-        if record.write() { scratch.recoveryKept = true }
+        guard record.write() else { return false }
+        scratch.recoveryKept = true
+        return true
     }
 
     private func dropRecovery() {
@@ -603,6 +642,27 @@ struct ComposerScreen: View {
     private func close() {
         finishRecordingIfNeeded()
         if saveNow() { leave() }
+    }
+
+    /// The failure banner's way out when nothing can be written to the journal:
+    /// the page as it stands goes to its recovery file (`ComposerRecovery`) and
+    /// the page closes without another save. Quire then asks about it as it does
+    /// for a page it was closed on, where it can be saved, copied or left for
+    /// later. If even that file can't be written the page stays open.
+    private func closeKeeping() {
+        finishRecordingIfNeeded()
+        scratch.pending?.cancel()
+        scratch.saveGeneration += 1
+        let stamp = stampText
+        let raw = JournalStore.makeEntry(timestamp: stamp, title: headerTitle,
+                                         body: text.trimmingCharacters(in: .newlines)).raw
+        guard keepForRecovery(stamp: stamp, composed: raw) else {
+            say("Couldn't keep a copy. Copy the text first.")
+            return
+        }
+        // Kept on purpose: no last save as the page goes, and the file stays.
+        scratch.settled = true
+        leave()
     }
 
     private func saveRecoveryCopy() {
@@ -706,7 +766,16 @@ struct ComposerScreen: View {
                                         discard()
                                         return leaving ? nil : (saveError ?? "The draft could not be discarded.")
                                     },
-                                    onClose: { DispatchQueue.main.async { if !leaving { focus = was ?? .body } } })
+                                    onClose: { giveBack(was) })
+        }
+    }
+
+    /// The text has the keyboard again once the monitor's question or date picker
+    /// closes. Not under App Lock: locking cancels them too, and the keyboard
+    /// handed back then would type into the page behind the veil.
+    private func giveBack(_ was: Field?) {
+        DispatchQueue.main.async {
+            if !leaving, !AppLockManager.shared.showsVeil { focus = was ?? .body }
         }
     }
 
@@ -721,7 +790,7 @@ struct ComposerScreen: View {
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             DeskDatePicker.shared.open(date: stampDate, title: title,
                                        onSet: { applyStamp($0); return nil },
-                                       onClose: { DispatchQueue.main.async { if !leaving { focus = was ?? .body } } })
+                                       onClose: { giveBack(was) })
         }
     }
 
@@ -1043,9 +1112,15 @@ final class EscapingTextField: UITextField {
         if window != nil { onWindow?() }
     }
 
+    /// Never under App Lock (see `PastingTextView`).
+    override var canBecomeFirstResponder: Bool {
+        !AppLockManager.shared.showsVeil && super.canBecomeFirstResponder
+    }
+
     override var keyCommands: [UIKeyCommand]? {
         let esc = EscapeChord.declared(composing: markedTextRange != nil).map { $0.keyCommand(action: #selector(quireEscape)) }
-        let own = (super.keyCommands ?? []) + esc + [CommandKeys.toggle]
+        // The monitor's own keys too (⌥⌘P pauses it), as the body's text view has them.
+        let own = (super.keyCommands ?? []) + esc + [CommandKeys.toggle] + DisplayKeys.commands
         guard KeyCommandRouter.shared.wantsChords else { return own }
         return own + KeyCommandRouter.chords.map {
             let c = UIKeyCommand(input: $0, modifierFlags: .control, action: #selector(quireChord(_:)))
@@ -1068,18 +1143,22 @@ private struct StampSheet: View {
     let onSave: (Date) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                QLink(title: "Cancel") { dismiss() }
-                Spacer()
-                QLink(title: "Set", emphasised: true) { onSave(initial); dismiss() }
+        // In a scroll view: on a phone on its side the calendar is taller than
+        // the sheet, and the time row under it could not be reached.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    QLink(title: "Cancel") { dismiss() }
+                    Spacer()
+                    QLink(title: "Set", emphasised: true) { onSave(initial); dismiss() }
+                }
+                QTitle(kicker: "Date and time", title: "When", size: 34)
+                DatePicker("", selection: $initial, displayedComponents: [.date, .hourAndMinute])
+                    .datePickerStyle(.graphical).labelsHidden().tint(q.accentColor)
             }
-            QTitle(kicker: "Date and time", title: "When", size: 34)
-            DatePicker("", selection: $initial, displayedComponents: [.date, .hourAndMinute])
-                .datePickerStyle(.graphical).labelsHidden().tint(q.accentColor)
-            Spacer(minLength: 0)
+            .padding(.horizontal, 26).padding(.top, 16).padding(.bottom, 24)
         }
-        .padding(.horizontal, 26).padding(.top, 16)
+        .scrollBounceBehavior(.basedOnSize)
         .background(q.pageColor.ignoresSafeArea())
         .preferredColorScheme(q.colorScheme)
         .environment(\.colorScheme, q.colorScheme)

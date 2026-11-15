@@ -11,7 +11,9 @@
 //  folder's security-scoped bookmark — so everything lands in the App Group's
 //  `PendingShare/` handoff (a `share-<id>.md` jnl-format draft per share plus an
 //  `assets/` folder), which the app drains into the inbox on its next launch
-//  or foreground (`JournalStore.drainPendingShares`). Media is copied
+//  or foreground (`JournalStore.drainPendingShares`). A `share-<id>.md` file is
+//  always one draft: the app escapes any line of the shared text that reads as
+//  an entry header, so the text needs none here. Media is copied
 //  file-to-file (never buffered — extensions have a tight memory budget) and
 //  named here so the drafts' `![](assets/…)` links are already correct once
 //  the app moves the files into `<base>/assets/`.
@@ -48,7 +50,7 @@ final class ShareViewController: UIViewController {
         Task { await run() }
     }
 
-    private func show(_ compose: ShareComposeView) {
+    private func show<Content: View>(_ compose: Content) {
         let host = UIHostingController(rootView: compose)
         addChild(host)
         host.view.frame = view.bounds
@@ -70,7 +72,7 @@ final class ShareViewController: NSViewController {
         Task { await run() }
     }
 
-    private func show(_ compose: ShareComposeView) {
+    private func show<Content: View>(_ compose: Content) {
         let host = NSHostingView(rootView: compose)
         host.frame = view.bounds
         host.autoresizingMask = [.width, .height]
@@ -84,7 +86,12 @@ extension ShareViewController {
     private func run() async {
         guard let captured = await ShareCapture.collect(
             items: extensionContext?.inputItems as? [NSExtensionItem] ?? []) else {
-            extensionContext?.completeRequest(returningItems: nil)
+            // Nothing Quire can keep (a PDF, a zip): say so. The sheet used to
+            // close exactly as it does after a save, with nothing saved.
+            show(ShareNothingView(onClose: { [weak self] in
+                self?.extensionContext?.cancelRequest(withError: NSError(
+                    domain: NSCocoaErrorDomain, code: NSUserCancelledError))
+            }))
             return
         }
         let defaults = UserDefaults(suiteName: appGroupID)
@@ -168,6 +175,25 @@ struct ShareComposeView: View {
             Spacer(minLength: 0)
         }
         .padding(16)
+    }
+}
+
+/// Shown when the share held nothing that can go in a draft.
+struct ShareNothingView: View {
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("Nothing to save").font(.headline)
+            Text("Quire can keep text, links, photos, video and audio. This isn't one of those, so nothing was added to your Inbox.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Close", action: onClose)
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
