@@ -37,6 +37,11 @@ ureq = { version = "3.4", features = ["json", "platform-verifier"] }
 sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
+# A release file's .sig, against the updater's public key.
+minisign-verify = "0.3"
+base64 = "0.22"
+# SIGHUP and SIGTERM as a flag the loop reads (crossterm already builds it).
+signal-hook = "0.3"
 
 [dev-dependencies]
 tempfile.workspace = true

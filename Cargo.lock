@@ -3833,10 +3833,12 @@ name = "quire-tui"
 version = "0.11.0"
 dependencies = [
  "arboard",
+ "base64 0.22.1",
  "chrono",
  "crossterm",
  "dirs 5.0.1",
  "flate2",
+ "minisign-verify",
  "once_cell",
  "quire-core",
  "rand 0.9.5",
@@ -3845,6 +3847,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "signal-hook",
  "tar",
  "tempfile",
  "unicode-segmentation",
