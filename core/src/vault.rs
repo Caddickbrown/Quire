@@ -48,7 +48,9 @@ pub trait Vault: Send + Sync {
     /// Rename a file or folder.
     fn rename(&self, from: &str, to: &str) -> Result<(), String>;
     /// The children of a folder. A missing folder lists as empty. Symlinks
-    /// are reported as neither file nor folder, so walkers never follow them.
+    /// are reported as neither file nor folder, so a walker never follows one
+    /// without meaning to (the journal's entry trees do, for a linked folder:
+    /// `Journal::walk_files`).
     fn list(&self, rel: &str) -> Result<Vec<Item>, String>;
     fn is_dir(&self, rel: &str) -> bool;
     fn is_file(&self, rel: &str) -> bool;
@@ -72,18 +74,28 @@ impl FsVault {
     pub fn root(&self) -> &Path {
         &self.root
     }
-    fn path(&self, rel: &str) -> PathBuf {
+    /// Where `rel` is, or None for one that would leave the root: an absolute
+    /// path (`join` would throw the root away) or one with `..` in it. Every
+    /// path the core builds is relative and stays inside; this is the vault
+    /// not taking that on trust.
+    fn path(&self, rel: &str) -> Option<PathBuf> {
+        use std::path::Component;
         if rel.is_empty() || rel == "." {
-            self.root.clone()
-        } else {
-            self.root.join(rel)
+            return Some(self.root.clone());
         }
+        let inside = Path::new(rel).components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir));
+        inside.then(|| self.root.join(rel))
+    }
+
+    /// `path`, as an error for the operations that can give one.
+    fn checked(&self, rel: &str) -> Result<PathBuf, String> {
+        self.path(rel).ok_or_else(|| format!("Refusing a path outside the journal folder: {:?}", rel))
     }
 }
 
 impl Vault for FsVault {
     fn read(&self, rel: &str) -> Result<Option<Vec<u8>>, String> {
-        let p = self.path(rel);
+        let p = self.checked(rel)?;
         match fs::read(&p) {
             Ok(b) => Ok(Some(b)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -92,7 +104,7 @@ impl Vault for FsVault {
     }
 
     fn write(&self, rel: &str, bytes: &[u8]) -> Result<(), String> {
-        let path = self.path(rel);
+        let path = self.checked(rel)?;
         let dir = path.parent().ok_or("no parent folder")?;
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let _lock = FolderLock::take(dir);
@@ -100,7 +112,7 @@ impl Vault for FsVault {
     }
 
     fn replace_if_unchanged(&self, rel: &str, expected: Option<&[u8]>, bytes: Option<&[u8]>) -> Result<bool, String> {
-        let path = self.path(rel);
+        let path = self.checked(rel)?;
         let dir = path.parent().ok_or("no parent folder")?;
         if bytes.is_some() {
             fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -131,7 +143,7 @@ impl Vault for FsVault {
     }
 
     fn remove(&self, rel: &str) -> Result<bool, String> {
-        let p = self.path(rel);
+        let p = self.checked(rel)?;
         // A real folder (not a link to one) goes only when empty: remove_dir
         // refuses anything else, so nothing is ever deleted recursively here.
         let is_dir = fs::symlink_metadata(&p).map(|m| m.is_dir()).unwrap_or(false);
@@ -149,7 +161,7 @@ impl Vault for FsVault {
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), String> {
-        let (a, b) = (self.path(from), self.path(to));
+        let (a, b) = (self.checked(from)?, self.checked(to)?);
         if let Some(parent) = b.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -161,7 +173,7 @@ impl Vault for FsVault {
     }
 
     fn list(&self, rel: &str) -> Result<Vec<Item>, String> {
-        let p = self.path(rel);
+        let p = self.checked(rel)?;
         let rd = match fs::read_dir(&p) {
             Ok(rd) => rd,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -178,24 +190,24 @@ impl Vault for FsVault {
     }
 
     fn is_dir(&self, rel: &str) -> bool {
-        self.path(rel).is_dir()
+        self.path(rel).is_some_and(|p| p.is_dir())
     }
 
     fn is_file(&self, rel: &str) -> bool {
-        self.path(rel).is_file()
+        self.path(rel).is_some_and(|p| p.is_file())
     }
 
     fn len(&self, rel: &str) -> u64 {
-        fs::symlink_metadata(self.path(rel)).map(|m| m.len()).unwrap_or(0)
+        self.path(rel).and_then(|p| fs::symlink_metadata(p).ok()).map(|m| m.len()).unwrap_or(0)
     }
 
     fn modified(&self, rel: &str) -> Option<u64> {
-        let m = fs::symlink_metadata(self.path(rel)).ok()?.modified().ok()?;
+        let m = fs::symlink_metadata(self.path(rel)?).ok()?.modified().ok()?;
         m.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
     }
 
     fn local_path(&self, rel: &str) -> Option<PathBuf> {
-        Some(self.path(rel))
+        self.path(rel)
     }
 }
 
@@ -298,6 +310,30 @@ mod tests {
         assert!(!v.remove("c/d.md").unwrap());
         assert!(v.list("nope").unwrap().is_empty());
         assert_eq!(v.local_path("x").unwrap(), d.path().join("x"));
+    }
+
+    #[test]
+    fn a_path_that_leaves_the_root_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("journal-folder");
+        fs::create_dir(&root).unwrap();
+        fs::write(d.path().join("outside.md"), "theirs").unwrap();
+        let v = FsVault::new(&root);
+        let abs = d.path().join("outside.md").to_string_lossy().to_string();
+        for rel in ["../outside.md", "a/../../outside.md", abs.as_str()] {
+            assert!(v.read(rel).is_err(), "{rel}");
+            assert!(v.write(rel, b"mine").is_err(), "{rel}");
+            assert!(v.replace_if_unchanged(rel, Some(b"theirs"), Some(b"mine")).is_err(), "{rel}");
+            assert!(v.remove(rel).is_err(), "{rel}");
+            assert!(v.rename(rel, "in.md").is_err() && v.rename("in.md", rel).is_err(), "{rel}");
+            assert!(!v.is_file(rel) && !v.is_dir(rel) && v.len(rel) == 0 && v.modified(rel).is_none() && v.local_path(rel).is_none(), "{rel}");
+        }
+        assert!(v.list("..").is_err());
+        assert_eq!(fs::read_to_string(d.path().join("outside.md")).unwrap(), "theirs");
+        // The root itself, and `./` in front of a path, are still fine.
+        assert!(v.is_dir("") && v.is_dir("."));
+        v.write("./a/b.md", b"hi").unwrap();
+        assert_eq!(v.read("a/./b.md").unwrap().unwrap(), b"hi");
     }
 
     #[test]

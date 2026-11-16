@@ -102,6 +102,8 @@ final class AppleVault: NativeVault, @unchecked Sendable {
         return resolved.path
     }
     private func failure(_ message: String) -> BridgeError { .Failure(message: message) }
+    /// What a read, a listing or a swap says when it met an iCloud placeholder.
+    static let downloadingMessage = "Journal files are downloading from iCloud. Try again shortly."
     private func coordinated<T>(_ url: URL, writing: Bool, options: NSFileCoordinator.WritingOptions = .forReplacing, _ body: (URL) throws -> T) throws -> T {
         let coordinator = NSFileCoordinator(filePresenter: nil)
         var coordinationError: NSError?
@@ -124,7 +126,12 @@ final class AppleVault: NativeVault, @unchecked Sendable {
     /// journal of a few thousand entries take most of a minute to open. Nook
     /// just read the file, and so does this: iCloud is only consulted when the
     /// file turns out not to be there.
-    func read(rel: String) throws -> Data? {
+    ///
+    /// Every method Rust calls reports its errors as the bridge's (`plain`): an
+    /// ordinary Cocoa error thrown out of a callback reaches the person as
+    /// "Callback interface failure", not as what went wrong.
+    func read(rel: String) throws -> Data? { try plain { try self.readPlain(rel) } }
+    private func readPlain(_ rel: String) throws -> Data? {
         let target = try url(rel)
         do { return try Data(contentsOf: target) }
         catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
@@ -132,8 +139,10 @@ final class AppleVault: NativeVault, @unchecked Sendable {
             // file that doesn't exist.
             let placeholder = target.deletingLastPathComponent().appendingPathComponent("." + target.lastPathComponent + ".icloud")
             if fm.fileExists(atPath: placeholder.path) {
-                try fm.startDownloadingUbiquitousItem(at: target)
-                throw failure("Journal files are downloading from iCloud. Try again shortly.")
+                // Asked for, and said to be coming, whether or not the asking
+                // worked: its failure is not what the person needs to read.
+                try? fm.startDownloadingUbiquitousItem(at: target)
+                throw failure(Self.downloadingMessage)
             }
             if fm.isUbiquitousItem(at: target) {
                 try fm.startDownloadingUbiquitousItem(at: target)
@@ -143,9 +152,11 @@ final class AppleVault: NativeVault, @unchecked Sendable {
         }
     }
     func write(rel: String, bytes: Data) throws {
-        let target = try url(rel)
-        try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try coordinated(target, writing: true) { try self.replace($0, with: bytes) }
+        try plain {
+            let target = try self.url(rel)
+            try self.fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try self.coordinated(target, writing: true) { try self.replace($0, with: bytes) }
+        }
     }
     private func replace(_ target: URL, with bytes: Data) throws {
         let temp = target.deletingLastPathComponent().appendingPathComponent(".quire-\(UUID().uuidString).tmp")
@@ -161,6 +172,9 @@ final class AppleVault: NativeVault, @unchecked Sendable {
     /// plain read above stays uncoordinated and fast. `.forMerging` is the
     /// option for a read-then-write, and has iCloud bring the file up to date.
     func replaceIfUnchanged(rel: String, expected: Data?, bytes: Data?) throws -> Bool {
+        try plain { try self.swapIfUnchanged(rel, expected: expected, bytes: bytes) }
+    }
+    private func swapIfUnchanged(_ rel: String, expected: Data?, bytes: Data?) throws -> Bool {
         let target = try url(rel)
         if bytes != nil { try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true) }
         return try coordinated(target, writing: true, options: bytes == nil ? .forDeleting : .forMerging) { target in
@@ -168,8 +182,8 @@ final class AppleVault: NativeVault, @unchecked Sendable {
             // "no file" must not be taken for what the caller expected.
             let placeholder = target.deletingLastPathComponent().appendingPathComponent("." + target.lastPathComponent + ".icloud")
             if self.fm.fileExists(atPath: placeholder.path) {
-                try self.fm.startDownloadingUbiquitousItem(at: target)
-                throw self.failure("Journal files are downloading from iCloud. Try again shortly.")
+                try? self.fm.startDownloadingUbiquitousItem(at: target)
+                throw self.failure(Self.downloadingMessage)
             }
             let current: Data?
             do { current = try Data(contentsOf: target) }
@@ -190,7 +204,7 @@ final class AppleVault: NativeVault, @unchecked Sendable {
     }
     func rename(from: String, to: String) throws {
         let source = try url(from), destination = try url(to)
-        try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try plain { try self.fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true) }
         var error: NSError?
         var result: Result<Void, Error>?
         NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: source, options: .forMoving,
@@ -201,7 +215,7 @@ final class AppleVault: NativeVault, @unchecked Sendable {
         guard let result else { throw failure("Rename coordination did not complete") }
         do { try result.get() } catch { throw failure(error.localizedDescription) }
     }
-    /// Run a read without file coordination, reporting errors as the bridge's.
+    /// Run `body`, reporting whatever it throws as the bridge's error.
     private func plain<T>(_ body: () throws -> T) throws -> T {
         do { return try body() } catch let error as BridgeError { throw error } catch { throw failure(error.localizedDescription) }
     }
@@ -213,14 +227,17 @@ final class AppleVault: NativeVault, @unchecked Sendable {
             let items: [URL]
             do { items = try self.fm.contentsOfDirectory(at: target, includingPropertiesForKeys: Array(keys)) }
             catch let error as CocoaError where error.code == .fileReadNoSuchFile { return [] }
+            // Ask iCloud to materialize placeholders, and fail this snapshot
+            // rather than publishing an incomplete journal as if it is empty.
+            // Every one in the folder is asked for before failing: asking for
+            // the first alone brought a month of day files down one per try.
+            let placeholders = items.filter { $0.pathExtension == "icloud" }
+            if !placeholders.isEmpty {
+                for item in placeholders { try? self.fm.startDownloadingUbiquitousItem(at: item) }
+                throw self.failure(Self.downloadingMessage)
+            }
             return try items.map { item in
                 let v = try item.resourceValues(forKeys: keys)
-                // Ask iCloud to materialize placeholders, and fail this snapshot
-                // rather than publishing an incomplete journal as if it is empty.
-                if item.pathExtension == "icloud" {
-                    try self.fm.startDownloadingUbiquitousItem(at: item)
-                    throw self.failure("Journal files are downloading from iCloud. Try again shortly.")
-                }
                 let link = v.isSymbolicLink == true
                 return VaultItem(name: item.lastPathComponent, isDir: !link && v.isDirectory == true,
                                  isFile: !link && v.isRegularFile == true, len: UInt64(max(0, v.fileSize ?? 0)))

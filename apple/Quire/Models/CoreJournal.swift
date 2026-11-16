@@ -21,6 +21,15 @@ struct CoreEntry: Decodable {
     }
 }
 
+/// A snapshot for showing: every entry that could be read, and the files that
+/// were read but aren't text (not UTF-8), which are left out and named. A file
+/// or folder that can't be read at all still fails the call.
+struct CoreSnapshot: Decodable {
+    struct Unreadable: Decodable { let file: String; let error: String }
+    let entries: [CoreEntry]
+    let unreadable: [Unreadable]
+}
+
 struct CoreWritten: Decodable { let file: String; let index: Int; let raw: String }
 
 final class CoreJournal: @unchecked Sendable {
@@ -36,6 +45,10 @@ final class CoreJournal: @unchecked Sendable {
     }
     func load() throws -> [CoreEntry] { try call("load") }
     func inbox() throws -> [CoreEntry] { try call("inbox") }
+    /// `load` for a screen: one file that isn't text no longer hides the rest.
+    /// Anything that decides what to delete or rewrite keeps the strict `load`.
+    func loadLenient() throws -> CoreSnapshot { try call("load_lenient") }
+    func inboxLenient() throws -> CoreSnapshot { try call("inbox_lenient") }
     func migrate() throws { let _: Bool = try call("migrate") }
     func reference(_ entry: Entry) throws -> [String: Any] {
         guard let file = entry.file, let index = entry.fileIndex else {

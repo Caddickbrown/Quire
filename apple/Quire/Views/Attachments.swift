@@ -45,6 +45,12 @@ enum Attach {
     static func file(_ url: URL, into store: JournalStore) -> String? {
         let ok = url.startAccessingSecurityScopedResource()
         defer { if ok { url.stopAccessingSecurityScopedResource() } }
+        // Video and audio are copied across as files, as a Photos pick is: read
+        // whole into memory, a long video froze the page and could get the app
+        // killed. Images still come as data, to be converted and sized on save.
+        let type = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+            ?? UTType(filenameExtension: url.pathExtension)
+        if let type, !type.conforms(to: .image), isMedia(type) { return store.importAsset(from: url) }
         guard let data = try? Data(contentsOf: url) else { return nil }
         let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
         return store.saveAsset(data, ext: ext)

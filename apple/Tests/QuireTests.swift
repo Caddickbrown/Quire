@@ -34,6 +34,17 @@ final class JournalParserTests: XCTestCase {
         XCTAssertNil(MediaLinks.resolved("../../outside.jpg", file: "inbox.md"))
     }
 
+    /// A bare target may hold balanced brackets, as in the core: the pattern
+    /// used to stop at the first `)`, so `image(1).jpg` had no owning entry in
+    /// the Media Library.
+    func testMediaTargetsMayHoldBalancedBrackets() {
+        XCTAssertEqual(MediaLinks.paths(in: "![](assets/2026/09/image(1).jpg)"), ["assets/2026/09/image(1).jpg"])
+        XCTAssertEqual(MediaLinks.paths(in: "a ![x](assets/a(1)(2).png \"t\") b ![](assets/plain.jpg) c"),
+                       ["assets/a(1)(2).png", "assets/plain.jpg"])
+        XCTAssertEqual(MediaLinks.paths(in: "![](<assets/with (space).jpg>)"), ["assets/with (space).jpg"])
+        XCTAssertEqual(MediaLinks.strippingLinks("see ![cap](assets/image(1).png) here"), "see   here")
+    }
+
     func testStrippingLinksLeavesTheProse() {
         XCTAssertEqual(MediaLinks.strippingLinks("see ![cap](assets/a.png) here"), "see   here")
         XCTAssertEqual(MediaLinks.strippingLinks("plain"), "plain")
@@ -234,6 +245,28 @@ final class SearchQueryTests: XCTestCase {
     func testTokenizeKeepsQuotedPhrases() {
         XCTAssertEqual(SearchQuery.tokenize(#"plain "two words" tag:work"#),
                        ["plain", "two words", "tag:work"])
+    }
+
+    /// The grammar is the core's (14 November): curly and angle quotes quote, a
+    /// quoted token is always text, and an operator whose value can't be used
+    /// is searched for as text, not dropped.
+    func testQuotesAndUnusableOperatorsFollowTheCore() {
+        XCTAssertEqual(SearchQuery.tokenize("a \u{201C}two words\u{201D} \u{00AB}trois mots\u{00BB} \u{201E}zwei\u{201C}\tb"),
+                       ["a", "two words", "trois mots", "zwei", "b"])
+        XCTAssertEqual(SearchQuery.parse("\u{201C}two words\u{201D}").terms, ["two words"])
+        let quoted = SearchQuery.parse(#""tag:work" "is:starred""#)
+        XCTAssertEqual(quoted.terms, ["tag:work", "is:starred"])
+        XCTAssertEqual(quoted.tags, [])
+        XCTAssertFalse(quoted.starred)
+        let unusable = SearchQuery.parse("before:March has:pdf tag:")
+        XCTAssertEqual(unusable.terms, ["before:march", "has:pdf", "tag:"])
+        XCTAssertNil(unusable.before)
+        XCTAssertEqual(unusable.has, [])
+        // And the match is made with the same reading: a quoted operator is
+        // looked for as words.
+        XCTAssertTrue(quoted.matches(entry("2026-05-10", "", "note tag:work and is:starred")))
+        XCTAssertFalse(quoted.matches(entry("2026-05-10", "", "about @work")))
+        XCTAssertTrue(unusable.matches(entry("2026-05-10", "", "due before:March has:pdf tag: x")))
     }
 
     func testOperatorsParse() {

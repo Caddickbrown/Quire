@@ -99,7 +99,7 @@ private struct TodaySmall: View {
     private var marathon: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Text("■").foregroundStyle(q.signalColor)
+                Text("■").foregroundStyle(q.markColor)
                 Text(day.goal > 0 ? "WORDS / GOAL" : "WORDS TODAY").tracking(1.4)
             }
             .font(q.label(10)).foregroundStyle(q.mutedColor)
@@ -313,7 +313,7 @@ private struct TodayLarge: View {
                         + Text(day.goal > 0 ? "/\(day.goal)" : "").foregroundColor(q.mutedColor))
                         .font(q.display(18)).lineLimit(1).minimumScaleFactor(0.5)
                     if day.goal > 0 {
-                        WidgetBar(fraction: day.goalFraction, height: 4, fill: q.signalColor, track: q.lineColor)
+                        WidgetBar(fraction: day.goalFraction, height: 4, fill: q.markColor, track: q.lineColor)
                     }
                 }
                 readout("Streak", leading: true) {
@@ -338,7 +338,7 @@ private struct TodayLarge: View {
                 .padding(.top, 12)
 
             Spacer(minLength: 8)
-            QHazard(color: q.signalColor).opacity(0.9)
+            QHazard(color: q.markColor).opacity(0.9)
             HStack {
                 Text("~/JOURNAL")
                 Spacer()
@@ -401,7 +401,7 @@ private struct OnThisDaySmall: View {
     private func marathon(_ memory: WidgetDay.Memory) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Text("■").foregroundStyle(q.signalColor)
+                Text("■").foregroundStyle(q.markColor)
                 Text("ON THIS DAY").tracking(1.4)
             }
             .font(q.label(10)).foregroundStyle(q.mutedColor)
@@ -575,7 +575,7 @@ private struct TimerLockScreen: View {
             if state.wordGoal > 0 {
                 WidgetBar(fraction: min(1, Double(state.wordsToday) / Double(state.wordGoal)),
                           height: q.isMarathon ? 4 : q.ruleH,
-                          fill: q.isMarathon ? q.signalColor : q.accentColor, track: q.lineColor)
+                          fill: q.isMarathon ? q.markColor : q.accentColor, track: q.lineColor)
             }
         }
         .foregroundStyle(q.inkColor)

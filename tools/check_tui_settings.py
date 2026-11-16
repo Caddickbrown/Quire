@@ -7,7 +7,8 @@ XDG_CONFIG_HOME (Linux only; macOS ignores it) and HOME (a Mac's
 ~/Library/Application Support, jnl's config, ~/notes). A binary from before
 QUIRE_CONFIG_DIR existed fails the first check on a Mac instead of reaching the
 real settings. The version it looks for is the workspace's, from Cargo.toml.
-Run by hand, not by make; the keys it sends were last checked against 0.7.
+Run by hand, not by make; the keys it sends were last checked against 0.11
+(15 November 2026: it passes as written).
 """
 import fcntl
 import json

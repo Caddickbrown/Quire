@@ -62,7 +62,7 @@ struct InboxScreen: View {
                 if store.inboxDrafts.isEmpty {
                     Text(store.indexed
                          ? "Everything is filed. Captures from the widget, the share sheet and the reminder land here first."
-                         : store.foldingLegacy ? "Moving your journal into day files…" : "Loading your journal…")
+                         : store.qReadingLine + "…")
                         .font(q.writing(18)).foregroundStyle(q.mutedColor).lineSpacing(5)
                 }
                 ForEach(months) { month in

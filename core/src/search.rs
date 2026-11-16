@@ -5,14 +5,21 @@
 //! Grammar:
 //!     plain terms          case-insensitive substring match on title + body
 //!                          (not the timestamp header)
-//!     "exact phrase"       quoted phrases match as one substring
+//!     "exact phrase"       quoted phrases match as one substring; curly
+//!                          quotes and guillemets (“ ” „ « ») quote too, as
+//!                          a phone keyboard types those. Anything quoted is
+//!                          text, never an operator: "is:starred" finds the
+//!                          words
 //!     tag:name  or  @name  entry carries @name
 //!     before:2026-03       entry date strictly before the (partial) ISO date
 //!     after:2026-03        entry date on/after the (partial) ISO date
 //!     has:image            entry links media of that kind (image|video|audio|media)
 //!     is:starred           entry is starred
 //!
-//! Every clause must match (AND). An empty query matches nothing.
+//! Every clause must match (AND). An empty query matches nothing. An
+//! operator whose value can't be used (`before:March`, `has:pdf`, `tag:`) is
+//! searched for as text, so a mistyped filter narrows the search to nothing
+//! instead of silently widening it.
 
 use crate::extras::media_kind;
 use crate::journal::{link_targets, resolve_link, Entry};
@@ -34,29 +41,26 @@ impl Query {
 
     pub fn parse(raw: &str) -> Query {
         let mut q = Query::default();
-        for token in tokenize(raw) {
+        for (token, quoted) in tokens(raw) {
             let lower = token.to_lowercase();
-            if let Some(name) = lower.strip_prefix("tag:") {
-                if !name.is_empty() {
-                    q.tags.push(if name.starts_with('@') { name.to_string() } else { format!("@{}", name) });
-                }
-            } else if lower.starts_with('@') && lower.len() > 1 && !token.contains(' ') {
+            if quoted {
+                q.terms.push(lower);
+                continue;
+            }
+            let value = |prefix: &str| lower.strip_prefix(prefix).map(str::to_string);
+            if let Some(name) = value("tag:").filter(|n| !n.trim_start_matches('@').is_empty()) {
+                q.tags.push(if name.starts_with('@') { name } else { format!("@{}", name) });
+            } else if lower.starts_with('@') && lower.len() > 1 {
                 q.tags.push(lower);
-            } else if let Some(d) = lower.strip_prefix("before:") {
-                if is_partial_date(d) {
-                    q.before = Some(d.to_string());
-                }
-            } else if let Some(d) = lower.strip_prefix("after:") {
-                if is_partial_date(d) {
-                    q.after = Some(d.to_string());
-                }
-            } else if let Some(kind) = lower.strip_prefix("has:") {
-                if ["image", "video", "audio", "media"].contains(&kind) {
-                    q.has.push(kind.to_string());
-                }
+            } else if let Some(d) = value("before:").filter(|d| is_partial_date(d)) {
+                q.before = Some(d);
+            } else if let Some(d) = value("after:").filter(|d| is_partial_date(d)) {
+                q.after = Some(d);
+            } else if let Some(kind) = value("has:").filter(|k| ["image", "video", "audio", "media"].contains(&k.as_str())) {
+                q.has.push(kind);
             } else if lower == "is:starred" {
                 q.starred = true;
-            } else if !lower.is_empty() {
+            } else {
                 q.terms.push(lower);
             }
         }
@@ -113,27 +117,36 @@ pub fn media_paths(e: &Entry) -> Vec<String> {
     link_targets(&e.raw).into_iter().filter_map(|p| resolve_link(&e.file, &p)).filter(|p| p.starts_with("assets/")).collect()
 }
 
+/// The characters that open or close a phrase: the straight quote, and the
+/// curly and angle ones a phone keyboard's smart punctuation types for it.
+pub const QUOTES: [char; 6] = ['"', '\u{201C}', '\u{201D}', '\u{201E}', '\u{00AB}', '\u{00BB}'];
+
 /// Whitespace-split, except quoted runs ("two words") come out whole.
 pub fn tokenize(s: &str) -> Vec<String> {
+    tokens(s).into_iter().map(|(t, _)| t).collect()
+}
+
+/// `tokenize`, with whether each token was quoted.
+fn tokens(s: &str) -> Vec<(String, bool)> {
     let mut tokens = vec![];
     let mut current = String::new();
     let mut in_quotes = false;
     for ch in s.chars() {
-        if ch == '"' {
+        if QUOTES.contains(&ch) {
             if !current.is_empty() {
-                tokens.push(std::mem::take(&mut current));
+                tokens.push((std::mem::take(&mut current), in_quotes));
             }
             in_quotes = !in_quotes;
         } else if ch.is_whitespace() && !in_quotes {
             if !current.is_empty() {
-                tokens.push(std::mem::take(&mut current));
+                tokens.push((std::mem::take(&mut current), false));
             }
         } else {
             current.push(ch);
         }
     }
     if !current.is_empty() {
-        tokens.push(current);
+        tokens.push((current, in_quotes));
     }
     tokens
 }
@@ -195,6 +208,29 @@ mod tests {
         assert!(!Query::parse("2025").matches(&dated), "a plain term never searches the header");
         assert!(Query::parse("morning").matches(&dated));
         assert!(Query::parse("2025").matches(&entry("2025-06-01", "", "bought it in 2025")));
+
+        // Smart punctuation: a phone types “ ” for ", and they quote the same.
+        assert_eq!(tokenize("\u{201C}exact phrase\u{201D} \u{00AB}deux mots\u{00BB} \u{201E}zwei\u{201C}"), vec!["exact phrase", "deux mots", "zwei"]);
+        let curly = Query::parse("\u{201C}exact phrase\u{201D}");
+        assert_eq!(curly, phrase);
+        assert!(curly.matches(&entry("2026-01-01", "", "an exact phrase here")));
+        assert!(!curly.matches(&entry("2026-01-01", "", "exact other phrase")));
+
+        // Anything quoted is text, never an operator.
+        let starred_words = Query::parse(r#""is:starred""#);
+        assert!(!starred_words.starred);
+        assert_eq!(starred_words.terms, vec!["is:starred"]);
+        assert!(starred_words.matches(&entry("2026-01-01", "", "type is:starred to filter")));
+        let q = Query::parse(r#""tag:work stuff" "@home" "before:2026""#);
+        assert!(q.tags.is_empty() && q.before.is_none());
+        assert_eq!(q.terms, vec!["tag:work stuff", "@home", "before:2026"]);
+
+        // An operator with a value that can't be used is searched as text, so
+        // the search never comes back wider than what was asked.
+        let q = Query::parse("coffee before:March has:pdf tag:");
+        assert!(q.before.is_none() && q.has.is_empty() && q.tags.is_empty());
+        assert_eq!(q.terms, vec!["coffee", "before:march", "has:pdf", "tag:"]);
+        assert!(!q.matches(&entry("2026-01-01", "", "coffee")));
 
         let recorded = entry("2026-01-02", "", "![](assets/a.m4a) ![](assets/b.webm) [f](assets/c.pdf)");
         assert!(Query::parse("has:audio").matches(&recorded));

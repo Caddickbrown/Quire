@@ -21,6 +21,11 @@ pub const RELEASE_TARGET: Option<&str> = option_env!("QUIRE_RELEASE_TARGET");
 /// The longest one request may take, start to last byte (the AppImage is
 /// about 100 MB).
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+/// The key releases are signed with: `plugins.updater.pubkey` in
+/// linux/src-tauri/tauri.conf.json (base64 of a minisign public-key file),
+/// the same one the desktop app's own updater checks. A test holds the two
+/// together.
+const UPDATER_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE1N0VDMjcxOTg0ODcxNUMKUldSY2NVaVljY0orcGFuRXQzZTNhUzduZnU2dXhjTkF0eWd0Z1ZTZGVCMXkxdklOSnREQlhWQzAK";
 /// The binaries in each release tarball, installed side by side.
 const BINS: [&str; 2] = ["quire", "jnl"];
 
@@ -94,6 +99,10 @@ fn download(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
     let fail = |e: ureq::Error| format!("Download failed: {e}");
     let mut url = url.to_string();
     for _ in 0..5 {
+        // The first address and every one a redirect names: https, and GitHub's.
+        if !download_host_ok(&url) {
+            return Err(format!("Download failed: {} is not an https address at GitHub; nothing was fetched from it.", url.split(['?', '#']).next().unwrap_or(&url)));
+        }
         let mut res = agent.get(&url).call().map_err(fail)?;
         if res.status().is_redirection() {
             let next = res.headers().get("location").and_then(|v| v.to_str().ok()).map(str::to_string);
@@ -106,6 +115,21 @@ fn download(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
     Err("Download failed: too many redirects".into())
 }
 
+/// Where a release file may come from: `https://` and a host of GitHub's
+/// (github.com, or a name under it or under githubusercontent.com, where
+/// release files are served). A redirect to plain http, to another site or
+/// to a relative path is refused, not followed.
+pub fn download_host_ok(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // No user:password@ part, which can dress another host up as GitHub.
+    if authority.contains('@') {
+        return false;
+    }
+    let host = authority.strip_suffix(":443").unwrap_or(authority).to_ascii_lowercase();
+    host == "github.com" || host.ends_with(".github.com") || host.ends_with(".githubusercontent.com")
+}
+
 /// The hex digest at the start of a `sha256sum` line.
 pub fn expected_digest(sums: &str) -> Option<String> {
     let d = sums.split_whitespace().next()?.to_ascii_lowercase();
@@ -114,6 +138,31 @@ pub fn expected_digest(sums: &str) -> Option<String> {
 
 pub fn hex_sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Is `sig` (a release's `<file>.sig`: base64 of a minisign signature, as
+/// `tauri signer sign` writes it) a signature of `bytes` by `pubkey` (base64
+/// of a minisign public-key file)?
+pub fn verify_signature(pubkey: &str, bytes: &[u8], sig: &str) -> Result<(), String> {
+    use base64::Engine;
+    let text = |b64: &str, what: &str| {
+        base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok().and_then(|b| String::from_utf8(b).ok()).ok_or_else(|| format!("the {what} isn't readable"))
+    };
+    let key = minisign_verify::PublicKey::decode(&text(pubkey, "signing key")?).map_err(|e| format!("the signing key isn't readable: {e}"))?;
+    let sig = minisign_verify::Signature::decode(&text(sig, "signature")?).map_err(|e| format!("the signature isn't readable: {e}"))?;
+    key.verify(bytes, &sig, true).map_err(|e| format!("the signature doesn't match: {e}"))
+}
+
+/// Check a downloaded release file against its `.sig`, when the release has
+/// one. A signature that is there and fails stops the update. A release with
+/// none (0.11.0 and older) is said in a line and rests on its SHA-256 alone.
+fn check_signature(agent: &ureq::Agent, rel: &Release, name: &str, bytes: &[u8]) -> Result<(), String> {
+    let Some(url) = url_of(rel, &format!("{name}.sig")) else {
+        println!("  note: this release has no signature for {name}; it was checked against its SHA-256 only.");
+        return Ok(());
+    };
+    let sig = String::from_utf8(download(agent, &url)?).map_err(|_| format!("The signature of {name} isn't text; nothing was changed."))?;
+    verify_signature(UPDATER_PUBKEY, bytes, &sig).map_err(|e| format!("{name} is not signed by Quire's release key ({e}); nothing was changed."))
 }
 
 /// The named binaries from a release tarball, by file name (any directory).
@@ -231,12 +280,58 @@ fn notes_preview(body: &str) -> String {
     s
 }
 
+/// What `quire update` was asked to do.
+#[derive(Debug, Default, PartialEq)]
+pub struct Asked {
+    pub check: bool,
+    pub terminal: bool,
+    pub desktop: bool,
+    pub main: bool,
+    pub help: bool,
+}
+
+/// The arguments, or the one that isn't known. Anything unknown stops the
+/// command: `--chek` or `--dry-run` must never be read as "go ahead".
+pub fn parse_args(args: &[String]) -> Result<Asked, String> {
+    let mut asked = Asked::default();
+    for a in args {
+        match a.as_str() {
+            "--check" => asked.check = true,
+            "--terminal" => asked.terminal = true,
+            "--desktop" => asked.desktop = true,
+            "--main" => asked.main = true,
+            "--help" | "-h" | "help" => asked.help = true,
+            other => return Err(format!("update doesn't take {other:?}; nothing was done.")),
+        }
+    }
+    Ok(asked)
+}
+
+const USAGE: &str = "
+  quire update              install the latest release: the terminal app and the desktop AppImage
+  quire update --check      only say whether there is one
+  quire update --terminal   the terminal app only
+  quire update --desktop    the desktop AppImage only
+  quire update --main       build the terminal app from the latest code on main, with cargo
+";
+
 /// `quire update [--check] [--terminal | --desktop | --main]`. Both apps by
 /// default. Returns the exit code.
 pub fn run(args: &[String]) -> i32 {
-    let has = |f: &str| args.iter().any(|a| a == f);
-    if has("--main") {
-        return match update_from_main(has("--desktop"), has("--check")) {
+    let asked = match parse_args(args) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("  {e}");
+            eprint!("{USAGE}");
+            return 2;
+        }
+    };
+    if asked.help {
+        print!("{USAGE}");
+        return 0;
+    }
+    if asked.main {
+        return match update_from_main(asked.desktop, asked.check) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("  {e}");
@@ -244,12 +339,12 @@ pub fn run(args: &[String]) -> i32 {
             }
         };
     }
-    let (terminal, desktop) = match (has("--terminal"), has("--desktop")) {
+    let (terminal, desktop) = match (asked.terminal, asked.desktop) {
         (true, false) => (true, false),
         (false, true) => (false, true),
         _ => (true, true),
     };
-    let check_only = has("--check");
+    let check_only = asked.check;
     let result = latest(&agent()).and_then(|rel| {
         let agent = agent();
         let mut failed = None;
@@ -309,6 +404,7 @@ fn update_terminal(agent: &ureq::Agent, rel: &Release, check_only: bool) -> Resu
     if hex_sha256(&tarball) != want {
         return Err("The download doesn't match its checksum; nothing was changed.".into());
     }
+    check_signature(agent, rel, &name, &tarball)?;
     replace_bins(&dir, &unpack(&tarball)?)?;
     println!("  ✓ Quire {version} installed in {}.", dir.display());
     Ok(())
@@ -518,6 +614,7 @@ fn update_desktop(agent: &ureq::Agent, rel: &Release, check_only: bool, asked: b
             if hex_sha256(&bytes) != want {
                 return Err("the download doesn't match its checksum; nothing was changed.".into());
             }
+            check_signature(agent, rel, &file, &bytes)?;
             replace_file(&path, &bytes)?;
             println!("  ✓ Desktop app updated to {version}. If it's open, restart it.");
             Ok(())
@@ -554,6 +651,78 @@ mod tests {
         assert!(!is_newer("0.7.0", "0.7.0"));
         assert!(!is_newer("0.6.9", "0.7.0"));
         assert!(!is_newer("junk", "0.7.0"));
+    }
+
+    #[test]
+    fn an_unknown_argument_stops_the_update() {
+        let args = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
+        assert_eq!(parse_args(&[]), Ok(Asked::default()));
+        assert_eq!(parse_args(&args("--check --desktop")), Ok(Asked { check: true, desktop: true, ..Asked::default() }));
+        assert_eq!(parse_args(&args("--main")), Ok(Asked { main: true, ..Asked::default() }));
+        for help in ["--help", "-h", "help"] {
+            assert!(parse_args(&args(help)).unwrap().help, "{help}");
+        }
+        // A typo, or a flag from another program, is never "go ahead".
+        for bad in ["--chek", "--dry-run", "--check=1", "-n", "now", "--check --hlep"] {
+            assert!(parse_args(&args(bad)).unwrap_err().contains("nothing was done"), "{bad}");
+        }
+        // `run` answers these before anything is looked up or downloaded.
+        assert_eq!(run(&args("--help")), 0);
+        assert_eq!(run(&args("--chek")), 2);
+        assert_eq!(run(&args("--check --dry-run")), 2);
+    }
+
+    #[test]
+    fn downloads_come_from_github_over_https_only() {
+        for ok in [
+            "https://github.com/Caddickbrown/Quire/releases/download/v1.0.0/quire-x.tar.gz",
+            "https://objects.githubusercontent.com/github-production-release-asset/1/2?sig=abc",
+            "https://release-assets.githubusercontent.com/x",
+            "https://GitHub.com:443/x",
+        ] {
+            assert!(download_host_ok(ok), "{ok}");
+        }
+        for bad in [
+            "http://github.com/Caddickbrown/Quire/releases/download/v1.0.0/quire-x.tar.gz",
+            "https://example.com/quire-x.tar.gz",
+            "https://github.com.example.com/x",
+            "https://examplegithub.com/x",
+            "https://notgithubusercontent.com/x",
+            "https://github.com@example.com/x",
+            "https://example.com/?https://github.com/",
+            "/Caddickbrown/Quire/releases/x",
+            "file:///etc/passwd",
+            "",
+        ] {
+            assert!(!download_host_ok(bad), "{bad}");
+        }
+    }
+
+    /// A throwaway key, and its signature of `SIGNED`, in the release's formats.
+    const TEST_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IFRFU1QKUldSTmZtaHY1YzE3THNFVUd1YXl2NTd5Z3daYWttcHF0dGd3TzZHRzM5KytUYkJ6RzJwdzFRSU4K";
+    const TEST_SIG: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSTmZtaHY1YzE3TGttczNzRFVDVkZLaUxvM3I1dVlkSlFheFI2aHVhc1FtTlFwTUNyd1A2SDhyaWsrNHlNK0NlTTBaeExDUnV2bDJRSGhHUUVyWStiWTlFbVkzYW9Jdmc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzAwMDAwCWZpbGU6cXVpcmUtdGVzdC50YXIuZ3oKVGxqSmlJbjZTczY2YSs0bG5yMHNYbzBMRGJ3LzlCWlZQL3hoTW5zT3RtNEdpMzRLeHczYkNVSXFXN1VIaTRSaE5TeEsyb25ZVjdUT1RtUGhSNFAzQmc9PQo=";
+    const SIGNED: &[u8] = b"quire test tarball";
+
+    #[test]
+    fn a_release_file_is_checked_against_its_signature() {
+        assert_eq!(verify_signature(TEST_KEY, SIGNED, TEST_SIG), Ok(()));
+        assert_eq!(verify_signature(TEST_KEY, SIGNED, &format!("{TEST_SIG}\n")), Ok(()), "a trailing newline is the file's, not the signature's");
+        // Other bytes, another key, or a signature that isn't one: all refused.
+        assert!(verify_signature(TEST_KEY, b"quire test tarball, changed", TEST_SIG).unwrap_err().contains("doesn't match"));
+        assert!(verify_signature(UPDATER_PUBKEY, SIGNED, TEST_SIG).is_err(), "signed by a key that isn't the release's");
+        assert!(verify_signature(TEST_KEY, SIGNED, "").unwrap_err().contains("signature isn't readable"));
+        assert!(verify_signature(TEST_KEY, SIGNED, "bm90IGEgc2lnbmF0dXJl").unwrap_err().contains("signature isn't readable"));
+        assert!(verify_signature("", SIGNED, TEST_SIG).unwrap_err().contains("signing key"));
+    }
+
+    /// One key for both updaters: the terminal's is the desktop app's.
+    #[test]
+    fn the_release_key_is_the_desktop_updaters() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../linux/src-tauri/tauri.conf.json")).unwrap();
+        assert_eq!(conf["plugins"]["updater"]["pubkey"], UPDATER_PUBKEY);
+        use base64::Engine;
+        let key = String::from_utf8(base64::engine::general_purpose::STANDARD.decode(UPDATER_PUBKEY).unwrap()).unwrap();
+        assert!(minisign_verify::PublicKey::decode(&key).is_ok(), "and it is a key");
     }
 
     #[test]

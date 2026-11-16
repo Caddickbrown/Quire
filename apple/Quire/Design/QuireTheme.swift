@@ -78,7 +78,7 @@ struct QuireTheme: Decodable, Identifiable, Equatable {
     /// Used only if the bundled catalogue can't be read.
     private static let fallback = QuireTheme(
         id: "almanac", name: "Almanac", dark: false, page: "#F7F1E4", ground: "#F5F0E6",
-        chrome: "#EFE8DB", card: "#FFFDF8", ink: "#1F1A14", muted: "#6B6257", faint: "#8A8073",
+        chrome: "#EFE8DB", card: "#FFFDF8", ink: "#1F1A14", muted: "#6B6257", faint: "#756C61",
         line: "#E3DACB", line2: "#EFE8DB", accent: "#8E2F1C", accentSoft: "#F1E0D6",
         accentInk: "#6E2414", onAccent: "#FFFDF8", headWeight: 500, ruleH: 2,
         signal: nil, onSignal: nil, flag: nil)
@@ -112,6 +112,11 @@ struct QuireTheme: Decodable, Identifiable, Equatable {
     var isMarathon: Bool { id.hasPrefix("marathon") }
     var signalColor: Color { Color(hex: signal ?? accent) }
     var onSignalColor: Color { Color(hex: onSignal ?? onAccent) }
+    /// For a mark drawn on the page (a rule, a square, a progress bar, tape). The
+    /// signal is a fill, with `onSignalColor` over it: Marathon Day's lime on its
+    /// pale paper is 1.04:1 and can't be seen as a mark, so marks are the accent.
+    /// The two are the same colour in every other theme.
+    var markColor: Color { accentColor }
     var flagColor: Color { Color(hex: flag ?? accent) }
 }
 
@@ -287,7 +292,7 @@ struct QLabel: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            if q.isMarathon { Text("■").foregroundStyle(q.signalColor) }
+            if q.isMarathon { Text("■").foregroundStyle(q.markColor) }
             Text(text.uppercased()).tracking(q.tracking(size))
             if let trailing {
                 Spacer()
@@ -359,7 +364,7 @@ struct QTitleRule: View {
     var body: some View {
         if q.isMarathon {
             HStack(spacing: 4) {
-                ForEach(0..<5, id: \.self) { _ in Rectangle().fill(q.signalColor).frame(width: 14, height: 6) }
+                ForEach(0..<5, id: \.self) { _ in Rectangle().fill(q.markColor).frame(width: 14, height: 6) }
             }
             .accessibilityHidden(true)
         } else {

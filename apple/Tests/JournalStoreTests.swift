@@ -1052,4 +1052,264 @@ final class JournalStoreTests: XCTestCase {
         for _ in 0..<500 where store.entries(for: "2026-05-11").count != 2 { try await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertEqual(store.entries(for: "2026-05-11").count, 2)
     }
+
+    // MARK: The 14 November review (section 5)
+
+    /// A1/A16: a `share-<id>.md` file is one draft whatever its text holds, and
+    /// the drain says how many drafts it handed over (what brings the Inbox up
+    /// to date when the app comes forward).
+    func testAShareWithAHeaderShapedLineIsOneDraft() throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("quire-share-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: dir) }
+        write("[2026-11-07 09:00:00] a note\nfirst line\n[2026-11-01 10:00:00] a line from the note\nlast line\n",
+              to: dir.appendingPathComponent("share-A.md"))
+        XCTAssertEqual(JournalStore.drainShares(from: dir, into: base), 1)
+        store.reload()
+        XCTAssertEqual(store.inboxDrafts.map(\.suffix), ["a note"])
+        XCTAssertEqual(store.inboxDrafts.first?.shownBody, "first line\n[2026-11-01 10:00:00] a line from the note\nlast line")
+        XCTAssertEqual(JournalStore.drainShares(from: dir, into: base), 0, "nothing left to hand over")
+    }
+
+    /// A3: a line the journal can't take is left in the handoff folder, and
+    /// the drain files it later. It used to be dropped.
+    func testALineTheJournalCannotTakeIsKeptForTheInbox() throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("quire-share-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: dir) }
+        // Today's draft file isn't text: the core refuses to write into it.
+        let today = JournalStore.nowDate().replacingOccurrences(of: "-", with: "/")
+        let dayFile = base.appendingPathComponent("inbox/\(today).md")
+        try fm.createDirectory(at: dayFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([0xFF, 0xFE]).write(to: dayFile)
+        XCTAssertThrowsError(try JournalStore.addDraft(title: "", body: "a line", base: base))
+        XCTAssertEqual(try Data(contentsOf: dayFile), Data([0xFF, 0xFE]), "and leaves it as it was")
+
+        let when = try XCTUnwrap(JournalStore.date(from: "2026-11-08 07:30:00"))
+        XCTAssertTrue(JournalStore.handOffDraft(title: "two\nlines", body: "a line\n[2026-11-01 10:00:00] not a header\n", at: when, to: dir))
+        XCTAssertFalse(JournalStore.handOffDraft(title: "", body: "x", to: nil), "nowhere to keep it is said, not hidden")
+        XCTAssertEqual(names(in: dir).count, 1)
+        XCTAssertTrue(names(in: dir)[0].hasPrefix("share-") && names(in: dir)[0].hasSuffix(".md"))
+
+        XCTAssertEqual(JournalStore.drainShares(from: dir, into: base), 1)
+        store.reload()
+        XCTAssertEqual(store.inboxDrafts.map(\.ts), ["2026-11-08 07:30:00"])
+        XCTAssertEqual(store.inboxDrafts.first?.suffix, "two lines")
+        XCTAssertEqual(store.inboxDrafts.first?.shownBody, "a line\n[2026-11-01 10:00:00] not a header")
+        XCTAssertEqual(names(in: dir), [])
+    }
+
+    /// A9: a quick add reads the day's own file, and folds a legacy inbox only
+    /// when there is one.
+    func testAQuickAddWritesTheDraftAndFoldsALegacyInbox() throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        try JournalStore.addDraft(title: "quick", body: "one", base: base)
+        write("[2026-05-01 08:00:00] old\nfrom jnl\n", to: inbox(base))
+        try JournalStore.addDraft(title: "", body: "two", base: base)
+        store.reload()
+        XCTAssertEqual(Set(store.inboxDrafts.map(\.shownBody)), ["one", "two", "from jnl"])
+        XCTAssertEqual(read(inbox(base)), "", "the legacy inbox was folded into day files")
+    }
+
+    /// A6: one file that isn't text is left out and named; the rest of the
+    /// journal is shown. It used to mean no journal at all.
+    func testAFileThatIsNotTextIsNamedAndTheRestIsShown() async throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        write("[2026-05-10 08:00:00] kept\nbody\n", to: day(base, "2026-05-10"))
+        write("[2026-05-12 08:00:00] draft\nbody\n", to: base.appendingPathComponent("inbox/2026/05/12.md"))
+        try Data([0x5B, 0xFF, 0xFE]).write(to: day(base, "2026-05-11"))
+        store.reload()
+        for _ in 0..<500 where store.unreadableFiles.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertTrue(store.indexed)
+        XCTAssertEqual(store.unreadableFiles, ["journal/2026/05/11.md"])
+        XCTAssertEqual(store.archiveDays.map(\.date), ["2026-05-10"])
+        XCTAssertEqual(store.inboxDrafts.map(\.suffix), ["draft"])
+        XCTAssertEqual(store.unreadableFilesMessage?.contains("journal/2026/05/11.md"), true)
+        XCTAssertEqual(try Data(contentsOf: day(base, "2026-05-11")), Data([0x5B, 0xFF, 0xFE]), "and is not touched")
+        XCTAssertNil(JournalStore.unreadableMessage([]))
+        XCTAssertEqual(JournalStore.unreadableMessage(["a.md", "b.md", "c.md"])?.contains("a.md and 2 more"), true)
+
+        // Put right, it comes back and the list empties.
+        write("[2026-05-11 08:00:00] back\nbody\n", to: day(base, "2026-05-11"))
+        store.reload()
+        for _ in 0..<500 where !store.unreadableFiles.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(store.unreadableFiles, [])
+        XCTAssertEqual(store.archiveDays.map(\.date), ["2026-05-11", "2026-05-10"])
+    }
+
+    /// A7: a HEIC's JPEG never takes the name of one that is already there.
+    func testAConvertedPhotoNeverTakesAnExistingJPEGsName() {
+        let (store, base) = makeStore()
+        _ = store
+        defer { try? FileManager.default.removeItem(at: base) }
+        let heic = base.appendingPathComponent("assets/2026/11/IMG_0001.heic")
+        write("heic", to: heic)
+        XCTAssertEqual(JournalStore.freeJPEGURL(for: heic).lastPathComponent, "IMG_0001.jpg")
+        write("another photo", to: base.appendingPathComponent("assets/2026/11/IMG_0001.jpg"))
+        XCTAssertEqual(JournalStore.freeJPEGURL(for: heic).lastPathComponent, "IMG_0001-1.jpg")
+        write("and another", to: base.appendingPathComponent("assets/2026/11/IMG_0001-1.jpg"))
+        XCTAssertEqual(JournalStore.freeJPEGURL(for: heic).lastPathComponent, "IMG_0001-2.jpg")
+    }
+
+    /// A8: a changed file is our own echo only while it still looks like
+    /// something we left there.
+    func testAFileWeWroteThatSomeoneElseThenChangedIsNotOurEcho() throws {
+        XCTAssertTrue(JournalStore.isElsewhere(now: "10:1", own: nil), "never written by us")
+        XCTAssertFalse(JournalStore.isElsewhere(now: "10:1", own: ["10:1"]), "as we left it")
+        XCTAssertFalse(JournalStore.isElsewhere(now: "10:1", own: ["10:1", "12:2"]), "as an earlier write of ours left it")
+        XCTAssertTrue(JournalStore.isElsewhere(now: "15:3", own: ["10:1", "12:2"]), "changed since by another writer")
+        XCTAssertFalse(JournalStore.isElsewhere(now: nil, own: [""]), "we emptied it and it is gone")
+        XCTAssertTrue(JournalStore.isElsewhere(now: nil, own: ["10:1"]), "we wrote it and something removed it")
+
+        // The signature is the one `contentSignatures` records.
+        let (store, base) = makeStore()
+        _ = store
+        defer { try? FileManager.default.removeItem(at: base) }
+        let file = day(base, "2026-05-10")
+        write("[2026-05-10 08:00:00] a\n", to: file)
+        XCTAssertEqual(JournalStore.signature(of: file), JournalStore.contentSignatures(base: base)["journal/2026/05/10.md"])
+        XCTAssertNil(JournalStore.signature(of: base.appendingPathComponent("journal/none.md")))
+    }
+
+    /// A2: every placeholder among the entry files is found (and asked for),
+    /// none under assets/ or the recovery folder; and the listing asks for a
+    /// whole folder's worth before it fails.
+    func testPlaceholdersAreFoundAmongEntryFilesOnly() throws {
+        let (store, base) = makeStore()
+        _ = store
+        defer { try? FileManager.default.removeItem(at: base) }
+        XCTAssertEqual(JournalStore.placeholderTarget(base.appendingPathComponent("journal/2026/11/.14.md.icloud"))?.lastPathComponent, "14.md")
+        XCTAssertNil(JournalStore.placeholderTarget(base.appendingPathComponent("journal/2026/11/14.md")))
+        XCTAssertNil(JournalStore.placeholderTarget(base.appendingPathComponent("journal/2026/11/.icloud")))
+        XCTAssertEqual(JournalStore.startPlaceholderDownloads(base: base), 0)
+        for rel in ["journal/2026/11/.13.md.icloud", "journal/2026/11/.14.md.icloud", "inbox/2026/11/.15.md.icloud",
+                    "split/work/2026/11/.14.md.icloud", ".inbox.md.icloud", ".quire/.searches.json.icloud",
+                    "assets/2026/11/.film.mov.icloud", ".quire/media-cleanup/x/assets/.old.mov.icloud"] {
+            write("", to: base.appendingPathComponent(rel))
+        }
+        XCTAssertEqual(JournalStore.startPlaceholderDownloads(base: base), 6)
+
+        // The vault fails the listing (never a short one), whatever the order.
+        let vault = AppleVault(base: base)
+        XCTAssertThrowsError(try vault.list(rel: "journal/2026/11")) { error in
+            XCTAssertEqual(journalErrorMessage(error), AppleVault.downloadingMessage)
+        }
+        XCTAssertThrowsError(try vault.read(rel: "journal/2026/11/14.md")) { error in
+            XCTAssertEqual(journalErrorMessage(error), AppleVault.downloadingMessage)
+        }
+        XCTAssertEqual(JournalStore.downloadRetryDelay(attempt: 0), 3)
+        XCTAssertEqual(JournalStore.downloadRetryDelay(attempt: 40), 30)
+        XCTAssertNil(JournalStore.downloadRetryDelay(attempt: 60))
+    }
+
+    /// A2: with files still to come the journal is not shown short; it says how
+    /// many are coming, and opens by itself once they are here.
+    func testAJournalStillDownloadingOpensWhenItsFilesArrive() async throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        try await waitForIndex(store)
+        write("[2026-05-10 08:00:00] here\nbody\n", to: day(base, "2026-05-10"))
+        let placeholder = base.appendingPathComponent("journal/2026/05/.11.md.icloud")
+        write("", to: placeholder)
+        store.reload()
+        for _ in 0..<500 where store.downloadsPending == 0 { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(store.downloadsPending, 1)
+        XCTAssertEqual(store.archiveDays.map(\.date), [], "not a journal with a day missing")
+        XCTAssertEqual(store.lastWriteError?.contains("Downloading 1 journal file"), true)
+        // The file lands; nobody asks, and the journal opens.
+        try FileManager.default.removeItem(at: placeholder)
+        write("[2026-05-11 08:00:00] arrived\nbody\n", to: day(base, "2026-05-11"))
+        for _ in 0..<800 where store.archiveDays.count != 2 { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(store.archiveDays.map(\.date), ["2026-05-11", "2026-05-10"])
+        XCTAssertEqual(store.downloadsPending, 0)
+    }
+
+    /// A10: an ordinary Cocoa error inside the vault is the bridge's error with
+    /// its own words, not a panic in the callback.
+    func testAVaultFailureIsReportedInItsOwnWords() throws {
+        let (store, base) = makeStore()
+        _ = store
+        defer { try? FileManager.default.removeItem(at: base) }
+        // A folder where a file is wanted: reading it is a Cocoa error.
+        try FileManager.default.createDirectory(at: day(base, "2026-05-10"), withIntermediateDirectories: true)
+        let vault = AppleVault(base: base)
+        XCTAssertThrowsError(try vault.read(rel: "journal/2026/05/10.md")) { XCTAssertTrue($0 is BridgeError) }
+        XCTAssertThrowsError(try CoreJournal(base: base).text("journal/2026/05/10.md")) { error in
+            XCTAssertFalse(journalErrorMessage(error).contains("Callback interface failure"), journalErrorMessage(error))
+        }
+    }
+
+    /// A9: several renames, one reload, on or off the main actor.
+    func testMergingTagsRenamesEachAndReadsTheJournalOnce() async throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        write("[2026-05-10 08:00:00] a\n@wrk and @hom\n", to: day(base, "2026-05-10"))
+        store.reload()
+        try await waitForIndex(store)
+        store.mergeTags([(from: "@wrk", to: "@work")])
+        XCTAssertTrue(read(day(base, "2026-05-10")).contains("@work and @hom"))
+        let changed = await store.mergeTagsAsync([(from: "@hom", to: "@home"), (from: "@none", to: "@nothing")])
+        XCTAssertEqual(changed, 1)
+        XCTAssertTrue(read(day(base, "2026-05-10")).contains("@work and @home"))
+        XCTAssertNil(store.lastWriteError)
+        let exported = await store.exportMarkdownAsync()
+        XCTAssertEqual(exported, store.exportMarkdown())
+        XCTAssertEqual(exported?.contains("@work and @home"), true)
+    }
+
+    /// A18: Year in Review and Trends count the journal's days through the
+    /// core. Read from the folder, a conflict copy was a day of its own.
+    func testYearReviewAndTrendsDoNotCountConflictCopies() async throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        write("[2026-05-10 08:00:00] first *\none two three @work\n![](assets/a(1).jpg)\n", to: day(base, "2026-05-10"))
+        write("[2026-05-11 08:00:00] second\nfour five\n", to: day(base, "2026-05-11"))
+        write("[2026-05-11 08:00:00] second\nfour five\n", to: base.appendingPathComponent("journal/2026/05/11.sync-conflict-20260511-101010-ABCDEFG.md"))
+        write("[2026-05-11 08:00:00] second\nfour five\n", to: base.appendingPathComponent("journal/2026/05/11 (conflicted copy).md"))
+        write("[2025-12-31 08:00:00] last year\nsix\n", to: day(base, "2025-12-31"))
+        let cold = JournalStore.computeYearReview(base: base, year: "2026")
+        XCTAssertEqual(cold.daysWritten, 2)
+        XCTAssertEqual(cold.entries, 2)
+        XCTAssertEqual(cold.longestStreak, 2)
+        XCTAssertEqual(cold.starred, 1)
+        XCTAssertEqual(cold.photoCount, 1)
+        XCTAssertEqual(cold.firstLine, "first")
+        XCTAssertEqual(cold.topTags.map(\.tag), ["@work"])
+        store.reload()
+        try await waitForIndex(store)
+        for _ in 0..<500 where store.archiveDays.count != 3 { try await Task.sleep(nanoseconds: 10_000_000) }
+        let warm = await store.yearReview(for: "2026")
+        XCTAssertEqual(warm, cold)
+        XCTAssertEqual(warm.dailyWords, cold.dailyWords)
+
+        let now = try XCTUnwrap(JournalStore.date(from: "2026-06-15 12:00:00"))
+        let trends = JournalStore.computeTrends(days: JournalStore.filedDays(base: base), monthsBack: 12, now: now)
+        XCTAssertEqual(trends.months.count, 12)
+        XCTAssertEqual(trends.months.last, "2026-06")
+        XCTAssertEqual(Set(trends.monthWords.keys), ["2026-05", "2025-12"])
+        XCTAssertEqual(trends.topTags.first?.byMonth, ["2026-05": 1])
+    }
+
+    /// A5: a recording is recognised on this device, or not at all unless
+    /// Apple's servers were allowed by name.
+    func testTranscriptionStaysOnTheDeviceUnlessServersAreAllowed() {
+        XCTAssertEqual(Transcriber.route(supportsOnDevice: true, allowServer: false), .onDevice)
+        XCTAssertEqual(Transcriber.route(supportsOnDevice: true, allowServer: true), .onDevice)
+        XCTAssertNil(Transcriber.route(supportsOnDevice: false, allowServer: false))
+        XCTAssertEqual(Transcriber.route(supportsOnDevice: false, allowServer: true), .server)
+        XCTAssertFalse(UserDefaults.standard.bool(forKey: Transcriber.allowServerKey), "off unless switched on")
+    }
+
+    /// A19: nothing of the journal is in system search while the app lock is on.
+    func testSpotlightHoldsNothingWhileTheAppLockIsOn() {
+        XCTAssertTrue(SpotlightIndexer.mayIndex(enabled: true, appLock: false))
+        XCTAssertFalse(SpotlightIndexer.mayIndex(enabled: true, appLock: true))
+        XCTAssertFalse(SpotlightIndexer.mayIndex(enabled: false, appLock: false))
+    }
 }

@@ -96,84 +96,110 @@ struct ExternalDisplayRoot: View {
     }
 
     /// Which keys are live right now. Shown on the monitor because the phone is
-    /// dimmed; the same keys as the terminal app.
+    /// dimmed; the same keys as the terminal app. The rule: exactly the keys that
+    /// work, so the monitor's own (⌥⌘…) are on every page, `?` wherever a letter
+    /// isn't typed into something, and j/k beside the arrows they double.
     private var hints: [ShortcutHint] {
+        // ⌥⌘ with + or -, T, P, H: declared by whatever holds the keyboard
+        // (`DisplayKeys`), the composer's text and ⌘K's field included.
+        let display = ShortcutHint(key: "⌥⌘ ± T P H", label: "Size Theme Pause Hints")
+        // `?` reaches the key catcher, not a field: not while writing or typing a query.
+        let help = ShortcutHint(key: "?", label: "Hints")
         // The menu takes every key while it's up.
-        if commands.onMonitor, let menu = commands.menu { return menu.hints }
-        // A question on the monitor takes every key but these two.
+        if commands.onMonitor, let menu = commands.menu { return menu.hints + [display] }
+        // A question on the monitor takes every letter.
         if let question = confirm.request {
-            return [.init(key: "↩", label: question.action), .init(key: "⎋", label: "Cancel")]
+            let answer: [ShortcutHint] = [.init(key: "↩", label: question.action), .init(key: "⎋", label: "Cancel")]
+            return answer + [help, display]
         }
         if datePicker.isOpen {
-            return [.init(key: "←→", label: "Day"), .init(key: "↑↓", label: "Week"), .init(key: "[ ]", label: "Month"),
+            let move: [ShortcutHint] = [.init(key: "←→", label: "Day"), .init(key: "↑↓ j k", label: "Week"), .init(key: "[ ]", label: "Month"),
                     .init(key: "t", label: "Today"), .init(key: "- =", label: "15 min"), .init(key: "0-9", label: "Type time")]
-                + (datePicker.typed.isEmpty ? [] : [.init(key: "⌫", label: "A digit")])
-                + [.init(key: "↩", label: "Set"), .init(key: "⎋", label: "Cancel")]
+            let digit: [ShortcutHint] = datePicker.typed.isEmpty ? [] : [.init(key: "⌫", label: "A digit")]
+            let finish: [ShortcutHint] = [.init(key: "↩", label: "Set"), .init(key: "⎋", label: "Cancel"), help, display]
+            return move + digit + finish
+        }
+        // A sheet opened by touch on the phone (Settings, the Media Library, a
+        // calendar, a date): it shows nothing here and keeps every letter from the
+        // page beneath, so only these work until it is closed.
+        if model.isCovered {
+            // The phone's Settings page scrolls from the keyboard.
+            let scroll: [ShortcutHint] = model.scrollPages.isEmpty ? [] : [.init(key: "↑↓ j k", label: "Scroll")]
+            return scroll + [DeskEscape.sheet.hint, help, display]
         }
         let menu = ShortcutHint(key: "⌘K", label: "Menu")
         if settings.isOpen {
-            return [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Change"), .init(key: ",", label: "Close"), .init(key: "⎋", label: "Close"), menu]
+            let rows: [ShortcutHint] = [.init(key: "↑↓ j k", label: "Move"), .init(key: "↩", label: "Change"), .init(key: ",", label: "Close"),
+                                        .init(key: "⎋", label: "Close")]
+            return rows + [help, menu, display]
         }
-        let common: [ShortcutHint] = [.init(key: "⌥⌘±", label: "Size"), .init(key: "⌥⌘T", label: "Theme"), .init(key: "⌥⌘P", label: "Pause"),
-                                      .init(key: "⌥⌘H", label: "Hints")]
         // `r` picks from what is filed: with nothing filed it does nothing, so
         // it isn't listed (the Inbox's own `r`, a random draft, is its list's).
         let random: [ShortcutHint] = (model.store?.archiveEntries.isEmpty ?? true) ? [] : [.init(key: "r", label: "Random")]
         // The root's letters work from lists and open entries too.
         let go = ShortcutHint(key: "n i l /", label: "New Inbox Look Search")
+        let tail: [ShortcutHint] = [.init(key: ",", label: "Settings"), help, menu, display]
         switch model.content {
         case .idle:
             // ↑/↓ from here go to the Journal's first or last entry.
             let first: [ShortcutHint] = [.init(key: "n", label: "New"), .init(key: "↩", label: "Write"), .init(key: "↑↓", label: "Journal"),
                                          .init(key: "i", label: "Inbox"), .init(key: "j", label: "Journal"),
                                          .init(key: "l", label: "Look back"), .init(key: "/", label: "Search")]
-            let rest: [ShortcutHint] = [.init(key: "p", label: "Prompt"), .init(key: ",", label: "Settings"), .init(key: "?", label: "Hints"), menu]
+            let rest: [ShortcutHint] = [.init(key: "p", label: "Prompt")] + tail
             return first + random + rest
         case .browsing(let listTitle, let rows, _, _, _):
-            // An empty list has nothing for the row keys to act on.
+            // An empty list has nothing for the row keys to act on, and leaves
+            // its letters to the root: `j` is the Journal again, not "down".
             if rows.isEmpty, listTitle != "Search" {
-                let rest: [ShortcutHint] = [go, .init(key: ",", label: "Settings"), menu]
-                return [DeskEscape.list.hint] + random + rest
+                let go: ShortcutHint = .init(key: "n i j l /", label: "New Inbox Journal Look Search")
+                return [DeskEscape.list.hint] + random + [go] + tail
             }
             // Esc goes home from any list; Search is a sheet, so it closes that first.
-            let base: [ShortcutHint] = [.init(key: "↑↓", label: "Move"), .init(key: "↩", label: "Open"),
+            let base: [ShortcutHint] = [.init(key: "↑↓ j k", label: "Move"), .init(key: "↩", label: "Open"),
                                         (listTitle == "Search" ? DeskEscape.sheet : DeskEscape.list).hint]
             switch listTitle {
             case "Inbox":
                 // A random draft, as the Inbox's own Random does.
                 let keys: [ShortcutHint] = [.init(key: "r", label: "Random"), .init(key: "f", label: "File"), .init(key: "e", label: "Edit"), .init(key: "*", label: "Star"),
-                               .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), go, .init(key: ",", label: "Settings"), menu]
-                return base + keys
+                               .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), go]
+                return base + keys + tail
             case "Journal":
                 let keys: [ShortcutHint] = [.init(key: "e", label: "Edit"), .init(key: "u", label: "Inbox"), .init(key: "*", label: "Star"),
-                               .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), go, .init(key: ",", label: "Settings"), menu]
-                return base + random + keys
+                               .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), go]
+                return base + random + keys + tail
             case "Search":
                 // The search sheet keeps the app's letters away (they type).
                 if model.search?.typing ?? true {
-                    return [.init(key: "Type", label: "To search"), .init(key: "↩", label: "Results"), .init(key: "⎋", label: "Close"), menu]
+                    // ↩ goes to the results, when there are any.
+                    let results: [ShortcutHint] = rows.isEmpty ? [] : [.init(key: "↩", label: "Results")]
+                    let close: [ShortcutHint] = [.init(key: "⎋", label: "Close"), menu, display]
+                    return [ShortcutHint(key: "Type", label: "To search")] + results + close
                 }
-                return base + [.init(key: "/", label: "Query"), menu]
+                let query: [ShortcutHint] = [.init(key: "/", label: "Query")]
+                // Out of the field with nothing found: back to the query, or out.
+                if rows.isEmpty { return query + [DeskEscape.sheet.hint, help, menu, display] }
+                return base + query + [help, menu, display]
             default:
-                let keys: [ShortcutHint] = [go, .init(key: ",", label: "Settings"), menu]
-                return base + random + keys
+                return base + random + [go] + tail
             }
         case .composing:
             // No `?` or `,` here: with the editor focused they type.
-            return [.init(key: "^J", label: "File"), .init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"),
-                    .init(key: "^F", label: "Focus"), .init(key: "^P", label: "Prompt"), .init(key: "^D", label: "Discard"), .init(key: "⎋", label: "Done"), menu]
+            let chords: [ShortcutHint] = [.init(key: "^J", label: "File"), .init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"),
+                    .init(key: "^F", label: "Focus"), .init(key: "^P", label: "Prompt"), .init(key: "^D", label: "Discard"),
+                    .init(key: "⎋", label: "Done")]
+            return chords + [menu, display]
         case .editing(_, _, _, _, _, let isDraft, _):
-            return (isDraft ? [.init(key: "^J", label: "File")] : []) +
-                [.init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"), .init(key: "^F", label: "Focus"),
-                 .init(key: "^P", label: "Prompt")] +
-                (isDraft ? [.init(key: "^D", label: "Discard")] : []) + [.init(key: "⎋", label: "Back"), menu]
+            let file: [ShortcutHint] = isDraft ? [.init(key: "^J", label: "File")] : []
+            let chords: [ShortcutHint] = [.init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"),
+                                          .init(key: "^F", label: "Focus"), .init(key: "^P", label: "Prompt")]
+            let discard: [ShortcutHint] = isDraft ? [.init(key: "^D", label: "Discard")] : []
+            return file + chords + discard + [ShortcutHint(key: "⎋", label: "Back"), menu, display]
         case .reading(_, _, _, _, let isDraft):
             let move: ShortcutHint = isDraft ? .init(key: "f", label: "File") : .init(key: "u", label: "Inbox")
-            let first: [ShortcutHint] = [.init(key: "↑↓", label: "Scroll"), .init(key: "e", label: "Edit")]
+            let first: [ShortcutHint] = [.init(key: "↑↓ j k", label: "Scroll"), .init(key: "e", label: "Edit")]
             let rest: [ShortcutHint] = [move, .init(key: "*", label: "Star"),
-                    .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), DeskEscape.entry.hint, go,
-                    .init(key: ",", label: "Settings"), menu]
-            return first + random + rest + common
+                    .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), DeskEscape.entry.hint, go]
+            return first + random + rest + tail
         }
     }
 }
@@ -681,7 +707,11 @@ private struct DeskBrowse: View {
                 // The row, not its place: the rows sent are a window on a long list,
                 // so the selection can move with its place in the window unchanged.
                 .onChange(of: current?.id) { _, id in
-                    if let id { withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id, anchor: .center) } }
+                    if let id {
+                        withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .easeOut(duration: 0.12)) {
+                            proxy.scrollTo(id, anchor: .center)
+                        }
+                    }
                 }
                 .onAppear { if rows.indices.contains(selected) { proxy.scrollTo(rows[selected].id, anchor: .center) } }
             }
@@ -813,8 +843,11 @@ private struct DeskEntry: View {
                               mirror: true, mirrorCaret: inTitle ? nil : caret)
         } else {
             ScrollView {
+                // Photos through the downsampling cache, no larger than a monitor
+                // shows: a full-size decode of each one, on the main thread and
+                // again whenever the page was redrawn, held the monitor up.
                 MediaBody(text: text, font: q.writing(metrics.text), textColor: q.inkColor, contentPadding: 0,
-                          onUpdateText: nil, mediaScale: max(1, metrics.text / 20))
+                          onUpdateText: nil, thumbnailSide: 2048, mediaScale: max(1, metrics.text / 20))
                     .background(QScrollAttach(handle: ExternalDisplayModel.shared.pageScroll))
             }
         }

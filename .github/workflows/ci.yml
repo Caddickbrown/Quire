@@ -21,13 +21,23 @@ jobs:
     env:
       # A shared runner is a busy host; see the note on make smoke in CLAUDE.md.
       QUIRE_SMOKE_WAIT_SCALE: 3
+      # A check this runner can't run (no node, WebKitGTK or shellcheck) fails
+      # the job instead of being skipped: see `skip` in the Makefile.
+      QUIRE_CHECK_STRICT: 1
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # the stable branch, 2026-11-09
         with:
           components: clippy
+      # The desktop crate is linted and its tests run only where WebKitGTK is
+      # installed; the same list as release.yml's desktop job.
+      - name: System libraries for the desktop app
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev build-essential file libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf pkg-config
       - run: make test
       - run: make check
       - run: make smoke

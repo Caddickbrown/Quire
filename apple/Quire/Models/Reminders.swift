@@ -80,6 +80,17 @@ final class NotificationResponder: NSObject, UNUserNotificationCenterDelegate {
         ])
     }
 
+    /// The line typed into "Write a line…" could be saved nowhere: give the
+    /// words back where they were typed, so they can be copied out.
+    static func reportUnsaved(_ text: String, reason: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Quire couldn't save your line"
+        content.subtitle = reason
+        content.body = text
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "quire.unsaved.\(UUID().uuidString)", content: content, trigger: nil))
+    }
+
     /// Show reminders even while the app is frontmost.
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification,
@@ -95,7 +106,12 @@ final class NotificationResponder: NSObject, UNUserNotificationCenterDelegate {
            let text = (response as? UNTextInputNotificationResponse)?.userText,
            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Task { @MainActor in
-                _ = try? JournalStore.quickAddDraft(title: "", body: text)
+                // Never dropped: a line the journal couldn't take just now is
+                // kept in the handoff folder for the Inbox, and one that could
+                // go nowhere is handed back in a notification.
+                if case .lost(let reason) = JournalStore.quickAddKeepingText(title: "", body: text) {
+                    Self.reportUnsaved(text, reason: reason)
+                }
                 NotificationCenter.default.post(name: .quireJournalChangedExternally, object: nil)
                 completionHandler()
             }

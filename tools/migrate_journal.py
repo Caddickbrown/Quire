@@ -6,7 +6,9 @@ Three changes, all reversible, all idempotent:
   1. inbox.md  ->  inbox/YYYY/MM/DD.md
      Every draft already carries a [YYYY-MM-DD HH:MM:SS] header, so the inbox
      splits into one file per day exactly like journal/. Entries keep their raw
-     text byte for byte; within a day they are ordered oldest first (jnl's
+     text byte for byte, except that ./assets/ links are made base-relative
+     (assets/…) so they still resolve from a day file, as Quire does; within a
+     day they are ordered oldest first (jnl's
      stable sort). The old inbox.md is moved, never deleted, to
      .quire/migration/inbox-<stamp>.md, and only after every entry has been
      re-read from the new files and matched against the original.
@@ -32,7 +34,12 @@ Dependency-free, Python 3.8+. Dry run by default; --apply writes.
 Run it again later and it merges any inbox.md or <tag>.md an older app has
 written since (entries already in place are skipped by raw text).
 
-Each source is read again just before it is moved; if an app wrote to it in the
+Close Quire, and let any sync finish, before --apply: this tool runs outside
+the app and cannot take the app's locks. It still guards against a write that
+lands while it works. Each day file is read again just before it is written;
+if it is not what the plan was made from (Quire or a sync changed it), nothing
+is written over it and the plan is made again from what is there now. Each
+source is read again just before it is moved; if an app wrote to it in the
 meantime it is planned again, so the new drafts are in the day files before the
 file goes. A file that is not UTF-8 is skipped with a message and left where it
 is. With --keep-nook on a folder that has .nook/ and no .quire/, the moved
@@ -174,6 +181,41 @@ def write_atomic(path, text):
         raise
 
 
+class Plan(OrderedDict):
+    """day file -> (preamble, entries, added, duplicates), plus what each day
+    file held when the plan was made (`seen`: its bytes, or None for no file),
+    so the write can tell that the file changed in between."""
+
+    def __init__(self):
+        OrderedDict.__init__(self)
+        self.seen = {}
+
+
+def read_target(plan, target):
+    """(preamble, entries) of an existing day file, remembered in plan.seen."""
+    raw = read_bytes(target) if os.path.isfile(target) else None
+    plan.seen[target] = raw
+    if raw is None:
+        return "", []
+    text = decode(raw, target)
+    return leading_preamble(text), parse_entries(text)
+
+
+def write_plan(plan):
+    """Write each day file of the plan. A file that is no longer what the plan
+    read is not written over: returns False at the first one, and the caller
+    plans again from the files as they are now (what was already written is
+    then found in place and skipped as a duplicate)."""
+    for target, (pre, entries, _, _) in plan.items():
+        now = read_bytes(target) if os.path.isfile(target) else None
+        if now != plan.seen.get(target):
+            return False
+        text = render_entries(pre, entries)
+        write_atomic(target, text)
+        plan.seen[target] = text.encode("utf-8")
+    return True
+
+
 def day_path(base, date):
     y, m, d = date.split("-")
     return os.path.join(base, "inbox", y, m, d + ".md")
@@ -188,6 +230,9 @@ def plan_inbox(base, content=None):
         if not os.path.isfile(src):
             return None, "", []
         content = read_text(src)
+    # Root-relative ./assets/ links become assets/, which work from any depth
+    # (Quire's own fold does the same).
+    content = LINK_DOT_ASSETS_RE.sub(r"](\1assets/", content)
     entries = parse_entries(content)
     preamble = leading_preamble(content)
 
@@ -195,14 +240,10 @@ def plan_inbox(base, content=None):
     for e in entries:
         by_day.setdefault(e.date, []).append(e)
 
-    plan = OrderedDict()
+    plan = Plan()
     for date, new in by_day.items():
         target = day_path(base, date)
-        existing_pre, existing = "", []
-        if os.path.isfile(target):
-            existing_text = read_text(target)
-            existing = parse_entries(existing_text)
-            existing_pre = leading_preamble(existing_text)
+        existing_pre, existing = read_target(plan, target)
         seen = {e.raw.rstrip("\n") for e in existing}
         added = [e for e in new if e.raw.rstrip("\n") not in seen]
         plan[target] = (existing_pre, sorted_by_timestamp(existing + added), len(added), len(new) - len(added))
@@ -243,8 +284,10 @@ def apply_inbox(base, plan, preamble, source_entries, log, raw=None):
     again if an app has written to it since."""
     src = os.path.join(base, "inbox.md")
     for _ in range(MAX_PLANS):
-        for target, (pre, entries, _, _) in plan.items():
-            write_atomic(target, render_entries(pre, entries))
+        if not write_plan(plan):
+            log("  a day file in inbox/ changed while it was being written; planning again")
+            plan, preamble, source_entries = plan_inbox(base, decode(raw, src) if raw is not None else None)
+            continue
         if preamble:
             p = os.path.join(base, "inbox", "preamble.md")
             if os.path.exists(p):
@@ -269,7 +312,7 @@ def apply_inbox(base, plan, preamble, source_entries, log, raw=None):
         raw = now
         plan, preamble, source_entries = plan_inbox(base, decode(raw, src))
     else:
-        log("  inbox.md keeps changing — left in place; run again when nothing is writing to it")
+        log("  inbox.md or inbox/ keeps changing — inbox.md left in place; run again when nothing is writing to the folder")
         return False
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -378,14 +421,10 @@ def plan_split(base, name, raw):
     by_day = OrderedDict()
     for e in entries:
         by_day.setdefault(e.date, []).append(e)
-    plan = OrderedDict()
+    plan = Plan()
     for date, new in by_day.items():
         target = split_day_path(base, tag, date)
-        existing_pre, existing = "", []
-        if os.path.isfile(target):
-            existing_text = read_text(target)
-            existing = parse_entries(existing_text)
-            existing_pre = leading_preamble(existing_text)
+        existing_pre, existing = read_target(plan, target)
         seen = {e.raw.rstrip("\n") for e in existing}
         added = [e for e in new if e.raw.rstrip("\n") not in seen]
         plan[target] = (existing_pre, sorted_by_timestamp(existing + added), len(added), len(new) - len(added))
@@ -415,8 +454,12 @@ def apply_split(base, name, tag, plan, preamble, source_entries, log, raw=None):
     """As apply_inbox: write, check, read the source again, then move it."""
     src = os.path.join(base, name)
     for _ in range(MAX_PLANS):
-        for target, (pre, entries, _, _) in plan.items():
-            write_atomic(target, render_entries(pre, entries))
+        if not write_plan(plan):
+            log("  a day file in split/%s/ changed while it was being written; planning again" % tag)
+            if raw is None:
+                raw = read_bytes(src)
+            plan, preamble, source_entries = plan_split(base, name, raw)
+            continue
         if preamble:
             p = os.path.join(base, "split", tag, "preamble.md")
             if os.path.exists(p):
@@ -441,7 +484,7 @@ def apply_split(base, name, tag, plan, preamble, source_entries, log, raw=None):
         raw = now
         plan, preamble, source_entries = plan_split(base, name, raw)
     else:
-        log("  %s keeps changing — left in place; run again when nothing is writing to it" % name)
+        log("  %s or split/%s/ keeps changing — %s left in place; run again when nothing is writing to the folder" % (name, tag, name))
         return False
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup_dir = migration_dir(base)

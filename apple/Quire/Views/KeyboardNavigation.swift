@@ -212,15 +212,7 @@ final class KeyCommandController: UIViewController {
                 c.wantsPriorityOverSystemBehavior = true
                 return c
             } : []
-        let display: [UIKeyCommand] = ExternalDisplayModel.shared.isConnected ? [
-            UIKeyCommand(input: "=", modifierFlags: [.command, .alternate], action: #selector(displayLarger)),
-            UIKeyCommand(input: "+", modifierFlags: [.command, .alternate], action: #selector(displayLarger)),
-            UIKeyCommand(input: "-", modifierFlags: [.command, .alternate], action: #selector(displaySmaller)),
-            UIKeyCommand(input: "t", modifierFlags: [.command, .alternate], action: #selector(displayTheme)),
-            UIKeyCommand(input: "p", modifierFlags: [.command, .alternate], action: #selector(displayPause)),
-            UIKeyCommand(input: "h", modifierFlags: [.command, .alternate], action: #selector(toggleHints)),
-        ] : []
-        return arrows + letters + chords + display + [
+        return arrows + letters + chords + DisplayKeys.commands + [
             CommandKeys.toggle,
             UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(openSelection)),
             UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(clearSelection)),
@@ -235,10 +227,6 @@ final class KeyCommandController: UIViewController {
     @objc private func chord(_ command: UIKeyCommand) {
         if let input = command.input { KeyCommandRouter.shared.chord(input) }
     }
-    @objc private func displayLarger() { ExternalDisplayModel.shared.adjustTextSize(1) }
-    @objc private func displaySmaller() { ExternalDisplayModel.shared.adjustTextSize(-1) }
-    @objc private func displayTheme() { ExternalDisplayModel.shared.cycleTheme() }
-    @objc private func displayPause() { ExternalDisplayModel.shared.togglePause() }
 
     private var reclaim: Timer?
 
@@ -279,6 +267,39 @@ final class KeyCommandController: UIViewController {
     @objc private func openSelection()  { KeyCommandRouter.shared.open() }
     @objc private func clearSelection() { KeyCommandRouter.shared.clear() }
     @objc private func toggleHints()    { ShortcutHints.toggle() }
+}
+
+/// The monitor's own keys: ⌥⌘ with + or - for its text size, T its theme, P to
+/// pause it, H its hint bar. Declared by whatever holds the keyboard (the key
+/// catcher, the composer's two text views, ⌘K's field), so they work wherever
+/// the hint bar lists them: pausing the monitor must not depend on first
+/// leaving the page being written. Only while a monitor is connected.
+@MainActor enum DisplayKeys {
+    static var commands: [UIKeyCommand] {
+        guard ExternalDisplayModel.shared.isConnected else { return [] }
+        return ["=", "+", "-", "t", "p", "h"].map {
+            let c = UIKeyCommand(input: $0, modifierFlags: [.command, .alternate],
+                                 action: #selector(UIResponder.quireDisplayKey(_:)))
+            // Otherwise a text view takes them for itself.
+            c.wantsPriorityOverSystemBehavior = true
+            return c
+        }
+    }
+}
+
+extension UIResponder {
+    @objc func quireDisplayKey(_ command: UIKeyCommand) {
+        MainActor.assumeIsolated {
+            switch command.input {
+            case "=", "+": ExternalDisplayModel.shared.adjustTextSize(1)
+            case "-": ExternalDisplayModel.shared.adjustTextSize(-1)
+            case "t": ExternalDisplayModel.shared.cycleTheme()
+            case "p": ExternalDisplayModel.shared.togglePause()
+            case "h": ShortcutHints.toggle()
+            default: break
+            }
+        }
+    }
 }
 
 private extension UIWindow {

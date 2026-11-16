@@ -131,6 +131,24 @@ struct ExternalRow: Equatable, Identifiable {
     /// Set while the Search sheet is up.
     @Published var search: DeskSearch?
 
+    /// The sheets up on the phone that show nothing here (Settings, the Media
+    /// Library, a calendar or date sheet opened by touch). While there is one,
+    /// every letter is kept from the page beneath, so the hint bar lists only
+    /// what still works (`QKeyBlocker`).
+    @Published private(set) var coveredBy: Set<UUID> = []
+    var isCovered: Bool { !coveredBy.isEmpty }
+    func setCovered(_ covered: Bool, by id: UUID) {
+        if covered { if !coveredBy.contains(id) { coveredBy.insert(id) } }
+        else if coveredBy.contains(id) { coveredBy.remove(id) }
+    }
+    /// Pages with no rows that ↑/↓ and j/k scroll (`qKeyScroll`: Settings on the
+    /// phone). Under a covering sheet those keys work too, and are listed.
+    @Published private(set) var scrollPages: Set<UUID> = []
+    func setScrollPage(_ on: Bool, by id: UUID) {
+        if on { if !scrollPages.contains(id) { scrollPages.insert(id) } }
+        else if scrollPages.contains(id) { scrollPages.remove(id) }
+    }
+
     #if os(iOS)
     /// The page on the monitor, for ↑/↓ on an open entry.
     let pageScroll = QScrollHandle()

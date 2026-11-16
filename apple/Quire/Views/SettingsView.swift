@@ -242,6 +242,7 @@ struct SettingsView: View {
     @State private var cleaningUp = false
     @State private var cleanupMessage = ""
     @State private var showingNothingToExport = false
+    @State private var exportError: String?
     @State private var showingBackupPicker = false
     @State private var backupMessage: String?
     @State private var showingTagReview = false
@@ -312,9 +313,9 @@ struct SettingsView: View {
                 Toggle("Focus current paragraph", isOn: $focusParagraph)
                 }
                 Toggle("Writing prompts", isOn: $promptsOn)
-                if group == nil {
-                Toggle("Transcribe voice memos automatically", isOn: $autoTranscribe)
-                }
+                // On every platform: the iPhone composer obeys it, and it was
+                // behind the Mac-only rows, where an iPhone could not reach it.
+                Toggle("Transcribe voice memos on this device", isOn: $autoTranscribe)
                 // onChange sits on the controls, not the Section: a modified
                 // Section is no longer a Section to the enclosing Form.
                 Toggle("Daily word goal", isOn: $wordGoalEnabled)
@@ -326,7 +327,11 @@ struct SettingsView: View {
             } header: {
                 QLabel("Writing")
             } footer: {
-                Text("Typewriter scrolling keeps the line you're typing centred; focus dims everything but the current paragraph. Prompts show a question in the empty composer. The word goal counts everything dated today and shows a quiet ring by the timer.")
+                // The iPhone and iPad have no typewriter scrolling, paragraph focus or
+                // timer ring: their page explains only what is on it.
+                Text(group == nil
+                     ? "Typewriter scrolling keeps the line you're typing centred; focus dims everything but the current paragraph. Prompts show a question in the empty composer. The word goal counts everything dated today and shows a quiet ring by the timer."
+                     : "Prompts show a question on an empty page. A voice memo recorded on the page is transcribed on this device, beneath its link. The word goal counts everything dated today.")
             }
             .qRowBackground()
             }
@@ -411,7 +416,7 @@ struct SettingsView: View {
             } header: {
                 QLabel("Privacy")
             } footer: {
-                Text("The lock covers the app only — your files stay plain markdown on disk and remain readable in \(fileBrowserName). Spotlight indexing (off by default) lets system search find entry titles and text; results open the entry in Quire.")
+                Text("The lock covers the app only — your files stay plain markdown on disk and remain readable in \(fileBrowserName). Spotlight indexing (off by default) lets system search find entry titles and text; results open the entry in Quire. While App Lock is on, nothing is indexed.")
             }
             .qRowBackground()
             }
@@ -833,6 +838,11 @@ struct SettingsView: View {
         } message: {
             Text(cleanupMessage)
         }
+        .alert("Export failed", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+            Button("OK") { }
+        } message: {
+            Text(exportError ?? "")
+        }
         .alert("Nothing to export", isPresented: $showingNothingToExport) {
             Button("OK") { }
         } message: {
@@ -1082,12 +1092,19 @@ struct SettingsView: View {
     }
     private var exportButton: some View {
         Button {
-            let md = store.exportMarkdown()
-            if md.isEmpty {
-                showingNothingToExport = true
-            } else {
-                exportDoc = ExportDocument(text: md)
-                showingExporter = true
+            // Read off the main thread. Nil: the journal could not be read in full,
+            // and an export with a hole in it is not offered; the store says why.
+            Task { @MainActor in
+                guard let md = await store.exportMarkdownAsync() else {
+                    exportError = store.lastWriteError ?? "The journal could not be read in full, so nothing was exported."
+                    return
+                }
+                if md.isEmpty {
+                    showingNothingToExport = true
+                } else {
+                    exportDoc = ExportDocument(text: md)
+                    showingExporter = true
+                }
             }
         } label: {
             Label("Export…", systemImage: "square.and.arrow.up")

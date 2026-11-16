@@ -32,23 +32,27 @@ struct RetimeSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                QLink(title: "Cancel") { dismiss() }
-                Spacer()
-                QLink(title: "Save", emphasised: true, action: save)
+        // In a scroll view: on a phone on its side the calendar is taller than
+        // the sheet, and the time row under it could not be reached.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    QLink(title: "Cancel") { dismiss() }
+                    Spacer()
+                    QLink(title: "Save", emphasised: true, action: save)
+                }
+                QTitle(kicker: "Change date and time", title: "When", size: 34)
+                Text(ref.entry.qTitle.isEmpty ? "Untitled" : ref.entry.qTitle)
+                    .font(q.writing(18, italic: true)).foregroundStyle(q.mutedColor).lineLimit(2)
+                DatePicker("", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                    .datePickerStyle(.graphical).labelsHidden().tint(q.accentColor)
+                Text("Now \(ref.entry.ts)  →  \(JournalStore.ts(from: date))")
+                    .font(q.mono(12)).foregroundStyle(q.mutedColor)
+                if let error { Text(error).font(q.ui(14)).foregroundStyle(q.accentColor) }
             }
-            QTitle(kicker: "Change date and time", title: "When", size: 34)
-            Text(ref.entry.qTitle.isEmpty ? "Untitled" : ref.entry.qTitle)
-                .font(q.writing(18, italic: true)).foregroundStyle(q.mutedColor).lineLimit(2)
-            DatePicker("", selection: $date, displayedComponents: [.date, .hourAndMinute])
-                .datePickerStyle(.graphical).labelsHidden().tint(q.accentColor)
-            Text("Now \(ref.entry.ts)  →  \(JournalStore.ts(from: date))")
-                .font(q.mono(12)).foregroundStyle(q.mutedColor)
-            if let error { Text(error).font(q.ui(14)).foregroundStyle(q.accentColor) }
-            Spacer(minLength: 0)
+            .padding(.horizontal, 26).padding(.top, 16).padding(.bottom, 24)
         }
-        .padding(.horizontal, 26).padding(.top, 16)
+        .scrollBounceBehavior(.basedOnSize)
         .background(q.pageColor.ignoresSafeArea())
         .preferredColorScheme(q.colorScheme)
         .environment(\.colorScheme, q.colorScheme)

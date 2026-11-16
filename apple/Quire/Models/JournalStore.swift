@@ -92,6 +92,24 @@ final class JournalStore: ObservableObject {
     /// Set when the folder was opened with a `.quire-restore-old-…` folder in
     /// it: a restore was interrupted and what it moved aside is still there.
     @Published private(set) var interruptedRestore: String?
+    /// Entry files (paths in the journal folder) that were read but aren't
+    /// text: their entries are not shown, and nothing is written into them.
+    /// Empty nearly always. `unreadableFilesMessage` words it for a banner.
+    @Published private(set) var unreadableFiles: [String] = []
+    /// How many journal files iCloud was still bringing down when the journal
+    /// was last read. While it isn't zero the journal can't be shown (a
+    /// journal with days missing is never shown as if it were whole) and the
+    /// read is tried again by itself as the files arrive.
+    @Published private(set) var downloadsPending = 0
+
+    var unreadableFilesMessage: String? { Self.unreadableMessage(unreadableFiles) }
+
+    nonisolated static func unreadableMessage(_ files: [String]) -> String? {
+        guard let first = files.first else { return nil }
+        let rest = files.count - 1
+        return "Quire can't read \(first)\(rest > 0 ? " and \(rest) more" : ""): "
+            + "\(rest > 0 ? "they aren't" : "it isn't") plain text. Its entries are left out until the file is put right."
+    }
 
     struct ArchiveDay: Identifiable, Hashable {
         let date: String     // "YYYY-MM-DD"
@@ -219,7 +237,7 @@ final class JournalStore: ObservableObject {
     func createEditorDraft(timestamp: String, title: String, body: String) -> Entry? {
         let result: CoreWritten? = coreMutation(patched: true) { core in
             var ts = timestamp
-            let used = Set(try core.inbox().map(\.ts))
+            let used = Set(try core.inboxLenient().entries.map(\.ts))
             while used.contains(ts) {
                 let next = Self.timestamp(after: ts)
                 guard next != ts else { throw JournalError.journalUnavailable }
@@ -534,6 +552,10 @@ final class JournalStore: ObservableObject {
         freshAsOf = -1; cachePatches = []; buildInFlight = false; indexDay = ""
         lastSignatures = [:]; ownWrites = [:]; legacyDeclined = nil
         interruptedRestore = nil
+        if !unreadableFiles.isEmpty { unreadableFiles = [] }
+        if downloadsPending != 0 { downloadsPending = 0 }
+        loadFailed = false; conflictsChecked = false
+        downloadRetry?.cancel(); downloadRetry = nil; downloadRetries = 0
         if let snap = todaySnapshot, snap.base != resolved.url?.path { todaySnapshot = nil }
         if let old = securityScopedURL {
             old.stopAccessingSecurityScopedResource()
@@ -550,8 +572,19 @@ final class JournalStore: ObservableObject {
             reload()
             return
         }
-        if resolved.scoped, url.startAccessingSecurityScopedResource() {
-            securityScopedURL = url
+        if resolved.scoped {
+            if url.startAccessingSecurityScopedResource() {
+                securityScopedURL = url
+            } else if (try? fm.contentsOfDirectory(atPath: url.path)) == nil {
+                // The bookmark resolved but grants nothing, and the folder
+                // can't be listed: the same as a folder that has gone. Carrying
+                // on showed an empty journal with no word of why.
+                unavailableFolder = url.lastPathComponent
+                baseURL = nil
+                stopSyncWatcher()
+                reload()
+                return
+            }
         }
         baseURL = url
         try? fm.createDirectory(at: url.appendingPathComponent("journal"),
@@ -1279,9 +1312,40 @@ final class JournalStore: ObservableObject {
     private var reloadStartedAt = Date.distantPast
     /// Files this app has written itself since then, and when. A change to one
     /// of these alone is our own write coming back through the watcher.
-    private var ownWrites: [String: Date] = [:]
+    ///
+    /// Each also keeps what the file looked like (size and date) straight
+    /// after the write: a change to one of these paths is only ours while the
+    /// file still looks like something we left. A draft another device synced
+    /// into the same day file afterwards used to be taken for our own echo,
+    /// and stayed out of the Inbox until the next full read.
+    private struct OwnWrite {
+        var at: Date
+        /// Every look the file has had straight after a write of ours since
+        /// the last index ("" when the write left no file).
+        var signatures: Set<String>
+    }
+    private var ownWrites: [String: OwnWrite] = [:]
     private func noteOwnWrite(_ rel: String?) {
-        if let rel { ownWrites[rel] = Date() }
+        guard let rel else { return }
+        let signature = baseURL.flatMap { Self.signature(of: $0.appendingPathComponent(rel)) } ?? ""
+        var own = ownWrites[rel] ?? OwnWrite(at: Date(), signatures: [])
+        own.at = Date()
+        own.signatures.insert(signature)
+        ownWrites[rel] = own
+    }
+
+    /// A file's size and date, as `contentSignatures` records them. Nil when
+    /// there is no file.
+    nonisolated static func signature(of url: URL) -> String? {
+        guard let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else { return nil }
+        return "\(v.fileSize ?? 0):\(v.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+    }
+
+    /// Whether a changed path is another writer's: one we never wrote, or one
+    /// that no longer looks like anything we left there.
+    nonisolated static func isElsewhere(now signature: String?, own signatures: Set<String>?) -> Bool {
+        guard let signatures else { return true }
+        return !signatures.contains(signature ?? "")
     }
     /// The day ("YYYY-MM-DD") the index now showing was built for: today's
     /// words, the streak and On this day are all relative to it.
@@ -1291,17 +1355,120 @@ final class JournalStore: ObservableObject {
     /// changed. Every app-switch used to trigger a complete corpus re-read.
     func reloadIfChanged() {
         guard let base = baseURL else { return }
+        // What the share extension (or a quick-add that couldn't reach the
+        // journal) left in the App Group changes no journal file, so the look
+        // below would never see it: move it in first. The drafts it writes are
+        // not this store's own writes, so that look then reads the journal
+        // again; the Inbox has them at once.
+        if drainPendingShares() > 0 { loadInbox() }
         // The first index is still being built (it records the signatures when
         // it lands), so there is nothing yet to compare against: a second full
         // read here would double the time to open the journal.
-        if !indexed, Date().timeIntervalSince(reloadStartedAt) < 120 { return }
+        // (Not once that read has failed: then there is nothing to wait for,
+        // and coming forward is as good a moment as any to try again.)
+        if !indexed, !loadFailed, Date().timeIntervalSince(reloadStartedAt) < 120 { return }
+        if loadFailed { downloadRetries = 0 }
         if rebuildIfDayChanged() { return }
+        // iCloud may be holding another device's version of a file this one
+        // also changed. Only the watcher used to look, and a custom folder's
+        // watcher doesn't see into the day folders: the loser's entries sat in
+        // a conflict version nothing showed. A folder on this device alone
+        // can't have one.
+        let lookForConflicts = storageMode != .local
         Task.detached(priority: .userInitiated) { [weak self] in
             let now = Self.contentSignatures(base: base)
+            let conflicted = lookForConflicts ? Self.filesWithConflicts(base: base, splits: []) : []
             await MainActor.run { [weak self] in
-                guard let self, self.baseURL == base, self.changedElsewhere(now) else { return }
+                guard let self, self.baseURL == base else { return }
+                let elsewhere = self.changedElsewhere(now)
+                guard elsewhere || !conflicted.isEmpty else { return }
+                for url in conflicted { self.resolveConflicts(at: url) }
                 self.reload()
             }
+        }
+    }
+
+    /// The first read of this folder failed (and no later one has worked).
+    private var loadFailed = false
+    /// Conflict versions have been looked for since this folder was opened.
+    private var conflictsChecked = false
+
+    /// Once per folder, when its first index is showing: merge any conflict
+    /// versions iCloud is holding. Off the main actor and after the journal is
+    /// up, so it costs the launch nothing.
+    private func checkConflictsOnce() {
+        guard !conflictsChecked, storageMode != .local, let base = baseURL else { return }
+        conflictsChecked = true
+        Task.detached(priority: .utility) { [weak self] in
+            let conflicted = Self.filesWithConflicts(base: base, splits: [])
+            guard !conflicted.isEmpty else { return }
+            await MainActor.run { [weak self] in
+                guard let self, self.baseURL == base else { return }
+                for url in conflicted { self.resolveConflicts(at: url) }
+                self.reload()
+            }
+        }
+    }
+
+    // MARK: Files iCloud hasn't brought down
+
+    /// Ask iCloud for every journal file that is still a placeholder, and say
+    /// how many there are. The strict read stops at the first folder holding
+    /// one, so asking only from there brought a new device's journal down a
+    /// folder (once, a file) per try. Entry files and the sidecar's records
+    /// only: never `assets/` or the recovery folder, which can be gigabytes.
+    nonisolated static func startPlaceholderDownloads(base: URL) -> Int {
+        let fm = FileManager.default
+        var count = 0
+        func ask(_ url: URL) {
+            guard let real = placeholderTarget(url) else { return }
+            try? fm.startDownloadingUbiquitousItem(at: real)
+            count += 1
+        }
+        // The hidden files are the point: no `.skipsHiddenFiles`.
+        for flat in ["", ".quire", ".nook"] {
+            let dir = flat.isEmpty ? base : base.appendingPathComponent(flat, isDirectory: true)
+            for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] { ask(url) }
+        }
+        for tree in ["inbox", "journal", "split"] {
+            guard let en = fm.enumerator(at: base.appendingPathComponent(tree, isDirectory: true), includingPropertiesForKeys: nil) else { continue }
+            for case let url as URL in en { ask(url) }
+        }
+        return count
+    }
+
+    /// The file an iCloud placeholder stands for (`.14.md.icloud` → `14.md`),
+    /// or nil when `url` isn't one.
+    nonisolated static func placeholderTarget(_ url: URL) -> URL? {
+        let name = url.lastPathComponent
+        guard name.hasPrefix("."), name.hasSuffix(".icloud"), name.count > ".icloud".count + 1 else { return nil }
+        return url.deletingLastPathComponent().appendingPathComponent(String(name.dropFirst().dropLast(".icloud".count)))
+    }
+
+    private var downloadRetry: Task<Void, Never>?
+    private var downloadRetries = 0
+    /// How long to wait before reading again while files come down: a few
+    /// seconds at first, half a minute at most, and not for ever (coming
+    /// forward starts it again).
+    nonisolated static func downloadRetryDelay(attempt: Int) -> TimeInterval? {
+        attempt < 60 ? min(30, 3 + Double(attempt) * 2) : nil
+    }
+
+    /// The read failed with `waiting` files still to come: say so (once per
+    /// change in the number, not on every try) and read again shortly. The
+    /// retry costs a listing, which stops at the first placeholder.
+    private func retryWhenDownloaded(waiting: Int, base: URL) {
+        if waiting != downloadsPending {
+            downloadsPending = waiting
+            lastWriteError = "Downloading \(waiting) journal file\(waiting == 1 ? "" : "s") from iCloud. Your journal opens when \(waiting == 1 ? "it is" : "they are") here."
+        }
+        downloadRetry?.cancel()
+        guard let delay = Self.downloadRetryDelay(attempt: downloadRetries) else { return }
+        downloadRetries += 1
+        downloadRetry = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.baseURL == base, !self.buildInFlight else { return }
+            self.reload()
         }
     }
 
@@ -1325,7 +1492,7 @@ final class JournalStore: ObservableObject {
     private func changedElsewhere(_ now: [String: String]) -> Bool {
         let changed = Self.changedPaths(lastSignatures, now)
         guard !changed.isEmpty else { return false }
-        if changed.contains(where: { ownWrites[$0] == nil }) { return true }
+        if changed.contains(where: { Self.isElsewhere(now: now[$0], own: ownWrites[$0]?.signatures) }) { return true }
         for path in changed { lastSignatures[path] = now[path] }
         return false
     }
@@ -1344,8 +1511,7 @@ final class JournalStore: ObservableObject {
         let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
         var out: [String: String] = [:]
         func note(_ url: URL, _ rel: String) {
-            guard let v = try? url.resourceValues(forKeys: Set(keys)) else { return }
-            out[rel] = "\(v.fileSize ?? 0):\(v.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+            if let signature = signature(of: url) { out[rel] = signature }
         }
         for directory in ["inbox", "journal", "split", ".quire", ".nook"] {
             let root = base.appendingPathComponent(directory)
@@ -1378,8 +1544,14 @@ final class JournalStore: ObservableObject {
     private func loadInbox() {
         guard let core else { inboxDrafts = []; return }
         migrateLegacyIfPresent()
-        do { inboxDrafts = JournalParser.withOccurrences(try core.inbox().map(\.entry)) }
-        catch { lastWriteError = journalErrorMessage(error) }
+        // Lenient: a draft file that isn't text is left out (and named when
+        // the index lands), where it used to leave the Inbox as it was.
+        do { inboxDrafts = JournalParser.withOccurrences(try core.inboxLenient().entries.map(\.entry)) }
+        catch {
+            // While files are coming down the retry says so once, not each time.
+            let message = journalErrorMessage(error)
+            if !(downloadsPending > 0 && message == AppleVault.downloadingMessage) { lastWriteError = message }
+        }
     }
 
     struct BuiltIndex {
@@ -1393,6 +1565,8 @@ final class JournalStore: ObservableObject {
         /// never walk the disk on the main actor again.
         var corpus: [(date: String, entries: [Entry])] = []
         var splitEntries: [String: [Entry]] = [:]
+        /// Entry files that were read but aren't text, left out of the above.
+        var unreadable: [String] = []
     }
 
     /// Coalesce a burst of mutations into one rebuild. Nothing waits on it for
@@ -1466,10 +1640,20 @@ final class JournalStore: ObservableObject {
             let initial: BuiltIndex
             do { initial = try Self.buildIndex(base: base, triggerDownloads: triggerDownloads) }
             catch {
+                // Files iCloud hasn't brought down are all asked for now, and
+                // the read is tried again as they land; it used to wait for
+                // the next two-minute look, one file further on each time.
+                let waiting = Self.startPlaceholderDownloads(base: base)
                 await MainActor.run { [weak self] in
                     guard let self, self.baseURL == base, self.indexGeneration == generation else { return }
                     self.buildInFlight = false
-                    self.lastWriteError = journalErrorMessage(error)
+                    self.loadFailed = true
+                    if waiting > 0 {
+                        self.retryWhenDownloaded(waiting: waiting, base: base)
+                    } else {
+                        if self.downloadsPending != 0 { self.downloadsPending = 0 }
+                        self.lastWriteError = journalErrorMessage(error)
+                    }
                 }
                 return
             }
@@ -1481,7 +1665,14 @@ final class JournalStore: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self, self.baseURL == base, self.indexGeneration == generation else { return }
                 self.lastSignatures = signatures
-                self.ownWrites = self.ownWrites.filter { $0.value >= started }
+                self.loadFailed = false
+                self.downloadRetry?.cancel(); self.downloadRetry = nil; self.downloadRetries = 0
+                if self.downloadsPending != 0 { self.downloadsPending = 0 }
+                if self.unreadableFiles != idx.unreadable {
+                    self.unreadableFiles = idx.unreadable
+                    if let message = Self.unreadableMessage(idx.unreadable) { self.lastWriteError = message }
+                }
+                self.ownWrites = self.ownWrites.filter { $0.value.at >= started }
                 self.indexDay = todayISO
                 self.archiveDays = idx.days
                 var map = Dictionary(uniqueKeysWithValues: idx.tags.map { ($0.tag, $0.count) })
@@ -1523,6 +1714,7 @@ final class JournalStore: ObservableObject {
                 #if canImport(CoreSpotlight)
                 SpotlightIndexer.scheduleReindex(source: { self.spotlightSource() })
                 #endif
+                self.checkConflictsOnce()
             }
             // The sizes, once the journal is showing.
             var sizes = HeavyStats()
@@ -1597,6 +1789,11 @@ final class JournalStore: ObservableObject {
     /// The lock was switched on or off: what the widget and the weekly note
     /// may say has changed with it.
     private func appLockChanged() {
+        #if canImport(CoreSpotlight)
+        // Whatever the journal's state: the lock going on empties the system
+        // index at once, and going off fills it again (when it is asked for).
+        SpotlightIndexer.scheduleReindex(source: { self.spotlightSource() })
+        #endif
         guard indexed else { return }
         writeWidgetSnapshot()
         ResurfacingScheduler.settingsChanged(store: self)
@@ -1805,7 +2002,12 @@ final class JournalStore: ObservableObject {
         var latestOnThisDayYear = 0
         var statDates: [Date] = []
 
-        let all = try CoreJournal(base: base).load()
+        // Lenient: one file that isn't text used to mean no journal at all.
+        // It is left out and named (`unreadable`); a file or folder that can't
+        // be read at all (evicted, unreachable) still throws.
+        let snapshot = try CoreJournal(base: base).loadLenient()
+        idx.unreadable = snapshot.unreadable.map(\.file)
+        let all = snapshot.entries
         let grouped = Dictionary(grouping: all.filter { $0.source == "journal" }, by: \.date)
         let urls = grouped.keys.sorted(by: >).map { base.appendingPathComponent("journal/" + $0.replacingOccurrences(of: "-", with: "/") + ".md") }
         var tagMap: [String: Int] = [:]
@@ -1890,7 +2092,7 @@ final class JournalStore: ObservableObject {
     func entries(for date: String) -> [Entry] {
         if cacheFresh { return archiveEntries.first { $0.date == date }?.entries ?? [] }
         guard let core else { return [] }
-        do { return JournalParser.withOccurrences(try core.load().filter { $0.source == "journal" && $0.date == date }.map(\.entry)) }
+        do { return JournalParser.withOccurrences(try core.loadLenient().entries.filter { $0.source == "journal" && $0.date == date }.map(\.entry)) }
         catch { lastWriteError = journalErrorMessage(error); return [] }
     }
 
@@ -1988,9 +2190,28 @@ final class JournalStore: ObservableObject {
         return d[b.count]
     }
 
-    /// Apply several tag renames in one pass over each file, reloading once.
+    /// Apply several tag renames, reloading once (each rename used to read the
+    /// whole journal again before the next began).
     func mergeTags(_ merges: [(from: String, to: String)]) {
-        for merge in merges { _ = renameTag(from: merge.from, to: merge.to) }
+        guard !merges.isEmpty else { return }
+        for merge in merges {
+            let _: Int? = coreMutation { try $0.call("rename_tag", ["from": [merge.from], "to": merge.to]) }
+        }
+        reload()
+    }
+
+    /// `mergeTags`, off the main actor: every rename rewrites each file that
+    /// holds the tag. Returns how many occurrences were renamed.
+    @discardableResult
+    func mergeTagsAsync(_ merges: [(from: String, to: String)]) async -> Int {
+        guard !merges.isEmpty else { return 0 }
+        let pairs = merges.map { [$0.from, $0.to] }
+        let changed: Int? = await maintenance { core in
+            var total = 0
+            for pair in pairs { let n: Int = try core.call("rename_tag", ["from": [pair[0]], "to": pair[1]]); total += n }
+            return total
+        }
+        return changed ?? 0
     }
 
     /// Rename all occurrences of one @tag to another across inbox, journal, and
@@ -2107,7 +2328,7 @@ final class JournalStore: ObservableObject {
         // identify an existing draft solely by a timestamp shared by twins.
         if composerEntry == nil, let previous {
             do {
-                let matches = try core.inbox().filter { $0.ts == previous }
+                let matches = try core.inboxLenient().entries.filter { $0.ts == previous }
                 guard matches.count == 1 else { throw JournalError.journalUnavailable }
                 composerEntry = matches[0].entry
             } catch { lastWriteError = journalErrorMessage(error); return previous }
@@ -2115,7 +2336,7 @@ final class JournalStore: ObservableObject {
         let result: CoreWritten? = coreMutation(patched: true) { core in
             if let composerEntry { return try core.update(composerEntry, text: Self.makeEntry(timestamp: timestamp, title: title, body: body).raw) }
             var ts = timestamp
-            let used = Set(try core.inbox().map(\.ts))
+            let used = Set(try core.inboxLenient().entries.map(\.ts))
             while used.contains(ts) { ts = Self.timestamp(after: ts) }
             return try core.call("new", ["ts": ts, "title": title, "body": body])
         }
@@ -2255,7 +2476,7 @@ final class JournalStore: ObservableObject {
         let stamps = DateFormatter()
         stamps.dateFormat = "yyyy-MM-dd HH:mm:ss"; stamps.locale = Locale(identifier: "en_US_POSIX")
         var map: [String: Date] = [:]
-        for value in (try? CoreJournal(base: base).load()) ?? [] {
+        for value in (try? CoreJournal(base: base).loadLenient().entries) ?? [] {
             guard let date = stamps.date(from: value.ts) else { continue }
             for path in MediaLinks.paths(in: value.raw) {
                 guard let rel = MediaLinks.resolved(path, file: value.file) else { continue }
@@ -2677,8 +2898,12 @@ final class JournalStore: ObservableObject {
         Task.detached(priority: .background) {
             #if os(iOS)
             // Give the export a grace period if the app is backgrounded mid-encode.
-            let bgTask = await MainActor.run { UIApplication.shared.beginBackgroundTask(withName: "quire.compress") }
-            defer { if bgTask != .invalid { Task { @MainActor in UIApplication.shared.endBackgroundTask(bgTask) } } }
+            // The task is ended when its time runs out as well as when the
+            // encode is done: one still open then gets the app killed, not
+            // suspended. The encode stops with the app; the original is only
+            // replaced by a finished file, so it is untouched.
+            let bgTask = await MainActor.run { BackgroundGrace(name: "quire.compress") }
+            defer { Task { @MainActor in bgTask.end() } }
             #endif
             let outcome = await MediaTranscodeQueue.shared.run { await MediaTranscoder.compress(url: url, ext: ext, recovery: recovery) }
             Self.pruneRecovery(base: base)
@@ -2692,6 +2917,25 @@ final class JournalStore: ObservableObject {
             }
         }
     }
+
+    #if os(iOS)
+    /// A background task that is always ended once: by its owner, or by iOS
+    /// when the time allowed runs out.
+    @MainActor
+    final class BackgroundGrace {
+        private var id = UIBackgroundTaskIdentifier.invalid
+        init(name: String) {
+            id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+                MainActor.assumeIsolated { self?.end() }
+            }
+        }
+        func end() {
+            guard id != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(id)
+            id = .invalid
+        }
+    }
+    #endif
 
     struct MediaCompressionResult { var images = 0; var videos = 0; var audios = 0; var bytesSaved = 0; var converted = 0; var failed = 0 }
 
@@ -2723,22 +2967,37 @@ final class JournalStore: ObservableObject {
         var converted = 0
         for heic in heics {
             guard baseURL == base else { break }
-            let jpgName = "\(heic.deletingPathExtension().lastPathComponent).jpg"
-            let jpgURL = heic.deletingLastPathComponent().appendingPathComponent(jpgName)
+            // Never over a JPEG that is already there: `IMG_0001.jpg` beside
+            // `IMG_0001.heic` is another photo, and used to be replaced by this
+            // one. The next free name is taken, as the core's `unique_jpg_path`.
+            let jpgURL = Self.freeJPEGURL(for: heic)
+            let jpgName = jpgURL.lastPathComponent
             let written = await Task.detached(priority: .utility) { () -> Bool in
                 guard let data = try? Data(contentsOf: heic),
                       let jpg = ImageDownsampler.jpeg(data, dataSaver: dataSaver) else { return false }
-                return (try? jpg.write(to: jpgURL, options: .atomic)) != nil
+                // Whole or not there, and refused (a move never replaces) if
+                // something took the name meanwhile.
+                let fm = FileManager.default
+                let tmp = jpgURL.deletingLastPathComponent().appendingPathComponent("._tmp_\(UUID().uuidString).jpg")
+                defer { try? fm.removeItem(at: tmp) }
+                guard (try? jpg.write(to: tmp)) != nil else { return false }
+                return (try? fm.moveItem(at: tmp, to: jpgURL)) != nil
             }.value
             guard written else { continue }
             var relinked = index.complete
+            var pointedAt = false
             for (rel, text) in texts {
                 guard let renamed = MediaLinks.renaming(text, from: heic.lastPathComponent, to: jpgName) else { continue }
                 do {
                     try writeFile(base.appendingPathComponent(rel), renamed, replacing: text)
                     texts[rel] = renamed
+                    pointedAt = true
                 } catch { relinked = false }
             }
+            // The HEIC stays for the next run, which makes its JPEG again: one
+            // that no link was pointed at is taken away, or each run that
+            // couldn't finish would leave another copy behind.
+            if !relinked, !pointedAt { try? FileManager.default.removeItem(at: jpgURL) }
             guard relinked else { continue }
             // Parked, not removed: a link this didn't know to rewrite (a
             // template, transfer.md) can still be put right by hand.
@@ -2747,6 +3006,21 @@ final class JournalStore: ObservableObject {
             converted += 1
         }
         return converted
+    }
+
+    /// Where a HEIC's JPEG goes: beside it under the same name, or `name-1.jpg`,
+    /// `name-2.jpg`… when that is taken (the core's `unique_jpg_path`).
+    nonisolated static func freeJPEGURL(for heic: URL) -> URL {
+        let fm = FileManager.default
+        let dir = heic.deletingLastPathComponent()
+        let stem = heic.deletingPathExtension().lastPathComponent
+        var candidate = dir.appendingPathComponent("\(stem).jpg")
+        var n = 0
+        while fm.fileExists(atPath: candidate.path) {
+            n += 1
+            candidate = dir.appendingPathComponent("\(stem)-\(n).jpg")
+        }
+        return candidate
     }
 
     /// Every entry file that mentions a HEIC, with its text, and whether every
@@ -2871,10 +3145,45 @@ final class JournalStore: ObservableObject {
         guard let base = resolved.url else { throw JournalError.journalUnavailable }
         let started = resolved.scoped && base.startAccessingSecurityScopedResource()
         defer { if started { base.stopAccessingSecurityScopedResource() } }
-        let core = CoreJournal(base: base)
-        try core.migrate()
-        let _: CoreWritten = try core.call("new", ["ts": nowTS(), "title": title, "body": body])
+        try addDraft(title: title, body: body, base: base)
         return true
+    }
+
+    /// One draft into the journal at `base`. A legacy `inbox.md` or `<tag>.md`
+    /// is folded first when one is there (one directory listing to find out):
+    /// the fold lists the inbox, journal and split trees in full, which used to
+    /// be done for every Siri add, on the main actor, and failed the add while
+    /// any day file anywhere was still coming down from iCloud. The write
+    /// itself reads only the day's own file.
+    static func addDraft(title: String, body: String, base: URL) throws {
+        let core = CoreJournal(base: base)
+        if legacySignature(base: base) != nil { try core.migrate() }
+        let _: CoreWritten = try core.call("new", ["ts": nowTS(), "title": title, "body": body])
+    }
+
+    /// What became of a line added from outside the app.
+    enum QuickAdd: Equatable {
+        /// Nothing to add: the title and body were both blank.
+        case nothing
+        /// In the Inbox.
+        case added
+        /// The journal couldn't be written (`reason`); the line is in the
+        /// handoff folder and goes into the Inbox when the app next comes forward.
+        case kept(reason: String)
+        /// Neither worked. The caller still has the text and must say so.
+        case lost(reason: String)
+    }
+
+    /// `quickAddDraft`, never dropping the text: when the journal can't be
+    /// reached or written (a dead bookmark, a folder that has gone, a day file
+    /// evicted by iCloud) the draft is left in the share handoff folder, which
+    /// the app drains into the Inbox.
+    static func quickAddKeepingText(title: String, body: String) -> QuickAdd {
+        do { return try quickAddDraft(title: title, body: body) ? .added : .nothing }
+        catch {
+            let reason = journalErrorMessage(error)
+            return handOffDraft(title: title, body: body) ? .kept(reason: reason) : .lost(reason: reason)
+        }
     }
 
     /// Number of drafts currently in the inbox (headless — for App Intents).
@@ -2883,7 +3192,7 @@ final class JournalStore: ObservableObject {
         guard let base = resolved.url else { return 0 }
         let started = resolved.scoped && base.startAccessingSecurityScopedResource()
         defer { if started { base.stopAccessingSecurityScopedResource() } }
-        return (try? CoreJournal(base: base).inbox().count) ?? 0
+        return (try? CoreJournal(base: base).inboxLenient().entries.count) ?? 0
     }
 
 
@@ -3050,6 +3359,23 @@ final class JournalStore: ObservableObject {
             let entries = try core.load().filter { $0.source != "inbox" }.sorted { $0.ts < $1.ts }
             return JournalParser.renderEntries(preamble: "", entries: entries.map(\.entry))
         } catch { lastWriteError = journalErrorMessage(error); return "" }
+    }
+
+    /// `exportMarkdown`, read and rendered off the main actor. Nil when the
+    /// journal couldn't be read in full (the reason is in `lastWriteError`):
+    /// an export is never quietly short.
+    func exportMarkdownAsync() async -> String? {
+        guard let base = baseURL else { lastWriteError = "The journal folder is unavailable."; return nil }
+        let outcome: Result<String, Error> = await Task.detached(priority: .userInitiated) {
+            Result {
+                let entries = try CoreJournal(base: base).load().filter { $0.source != "inbox" }.sorted { $0.ts < $1.ts }
+                return JournalParser.renderEntries(preamble: "", entries: entries.map(\.entry))
+            }
+        }.value
+        switch outcome {
+        case .success(let text): return text
+        case .failure(let error): lastWriteError = journalErrorMessage(error); return nil
+        }
     }
 
     // MARK: Cleanup (jnl cmdCleanup)
@@ -3420,14 +3746,16 @@ final class JournalStore: ObservableObject {
 
     /// Move anything the share extension captured into the journal: media into
     /// `<base>/assets/` (the pending drafts already link them by that path),
-    /// the drafts onto the end of the inbox. Runs on every reload, so shares
-    /// land on the next launch or foreground.
-    private func drainPendingShares() {
+    /// the drafts onto the end of the inbox. Runs on every reload and each time
+    /// the app comes forward (`reloadIfChanged`), so shares land on the next
+    /// launch or foreground. Returns how many drafts it handed to the inbox.
+    @discardableResult
+    private func drainPendingShares() -> Int {
         #if DEBUG
-        if isTestStore { return }
+        if isTestStore { return 0 }
         #endif
-        guard let dir = Self.pendingShareDir, let base = baseURL else { return }
-        Self.drainShares(from: dir, into: base, compress: { [weak self] rel in
+        guard let dir = Self.pendingShareDir, let base = baseURL else { return 0 }
+        return Self.drainShares(from: dir, into: base, compress: { [weak self] rel in
             self?.scheduleCompression(assetRelPath: rel)
         }, report: { [weak self] message in
             self?.lastWriteError = message
@@ -3442,15 +3770,26 @@ final class JournalStore: ObservableObject {
     /// crashed are picked up too. A claimed file is removed only once its
     /// drafts are in the inbox; one that can't be read is kept for the next
     /// time, never taken for empty and deleted.
+    ///
+    /// A `share-<id>.md` file is one share and so one draft, whatever its text
+    /// holds: a line in it that reads as an entry header (a shared note with a
+    /// timestamp in brackets) is escaped as the editor escapes one, where it
+    /// used to split the share into several drafts. It keeps its `share-`
+    /// prefix when claimed so that is still known after a crash. The single
+    /// `pending.md` of older builds held several drafts and is read as such.
+    ///
+    /// Returns how many drafts were handed to the inbox.
+    @discardableResult
     static func drainShares(from dir: URL, into base: URL,
                             compress: (String) -> Void = { _ in },
                             report: (String) -> Void = { _ in },
-                            now: Date = Date()) {
+                            now: Date = Date()) -> Int {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.creationDateKey, .contentModificationDateKey]
         for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         where url.pathExtension == "md" {
-            try? fm.moveItem(at: url, to: dir.appendingPathComponent("\(UUID().uuidString).processing"))
+            let single = url.lastPathComponent.hasPrefix(singleSharePrefix) ? singleSharePrefix : ""
+            try? fm.moveItem(at: url, to: dir.appendingPathComponent("\(single)\(UUID().uuidString).processing"))
         }
         func captured(_ url: URL) -> Date {
             (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
@@ -3463,7 +3802,8 @@ final class JournalStore: ObservableObject {
         for url in claimed {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
             readable.append(url)
-            shared += JournalParser.parseEntries(text)
+            let one = url.lastPathComponent.hasPrefix(singleSharePrefix)
+            shared += JournalParser.parseEntries(one ? escapingEmbeddedHeaders(text, skippingFirstLine: true) : text)
         }
         // Media first, so the links resolve the moment the drafts appear. A
         // file a draft here links is complete (the draft is written after it);
@@ -3492,9 +3832,44 @@ final class JournalStore: ObservableObject {
                 for (date, entries) in Dictionary(grouping: shared, by: \.date) {
                     let _: Int = try core.call("insert", ["file": "inbox/" + date.replacingOccurrences(of: "-", with: "/") + ".md", "raws": entries.map(\.raw)])
                 }
-            } catch { report(journalErrorMessage(error)); return }
+            } catch { report(journalErrorMessage(error)); return 0 }
         }
         for url in readable { try? fm.removeItem(at: url) }
+        return shared.count
+    }
+
+    /// What the share extension names each share's file (`share-<id>.md`).
+    nonisolated static let singleSharePrefix = "share-"
+
+    /// Leave a draft in the handoff folder, as the share extension does, for
+    /// the app to move into the Inbox the next time it comes forward. For a
+    /// quick-add (the reminder's "Write a line…", Siri) that couldn't reach the
+    /// journal: a folder that has gone, a day file iCloud hasn't brought down.
+    /// The words are kept where they used to be dropped. False when there is
+    /// no App Group container to write to.
+    @discardableResult
+    nonisolated static func handOffDraft(title: String, body: String, at date: Date = Date(), to dir: URL? = pendingShareDir) -> Bool {
+        guard let dir else { return false }
+        let fm = FileManager.default
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let stamp = DateFormatter()
+        stamp.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        stamp.locale = Locale(identifier: "en_US_POSIX")
+        var header = "[\(stamp.string(from: date))]"
+        // The header is one line: a title can't carry a line break into it.
+        let heading = title.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        if !heading.isEmpty { header += " " + heading }
+        let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Written under another extension and renamed, as the extension does:
+        // the drain claims `.md` files and must never see half of one.
+        let id = UUID().uuidString
+        let draft = dir.appendingPathComponent("\(singleSharePrefix)\(id).tmp")
+        guard (try? Data(((text.isEmpty ? header : header + "\n" + text) + "\n").utf8).write(to: draft, options: .atomic)) != nil else { return false }
+        guard (try? fm.moveItem(at: draft, to: dir.appendingPathComponent("\(singleSharePrefix)\(id).md"))) != nil else {
+            try? fm.removeItem(at: draft)
+            return false
+        }
+        return true
     }
 
     // MARK: Import (external journals → filed entries)
@@ -3664,7 +4039,7 @@ final class JournalStore: ObservableObject {
             // The first index is still being read (the query's first gathering
             // lands about now on a cold launch): reading it all again would
             // double the time to open, so look once it is in.
-            if !self.indexed, now.timeIntervalSince(self.reloadStartedAt) < 120 {
+            if !self.indexed, !self.loadFailed, now.timeIntervalSince(self.reloadStartedAt) < 120 {
                 self.scheduleSyncReload(after: 2)
                 return
             }

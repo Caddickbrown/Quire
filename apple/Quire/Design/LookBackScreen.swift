@@ -171,7 +171,9 @@ struct LookBackScreen: View {
             QLabel("When you write", trailing: "entries by weekday").qArrive()
             HStack(alignment: .bottom, spacing: 10) {
                 ForEach(0..<7, id: \.self) { i in
-                    Rectangle().fill(i == best ? q.accentColor : q.accentColor.opacity(0.35))
+                    // Muted, as their letters below are: the accent at a third was
+                    // under 3:1 on every paper, and these bars are the figures.
+                    Rectangle().fill(i == best ? q.accentColor : q.mutedColor)
                         .frame(height: max(4, 84 * CGFloat(counts[i]) / CGFloat(top)))
                         .qGrowUp(delay: 0.15 + Double(i) * 0.04)
                         .frame(maxWidth: .infinity)

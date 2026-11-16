@@ -11,7 +11,7 @@ use quire_core::stats;
 use quire_core::themes;
 use quire_core::*;
 use ratatui::layout::{Position, Rect};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
@@ -49,11 +49,15 @@ pub struct Browse {
     /// pressed: what Esc goes back to, since each letter typed moves the
     /// selection.
     pub before_filter: Option<(usize, usize, usize, usize, usize)>,
+    /// How far the entries pane has been read on (space, PgDn), in rows past
+    /// where the selection puts it. `ui` clamps it to the text there is; any
+    /// move of the selection starts again from the top.
+    pub scroll: Cell<usize>,
 }
 
 impl Default for Browse {
     fn default() -> Self {
-        Browse { pick: Pick::Main, col: 2, yi: 0, mi: 0, di: 0, ei: 0, filter: String::new(), filtering: false, before_filter: None }
+        Browse { pick: Pick::Main, col: 2, yi: 0, mi: 0, di: 0, ei: 0, filter: String::new(), filtering: false, before_filter: None, scroll: Cell::new(0) }
     }
 }
 
@@ -119,6 +123,8 @@ pub enum Confirm {
     MergeConflicts,
     /// Restore this backup over the journal.
     Restore(String),
+    /// Export over a file that is already there.
+    ExportOver(String),
 }
 
 /// What a one-line text prompt is for.
@@ -241,6 +247,13 @@ pub struct App {
     /// The user moved the tag popover's selection, so ↵ and ↹ take it even
     /// when what is typed is already a tag.
     tag_moved: bool,
+    /// The tag popover is up: something was typed at the `@word` under the
+    /// caret. A caret that only arrives there (an entry opened, an arrow, a
+    /// click) does not open it, so ↑ ↓ ↵ and Esc keep their own meanings.
+    tag_open: bool,
+    /// When the composer's unsaved text was first seen: typing without a
+    /// pause is still saved every `AUTOSAVE_CEILING`.
+    dirty_since: Option<Instant>,
     /// Said on the terminal after the screen is given back.
     exit_notes: Vec<String>,
 }
@@ -258,6 +271,13 @@ pub const RESULTS_LISTED: usize = 300;
 /// The composer needs a title row, a text row and its status lines.
 pub const COMPOSER_MIN_ROWS: u16 = 9;
 pub const COMPOSER_MIN_COLS: u16 = 30;
+/// Below this nothing is drawn but a line saying so, and no key acts.
+pub const MIN_ROWS: u16 = 6;
+pub const MIN_COLS: u16 = 30;
+/// The composer saves this long after the last keystroke…
+const AUTOSAVE_IDLE: Duration = Duration::from_millis(700);
+/// …and at least this often while the typing never pauses.
+const AUTOSAVE_CEILING: Duration = Duration::from_secs(5);
 
 /// A day as the DAY column shows it, "Wed 04": what is drawn and what the
 /// column's filter matches are the same text.
@@ -344,6 +364,8 @@ impl App {
             quit_refused: false,
             force_quit: false,
             tag_moved: false,
+            tag_open: false,
+            dirty_since: None,
             exit_notes: Vec::new(),
         };
         a.reload();
@@ -356,8 +378,21 @@ impl App {
     pub fn reload(&mut self) {
         match self.j.try_load_all() {
             Ok(entries) => {
+                // On the list being looked at, what is selected stays
+                // selected: by the entry, not by its place in a list that may
+                // have changed underneath. (A list that isn't showing keeps
+                // its place by position, so the Inbox still opens on the
+                // newest draft after one is written.)
+                let marked = matches!(self.screen, Screen::Inbox | Screen::Browse).then(|| self.browse_sel().entry).flatten();
+                let found = (self.screen == Screen::Search).then(|| self.results().get(self.search_i).map(|e| (*e).clone())).flatten();
                 self.entries = entries;
                 self.load_error = None;
+                if let Some(e) = marked {
+                    self.reselect(&e);
+                }
+                if let Some(i) = found.and_then(|e| self.results().iter().position(|x| x.file == e.file && x.raw == e.raw)) {
+                    self.search_i = i;
+                }
             }
             Err(e) => {
                 if self.load_error.as_deref() != Some(e.as_str()) {
@@ -384,6 +419,36 @@ impl App {
             h = (h ^ self.j.len(&rel)).wrapping_mul(1099511628211);
         }
         h
+    }
+
+    /// The file the last reading stopped at, while the list on screen is an
+    /// older one: drawn on every screen until a reading works.
+    pub fn load_error(&self) -> Option<&str> {
+        self.load_error.as_deref()
+    }
+
+    /// Too small to draw anything but a line saying so.
+    pub fn too_small(&self) -> bool {
+        self.height < MIN_ROWS || self.width < MIN_COLS
+    }
+
+    /// Put this screen's selection back on `was` after a reload: the same
+    /// file and text, at the same index if it is still there, else wherever
+    /// in that file it went. An entry that is gone or changed leaves the
+    /// selection where it was (and `clamp` keeps it on a row).
+    fn reselect(&mut self, was: &Entry) {
+        let same = |e: &&Entry| e.file == was.file && e.raw == was.raw;
+        let pool = self.browse_pool();
+        let Some(now) = pool.iter().copied().find(|e| same(e) && e.index == was.index).or_else(|| pool.iter().copied().find(same)).cloned() else { return };
+        let (y, m) = (&now.date[..4], &now.date[5..7]);
+        let (Some(yi), Some(mi), Some(di), Some(ei)) = (
+            self.browse_years().iter().position(|x| x.0 == y),
+            self.browse_months(y).iter().position(|x| x.0 == m),
+            self.browse_days(y, m).iter().position(|x| x.0 == now.date),
+            self.browse_day_entries(&now.date).iter().position(|x| x.file == now.file && x.index == now.index),
+        ) else { return };
+        let nav = self.nav_mut();
+        (nav.yi, nav.mi, nav.di, nav.ei) = (yi, mi, di, ei);
     }
 
     fn clamp(&mut self) {
@@ -637,6 +702,9 @@ impl App {
 
     /// Matching tags for the `@word` under the caret, most used first.
     pub fn tag_suggestions(&self) -> Vec<String> {
+        if !self.tag_open {
+            return vec![];
+        }
         let Some(d) = &self.draft else { return vec![] };
         let Some((_, prefix)) = d.ed.tag_prefix() else { return vec![] };
         let p = prefix.to_lowercase();
@@ -653,13 +721,17 @@ impl App {
     }
 
     /// Will ↵ or ↹ take the popover's tag? Not when what is typed is already
-    /// a tag in its own right (`@run`, with `@running` on offer), unless the
-    /// selection was moved to say so.
+    /// a tag in its own right (`@run`, with `@running` on offer), nor when it
+    /// is a bare `@` (the list is only the most used tags, and ↵ is a new
+    /// line), unless the selection was moved to say so.
     pub fn tag_accepts(&self) -> bool {
         if self.tag_moved {
             return true;
         }
         let Some((_, prefix)) = self.draft.as_ref().and_then(|d| d.ed.tag_prefix()) else { return false };
+        if prefix.is_empty() {
+            return false;
+        }
         let want = format!("@{}", prefix.to_lowercase());
         !self.known_tags().iter().any(|(t, _)| t.to_lowercase() == want)
     }
@@ -696,6 +768,8 @@ impl App {
         self.focus = false;
         self.tag_pick = 0;
         self.tag_moved = false;
+        self.tag_open = false;
+        self.dirty_since = None;
         self.push(Screen::Write);
     }
 
@@ -731,6 +805,8 @@ impl App {
         self.focus = false;
         self.tag_pick = 0;
         self.tag_moved = false;
+        self.tag_open = false;
+        self.dirty_since = None;
         self.push(Screen::Write);
     }
 
@@ -1166,12 +1242,22 @@ impl App {
                 self.toast("Time. Finish the sentence.".into(), false);
             }
         }
-        let autosave_due = !self.maintenance_running && self.draft.as_ref().map(|d| d.ed.dirty && d.ed.last_edit.elapsed() > Duration::from_millis(700)).unwrap_or(false);
-        if autosave_due {
-            if let Err(e) = self.save_draft() {
-                self.save_refused(e);
-                if let Some(d) = self.draft.as_mut() {
-                    d.ed.last_edit = Instant::now(); // try again in a while, not every tick
+        // Saved a moment after the typing pauses, and every few seconds when
+        // it doesn't: a closed window or a dropped line then costs seconds.
+        let dirty = self.draft.as_ref().is_some_and(|d| d.ed.dirty);
+        self.dirty_since = if dirty { self.dirty_since.or_else(|| Some(Instant::now())) } else { None };
+        let idle = self.draft.as_ref().is_some_and(|d| d.ed.last_edit.elapsed() > AUTOSAVE_IDLE);
+        let overdue = self.dirty_since.is_some_and(|t| t.elapsed() >= AUTOSAVE_CEILING);
+        if dirty && !self.maintenance_running && (idle || overdue) {
+            match self.save_draft() {
+                Ok(_) => self.dirty_since = None,
+                Err(e) => {
+                    self.save_refused(e);
+                    // Try again in a while, not every tick.
+                    self.dirty_since = Some(Instant::now());
+                    if let Some(d) = self.draft.as_mut() {
+                        d.ed.last_edit = Instant::now();
+                    }
                 }
             }
         }
@@ -1198,6 +1284,12 @@ impl App {
         }
         self.quit_refused = false;
         if self.maintenance_running { return; }
+        // Nothing is drawn, so nothing is pressed: `d` then `y` would delete
+        // an entry no one can see. (The composer has its own, larger floor,
+        // and still takes Esc and ^s.)
+        if self.too_small() {
+            return;
+        }
         if k.code == KeyCode::F(2) {
             self.toggle_mouse();
             return;
@@ -1263,7 +1355,9 @@ impl App {
             return;
         }
         match k.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            // Not Esc: it is "back" everywhere else, and held down from a
+            // nested screen it would carry on out of Quire.
+            KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('p') => self.prompt_n += 1,
             KeyCode::Enter => {
                 let p = self.current_prompt();
@@ -1289,39 +1383,38 @@ impl App {
                     self.clamp_browse();
                 }
                 KeyCode::Enter => self.keep_filtered(),
-                KeyCode::Backspace => {
-                    self.nav_mut().filter.pop();
+                // Through the rows the filter has left.
+                KeyCode::Up | KeyCode::Down => self.browse_step(k.code == KeyCode::Down),
+                _ => {
+                    let mut filter = std::mem::take(&mut self.nav_mut().filter);
+                    line_key(&mut filter, &k, |_| true);
+                    self.nav_mut().filter = filter;
                     self.clamp_browse();
                 }
-                KeyCode::Char(c) => {
-                    self.nav_mut().filter.push(c);
-                    self.clamp_browse();
-                }
-                _ => {}
             }
             return;
+        }
+        if self.nav().col != 3 || !matches!(k.code, KeyCode::Char(' ') | KeyCode::PageDown | KeyCode::PageUp) {
+            self.nav().scroll.set(0);
         }
         match k.code {
             KeyCode::Esc | KeyCode::Char('q') => self.back(),
             KeyCode::Left | KeyCode::Char('h') => self.nav_mut().col = self.nav().col.saturating_sub(1),
             KeyCode::Right => self.nav_mut().col = (self.nav().col + 1).min(3),
-            KeyCode::Up | KeyCode::Char('k') => {
-                match self.nav().col {
-                    0 => self.nav_mut().yi = self.nav().yi.saturating_sub(1),
-                    1 => self.nav_mut().mi = self.nav().mi.saturating_sub(1),
-                    2 => self.nav_mut().di = self.nav().di.saturating_sub(1),
-                    _ => self.nav_mut().ei = self.nav().ei.saturating_sub(1),
+            KeyCode::Up | KeyCode::Char('k') => self.browse_step(false),
+            KeyCode::Down => self.browse_step(true),
+            // Read on through an entry longer than the pane. From the date
+            // columns of a narrow window the first press brings the entries up.
+            KeyCode::Char(' ') | KeyCode::PageDown | KeyCode::PageUp => {
+                let page = (self.height.saturating_sub(9) as usize).max(1);
+                let nav = self.nav_mut();
+                if nav.col != 3 {
+                    nav.col = 3;
+                } else if k.code == KeyCode::PageUp {
+                    nav.scroll.set(nav.scroll.get().saturating_sub(page));
+                } else {
+                    nav.scroll.set(nav.scroll.get() + page);
                 }
-                self.after_browse_move();
-            }
-            KeyCode::Down => {
-                match self.nav().col {
-                    0 => self.nav_mut().yi += 1,
-                    1 => self.nav_mut().mi += 1,
-                    2 => self.nav_mut().di += 1,
-                    _ => self.nav_mut().ei += 1,
-                }
-                self.after_browse_move();
             }
             KeyCode::Enter => {
                 if self.nav().col < 3 {
@@ -1386,6 +1479,20 @@ impl App {
                 self.common_nav(&k);
             }
         }
+    }
+
+    /// ↑ or ↓ in the column that has the keys.
+    fn browse_step(&mut self, down: bool) {
+        let nav = self.nav_mut();
+        let slot = match nav.col {
+            0 => &mut nav.yi,
+            1 => &mut nav.mi,
+            2 => &mut nav.di,
+            _ => &mut nav.ei,
+        };
+        *slot = if down { *slot + 1 } else { slot.saturating_sub(1) };
+        nav.scroll.set(0);
+        self.after_browse_move();
     }
 
     /// ↵ in a column filter: the filter goes and the row it had selected
@@ -1473,6 +1580,9 @@ impl App {
         let width = self.editor_width();
         let suggestions = self.tag_suggestions();
         let accept = !suggestions.is_empty() && self.tag_accepts();
+        // The popover stays up only through keys that are typing at the tag
+        // or choosing from it; each of those says so below.
+        self.tag_open = false;
         let Some(d) = self.draft.as_mut() else { return };
         if d.floating && matches!(k.code, KeyCode::Char(_) | KeyCode::Enter) && !ctrl {
             d.ts = now_local();
@@ -1512,6 +1622,8 @@ impl App {
                 KeyCode::Char('i') => d.ed.toggle_wrap_word("_", "_"),
                 KeyCode::Char('g') => d.ed.toggle_wrap_word("`", "`"),
                 KeyCode::Char('w') | KeyCode::Backspace => d.ed.delete_word_back(),
+                // What Backspace is on a terminal that sends ^H for it.
+                KeyCode::Char('h') => d.ed.backspace(),
                 KeyCode::Char('a') => d.ed.home(),
                 KeyCode::Char('e') => d.ed.end(),
                 KeyCode::Left => d.ed.word_left(),
@@ -1532,8 +1644,8 @@ impl App {
         }
         match k.code {
             KeyCode::Esc => {
+                // The first Esc closes the popover and leaves the text alone.
                 if !suggestions.is_empty() {
-                    d.ed.insert_char(' ');
                     self.tag_moved = false;
                 } else {
                     self.leave_write();
@@ -1582,6 +1694,7 @@ impl App {
             KeyCode::Backspace => {
                 d.ed.backspace();
                 self.tag_moved = false;
+                self.tag_open = true;
             }
             KeyCode::Delete => d.ed.delete(),
             KeyCode::Left => {
@@ -1596,6 +1709,7 @@ impl App {
                 if !suggestions.is_empty() {
                     self.tag_pick = self.tag_pick.saturating_sub(1);
                     self.tag_moved = true;
+                    self.tag_open = true;
                 } else {
                     d.ed.up(width);
                 }
@@ -1605,6 +1719,7 @@ impl App {
                     // The first ↓ takes the row that is shown first.
                     self.tag_pick = if self.tag_moved || accept { (self.tag_pick + 1).min(suggestions.len() - 1) } else { 0 };
                     self.tag_moved = true;
+                    self.tag_open = true;
                 } else {
                     d.ed.down(width);
                 }
@@ -1625,6 +1740,7 @@ impl App {
                 d.ed.insert_char(c);
                 self.tag_pick = 0;
                 self.tag_moved = false;
+                self.tag_open = true;
             }
             _ => {}
         }
@@ -1680,15 +1796,11 @@ impl App {
                     self.search_i = (self.search_i + 1).min(n - 1)
                 }
             }
-            KeyCode::Backspace => {
-                self.query.pop();
-                self.search_i = 0;
+            _ => {
+                if line_key(&mut self.query, &k, |_| true) {
+                    self.search_i = 0;
+                }
             }
-            KeyCode::Char(c) => {
-                self.query.push(c);
-                self.search_i = 0;
-            }
-            _ => {}
         }
     }
 
@@ -1704,14 +1816,10 @@ impl App {
                         self.modal = None;
                     }
                 }
-                KeyCode::Backspace => {
-                    v.pop();
+                _ => {
+                    let room = v.len() < 19;
+                    line_key(v, &k, |c| room && (c.is_ascii_digit() || matches!(c, '-' | ':' | ' ')));
                 }
-                KeyCode::Char(c) if (c.is_ascii_digit() || c == '-' || c == ':' || c == ' ')
-                    && v.len() < 19 => {
-                        v.push(c)
-                    }
-                _ => {}
             },
             Modal::Input { value, ask, .. } => {
                 let ask = *ask;
@@ -1722,11 +1830,9 @@ impl App {
                         self.modal = None;
                         self.apply_ask(ask, &v);
                     }
-                    KeyCode::Backspace => {
-                        value.pop();
+                    _ => {
+                        line_key(value, &k, |_| true);
                     }
-                    KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => value.push(c),
-                    _ => {}
                 }
             }
             Modal::Restore(names, i) => match k.code {
@@ -1757,7 +1863,9 @@ impl App {
             Modal::Confirm { action, .. } => {
                 let action = action.clone();
                 match k.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    // `y` and nothing else: ↵ is what opened most of these
+                    // questions, and pressed again it must not answer them.
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
                         self.modal = None;
                         match action {
                             Confirm::Cleanup => self.run_cleanup(),
@@ -1795,6 +1903,7 @@ impl App {
                                 self.start_maintenance(move |j| import_transfer(&j, &now_local(), &tags).map(|n| format!("Filed {} {} from transfer.md", n, noun(n, "entry", "entries"))));
                             }
                             Confirm::Restore(name) => self.run_restore(&name),
+                            Confirm::ExportOver(path) => self.run_export(&path),
                             Confirm::DeleteSelected(at) => self.delete_at(&at),
                             a @ (Confirm::DiscardDraft | Confirm::RestoreDraft | Confirm::DeleteEmptied) => self.discard(a),
                         }
@@ -1990,11 +2099,20 @@ impl App {
                 if v.is_empty() {
                     return;
                 }
-                match export_all(&self.j, std::path::Path::new(&expand_home(v))) {
-                    Ok(n) => self.toast(format!("Exported {} entries", n), false),
-                    Err(e) => self.toast(e, true),
+                let path = expand_home(v);
+                if std::path::Path::new(&path).exists() {
+                    self.modal = Some(Modal::Confirm { text: format!("{} is already there. Replace it?", path), action: Confirm::ExportOver(path) });
+                } else {
+                    self.run_export(&path);
                 }
             }
+        }
+    }
+
+    fn run_export(&mut self, path: &str) {
+        match export_all(&self.j, std::path::Path::new(path)) {
+            Ok(n) => self.toast(format!("Exported {} {} to {}", n, noun(n, "entry", "entries"), path), false),
+            Err(e) => self.toast(e, true),
         }
     }
 
@@ -2260,7 +2378,7 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, m: MouseEvent) {
-        if self.maintenance_running { return; }
+        if self.maintenance_running || self.too_small() { return; }
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.help {
@@ -2320,7 +2438,10 @@ impl App {
                 let p = self.current_prompt();
                 self.start_draft("", &format!("> {}\n\n", p));
             }
-            Hit::Column(c) => self.nav_mut().col = c.min(3),
+            Hit::Column(c) => {
+                self.nav_mut().col = c.min(3);
+                self.nav().scroll.set(0);
+            }
             Hit::Item(c, i) => {
                 let b = self.nav_mut();
                 let slot = match c {
@@ -2332,6 +2453,9 @@ impl App {
                 let again = b.col == c && *slot == i;
                 *slot = i;
                 b.col = c.min(3);
+                if !again {
+                    b.scroll.set(0);
+                }
                 if again {
                     // A second click goes on, as ↵ does.
                     self.handle_key(KeyEvent::from(KeyCode::Enter));
@@ -2365,6 +2489,7 @@ impl App {
                 if let Some(d) = self.draft.as_mut() {
                     d.ed.place(vr, x.saturating_sub(left) as usize, last);
                     self.tag_pick = 0;
+                    self.tag_open = false;
                 }
             }
             Hit::TextEnd => {
@@ -2377,6 +2502,7 @@ impl App {
                 if let (Some(t), Some(d)) = (suggestions.get(i), self.draft.as_mut()) {
                     d.ed.accept_tag(t);
                     self.tag_pick = 0;
+                    self.tag_open = false;
                 }
             }
         }
@@ -2414,6 +2540,9 @@ impl App {
     /// A bracketed paste: text into whatever is taking it; in the composer,
     /// dropped media files become attachments.
     pub fn handle_paste(&mut self, s: String) {
+        if self.too_small() {
+            return;
+        }
         self.help = false;
         let s = s.replace("\r\n", "\n").replace('\r', "\n");
         let line = s.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -2461,6 +2590,7 @@ impl App {
         d.ed.insert_str(s);
         self.tag_pick = 0;
         self.tag_moved = false;
+        self.tag_open = false;
     }
 
     /// ^V in the composer: an image on the clipboard is attached; text is
@@ -2541,6 +2671,34 @@ fn compress_in_background(root: PathBuf, rel: String, device: String) {
     });
 }
 
+/// A key in a one-line field (search, a column filter, a prompt): a
+/// character that `takes` allows is typed, Backspace removes one. A control
+/// chord never types its letter: ^H is Backspace (what some terminals send
+/// for it), ^W takes a word back, ^U the line. True when the text changed.
+fn line_key(text: &mut String, k: &KeyEvent, takes: impl Fn(char) -> bool) -> bool {
+    let before = text.len();
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    match k.code {
+        KeyCode::Backspace if ctrl || k.modifiers.contains(KeyModifiers::ALT) => word_back(text),
+        KeyCode::Backspace | KeyCode::Char('h') if ctrl || k.code == KeyCode::Backspace => {
+            text.pop();
+        }
+        KeyCode::Char('w') if ctrl => word_back(text),
+        KeyCode::Char('u') if ctrl => text.clear(),
+        KeyCode::Char(c) if !ctrl && takes(c) => text.push(c),
+        _ => {}
+    }
+    text.len() != before
+}
+
+fn word_back(text: &mut String) {
+    let kept = text.trim_end().char_indices().rfind(|(_, c)| c.is_whitespace()).map_or(0, |(i, c)| i + c.len_utf8());
+    text.truncate(kept);
+}
+
+/// What a background thread's panic said, kept until the screen is given back.
+static WORKER_PANICS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 fn set_mouse(on: bool) -> std::io::Result<()> {
     use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
     if on {
@@ -2552,11 +2710,27 @@ fn set_mouse(on: bool) -> std::io::Result<()> {
 
 pub fn run(mut app: App) -> std::io::Result<()> {
     use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste};
+    // Before the screen is taken: a closed window (SIGHUP) or a `kill`
+    // (SIGTERM) sets a flag the loop reads, and Quire leaves the way `q`
+    // does, with the composer saved and the terminal given back.
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    for signal in [signal_hook::consts::SIGHUP, signal_hook::consts::SIGTERM] {
+        let _ = signal_hook::flag::register(signal, stop.clone());
+    }
     let mut terminal = ratatui::init();
     // ratatui's panic hook restores the screen; this one first gives the
-    // terminal back its mouse and plain paste.
+    // terminal back its mouse and plain paste. Only for the thread that has
+    // the screen: a worker (a backup, a maintenance job, a compression) that
+    // panics must not give the terminal back under a UI that is still
+    // running. Its job is reported as stopped, and what it said is printed
+    // once Quire has closed.
     let restore_hook = std::panic::take_hook();
+    let ui_thread = std::thread::current().id();
     std::panic::set_hook(Box::new(move |info| {
+        if std::thread::current().id() != ui_thread {
+            WORKER_PANICS.lock().unwrap_or_else(|p| p.into_inner()).push(format!("  A background job stopped: {}", info));
+            return;
+        }
         let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
         restore_hook(info);
     }));
@@ -2597,6 +2771,12 @@ pub fn run(mut app: App) -> std::io::Result<()> {
             }
         }
         app.tick();
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            // No one may be there to ask a second time: a save that fails
+            // goes straight to the recovery copy.
+            app.quit = true;
+            app.force_quit = true;
+        }
         if app.quit {
             if app.maintenance_running {
                 // The wait below can be long: say what it is for first.
@@ -2612,17 +2792,25 @@ pub fn run(mut app: App) -> std::io::Result<()> {
     };
     let mut redraw = true;
     let result = loop {
-        match step(&mut app, &mut terminal, &mut redraw) {
-            Ok(false) => {}
-            Ok(true) => break Ok(()),
-            Err(e) => break Err(e),
+        // A panic in a key or in drawing has already given the terminal back
+        // (the hook above). It ends the loop as an error does, so what is in
+        // the composer is still saved below.
+        let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| step(&mut app, &mut terminal, &mut redraw)));
+        match stepped {
+            Ok(Ok(false)) => {}
+            Ok(Ok(true)) => break Ok(()),
+            Ok(Err(e)) => break Err(e),
+            Err(_) => break Err(std::io::Error::other("Quire stopped on a fault of its own (reported above)")),
         }
     };
     if result.is_err() {
-        // The terminal went away under the loop, not the journal: what is in
-        // the composer is saved, or kept as a recovery copy.
-        app.finish_maintenance();
-        app.rescue_on_error();
+        // The terminal went away under the loop, or the loop itself failed;
+        // not the journal: what is in the composer is saved, or kept as a
+        // recovery copy.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            app.finish_maintenance();
+            app.rescue_on_error();
+        }));
     }
     if app.maintenance_running || app.backup_running() {
         app.toast(if app.backup_running() { "Finishing the backup before closing…" } else { "Finishing the maintenance job before closing…" }.into(), false);
@@ -2634,6 +2822,9 @@ pub fn run(mut app: App) -> std::io::Result<()> {
     ratatui::restore();
     // Only now can anything printed be read.
     for note in &app.exit_notes {
+        eprintln!("{}", note);
+    }
+    for note in WORKER_PANICS.lock().unwrap_or_else(|p| p.into_inner()).drain(..) {
         eprintln!("{}", note);
     }
     result
@@ -3116,6 +3307,14 @@ mod tests {
         a.reload();
         assert_eq!(a.entries.len(), 1, "not an empty journal");
         assert!(a.toast.as_ref().unwrap().0.contains("Can't read"));
+        // T2 of 14 November: the toast goes, the reason stays and names the file.
+        a.toast = None;
+        a.reload();
+        assert!(a.toast.is_none(), "said once");
+        assert!(a.load_error().is_some_and(|e| e.contains(&w.file)), "{:?}", a.load_error());
+        std::fs::write(d.path().join(&w.file), "[2026-03-04 10:00:00] a\nfixed\n").unwrap();
+        a.reload();
+        assert!(a.load_error().is_none() && a.entries[0].body.contains("fixed"));
     }
 
     #[test]
@@ -3133,6 +3332,277 @@ mod tests {
         a.height = COMPOSER_MIN_ROWS - 1;
         press(&mut a, KeyCode::Esc);
         assert!(a.draft.is_none() && a.entries.len() == 1, "esc still saves and leaves");
+    }
+
+    /// Review of 14 November, T1: the popover is for a tag being typed.
+    #[test]
+    fn the_tag_popover_opens_for_typing_and_esc_only_closes_it() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        j.new_draft("2026-03-04 10:00:00", "tags", false, "@running @running @garden").unwrap();
+        let w = j.new_draft("2026-03-05 10:00:00", "Mine", false, "out for a @run").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        let e = a.entries.iter().find(|e| e.title == "Mine").unwrap().clone();
+        // Opened with the caret after `@run`: no popover, and the keys are the editor's.
+        a.edit_entry(&e);
+        assert!(a.tag_suggestions().is_empty(), "nothing was typed");
+        let row = a.draft.as_ref().unwrap().ed.row;
+        press(&mut a, KeyCode::Up);
+        assert_eq!(a.draft.as_ref().unwrap().ed.row, row - 1, "↑ moves the caret");
+        press(&mut a, KeyCode::Down);
+        press(&mut a, KeyCode::End);
+        press(&mut a, KeyCode::Esc);
+        assert!(a.draft.is_none(), "Esc leaves");
+        assert_eq!(a.j.read(&w.file).trim_end(), w.raw, "and a reading visit rewrote nothing");
+        // Typed, it opens; Esc closes it and the text is as typed.
+        a.edit_entry(&e);
+        type_in(&mut a, "n");
+        assert_eq!(a.tag_suggestions(), ["@running"]);
+        press(&mut a, KeyCode::Esc);
+        assert!(a.tag_suggestions().is_empty() && a.screen == Screen::Write);
+        assert_eq!(a.draft.as_ref().unwrap().ed.body(), "out for a @runn", "no space was added");
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.draft.as_ref().unwrap().ed.body(), "out for a @runn\n", "closed, ↵ is a new line");
+        // An arrow or a click away from it closes it too.
+        type_in(&mut a, "@ga");
+        assert_eq!(a.tag_suggestions(), ["@garden"]);
+        press(&mut a, KeyCode::Left);
+        assert!(a.tag_suggestions().is_empty());
+        // A bare @ lists the most used tags, but ↵ is still a new line until one is chosen.
+        a.draft = None;
+        a.start_draft("", "");
+        type_in(&mut a, "x");
+        press(&mut a, KeyCode::Enter);
+        type_in(&mut a, "at @");
+        assert!(!a.tag_suggestions().is_empty(), "the most used tags are listed");
+        let first = a.known_tags()[0].0.clone();
+        assert!(!a.tag_accepts());
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.draft.as_ref().unwrap().ed.body(), "at @\n");
+        press(&mut a, KeyCode::Backspace);
+        press(&mut a, KeyCode::Down);
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.draft.as_ref().unwrap().ed.body(), format!("at {first} "));
+    }
+
+    /// T4: ↵ opens the questions, so it never answers them.
+    #[test]
+    fn only_y_answers_yes() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        j.new_draft("2026-03-04 10:00:00", "Keep me", false, "a").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.screen = Screen::Inbox;
+        press(&mut a, KeyCode::Char('d'));
+        assert!(confirm_text(&a).contains("Keep me"));
+        press(&mut a, KeyCode::Enter);
+        assert!(a.modal.is_none(), "↵ closes the question");
+        assert_eq!(a.entries.len(), 1, "without deleting");
+        press(&mut a, KeyCode::Char('d'));
+        press(&mut a, KeyCode::Char(' '));
+        assert_eq!(a.entries.len(), 1);
+        // Settings: ↵ on a maintenance row asks; ↵ again does not run it.
+        a.screen = Screen::Settings;
+        a.settings_i = 13;
+        press(&mut a, KeyCode::Enter);
+        assert!(confirm_text(&a).contains("File every draft"));
+        press(&mut a, KeyCode::Enter);
+        assert!(a.modal.is_none() && !a.maintenance_running);
+        assert!(a.entries.iter().all(|e| e.source == "inbox"), "nothing was filed");
+        a.screen = Screen::Inbox;
+        press(&mut a, KeyCode::Char('d'));
+        press(&mut a, KeyCode::Char('y'));
+        assert!(a.entries.is_empty(), "y is yes");
+    }
+
+    /// T5: typing that never pauses is still saved every few seconds.
+    #[test]
+    fn autosave_has_a_ceiling() {
+        let d = tempfile::tempdir().unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.start_draft("", "");
+        type_in(&mut a, "no pause");
+        a.tick();
+        assert!(a.entries.is_empty() && a.dirty_since.is_some(), "mid-typing, inside the ceiling: not yet");
+        // Still typing five seconds after the first unsaved key.
+        a.dirty_since = Some(Instant::now() - AUTOSAVE_CEILING);
+        type_in(&mut a, " at all");
+        a.tick();
+        assert_eq!(a.entries.len(), 1, "saved without a pause");
+        assert!(inbox_text(&a).contains("no pause at all"));
+        assert!(a.dirty_since.is_none());
+        // And as before once the typing stops.
+        type_in(&mut a, "!");
+        a.draft.as_mut().unwrap().ed.last_edit = Instant::now() - Duration::from_secs(1);
+        a.tick();
+        assert!(inbox_text(&a).contains("no pause at all!"));
+    }
+
+    /// T10: a control chord is never typed as its letter, and ^H is Backspace.
+    #[test]
+    fn control_chords_do_not_type_letters() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        j.new_draft("2026-03-04 10:00:00", "a", false, "b").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.screen = Screen::Search;
+        type_in(&mut a, "two words");
+        ctrl(&mut a, 'h');
+        assert_eq!(a.query, "two word");
+        ctrl(&mut a, 'x');
+        assert_eq!(a.query, "two word", "^x types nothing");
+        ctrl(&mut a, 'w');
+        assert_eq!(a.query, "two ");
+        ctrl(&mut a, 'u');
+        assert_eq!(a.query, "");
+        a.screen = Screen::Inbox;
+        press(&mut a, KeyCode::Char('/'));
+        type_in(&mut a, "20");
+        ctrl(&mut a, 'h');
+        ctrl(&mut a, 'j');
+        assert_eq!(a.inbox.filter, "2");
+        press(&mut a, KeyCode::Esc);
+        a.start_draft("", "");
+        type_in(&mut a, "abc");
+        ctrl(&mut a, 'h');
+        assert_eq!(a.draft.as_ref().unwrap().ed.lines[0], "ab");
+    }
+
+    /// T13.
+    #[test]
+    fn a_window_too_small_to_draw_takes_no_keys() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        j.new_draft("2026-03-04 10:00:00", "Unseen", false, "a").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.screen = Screen::Inbox;
+        a.height = MIN_ROWS - 1;
+        press(&mut a, KeyCode::Char('d'));
+        assert!(a.modal.is_none(), "no question no one can read");
+        press(&mut a, KeyCode::Char('y'));
+        press(&mut a, KeyCode::Char('f'));
+        press(&mut a, KeyCode::Char('f'));
+        a.handle_paste("x".into());
+        assert_eq!((a.entries.len(), a.entries[0].source.as_str(), a.screen), (1, "inbox", Screen::Inbox));
+        ctrl(&mut a, 'c');
+        assert!(a.quit, "^c still quits");
+        a.quit = false;
+        a.height = 24;
+        a.width = MIN_COLS - 1;
+        press(&mut a, KeyCode::Char('d'));
+        assert!(a.modal.is_none());
+        a.width = 80;
+        press(&mut a, KeyCode::Char('d'));
+        assert!(a.modal.is_some(), "and at a size that draws, keys work again");
+    }
+
+    /// T14.
+    #[test]
+    fn esc_is_back_and_never_quit() {
+        let d = tempfile::tempdir().unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.push(Screen::Browse);
+        a.push(Screen::Settings);
+        for _ in 0..5 {
+            press(&mut a, KeyCode::Esc);
+        }
+        assert_eq!((a.screen, a.quit), (Screen::Today, false), "held down, it stops at Today");
+        press(&mut a, KeyCode::Char('q'));
+        assert!(a.quit);
+    }
+
+    /// T18: a reload keeps the entry selected, not the row number.
+    #[test]
+    fn the_selection_follows_its_entry_through_a_reload() {
+        let d = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        j.new_draft("2026-03-04 10:00:00", "First", false, "a").unwrap();
+        j.new_draft("2026-03-04 11:00:00", "Second", false, "b").unwrap();
+        j.new_draft("2026-03-02 11:00:00", "Other day", false, "c").unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        a.screen = Screen::Inbox;
+        a.inbox.col = 3;
+        a.inbox.ei = 1;
+        assert_eq!(a.browse_sel().entry.unwrap().title, "Second");
+        // The phone syncs in an earlier draft the same day, and a newer day.
+        j.new_draft("2026-03-04 09:00:00", "Synced in", false, "c").unwrap();
+        j.new_draft("2026-03-09 09:00:00", "Newer day", false, "d").unwrap();
+        a.reload();
+        assert_eq!(a.browse_sel().entry.unwrap().title, "Second", "still the one that was marked");
+        press(&mut a, KeyCode::Char('f'));
+        let filed: Vec<&str> = a.entries.iter().filter(|e| e.source == "journal").map(|e| e.title.as_str()).collect();
+        assert_eq!(filed, ["Second"], "and `f` files that one");
+        // Search too.
+        a.screen = Screen::Search;
+        a.query = "a".into();
+        let at = a.results().iter().position(|e| e.title == "Other day").unwrap();
+        a.search_i = at;
+        j.new_draft("2026-03-10 09:00:00", "a newest", false, "a").unwrap();
+        a.reload();
+        assert_eq!(a.results()[a.search_i].title, "Other day");
+        // An entry that is gone leaves the selection on a row that exists.
+        a.screen = Screen::Inbox;
+        a.clamp_browse();
+        let gone = a.browse_sel().entry.unwrap();
+        j.delete_entry(&gone.file, gone.index, &gone.raw).unwrap();
+        a.reload();
+        assert!(a.browse_sel().entry.is_some());
+    }
+
+    /// T19.
+    #[test]
+    fn export_asks_before_writing_over_a_file() {
+        let d = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let j = Journal::open(d.path());
+        let w = j.new_draft("2026-03-04 10:00:00", "One", false, "a").unwrap();
+        j.file_draft(&w.file, w.index, &w.raw, &[]).unwrap();
+        let mut a = app_in(d.path(), Settings::default());
+        let dest = out.path().join("export.md");
+        std::fs::write(&dest, "mine, not an export").unwrap();
+        a.apply_ask(Ask::ExportPath, &dest.display().to_string());
+        assert!(confirm_text(&a).contains("already there"), "{}", confirm_text(&a));
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "mine, not an export", "not answered yes: untouched");
+        a.apply_ask(Ask::ExportPath, &dest.display().to_string());
+        press(&mut a, KeyCode::Char('y'));
+        assert!(std::fs::read_to_string(&dest).unwrap().contains("One"));
+        // A new file needs no question.
+        let fresh = out.path().join("fresh.md");
+        a.apply_ask(Ask::ExportPath, &fresh.display().to_string());
+        assert!(a.modal.is_none() && fresh.exists());
+    }
+
+    /// From the earlier reviews: ↑ and ↓ work while a column filter is open.
+    #[test]
+    fn arrows_move_through_a_filtered_column() {
+        let d = tempfile::tempdir().unwrap();
+        for day in ["2023/05/06", "2023/05/16", "2023/05/26", "2023/05/09"] {
+            let p = d.path().join("journal").join(format!("{day}.md"));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, format!("[{} 10:00:00] t\nx\n", day.replace('/', "-"))).unwrap();
+        }
+        let mut a = app_in(d.path(), Settings::default());
+        a.screen = Screen::Browse;
+        a.browse.col = 2;
+        press(&mut a, KeyCode::Char('/'));
+        type_in(&mut a, "6");
+        assert_eq!(a.browse_sel().date.as_deref(), Some("2023-05-06"), "only the 6th starts with 6");
+        press(&mut a, KeyCode::Backspace);
+        type_in(&mut a, "s");
+        let days: Vec<String> = a.browse_days("2023", "05").into_iter().map(|d| d.0).collect();
+        assert_eq!(days, ["2023-05-06"], "Sat 06");
+        press(&mut a, KeyCode::Backspace);
+        type_in(&mut a, "t");
+        let days: Vec<String> = a.browse_days("2023", "05").into_iter().map(|d| d.0).collect();
+        assert_eq!(days, ["2023-05-16", "2023-05-09"], "the Tuesdays");
+        press(&mut a, KeyCode::Down);
+        assert_eq!(a.browse_sel().date.as_deref(), Some("2023-05-09"));
+        press(&mut a, KeyCode::Up);
+        assert_eq!(a.browse_sel().date.as_deref(), Some("2023-05-16"));
+        press(&mut a, KeyCode::Down);
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.browse_sel().date.as_deref(), Some("2023-05-09"), "↵ keeps the row the arrows chose");
     }
 
     /// B4: a journal opened with --folder keeps its own backup folder and

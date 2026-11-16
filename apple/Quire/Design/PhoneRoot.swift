@@ -102,8 +102,11 @@ struct PhoneRoot: View {
         shellAsking
         .background(KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false))
         .background(CommandMenuShortcut())
-        .qKeyBlocker(active: composing != nil || retiming != nil || showSearch || showSettings || showMedia,
-                     onEscape: { closeSheet() })
+        .qKeyBlocker(active: composing != nil || showSearch, onEscape: { closeSheet() })
+        // These three publish nothing to the monitor: it is told they are up, so
+        // its hint bar stops listing the keys of the page beneath them.
+        .qKeyBlocker(active: retiming != nil || showSettings || showMedia, onEscape: { closeSheet() },
+                     coversMonitor: true)
         .fullScreenCover(item: $composing, onDismiss: {
             restoreMonitorPage()
             // A page taken down with a save that never landed is offered at once.
@@ -261,6 +264,8 @@ struct PhoneRoot: View {
             Button("Save to Inbox") { saveRecovered(record) }
             Button("Copy text") { copyRecovered(record) }
             Button("Discard", role: .destructive) { ComposerRecovery.remove(record.id); checkRecoverySoon() }
+            // Kept as it is, and asked about again the next time Quire opens or unlocks.
+            Button("Later", role: .cancel) { }
         } message: { record in
             Text(recoveryNote ?? Self.recoveryDescription(record))
         }
@@ -339,13 +344,13 @@ struct PhoneRoot: View {
                 if sidebarCollapsed {
                     QSideRail(onNew: { composing = ComposeTarget(ref: nil) },
                               onExpand: { withAnimation(foldAnimation) { sidebarCollapsed = false } },
-                              onMedia: { showMedia = true }, onSearch: { showSearch = true },
+                              onMedia: { showMedia = true }, onSearch: { openSearch() },
                               onSettings: { showSettings = true })
                 } else {
                     QSideBar(tab: tabChoice, inboxCount: store.inboxDrafts.count,
                              onNew: { composing = ComposeTarget(ref: nil) },
                              onCollapse: { withAnimation(foldAnimation) { sidebarCollapsed = true } },
-                             onMedia: { showMedia = true }, onSearch: { showSearch = true },
+                             onMedia: { showMedia = true }, onSearch: { openSearch() },
                              onSettings: { showSettings = true })
                 }
                 verticalRule
@@ -460,20 +465,20 @@ struct PhoneRoot: View {
         switch tab {
         case .today:
             TodayScreen(open: open, compose: { composing = ComposeTarget(ref: nil) },
-                        showInbox: { select(.inbox) }, search: { showSearch = true }, settings: { showSettings = true },
+                        showInbox: { select(.inbox) }, search: { openSearch() }, settings: { showSettings = true },
                         media: { showMedia = true }, line: $todayLine)
                 .onAppear { ExternalDisplayModel.shared.present(.idle) }
         case .inbox:
             InboxScreen(open: open, edit: { composing = ComposeTarget(ref: $0) }, retime: retimeFromKeys,
-                        search: { showSearch = true }, settings: { showSettings = true },
+                        search: { openSearch() }, settings: { showSettings = true },
                         selected: $inboxSelected)
         case .journal:
             JournalScreen(open: open, edit: { composing = ComposeTarget(ref: $0) }, retime: retimeFromKeys,
-                          search: { showSearch = true }, settings: { showSettings = true }, media: { showMedia = true },
+                          search: { openSearch() }, settings: { showSettings = true }, media: { showMedia = true },
                           jump: $journalJump, starredOnly: $journalStarred, splitName: $journalSplit,
                           selected: $journalSelected)
         case .lookBack:
-            LookBackScreen(open: open, search: { showSearch = true }, settings: { showSettings = true },
+            LookBackScreen(open: open, search: { openSearch() }, settings: { showSettings = true },
                            selected: $lookBackSelected)
         }
     }
@@ -481,7 +486,8 @@ struct PhoneRoot: View {
     /// A write that didn't land, or a journal folder that can't be reached:
     /// said plainly, in the accent, above everything, until it's gone.
     @ViewBuilder private var notice: some View {
-        if let message = store.storageUnavailableMessage ?? store.lastWriteError {
+        // Files the journal could not read stand here too, until they can be.
+        if let message = store.storageUnavailableMessage ?? store.lastWriteError ?? store.unreadableFilesMessage {
             VStack(spacing: 0) {
                 Text(message)
                     .font(q.ui(13)).foregroundStyle(q.accentColor)
@@ -607,8 +613,11 @@ struct PhoneRoot: View {
         }
     }
 
+    /// By id, as the composer's saves are followed: an entry starred on its page
+    /// is no longer equal to the reference the page was opened with, and the
+    /// page then stayed on the entry as it was before its date changed.
     private func replaceReference(_ old: EntryRef, with updated: EntryRef) {
-        path = path.map { $0 == old ? updated : $0 }
+        path = path.map { $0.id == old.id ? updated : $0 }
     }
 
     /// Beside the list, opening replaces the page; on the phone it pushes.
@@ -692,7 +701,8 @@ struct PhoneRoot: View {
     }
 
     /// With the monitor showing things the results go there, and an open entry
-    /// holds its page, so the entry closes first.
+    /// holds its page, so the entry closes first. Every way into Search comes
+    /// through here, a tap as much as `/` or ⌘K.
     private func openSearch() {
         if DeskDatePicker.shared.isAvailable { path.removeAll() }
         showSearch = true

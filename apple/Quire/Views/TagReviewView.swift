@@ -114,7 +114,7 @@ struct TagReviewView: View {
         }
         dismiss()
         if !merges.isEmpty {
-            Task { store.mergeTags(merges) }
+            Task { await store.mergeTagsAsync(merges) }
         }
     }
 }

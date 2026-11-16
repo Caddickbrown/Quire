@@ -41,14 +41,20 @@ struct AddJournalEntryIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let added = try JournalStore.quickAddDraft(title: title ?? "", body: body)
+        let outcome = JournalStore.quickAddKeepingText(title: title ?? "", body: body)
         // The app may be running behind this: tell it, as the reminder's
         // "Write a line" action does, or its Inbox stays as it was until the
         // next time it comes forward.
-        if added { NotificationCenter.default.post(name: .quireJournalChangedExternally, object: nil) }
-        return .result(dialog: added
-                       ? "Added to your journal inbox."
-                       : "There was nothing to add.")
+        if outcome != .nothing { NotificationCenter.default.post(name: .quireJournalChangedExternally, object: nil) }
+        switch outcome {
+        case .added: return .result(dialog: "Added to your journal inbox.")
+        case .nothing: return .result(dialog: "There was nothing to add.")
+        // The journal couldn't be written just now; the words are kept and go
+        // into the Inbox when Quire is next opened.
+        case .kept: return .result(dialog: "Saved. It will be in your inbox when you next open Quire.")
+        case .lost(let reason):
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: reason])
+        }
     }
 }
 

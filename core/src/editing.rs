@@ -16,13 +16,35 @@ pub enum ListStep {
 }
 
 static CHECK: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\s*)([-*+] \[[ xX]\] )(.*)$").unwrap());
-static ORDERED: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\s*)(\d+)([.)] )(.*)$").unwrap());
+// ASCII digits only: `\d` takes `٣.` for a list number, which then parses as
+// nothing and continues as `1.`.
+static ORDERED: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\s*)([0-9]+)([.)] )(.*)$").unwrap());
 static BULLET: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\s*)([-*+] )(.*)$").unwrap());
+
+/// A markdown thematic break: three or more of `*`, `-` or `_`, all the same,
+/// with nothing but spaces between (`* * *`, `- - -`, `---`).
+fn is_thematic_break(line: &str) -> bool {
+    let mut marks = line.chars().filter(|c| !matches!(c, ' ' | '\t'));
+    match marks.next() {
+        Some(first @ ('*' | '-' | '_')) => {
+            let mut n = 1;
+            marks.all(|c| {
+                n += 1;
+                c == first
+            }) && n >= 3
+        }
+        _ => false,
+    }
+}
 
 pub fn list_continuation(line: &str) -> Option<ListStep> {
     // A line may still carry its ending ("- milk\r\n"); `.` never matches
     // `\n`, so drop it first. A lone trailing `\r` is whitespace to trim().
     let line = line.strip_suffix('\n').unwrap_or(line);
+    // `* * *` has a bullet's shape, but it is a rule and not a list item.
+    if is_thematic_break(line.trim_end_matches('\r')) {
+        return None;
+    }
     if let Some(m) = CHECK.captures(line) {
         return Some(if m[3].trim().is_empty() {
             ListStep::End(m[1].chars().count() + m[2].chars().count())
@@ -108,6 +130,15 @@ mod tests {
         assert_eq!(list_continuation("18446744073709551615. x"), Some(ListStep::Continue("18446744073709551615. ".into())));
         assert_eq!(list_continuation("plain"), None);
         assert_eq!(list_continuation("-no space"), None);
+        // A thematic break is not a list item, whatever it is drawn with.
+        for rule in ["* * *", "- - -", "* * * *", "  - - -", "- - -\r\n", "***", "---"] {
+            assert_eq!(list_continuation(rule), None, "{rule:?}");
+        }
+        assert_eq!(list_continuation("- -"), Some(ListStep::Continue("- ".into())), "two marks are an item whose text is a dash");
+        assert_eq!(list_continuation("* - *"), Some(ListStep::Continue("* ".into())));
+        // Only ASCII digits number a list.
+        assert_eq!(list_continuation("٣. x"), None);
+        assert_eq!(list_continuation("３) x"), None);
     }
 
     #[test]

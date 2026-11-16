@@ -34,6 +34,14 @@ impl Palette {
         let card = rgb(&t.card).unwrap_or(page);
         let accent = rgb(&t.accent).unwrap_or(ink);
         let line = rgb(&t.line).unwrap_or(card);
+        // In 256 colours a card close to its page can land on the page's own
+        // index (Broadsheet), and the selected row then has no background at
+        // all. Step it towards the ink until it is a colour of its own.
+        let card = if truecolor {
+            card
+        } else {
+            (0..=10).map(|k| mix(card, ink, k as f32 * 0.04)).find(|c| nearest_256(*c) != nearest_256(page)).unwrap_or(card)
+        };
         Palette {
             id: t.id.clone(),
             name: t.name.clone(),
@@ -43,7 +51,7 @@ impl Palette {
             muted: c(&t.muted),
             faint: c(&t.faint),
             line: c(&t.line),
-            card: c(&t.card),
+            card: color(card, truecolor),
             accent: c(&t.accent),
             on_accent: c(&t.on_accent),
             dim: color(mix(page, ink, 0.38), truecolor),
@@ -151,6 +159,18 @@ pub fn nearest_256((r, g, b): (u8, u8, u8)) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The selected row is drawn on the card: it must not be the page.
+    #[test]
+    fn the_selection_has_a_background_in_256_colours() {
+        for t in quire_core::themes::themes() {
+            let p = Palette::from_theme(&t, false);
+            assert_ne!(p.card, p.bg, "{}", t.id);
+            // With 24-bit colour the card is the theme's own, untouched.
+            let (r, g, b) = rgb(&t.card).unwrap();
+            assert_eq!(Palette::from_theme(&t, true).card, Color::Rgb(r, g, b), "{}", t.id);
+        }
+    }
 
     #[test]
     fn nearest_colours() {

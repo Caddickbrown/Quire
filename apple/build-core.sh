@@ -7,6 +7,13 @@ if [[ "$(uname -s)" != Darwin ]] || ! command -v xcodebuild >/dev/null; then
     exit 1
 fi
 command -v cargo >/dev/null || { echo 'Install Rust with rustup first.' >&2; exit 1; }
+# The cross targets are rustup's. A cargo from somewhere else that comes first
+# on PATH (Homebrew's) has only the host's, and fails with "can't find crate
+# for `core`": build with the toolchain rustup adds the targets to.
+if command -v rustup >/dev/null && toolchain_cargo="$(rustup which cargo 2>/dev/null)"; then
+    PATH="$(dirname "$toolchain_cargo"):$PATH"
+    export PATH
+fi
 # Keep the workspace target stable even when the caller has a custom target dir.
 export CARGO_TARGET_DIR="$PWD/target/apple"
 export IPHONEOS_DEPLOYMENT_TARGET=17.0

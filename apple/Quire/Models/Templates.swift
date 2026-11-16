@@ -92,10 +92,11 @@ enum PromptDeck {
     /// The deck lives in QuireShared.swift so the widgets ask the same questions.
     static let prompts: [String] = QuirePrompts.deck
 
-    /// The prompt for a given day, plus `offset` rerolls.
+    /// The prompt for a given day, plus `offset` rerolls on top of the shared
+    /// ones. The same answer as Today and the widgets give (`QuirePrompts`,
+    /// with the "Another prompt" offset they keep in the App Group): this used
+    /// to count days its own way and never agreed with them.
     static func prompt(for date: Date = Date(), offset: Int = 0) -> String {
-        let day = Calendar.current.ordinality(of: .day, in: .era, for: date) ?? 0
-        let index = ((day + offset) % prompts.count + prompts.count) % prompts.count
-        return prompts[index]
+        QuirePrompts.prompt(on: date, offset: QuirePrompts.offset + offset)
     }
 }

@@ -256,5 +256,82 @@ class Splits(Base):
         self.assertFalse(any("not UTF-8" in l for l in self.log))
 
 
+class ChangedUnderneath(Base):
+    """A day file that Quire or a sync changes between the plan and the write
+    is never written over: the plan is made again from what is there."""
+
+    def changing(self, rel, text, times=1):
+        """write_plan, but `rel` gets `text` appended just before the first
+        `times` calls: a write that landed after the plan was made."""
+        real, calls = mj.write_plan, [0]
+        def write_plan(plan):
+            calls[0] += 1
+            if calls[0] <= times:
+                with open(os.path.join(self.d, rel), "ab") as f: f.write((text % calls[0]).encode("utf-8"))
+            return real(plan)
+        mj.write_plan = write_plan
+        self.addCleanup(setattr, mj, "write_plan", real)
+        return calls
+
+    def test_inbox_day_file_changed_after_the_plan_is_kept(self):
+        self.w("inbox.md", INBOX)
+        self.w("inbox/2026/01/05.md", "[2026-01-05 06:00:00] Already here\n")
+        calls = self.changing("inbox/2026/01/05.md", "\n[2026-01-05 23:0%d:00] Written by Quire meanwhile\nkeep me\n")
+        self.assertEqual(self.run_(), 0)
+        self.assertEqual(calls[0], 2)
+        day = [e.raw.split("\n")[0] for e in mj.parse_entries(self.r("inbox/2026/01/05.md"))]
+        self.assertEqual(day, ["[2026-01-05 06:00:00] Already here", "[2026-01-05 07:30:00] Early on day two *",
+                               "[2026-01-05 09:00:00] Second day", "[2026-01-05 23:01:00] Written by Quire meanwhile"])
+        self.assertIn("keep me", self.r("inbox/2026/01/05.md"))
+        self.assertEqual(len(mj.parse_entries(self.r("inbox/2026/01/04.md"))), 1)   # written once, not doubled by the second plan
+        self.assertFalse(os.path.exists(os.path.join(self.d, "inbox.md")))
+        self.assertTrue(any("planning again" in l for l in self.log))
+
+    def test_inbox_day_file_that_keeps_changing_leaves_inbox_md(self):
+        self.w("inbox.md", INBOX)
+        self.w("inbox/2026/01/04.md", "[2026-01-04 06:00:00] Already here\n")
+        self.changing("inbox/2026/01/04.md", "\n[2026-01-04 23:0%d:00] Again\n", times=mj.MAX_PLANS)
+        self.assertEqual(self.run_(), 1)
+        self.assertEqual(self.r("inbox.md"), INBOX)
+        day = self.r("inbox/2026/01/04.md")
+        for n in range(1, mj.MAX_PLANS + 1):
+            self.assertIn("[2026-01-04 23:0%d:00] Again" % n, day)   # nothing that landed was lost
+        self.assertFalse(os.path.exists(os.path.join(self.d, ".quire")))
+
+    def test_split_day_file_changed_after_the_plan_is_kept(self):
+        self.w("work.md", Splits.WORK)
+        self.w("split/work/2026/10/13.md", "[2026-10-13 08:00:00] Already here @work\n")
+        self.changing("split/work/2026/10/13.md", "\n[2026-10-13 23:0%d:00] Meanwhile @work\n")
+        self.assertEqual(self.run_(), 0)
+        day = [e.raw.split("\n")[0] for e in mj.parse_entries(self.r("split/work/2026/10/13.md"))]
+        self.assertEqual(day, ["[2026-10-13 08:00:00] Already here @work", "[2026-10-13 17:00:00] Retro", "[2026-10-13 23:01:00] Meanwhile @work"])
+        self.assertFalse(os.path.exists(os.path.join(self.d, "work.md")))
+
+    def test_new_day_file_that_appears_after_the_plan_is_kept(self):
+        self.w("inbox.md", "[2026-03-01 08:00:00] From inbox.md\n")
+        real, done = mj.write_plan, []
+        def write_plan(plan):
+            if not done:
+                done.append(1)
+                self.w("inbox/2026/03/01.md", "[2026-03-01 07:00:00] Quire made this file meanwhile\n")
+            return real(plan)
+        mj.write_plan = write_plan
+        self.addCleanup(setattr, mj, "write_plan", real)
+        self.assertEqual(self.run_(), 0)
+        self.assertEqual(self.r("inbox/2026/03/01.md"), "[2026-03-01 07:00:00] Quire made this file meanwhile\n\n[2026-03-01 08:00:00] From inbox.md\n")
+
+
+class InboxLinks(Base):
+    def test_dot_assets_links_are_made_base_relative(self):
+        # ./assets/ resolves from inbox.md at the root, not from inbox/2026/01/05.md.
+        self.w("inbox.md", "[2026-01-05 09:00:00] Photo\n![](./assets/a.jpg) [f](<./assets/b c.pdf>) ![](assets/d.jpg) [n](./notes/x.md)\n")
+        self.assertEqual(self.run_(), 0)
+        self.assertEqual(self.r("inbox/2026/01/05.md"), "[2026-01-05 09:00:00] Photo\n![](assets/a.jpg) [f](<assets/b c.pdf>) ![](assets/d.jpg) [n](./notes/x.md)\n")
+        self.assertFalse(os.path.exists(os.path.join(self.d, "inbox.md")))
+        # The original is kept as it was written.
+        backups = os.listdir(os.path.join(self.d, ".quire", "migration"))
+        self.assertIn("./assets/a.jpg", self.r(".quire/migration/" + backups[0]))
+
+
 if __name__ == "__main__":
     unittest.main()

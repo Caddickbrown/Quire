@@ -26,7 +26,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.height = area.height;
     let p = app.pal.clone();
     f.render_widget(Block::default().style(p.base()), area);
-    if area.height < 6 || area.width < 30 {
+    if app.too_small() {
+        // No key acts here either (`App::handle_key`), but ^c.
         put(f, Rect::new(0, 0, area.width, 1), Line::from(Span::styled("Quire needs a bigger window", p.muted())));
         return;
     }
@@ -57,7 +58,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             rule(f, rule_row, &p);
             browse(f, body, app);
             if !filter_hint(f, app, hint_row, &p) {
-                hints(f, app, hint_row, &p, &[("←→", "columns"), ("f", "file"), ("e", "edit"), ("*", "star"), ("t", "date & time"), ("d", "delete"), ("/", "filter")], &[("?", "keys"), ("esc", "back")], None);
+                hints(f, app, hint_row, &p, &[("←→", "columns"), ("f", "file"), ("e", "edit"), ("*", "star"), ("t", "date & time"), ("d", "delete"), ("/", "filter"), ("space", "read on")], &[("?", "keys"), ("esc", "back")], None);
             }
         }
         Screen::Browse => {
@@ -70,7 +71,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             rule(f, rule_row, &p);
             browse(f, body, app);
             if !filter_hint(f, app, hint_row, &p) {
-                hints(f, app, hint_row, &p, &[("↵", "open"), ("← →", "columns"), ("↑↓", "move"), ("/", "filter"), ("s", "journal"), ("u", "to inbox"), ("r", "random")], &[("?", "keys"), ("esc", "back")], None);
+                hints(f, app, hint_row, &p, &[("↵", "open"), ("← →", "columns"), ("↑↓", "move"), ("space", "read on"), ("/", "filter"), ("s", "journal"), ("u", "to inbox"), ("r", "random")], &[("?", "keys"), ("esc", "back")], None);
             }
         }
         Screen::Write => {
@@ -84,7 +85,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             rule(f, rule_row, &p);
             write(f, Rect::new(inner.x, 3, inner.width, area.height.saturating_sub(6)), app);
             if app.modal.is_none() {
-                hints(f, app, hint_row, &p, &[("^j", "file"), ("^s", "save"), ("^t", "date & time"), ("^f", "focus"), ("^p", "prompt"), ("^o", "timer"), ("^b ^i ^g", "wrap"), ("↵↵", "ends a list")], &[("F1", "keys"), ("esc", "back")], None);
+                hints(f, app, hint_row, &p, &[("^j", "file"), ("^s", "save"), ("^t", "date & time"), ("^f", "focus"), ("^p", "prompt"), ("^o", "timer"), ("^b ^g", "bold · code"), ("↵↵", "ends a list")], &[("F1", "keys"), ("esc", "back")], None);
             }
         }
         Screen::LookBack => {
@@ -118,8 +119,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             masthead(f, app, head, &p, "search", plain(Line::from(Span::styled(found, p.muted()))));
             rule(f, rule_row, &p);
             search(f, body, app);
-            hints(f, app, hint_row, &p, &[("↵", "open"), ("↑↓", "results")], &[("esc", if app.query.is_empty() { "back" } else { "clear" })], None);
+            hints(f, app, hint_row, &p, &[("↵", "open"), ("↑↓", "results")], &[("F1", "keys"), ("esc", if app.query.is_empty() { "back" } else { "clear" })], None);
         }
+    }
+    // A reading of the folder that failed: the lists are an older reading,
+    // and say so for as long as that is true. On the blank row under the rule.
+    if let Some(e) = app.load_error() {
+        let text = trunc(&format!("Can't read the whole journal, so this is how it stood before — {}", e), inner.width as usize);
+        put(f, Rect::new(inner.x, 2, inner.width, 1), Line::from(Span::styled(text, p.accent())));
     }
 
     if let Some(m) = &app.modal {
@@ -288,6 +295,7 @@ fn hint_key(k: &str) -> Option<KeyEvent> {
     let mut cs = k.chars();
     match (cs.next()?, cs.next(), cs.next()) {
         _ if k == "esc" => Some(KeyEvent::from(KeyCode::Esc)),
+        _ if k == "space" => Some(KeyEvent::from(KeyCode::Char(' '))),
         _ if k == "F1" => Some(KeyEvent::from(KeyCode::F(1))),
         ('↵', None, _) => Some(KeyEvent::from(KeyCode::Enter)),
         ('^', Some(c), None) => Some(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)),
@@ -306,18 +314,30 @@ fn section(label: &str, width: usize, p: &Palette) -> Line<'static> {
 }
 
 fn hints(f: &mut Frame, app: &App, r: Rect, p: &Palette, left: &[(&str, &str)], right: &[(&str, &str)], inbox_count: Option<usize>) {
+    // The right-hand keys first: they are how you get help and get out, and
+    // the left-hand ones fit around them.
+    let right_w: usize = right.iter().map(|(k, v)| k.width() + 1 + v.width()).sum::<usize>() + 3 * right.len().saturating_sub(1);
+    let room = (r.width as usize).saturating_sub(right_w + 2);
     let mut l: Vec<Item> = Vec::new();
+    let mut used = 0usize;
     for (k, v) in left {
         let h = hint_key(k).map(Hit::Key);
-        l.push((Span::styled(k.to_string(), p.key()), h.clone()));
-        l.push((Span::styled(format!(" {}", v), p.muted()), h.clone()));
+        let mut hint: Vec<Item> = vec![(Span::styled(k.to_string(), p.key()), h.clone()), (Span::styled(format!(" {}", v), p.muted()), h.clone())];
         if *v == "inbox" {
             if let Some(n) = inbox_count {
                 if n > 0 {
-                    l.push((Span::styled(format!(" {}", n), p.faint()), h));
+                    hint.push((Span::styled(format!(" {}", n), p.faint()), h));
                 }
             }
         }
+        // A whole hint or none of it: the row is never cut mid-word, and what
+        // doesn't fit (from the right) is still in the help overlay.
+        let w = items_width(&hint) as usize;
+        if used + w > room {
+            break;
+        }
+        used += w + 3;
+        l.extend(hint);
         l.push((Span::styled("   ", p.muted()), None));
     }
     let mut rt: Vec<Item> = Vec::new();
@@ -527,7 +547,7 @@ fn today(f: &mut Frame, r: Rect, app: &App) {
 fn filter_hint(f: &mut Frame, app: &App, r: Rect, p: &Palette) -> bool {
     let nav = app.nav();
     if nav.filtering {
-        put(f, r, Line::from(vec![Span::styled("/ ", p.key()), Span::styled(nav.filter.clone(), p.ink()), Span::styled("▏", p.accent()), Span::styled("   type to filter   ↵ keep   esc clear", p.muted())]));
+        put(f, r, Line::from(vec![Span::styled("/ ", p.key()), Span::styled(nav.filter.clone(), p.ink()), Span::styled("▏", p.accent()), Span::styled("   type to filter   ↑↓ move   ↵ keep   esc clear", p.muted())]));
     }
     nav.filtering
 }
@@ -649,7 +669,6 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
     let pw = (r.x + r.width).saturating_sub(x);
     let Some(date) = &sel.date else { return };
     let es = app.browse_day_entries(date);
-    two_sided(f, Rect::new(x, r.y, pw, 1), Line::from(Span::styled(date.to_string(), p.muted())), Line::from(Span::styled(es.first().map(|e| e.file.clone()).unwrap_or_default(), p.faint())));
     let mut lines: Vec<Line> = Vec::new();
     // Which entry each line belongs to, for clicks.
     let mut owner: Vec<usize> = Vec::new();
@@ -695,7 +714,15 @@ fn browse(f: &mut Frame, r: Rect, app: &App) {
         owner.resize(lines.len(), i);
     }
     let avail = h.saturating_sub(2) as usize;
-    let start = if sel_line + 3 > avail { sel_line.saturating_sub(2) } else { 0 };
+    // Where the selection puts the pane, then as far on as it has been read
+    // (space, PgDn), stopping when the last row is in view.
+    let base = if sel_line + 3 > avail { sel_line.saturating_sub(2) } else { 0 };
+    let last_start = lines.len().saturating_sub(avail).max(base);
+    let start = (base + nav.scroll.get()).min(last_start);
+    nav.scroll.set(start - base);
+    let file = es.first().map(|e| e.file.clone()).unwrap_or_default();
+    let more = if start < last_start { "   space ↓ more" } else if start > base { "   PgUp ↑ back" } else { "" };
+    two_sided(f, Rect::new(x, r.y, pw, 1), Line::from(Span::styled(date.to_string(), p.muted())), Line::from(vec![Span::styled(file, p.faint()), Span::styled(more, p.muted())]));
     app.hit(Rect::new(x, r.y, pw, h), Hit::Column(3));
     for (k, i) in owner.iter().skip(start).take(avail).enumerate() {
         app.hit(Rect::new(x, r.y + 2 + k as u16, pw, 1), Hit::Item(3, *i));
@@ -1071,12 +1098,12 @@ fn help_overlay(f: &mut Frame, area: Rect, app: &App) {
     let p = &app.pal;
     let rows: Vec<(&str, &str)> = match app.screen {
         Screen::Today => vec![("n", "new draft"), ("↵", "write from the prompt"), ("p", "another prompt"), ("i", "inbox"), ("j", "journal"), ("l", "look back"), ("/", "search"), ("r", "a random entry"), (",", "settings"), ("q", "quit")],
-        Screen::Inbox => vec![("← →", "year · month · day · drafts"), ("↑ ↓", "move"), ("f", "file the marked draft"), ("e", "edit it"), ("/", "filter the column"), ("*", "star"), ("t", "change its date and time"), ("d", "delete"), ("n", "new draft"), ("esc", "back")],
-        Screen::Browse => vec![("← →", "year · month · day · entries"), ("↑ ↓", "move"), ("e  ↵", "open (edit) the entry"), ("/", "filter the column"), ("s", "main · split journals · all"), ("u", "return to the inbox"), ("*", "star"), ("t", "date and time"), ("d", "delete"), ("r", "random"), ("esc", "back")],
-        Screen::Write => vec![("^j", "file to its day (or split journal)"), ("^s", "save now (it autosaves)"), ("^t", "date and time"), ("^f", "focus: dim all but this paragraph"), ("^p", "insert a prompt"), ("^o", "timer: start · pause · resume"), ("alt-o", "reset the timer"), ("^b ^i ^g", "bold · italic · code on the word"), ("@", "tag autocomplete, ↹ or ↵ accepts"), ("↹", "indent a list item"), ("↵ ↵", "an empty item ends the list"), ("^v", "paste; a clipboard image is attached"), ("drop", "a photo or video on the window attaches it"), ("^d", "undo this visit's changes (new draft: delete)"), ("^k", "save refused: keep yours as a new draft"), ("esc", "back (saved)"), ("^c", "quit (saved; twice if a save fails)")],
-        Screen::LookBack => vec![("← →", "earlier · later year"), ("esc", "back")],
-        Screen::Settings => vec![("↑ ↓", "choose a setting"), ("← →", "change it"), ("↵", "next value / toggle"), ("esc", "back")],
-        Screen::Search => vec![("type", "to search"), ("↑ ↓", "results"), ("↵", "open"), ("esc", "clear, then back")],
+        Screen::Inbox => vec![("← →", "year · month · day · drafts (also h)"), ("↑ ↓", "move (also k)"), ("↵", "the next column, then edit the draft"), ("space", "read on down a long draft · PgUp back"), ("f", "file the marked draft"), ("e", "edit it"), ("/", "filter the column: ↑ ↓ ↵ esc"), ("*", "star"), ("t", "change its date and time"), ("d", "delete"), ("n", "new draft"), ("j l , r", "journal · look back · settings · random"), ("esc  q", "back")],
+        Screen::Browse => vec![("← →", "year · month · day · entries (also h)"), ("↑ ↓", "move (also k)"), ("e  ↵", "open (edit) the entry"), ("space", "read on down a long entry · PgUp back"), ("/", "filter the column: ↑ ↓ ↵ esc"), ("s", "main · split journals · all"), ("u", "return to the inbox"), ("*", "star"), ("t", "date and time"), ("d", "delete"), ("r", "random"), ("n", "new draft"), ("i l ,", "inbox · look back · settings"), ("esc  q", "back")],
+        Screen::Write => vec![("^j", "file to its day (or split journal)"), ("^s", "save now (it autosaves)"), ("^t", "date and time"), ("^f", "focus: dim all but this paragraph"), ("^p", "insert a prompt"), ("^o", "timer: start · pause · resume"), ("alt-o", "reset the timer"), ("^b ^g", "bold · code on the word"), ("^i", "italic, where the terminal can tell it from ↹"), ("@", "tags: ↑ ↓ choose, ↹ or ↵ takes, esc closes"), ("↹  ⇧↹", "indent · outdent a list item"), ("↵ ↵", "an empty item ends the list"), ("^w ^a ^e", "delete a word · start · end of the line"), ("alt-← →", "a word left · right (also ^← ^→)"), ("^v", "paste; a clipboard image is attached"), ("drop", "a photo or video on the window attaches it"), ("^d", "undo this visit's changes (new draft: delete)"), ("^k", "save refused: keep yours as a new draft"), ("esc", "back (saved)"), ("^c", "quit (saved; twice if a save fails)")],
+        Screen::LookBack => vec![("← →", "earlier · later year"), ("n", "new draft"), ("i j", "inbox · journal"), ("/ , r", "search · settings · random"), ("esc  q", "back")],
+        Screen::Settings => vec![("↑ ↓", "choose a setting (also k j)"), ("← →", "change it (also h l)"), ("↵  space", "the next value, or do it"), ("esc  q", "back")],
+        Screen::Search => vec![("type", "to search"), ("↑ ↓", "results"), ("↵", "open"), ("^w ^u", "take back a word · the whole query"), ("esc", "clear, then back")],
     };
     let mut rows = rows;
     rows.push(("F2", if app.mouse { "mouse off (lets the terminal select)" } else { "mouse on: click, scroll" }));
@@ -1227,6 +1254,138 @@ mod tests {
         let rows = screen(&mut app, 100, 30).join("\n");
         assert!(rows.contains("1 word today") && rows.contains("1 draft in the inbox") && rows.contains("1 entry since 2019-03"), "{rows}");
         assert!(!rows.contains("1 words"), "{rows}");
+    }
+
+    /// Review of 14 November, T9: the hint row holds whole hints at any width.
+    #[test]
+    fn the_hint_row_is_never_cut_mid_word() {
+        let temp = tempfile::tempdir().unwrap();
+        let journal = Journal::open(temp.path());
+        journal.new_draft(&now_local(), "A draft", false, "x").unwrap();
+        let mut app = App::new(journal, Settings::default(), vec![], "almanac");
+        // Every label a hint row can end on, per screen.
+        let labels: [(Screen, &[&str]); 6] = [
+            (Screen::Today, &["new", "inbox 1", "journal", "search", "random", "look back", "settings"]),
+            (Screen::Inbox, &["columns", "file", "edit", "star", "date & time", "delete", "filter", "read on"]),
+            (Screen::Browse, &["open", "columns", "move", "read on", "filter", "journal", "to inbox", "random"]),
+            (Screen::Write, &["file", "save", "date & time", "focus", "prompt", "timer", "bold · code", "ends a list"]),
+            (Screen::LookBack, &["year", "journal", "inbox", "new"]),
+            (Screen::Settings, &["change", "choose"]),
+        ];
+        for (s, ends) in labels {
+            if s == Screen::Write {
+                app.start_draft("", "");
+            }
+            app.screen = s;
+            for w in 30..=130u16 {
+                let rows = screen(&mut app, w, 24);
+                let row = rows[23].trim_end().to_string();
+                assert!(row.ends_with(if s == Screen::Today { "q quit" } else { "esc back" }), "{s:?} at {w}: the way out is always there: {row:?}");
+                let left = row.rsplit_once(if s == Screen::Write { "F1 keys" } else { "? keys" }).map(|p| p.0.trim()).unwrap_or("");
+                assert!(left.is_empty() || ends.iter().any(|e| left.ends_with(e)), "{s:?} at {w}: {row:?}");
+            }
+        }
+        // At 80 columns Today says as much as fits and no half of the next.
+        app.screen = Screen::Today;
+        app.draft = None;
+        let row = screen(&mut app, 80, 24)[23].clone();
+        assert!(row.contains("r random      ") && !row.contains("l lo") && row.contains("? keys   q quit"), "{row:?}");
+    }
+
+    /// T2: a reading that failed is said on every screen until one works.
+    #[test]
+    fn an_unreadable_file_is_named_for_as_long_as_it_is_unreadable() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path(), "journal/2026/10/10.md", "[2026-10-10 08:00:00] Fine\nx\n");
+        let mut app = App::new(Journal::open(temp.path()), Settings::default(), vec![], "almanac");
+        std::fs::write(temp.path().join("journal/2026/10/10.md"), [0xff, 0xfe, 0x00, 0xc3]).unwrap();
+        app.reload();
+        app.toast = None; // the five-second toast has been and gone
+        for s in [Screen::Today, Screen::Inbox, Screen::Browse, Screen::LookBack, Screen::Search, Screen::Settings] {
+            app.screen = s;
+            let rows = screen(&mut app, 100, 30);
+            assert!(rows[2].contains("Can't read the whole journal") && rows[2].contains("journal/2026/10/10.md"), "{s:?}: {:?}", rows[2]);
+        }
+        write_file(temp.path(), "journal/2026/10/10.md", "[2026-10-10 08:00:00] Fine\nx\n");
+        app.reload();
+        assert!(screen(&mut app, 100, 30)[2].trim().is_empty());
+    }
+
+    /// T8: an entry longer than the pane can be read to its end.
+    #[test]
+    fn a_long_entry_is_read_on_with_space() {
+        let temp = tempfile::tempdir().unwrap();
+        let body: String = (1..=60).map(|i| format!("line number {i}\n\n")).collect();
+        write_file(temp.path(), "journal/2026/10/10.md", &format!("[2026-10-10 08:00:00] Long one\n{body}"));
+        let mut app = App::new(Journal::open(temp.path()), Settings::default(), vec![], "almanac");
+        let key = |app: &mut App, c: KeyCode| app.handle_key(KeyEvent::from(c));
+        for (w, h) in [(100u16, 30u16), (80, 24)] {
+            app.screen = Screen::Browse;
+            app.browse.col = 2;
+            let _ = screen(&mut app, w, h);
+            key(&mut app, KeyCode::Char(' '));
+            assert_eq!(app.browse.col, 3, "space goes to the entries first");
+            let top = screen(&mut app, w, h).join("\n");
+            assert!(top.contains("line number 1") && !top.contains("line number 60") && top.contains("space ↓ more"), "{top}");
+            let mut pages = 0;
+            while !screen(&mut app, w, h).join("\n").contains("180 words") {
+                key(&mut app, KeyCode::Char(' '));
+                pages += 1;
+                assert!(pages < 40, "never reached the end");
+            }
+            let end = screen(&mut app, w, h).join("\n");
+            assert!(!end.contains("space ↓ more") && end.contains("PgUp ↑ back") && end.contains("180 words"), "{end}");
+            // Past the end it stays put, and one PgUp is one page back.
+            let at = app.browse.scroll.get();
+            key(&mut app, KeyCode::PageDown);
+            let _ = screen(&mut app, w, h);
+            assert_eq!(app.browse.scroll.get(), at);
+            key(&mut app, KeyCode::PageUp);
+            assert!(!screen(&mut app, w, h).join("\n").contains("180 words"));
+            // Moving the selection starts from the top again.
+            key(&mut app, KeyCode::Left);
+            assert_eq!(app.browse.scroll.get(), 0);
+        }
+    }
+
+    /// No size panics, and none draws outside itself: every screen, with and
+    /// without a question, the help and a toast, from 1×1 up.
+    #[test]
+    fn every_screen_draws_at_every_size() {
+        let temp = tempfile::tempdir().unwrap();
+        let body: String = (1..=30).map(|i| format!("a line of body text, number {i}, with a @tag and **bold**\n")).collect();
+        write_file(temp.path(), "journal/2025/10/12.md", &format!("[2025-10-12 08:00:00] A walk by the canal *\n{body}\n[2025-10-12 09:00:00]\nuntitled\n"));
+        write_file(temp.path(), "split/work/2024/02/29.md", "[2024-02-29 09:00:00] Budget review @work\nx\n");
+        let journal = Journal::open(temp.path());
+        journal.new_draft(&now_local(), "A draft with a long title that will need cutting somewhere", false, &body).unwrap();
+        let mut app = App::new(journal, Settings::default(), vec!["work".into()], "almanac");
+        app.today = "2026-10-12".into();
+        app.query = "a".into();
+        // Every width up to the narrowest that draws and a little past it,
+        // then every fifth; every height at the widths where the layout changes.
+        let sizes: Vec<(u16, u16)> = (1..=130u16).filter(|w| *w <= 40 || w % 5 == 0).flat_map(|w| [1u16, 5, 6, 9, 24, 40].map(|h| (w, h)))
+            .chain((1..=45u16).flat_map(|h| [1u16, 29, 30, 80, 96, 130].map(|w| (w, h)))).collect();
+        for s in [Screen::Today, Screen::Inbox, Screen::Browse, Screen::Write, Screen::LookBack, Screen::Search, Screen::Settings] {
+            app.screen = s;
+            app.draft = None;
+            if s == Screen::Write {
+                app.start_draft("A title", &body);
+                app.screen = s;
+            }
+            for col in if matches!(s, Screen::Inbox | Screen::Browse) { vec![0, 3] } else { vec![0] } {
+                app.inbox.col = col;
+                app.browse.col = col;
+                for extra in 0..4 {
+                    app.modal = (extra == 1).then(|| Modal::Confirm { text: "Delete the entry 2025-10-12 08:00 “A walk by the canal”?".into(), action: crate::app::Confirm::Cleanup });
+                    app.help = extra == 2;
+                    app.toast = (extra == 3).then(|| ("A long message that says what happened and which key to press about it, twice over. ".repeat(3), std::time::Instant::now(), true));
+                    for (w, h) in &sizes {
+                        let rows = screen(&mut app, *w, *h);
+                        assert_eq!(rows.len(), *h as usize, "{s:?} {w}×{h}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

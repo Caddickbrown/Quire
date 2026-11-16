@@ -226,9 +226,13 @@ pub fn random_text(j: &Journal) -> Option<Entry> {
     Some(e)
 }
 
-pub fn cleanup_text(j: &Journal, split_tags: &[String]) {
+/// Err when any part of it failed: the file-by-file problems and a media
+/// stage that stopped are printed where they happen, and the command then
+/// ends with a failing status.
+pub fn cleanup_text(j: &Journal, split_tags: &[String]) -> Result<(), String> {
     match cleanup(j, split_tags) {
         Ok(r) => {
+            let mut failed = r.errors.len();
             println!("  Cleanup: {} file(s) checked, {} moved to their day, {} formatted, {} reordered, {} duplicate(s) removed, {} extracted to split journals.", r.files, r.moved, r.formatted, r.reordered, r.deduped, r.extracted);
             for e in r.errors {
                 println!("  ! {}", e);
@@ -254,14 +258,19 @@ pub fn cleanup_text(j: &Journal, split_tags: &[String]) {
             };
             let (removed, errors) = remove_ds_store(j);
             println!("  Removed {removed} .DS_Store file(s).");
+            failed += errors.len() + usize::from(!media_ok);
             for e in errors {
                 println!("  ! {}", e);
             }
             if media_ok {
                 prompt_orphan_media(j);
             }
+            if failed > 0 {
+                return Err(format!("cleanup finished with {} problem(s), listed above", failed));
+            }
+            Ok(())
         }
-        Err(e) => eprintln!("  error: {}", e),
+        Err(e) => Err(e),
     }
 }
 
@@ -304,28 +313,24 @@ fn prompt_orphan_media(j: &Journal) {
     }
 }
 
-pub fn export_text(j: &Journal, out: &str) {
+pub fn export_text(j: &Journal, out: &str) -> Result<(), String> {
     let dest = if out.is_empty() { j.root().join("export.md") } else { Path::new(out).to_path_buf() };
-    match export_all(j, &dest) {
-        Ok(n) => println!("  Exported {} entries to {}", n, dest.display()),
-        Err(e) => eprintln!("  error: {}", e),
-    }
+    let n = export_all(j, &dest)?;
+    println!("  Exported {} entries to {}", n, dest.display());
+    Ok(())
 }
 
-pub fn sort_text(j: &Journal) {
-    match sort_inbox(j) {
-        Ok(true) => println!("  Inbox sorted."),
-        Ok(false) => println!("  Inbox already in order."),
-        Err(e) => eprintln!("  error: {}", e),
-    }
+pub fn sort_text(j: &Journal) -> Result<(), String> {
+    println!("{}", if sort_inbox(j)? { "  Inbox sorted." } else { "  Inbox already in order." });
+    Ok(())
 }
 
-pub fn transfer_text(j: &Journal, split_tags: &[String]) {
-    match import_transfer(j, &now_local(), split_tags) {
-        Ok(0) => println!("  transfer.md is empty."),
-        Ok(n) => println!("  Filed {} entr{} from transfer.md.", n, if n == 1 { "y" } else { "ies" }),
-        Err(e) => eprintln!("  error: {}", e),
+pub fn transfer_text(j: &Journal, split_tags: &[String]) -> Result<(), String> {
+    match import_transfer(j, &now_local(), split_tags)? {
+        0 => println!("  transfer.md is empty."),
+        n => println!("  Filed {} entr{} from transfer.md.", n, if n == 1 { "y" } else { "ies" }),
     }
+    Ok(())
 }
 
 pub fn open_folder(j: &Journal) {
@@ -380,12 +385,14 @@ pub fn help(name: &str) {
   {n} export [file]      combine all entries into one file (default: export.md)
   {n} open               open the journal folder in the file manager
   {n} config             edit ~/.config/jnl/config
-  {n} migrate            fold a legacy inbox.md into inbox/ and .nook/ into .quire/
+  {n} migrate            fold a legacy inbox.md into inbox/ and <tag>.md journals into split/
   {n} update [--check]   install the latest release: the terminal app and the desktop
                          AppImage (--terminal / --desktop for one; --check: only say)
   {n} update --main      build the terminal app from the latest code on main, with cargo
 
   Options:  --folder PATH   --theme NAME   --help
+  They go before the command. After `new`, a title or a query, every word is
+  text; so is everything after a lone --.
 
   The folder: $JNL_DIR, else ~/.config/quire/settings.json, else
   ~/.config/jnl/config, else ~/notes. Split tags: Quire's settings, else

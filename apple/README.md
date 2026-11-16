@@ -76,7 +76,7 @@ while connected, active, unlocked and unpaused.
 Rust bridge tests run on Linux, including callback storage, migration,
 stale-index relocation, stale-raw rejection, retiming, and unreadable data.
 The Swift sources, plist files and generated project can be checked here.
-The iOS Simulator build and macOS XCTest pass (42 tests, including continued
+The iOS Simulator build and macOS XCTest pass (126 tests, including continued
 saves after retiming, same-second drafts, split journals and conflict recovery);
 `make test`, `make check` and Apple project wiring validation also pass. The iPhone app has been
 built signed and run on a device with a real journal. iCloud, widgets, share

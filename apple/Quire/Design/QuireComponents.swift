@@ -403,7 +403,7 @@ struct QSideBar: View {
             }
             .font(q.ui(14, weight: on ? .semibold : .regular))
             .foregroundStyle(on ? q.accentColor : q.inkColor)
-            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -586,6 +586,17 @@ struct QYearHeading: View {
 }
 
 extension JournalStore {
+    /// What a page says while the journal is still being read: a jnl or Nook
+    /// journal being folded into day files, files still coming from iCloud, or
+    /// just the reading.
+    var qReadingLine: String {
+        if foldingLegacy { return "Moving your journal into day files" }
+        if downloadsPending > 0 {
+            return "Downloading \(downloadsPending) journal file\(downloadsPending == 1 ? "" : "s") from iCloud"
+        }
+        return "Loading your journal"
+    }
+
     /// Filed entries from today's calendar day in earlier years, newest year
     /// first, read from the parsed archive already in memory. (`onThisDay()`
     /// re-reads and re-decodes the whole journal once per matching year, which
@@ -642,16 +653,21 @@ enum QMarkdown {
 private struct QBrowseCalendar: View {
     @Environment(\.quire) private var q
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("firstWeekday") private var firstWeekday = 1
     let entries: [EntryRef]
     var open: (EntryRef) -> Void
     @State private var month = Date()
     @State private var selected = JournalStore.nowDate()
     @State private var pickingMonth = false
+    /// The entries by day, grouped when the sheet opens and when they change,
+    /// not on every tap of a day.
+    @State private var byDay: [String: [EntryRef]] = [:]
 
+    /// The week starts where the phone's region starts it, as the date pickers
+    /// and the monitor's calendar do. It was a setting ("Start week on") that
+    /// the iPhone and iPad never show, so it stayed on Sunday for everyone.
     private var cal: Calendar {
         var c = Calendar(identifier: .gregorian)
-        c.firstWeekday = min(7, max(1, firstWeekday))
+        c.firstWeekday = Calendar.current.firstWeekday
         return c
     }
     private func key(_ date: Date) -> String {
@@ -665,7 +681,6 @@ private struct QBrowseCalendar: View {
     }
 
     var body: some View {
-        let byDay = Dictionary(grouping: entries, by: { $0.entry.date })
         let symbols = cal.veryShortWeekdaySymbols
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -734,7 +749,9 @@ private struct QBrowseCalendar: View {
             .padding(26)
         }
         .background(q.pageColor).foregroundStyle(q.inkColor)
-        .qKeyBlocker(active: true, onEscape: { dismiss() })
+        .onAppear { byDay = Dictionary(grouping: entries, by: { $0.entry.date }) }
+        .onChange(of: entries) { _, now in byDay = Dictionary(grouping: now, by: { $0.entry.date }) }
+        .qKeyBlocker(active: true, onEscape: { dismiss() }, coversMonitor: true)
     }
 
     private func control(_ label: String, _ symbol: String, action: @escaping () -> Void) -> some View {

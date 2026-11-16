@@ -12,9 +12,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
   with the area in bold (**Terminal**, **Linux**, **Core**, **Format**, …).
 - Call out anything that changes the on-disk format explicitly — the files
   are shared with jnl, Nook and hand-editing users.
-- On release: rename `[Unreleased]` to `## [x.y.z] — YYYY-MM-DD`, bump the
-  workspace version in `Cargo.toml`, `linux/src-tauri/Cargo.toml`,
-  `linux/src-tauri/tauri.conf.json` and `linux/package.json`, open a fresh `[Unreleased]`, then tag the release
+- On release: rename `[Unreleased]` to `## [x.y.z] — YYYY-MM-DD`, open a fresh
+  `[Unreleased]`, run `make bump V=x.y.z` (it writes the four version fields and the files that repeat them), then tag the release
   commit `vx.y.z` and push the tag (see Releases in `CLAUDE.md`).
 
 ---
@@ -31,6 +30,10 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: the monitor's hidden mode names the day of the week after an entry's header, shows the header's real seconds in the list's preview (not `:00`), and previews long entries whole.
 - **Terminal**: `^k` in the composer keeps your text as a new draft when a save is refused because the entry changed on disk.
 - **Releases**: `make bump V=x.y.z` sets the version in all four fields, `Cargo.lock` and `linux/package-lock.json`, and regenerates the Xcode project.
+- **Terminal**: space and PgDn read on through an entry longer than its pane in the Inbox and the Journal; PgUp goes back.
+- **Apple**: the composer's failure banner has "Close and keep for later" when the journal folder can't be reached; the page is kept and offered again, and that question has a "Later".
+- **Apple**: "Transcribe voice memos on this device" can be switched on an iPhone and iPad; ⌘K's rows can be tapped or clicked.
+- **Tools**: `make check` tests the installer (syntax and dry runs in a scratch home) and prints `SKIPPED:` for anything it can't run; CI treats a skip as a failure and now lints and tests the desktop app. `make check-scripts` runs the part that needs no Rust.
 
 ### Changed
 - **Apple**: the title bar keeps the Calendar beside Search on every page; the Media Library and Random buttons, which come and go, sit to its left.
@@ -52,6 +55,22 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Releases**: the release pipeline refuses a tag whose CHANGELOG heading isn't `## [x.y.z] — YYYY-MM-DD`, or that leaves bullets under `[Unreleased]`. The Rust toolchain action is pinned to a commit, and `npm ci` runs in a step that never sees the signing key.
 - **Install**: an AppImage is offered for removal by default only when the file carries Nook's or Wander's bundle id. `--dry-run` no longer contacts GitHub. `--uninstall` also offers to remove the source it cloned, and moves a `jnl` or `quire` only when it is Quire's.
 - **Docs**: CLAUDE.md, AGENTS.md, the Linux and Apple READMEs and the plan match the code again; CI is described as it is, run when asked and on a release tag. `docs/fix-spec.md` is the review these changes come from.
+- **Core**: backups leave out the recovery folder (`.quire/media-cleanup/`), so a compressed video is no longer in every backup twice. A restore's safety copy still holds everything.
+- **Core**: deleting a media file on a local folder moves it to the recovery folder for 30 days instead of removing it. Data Saver's kept originals are cleared after 30 days even if Maintenance is never opened.
+- **Core**: Storage sizes report the recovery folder on its own, and its copies of day files no longer count as journal text.
+- **Search**: curly quotes and guillemets (“ ” „ « ») quote a phrase like `"`; quoted text is never read as an operator, so `"is:starred"` finds the words; a filter that can't be used (`before:March`) is searched as text instead of being dropped. The same in every app.
+- **Terminal**: questions take `y` only. ↵ no longer answers yes, so three presses of ↵ can't restore a backup. Esc on Today no longer quits (`q` does).
+- **Terminal**: a journal folder in the settings that isn't there (a drive not mounted, a folder renamed) stops Quire with a message; it no longer starts an empty journal in `~/notes`.
+- **Terminal**: `--folder` with no value and unknown options are errors; `--folder=PATH` works; words after `new` or a title are never read as options. `import`, `export`, `sort`, `transfer`, `cleanup` and `random` exit with a failure when they fail.
+- **Terminal**: the help overlay lists the keys that work on each screen; Search shows F1.
+- **Apple**: voice memos are transcribed on the device or not at all. A recording is no longer sent to Apple's servers when the device can't recognise the language.
+- **Apple**: with App Lock on, nothing of the journal is kept in Spotlight.
+- **Apple**: the monitor's hint bar lists ⌥⌘ ± T P H as one hint on every page (they work while writing, in Search and in ⌘K), `?` and j/k where they act, and only Esc while a sheet opened by touch covers the page.
+- **Themes**: `faint` is darker on the light themes and lighter on the dark ones, to pass WCAG AA as text on page and card in all seven themes. On Linux the off switch is visible on light themes, custom accents are adjusted per theme to stay readable, and there is one danger colour.
+- **Installer**: an old `jnl` sitting where Quire's goes is moved aside only after Quire's own is downloaded, checked and run once (or built); a failed download or build leaves it where it was. You are told it will be moved, not asked.
+- **Installer**: the journal backup is written as `.partial`, read back, and only then named `quire-preinstall-<stamp>.tar.gz`. A launcher entry that is only *named* Nook or Wander is offered for removal with the default no.
+- **Installer**: refuses to run under `sudo` (it asks for sudo itself where needed), and Ctrl-C stops it instead of carrying on to the next step.
+- **Releases**: the tag must be on `main`; the signing key is seen by one job that builds nothing; GitHub's actions are pinned to commits.
 
 ### Fixed
 - **Apple**: ^t opens the date picker on the monitor from a new page too: the title, where a new page starts, took it as "transpose".
@@ -92,6 +111,64 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Linux**: two ways of leaving the composer no longer drop unsaved edits to a filed entry: ↑/↓ with the focus off the text, and the list's Random button. Both save first, as Ctrl+R and a click on a row do.
 - **Linux**: an entry whose header carries a date that doesn't exist (`2026-06-31`) no longer stops the Inbox, Journal or Starred list from drawing, and an impossible month or hour no longer turns Look back's charts into `NaN`. A picture whose name has brackets (`image(1).jpg`) shows in the reader instead of a broken link and stray text.
 - **Linux**: in the date and time popover, ↵ on Cancel, Now or Yesterday presses that button instead of saving. "Yesterday" on the calendar is the day before by the calendar, right in the hour around a clock change, and the year's heat map keeps 31 December where clocks change at midnight. The Journal picker goes back to the main journal when the split journal it showed has no entries left, and Look back's year picker always lists the year on show. One of a thing reads "1 word", "1 entry", "1 day".
+- **Core**: a root `.md` file is only folded into `split/` when it is a split journal (one of its entries carries `@<name>`). An export saved into the journal folder, or a log of timestamped lines, is left where it is instead of being copied out as thousands of day files.
+- **Core**: a year or month folder inside `inbox/`, `journal/` or `split/` that is a link to another folder is read as well as written, so a draft filed into one no longer vanishes from view. Hidden folders there (a sync tool's `.trash`) are no longer read as entries.
+- **Core**: when folding `inbox.md` or a `<tag>.md` stops after copying, each entry is shown once, not twice; the same file coming back from a sync no longer adds another copy to `.quire/migration/` on every open.
+- **Core**: folding `inbox.md` rewrites `./…` links so pictures still show from the day file (`tools/migrate_journal.py` does the same). Format: the folded draft's link text changes (`./assets/a.jpg` becomes `assets/a.jpg`); the original is kept in `.quire/migration/` as before.
+- **Core**: pasting many entries writes each day file once, and a paste that failed partway can be pasted again without doubling what was already written.
+- **Core**: a relative link to a file outside `assets/` (`./sketch.png`) still points at the same file after its entry is retimed, filed or returned to the Inbox.
+- **Core**: a preamble is kept unless the whole of it is already there (`# Notes` was dropped when `# Notes 2025` had been kept).
+- **Core**: pressing return after a rule (`* * *`, `- - -`) no longer starts a bullet, and only ASCII digits number a list.
+- **Core**: media cleanup and clearing unused media no longer read each file into memory, so a large video needs no matching RAM. If a copy fails partway, the copies already made are taken back and a retry does not leave `name-2` files. Two files whose names differ only in case no longer land on one file on a case-insensitive disk.
+- **Core**: Data Saver keeps a photo's colour profile (JPEG, PNG, TIFF), so Display P3 photos no longer come out flatter.
+- **Core**: importing a markdown folder dates an undated note by the earlier of its created and modified times, and importing the same folder again after adding a file adds only that file.
+- **Core**: the backup just made is never the one pruned, even when the clocks have gone back; a backup fails if a folder cannot be listed, where before it could skip files and still pass its check.
+- **Core**: a Day One import that fails partway removes the media it copied for entries it did not write, and no longer follows symlinks in the export's media folders. `transfer.md` with plain paragraphs is stamped on disk before filing, so a retry does not file them twice.
+- **Core**: renaming a tag no longer changes a longer accented word (`@caf` in `@café`). The Media Library's owners list agrees with its "in use" mark for links that differ in case or use `<img>`.
+- **Terminal**: the tag list opens only when you type at a tag. Opening an entry that ends in `@run` no longer takes ↑ ↓ ↵ and Esc, and Esc closes the list without adding a space.
+- **Terminal**: a journal file that can't be read is named on every screen until it can, not only in a five-second message.
+- **Terminal**: closing the window or `kill` (SIGHUP, SIGTERM) saves what is in the composer and gives the terminal back; typing without a pause is saved at least every 5 seconds; a fault in Quire itself still saves the composer. A background job that fails no longer gives the terminal back under the running app.
+- **Terminal**: `quire update --help`, or a mistyped flag, no longer performs the update. `quire help` no longer creates the folder or migrates anything.
+- **Terminal**: the hint bar drops whole hints when the window is narrow, never half a word; no key acts while the window is too small to draw; Broadsheet in 256 colours has its selection background again.
+- **Terminal**: ^H is Backspace, and a control chord no longer types its letter in Search, the column filter or a prompt (^W takes back a word, ^U the line). ↑ and ↓ work while a column filter is open.
+- **Terminal**: after the folder changes underneath, the Inbox, Journal and Search keep the same entry selected, so `f`, `u`, `*` and `e` act on the one that was marked. Settings → Export asks before replacing a file.
+- **Linux**: unsaved changes to a filed entry keep a recovery copy while you type, offered back as an edit to that entry after a crash. The recovery copy lives beside the settings file, not in the journal folder, so it survives the folder going missing; the failed-save dialog has Copy text.
+- **Linux**: a row clicked after a sync changed the file opens its own entry, and a task ticked in the reader can no longer land in another entry. Ctrl+S, filing and retiming a draft wait for an autosave in flight instead of overlapping it.
+- **Linux**: restore, clean up, compress, imports, File all, merges and installing an update close the composer and suspend the window until they finish; jobs that hit problems list them in a dialog that stays, with Copy.
+- **Linux**: the PIN is asked for even when the first load fails. An AppImage is recognised by where the binary runs from, not by `APPIMAGE` alone.
+- **Linux**: text typed in a Settings field is no longer lost when the page redraws; leaving an edited template asks first.
+- **Linux**: list continuation, Tab, bold/italic/code, tag completion and attach can be undone with Ctrl+Z. A paste with text and a picture of it pastes the text; a middle click on a link opens the browser.
+- **Linux**: Ctrl+1–6 work on AZERTY; templates and saved searches changed on another device reload.
+- **Linux**: the reader shows heading levels, rules, fenced code and nested lists; "New entry" on a past day's page dates the draft that day; an entry edited by hand is not rewritten by opening it.
+- **Linux**: printing waits for pictures; Stream and Media work in a narrow window; long lists say when they stop at 500.
+- **Linux**: deleting media says where the file goes (kept 30 days) and takes "in use" from the core; Storage shows the size of recovery copies.
+- **Linux**: focus ring on search fields, labels on every field, error toasts announced as alerts, the year's heat map is one tab stop with arrow keys, Delete removes a saved search and resets the timer, pictures open from the keyboard, tag merges ask first.
+- **Apple**: something shared to Quire is in the Inbox as soon as the app comes forward. It used to wait for a relaunch or midnight.
+- **Apple**: the reminder's "Write a line…" and Siri's Add Journal Entry no longer drop the text when the journal can't be written. The line is kept and goes into the Inbox when Quire is next opened.
+- **Apple**: a journal with files iCloud hasn't downloaded asks for all of them at once, says how many are coming and opens by itself when they arrive; iCloud conflict versions are looked for and merged when the app comes forward and when a folder is opened (neither confirmed on a device yet).
+- **Apple**: one file that isn't plain text no longer hides the whole journal. It is named in the banner and left out, and nothing is written into it.
+- **Apple**: with App Lock on, the keyboard can no longer come back to the page being written behind the lock (not confirmed on a device yet).
+- **Apple**: an entry starred on its page and then given a new date stays the page you are on. The reader's File, Return to Inbox and Delete close the page only if they happened, and say so if they didn't.
+- **Apple**: converting a HEIC never replaces a JPEG of the same name. "Choose File" copies a video or audio file in rather than reading it into memory. Background video compression ends its background task when time runs out.
+- **Apple**: a transcript that arrives after the page closed is no longer lost and marked done. Media links whose names hold brackets (`image(1).jpg`) show their owning entry in the Media Library.
+- **Apple**: a draft another device synced into a day file this app had just written shows up at the next look, not the next full load. A custom folder whose bookmark resolves but grants no access shows the "can't reach" banner.
+- **Apple**: merging tags and exporting read the journal off the main thread, and an export that can't read everything says why; a Siri add no longer walks the whole journal. A file error inside the journal folder is reported in its own words, not as "Callback interface failure".
+- **Apple**: the share sheet says so when there was nothing it could save, and shared text holding a timestamp-shaped line stays one draft.
+- **Apple**: Search opened by touch over an open entry shows on the monitor; `/` goes back to the query when nothing was found. The monitor's reading page no longer decodes photos at full size.
+- **Apple**: Return in the middle of a styled line restyles both halves; `snake_case` is not set in italics; with a Chinese or Japanese keyboard and a monitor, ↑/↓ and Return stay with the input method.
+- **Apple**: the calendar sheet's week starts where your region starts it. The date sheets scroll on a phone on its side; the keyboard returns to the text after a date sheet or an attachment picker.
+- **Apple**: Marathon Day's word-goal bar, title rule and other lime marks are drawn in the accent, where they can be seen, in the app and the widgets. Look back's weekday bars are darker.
+- **Apple**: the @-tag bar above the keyboard is in Quire's own type and colours, with larger targets; the reader's date and the sidebar's items are 44 points tall. VoiceOver names the entry text, speaks the date on the date button, and says that Today's summary opens the Inbox. Reduce Motion is respected in more places.
+- **Apple**: the composer's prompt, and the Mac's, is the one Today and the widgets show. Year in Review and Trends no longer count conflict copies as days. The iPhone no longer applies the Mac's light/dark setting.
+- **Apple**: `build-core.sh` uses rustup's toolchain when another cargo comes first on PATH.
+- **Installer**: on macOS two removed files with the same name no longer overwrite each other in the Trash. On Linux without `gio`, a move that needs sudo no longer leaves a root-owned folder. A release binary that can't run here (older glibc) is caught before anything is replaced, and the message says to use `--build`.
+- **Tools**: `migrate_journal.py` no longer writes over a day file that Quire or a sync changed after it planned; it plans again.
+- **Docs**: the README's bundle path, its "never `rm`" claim and the `^i` key; the Mac settings path in `CLAUDE.md`.
+
+### Security
+- **Releases**: each AppImage and each terminal tarball is published with a signature (`.sig`) made with the updater's key. `quire update` checks it when the release has one (a release without one is noted and rests on SHA-256), and only downloads from GitHub over https.
+- **Core**: the vault refuses absolute paths and `..`; entry paths are checked without case (`.Quire/…`, `Assets/…`) and the preamble files are not entry files. The bindings' `rewrite` accepts entry files only.
+- **Linux**: the backup folder can only be set to a path chosen in a dialog.
 
 ## [0.12.0] — not yet released
 

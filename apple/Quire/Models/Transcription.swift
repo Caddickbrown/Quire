@@ -2,8 +2,9 @@
 //  Transcription.swift
 //  Quire
 //
-//  Voice-memo transcription (Speech framework). On-device when the recogniser
-//  supports it — the transcript is inserted into the entry body beneath the
+//  Voice-memo transcription (Speech framework). On this device only, unless
+//  Apple's servers have been allowed by name (`Transcriber.allowServerKey`) —
+//  the transcript is inserted into the entry body beneath the
 //  audio's `![](assets/…)` link, so the words become ordinary searchable,
 //  taggable text and nothing new lands on disk.
 //
@@ -15,20 +16,37 @@ enum Transcriber {
     enum TranscriptionError: LocalizedError {
         case notAuthorized
         case unavailable
+        case onDeviceUnavailable
         case empty
 
         var errorDescription: String? {
             switch self {
             case .notAuthorized: return "Allow speech recognition in Settings to transcribe voice memos."
             case .unavailable:   return "Speech recognition isn't available for your language on this device."
+            case .onDeviceUnavailable:
+                return "This device can't transcribe your language by itself, and Quire doesn't send recordings to Apple's servers unless you allow it."
             case .empty:         return "No speech was recognised in this recording."
             }
         }
     }
 
-    /// Transcribe one audio file to text. Prefers on-device recognition and
-    /// falls back to the recogniser's default only when on-device isn't
-    /// supported for the current locale.
+    /// Off unless switched on: let a recording go to Apple's servers when this
+    /// device can't recognise the language by itself. No screen sets it yet.
+    static let allowServerKey = "transcribeAllowServer"
+
+    enum Route: Equatable { case onDevice, server }
+
+    /// Where a recording may be recognised, or nil when it may not be at all.
+    /// On the device whenever that is possible. Apple's servers only when the
+    /// device can't and they have been allowed: it used to go to them quietly
+    /// whenever the device couldn't, automatic transcription included, while
+    /// the app said "on this device".
+    static func route(supportsOnDevice: Bool, allowServer: Bool) -> Route? {
+        if supportsOnDevice { return .onDevice }
+        return allowServer ? .server : nil
+    }
+
+    /// Transcribe one audio file to text, on this device (see `route`).
     static func transcribe(url: URL) async throws -> String {
         let status = await withCheckedContinuation { cont in
             SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }
@@ -39,9 +57,11 @@ enum Transcriber {
         }
         let request = SFSpeechURLRecognitionRequest(url: url)
         request.shouldReportPartialResults = false
-        if recognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true
+        guard let route = route(supportsOnDevice: recognizer.supportsOnDeviceRecognition,
+                                allowServer: UserDefaults.standard.bool(forKey: allowServerKey)) else {
+            throw TranscriptionError.onDeviceUnavailable
         }
+        request.requiresOnDeviceRecognition = route == .onDevice
         let text: String = try await withCheckedThrowingContinuation { cont in
             // The callback can arrive on any queue; the lock makes the
             // single-resume guarantee airtight rather than probabilistic.
@@ -118,16 +138,24 @@ extension JournalStore {
     /// uses. Returns (transcribed, failed).
     @discardableResult
     func transcribeAllMemos() async -> (done: Int, failed: Int) {
+        guard let base = baseURL else { return (0, 0) }
         let already = transcribedAssetIDs()
-        var work: [(file: URL, path: String)] = []
-        for file in allContentFileURLs() {
-            guard let content = try? readContentFile(file) else { continue }
-            for path in Transcriber.audioPaths(in: content) {
-                let id = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
-                if !already.contains(id) { work.append((file, path)) }
+        // The sweep reads every file in the journal: off the main actor, on a
+        // journal handle of its own (it used to hold the app still meanwhile).
+        let work: [(file: URL, path: String)] = await Task.detached(priority: .userInitiated) {
+            let core = CoreJournal(base: base)
+            guard let files: [String] = try? core.call("files") else { return [] }
+            var found: [(file: URL, path: String)] = []
+            for rel in files {
+                guard let content = try? core.text(rel) else { continue }
+                for path in Transcriber.audioPaths(in: content) {
+                    let id = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+                    if !already.contains(id) { found.append((base.appendingPathComponent(rel), path)) }
+                }
             }
-        }
-        guard !work.isEmpty else { return (0, 0) }
+            return found
+        }.value
+        guard baseURL == base, !work.isEmpty else { return (0, 0) }
 
         var done = 0, failed = 0
         setMediaProgress((0, work.count))
