@@ -86,7 +86,7 @@ private struct VSFile {
     var preview = false
     var tree: [VSTreeRow]
     var selectedRow: String?
-    /// Dim words after the header line, like an editor's inlay hint: the
+    /// Dim words beside the header's date, like an editor's inlay hint: the
     /// entry's day of the week. Not part of the file.
     var headerHint: String? = nil
 }
@@ -893,11 +893,11 @@ private struct VSEditor: View {
         return lo < hi ? lo..<hi : nil
     }
 
-    /// The header line's inlay hint (the day of the week), dim and apart from
-    /// the text, as VS Code draws one. Nothing on any other line.
-    private func hint(_ i: Int) -> Text {
-        guard i == 0, let words = file.headerHint, !words.isEmpty else { return Text("") }
-        return Text("   " + words).font(.system(size: s.code * 0.9, design: .monospaced).italic()).foregroundColor(VS.lineNumber)
+    /// The header line's inlay hint (the day of the week), drawn beside the
+    /// date. Nothing on any other line.
+    private func hint(_ i: Int) -> String? {
+        guard i == 0, let words = file.headerHint, !words.isEmpty else { return nil }
+        return words
     }
 
     private func lineView(_ i: Int, _ line: String) -> some View {
@@ -911,7 +911,7 @@ private struct VSEditor: View {
                 if current, let col = file.caret?.col {
                     TimelineView(.periodic(from: moved, by: 0.53)) { t in
                         let on = Int(max(0, t.date.timeIntervalSince(moved)) / 0.53) % 2 == 0
-                        (Text(VSMarkdown.styled(line, s: s, caret: col, caretOn: on, selected: shade)) + hint(i))
+                        Text(VSMarkdown.styled(line, s: s, caret: col, caretOn: on, selected: shade, inlay: hint(i)))
                             .overlay(alignment: .topLeading) {
                                 if col == 0 {
                                     Rectangle().fill(on ? VS.caret : .clear)
@@ -921,7 +921,7 @@ private struct VSEditor: View {
                             }
                     }
                 } else {
-                    Text(VSMarkdown.styled(line, s: s, caret: nil, caretOn: false, selected: shade)) + hint(i)
+                    Text(VSMarkdown.styled(line, s: s, caret: nil, caretOn: false, selected: shade, inlay: hint(i)))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -993,7 +993,11 @@ private enum VSMarkdown {
     private static let inline = try! NSRegularExpression(pattern: #"(!?\[[^\]]*\]\([^)]*\))|(\*\*[^*]+\*\*)|(`[^`]+`)|((?<![\w#])#[A-Za-z][\w-]*)"#)
 
     /// One line coloured the way Dark+ colours markdown, with the caret drawn in.
-    static func styled(_ line: String, s: VSScale, caret: Int?, caretOn: Bool, selected: Range<Int>? = nil) -> AttributedString {
+    /// `inlay` is words drawn dim beside a header's date, as VS Code draws an
+    /// inlay hint (`[2026-11-16 Monday 08:12:00]`): not part of the line, so
+    /// the caret's and the selection's columns ignore it.
+    static func styled(_ line: String, s: VSScale, caret: Int?, caretOn: Bool, selected: Range<Int>? = nil,
+                       inlay: String? = nil) -> AttributedString {
         let mono = s.mono
         var out = AttributedString(line.isEmpty ? " " : line)
         out.font = mono
@@ -1054,6 +1058,16 @@ private enum VSMarkdown {
                 out[chars.index(before: index)..<index].kern = -advance / 2
                 out.insert(bar, at: index)
             }
+        }
+        // Last, so the columns above are the line's own. "[YYYY-MM-DD" is 11.
+        if let inlay, header.firstMatch(in: line, range: whole) != nil {
+            let dateEnd = 11
+            let shift = caret.map { min(max(0, $0), line.count) }.map { $0 > 0 && $0 <= dateEnd ? 1 : 0 } ?? 0
+            var words = AttributedString(" " + inlay)
+            words.font = .system(size: s.code * 0.9, design: .monospaced).italic()
+            words.foregroundColor = VS.lineNumber
+            let chars = out.characters
+            out.insert(words, at: chars.index(chars.startIndex, offsetBy: min(dateEnd + shift, chars.count)))
         }
         return out
     }
