@@ -27,7 +27,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: a page Quire closed on before it was saved is offered back at the next launch or unlock: save it to the Inbox, copy its text, or discard it. The save-failure banner has "Copy text".
 - **Apple**: a tap anywhere below the words on the writing page puts the cursor after the last one; the text fills the page.
 - **Apple**: Settings has a Macros page: Clean Up, Sort Inbox, File All Drafts, File transfer.md, Merge Conflict Copies and Merge Ex-Split Journals, each with an icon, out of Import and export.
-- **Apple**: the monitor's hidden mode names the day of the week after an entry's header, shows the header's real seconds in the list's preview (not `:00`), and previews long entries whole.
+- **Apple**: the monitor's hidden mode names the day of the week beside the date in an entry's header (`[2026-11-16 Monday 08:12:00]`, dim, like an editor's inlay hint), shows the header's real seconds in the list's preview (not `:00`), and previews long entries whole.
 - **Terminal**: `^k` in the composer keeps your text as a new draft when a save is refused because the entry changed on disk.
 - **Releases**: `make bump V=x.y.z` sets the version in all four fields, `Cargo.lock` and `linux/package-lock.json`, and regenerates the Xcode project.
 - **Terminal**: space and PgDn read on through an entry longer than its pane in the Inbox and the Journal; PgUp goes back.
