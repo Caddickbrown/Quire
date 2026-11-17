@@ -1,6 +1,6 @@
 [package]
 name = "quire-desktop"
-version = "0.11.0"
+version = "1.0.0"
 description = "Quire: one journalling app over a jnl folder"
 edition = "2021"
 

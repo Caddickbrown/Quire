@@ -20,7 +20,38 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-11-17
+
+Quire 1.0: no longer a prototype, but a journal to keep every day. The terminal app, the Linux desktop app and the app for iPhone, iPad and Mac all read and write the same plain Markdown files, a sync landing mid-save can't overwrite an edit, a restore can't empty the journal, and updates are signed and checked. One line installs it on Linux or a Mac: `curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash` (new in this release, the Mac gets the terminal app as a download too).
+
+Also in 1.0, on iPhone, iPad and the monitor: ⌘K that does anything (every action on the open entry or the page being written, themes that preview as you pick them, settings, macros, any entry by name), a date picker that follows the screen it's on, keyboard scrolling and a hint bar that lists the keys that work, hidden mode (with the day of the week beside the date), Quire's design on the iPad, new widgets, a calendar sheet, Auto theme pairs and media in the composer. Underneath: every rewrite of a journal file is a compare-and-swap, the vault refuses paths that leave the journal, and `quire update` checks each release's signature.
+
 ### Added
+- **Terminal**: `jnl update --main` (also `quire update --main`) builds the terminal app from the latest code on main with cargo, for a fix that isn't in a release yet.
+- **Apple**: ⌘K, from a monitor or any hardware keyboard: type a few letters to go to Today, the Inbox, the Journal, Search, a new draft, a date or Settings, with the same fuzzy match as Pippin and MiniOffice. Jump to a date reads `14 March`, `14/3` or `2026-03-14`, or offers yesterday, a week, a month or a year ago, and says where it lands when nothing was written that day. It is drawn on the monitor (as VS Code's Command Palette in hidden mode) or over the phone, and works over the composer, which saves and closes first.
+- **Apple**: the monitor's date picker shows the time with a line on how to change it, and an exact time can be typed: `1430`, `14:30` or `9`, with ⌫ taking a digit back. - and = still move it by 15 minutes, and the hint bar says so.
+- **Apple**: open entries scroll with ↑↓ or j/k, on the phone and the monitor together, and Settings scrolls with them on the phone. Settings and Look back keep the selected row in view on long pages or at large text sizes.
+- **Apple**: Search shows on the monitor what you're typing. ↩ goes to the results and `/` back to the query.
+- **Apple**: entries open on the iPhone play their video and voice memos in place (a memo's transcript reads beneath it), instead of showing the file's path. Voice memos get a player in the theme's own colours and type: play/pause, a timeline to drag or tap to seek, elapsed and remaining time; it is sized up on the monitor.
+- **Apple**: an open entry's actions (star, file or return to inbox, delete, edit) and the composer's star are icons, as the masthead's are.
+- **Apple**: press and hold an entry in Today, the Inbox or the Journal to delete it (it asks first).
+- **Apple**: On this day shows each entry's tags, on the phone and on the monitor.
+- **Apple**: Search has a Tags button listing every tag with its count; a tag searches for itself. The Journal's tag list is gone from the top of the page.
+- **Apple**: the mastheads use icons for Search and Settings, and Today and the Journal have a Media Library icon beside them (the Journal's "Media Library" link is gone).
+- **Apple**: `r` (a random entry) works and is listed on the monitor in the Journal, On this day and open entries, and gives a random draft in the Inbox; another `r` replaces the open entry rather than stacking up. The monitor's key hints step down in size rather than running off the edge, and Search no longer lists keys its sheet doesn't take.
+- **Apple**: words selected in the composer are shaded on the monitor too: a highlighter in the accent colour on Quire's page, VS Code's selection blue in hidden mode.
+- **Apple**: the composer's footer says how many drafts are left in the inbox (or that this is the last one), for working through them one by one.
+- **Apple**: with a monitor connected, ↑ and ↓ in the composer move the cursor by the monitor's lines, not the phone's, so it goes where you see it go; the phone keeps its own wrapping.
+- **Apple**: a whimsy pass, in Quire's calm, bookish manner: pages arrive (titles, labels and rows settle in top to bottom within about 150 ms when a tab or entry opens), the accent rule under a title draws in like a pen stroke, filing an entry turns the page over before it closes, a just-filed entry is set down in Today's list, another prompt (`p`) rolls up into place, On this day cards are dealt onto the page, Look back's figures count up and its weekday bars grow, the current streak breathes a few times, a "Goal met" stamp lands the first time the day's word goal is reached, Today's kicker says the part of the day, and an empty page's placeholder breathes until the first word. Haptics follow one vocabulary: success on filing and the goal, a light land on saving and a new prompt, a warning when a write fails. Reduce Motion keeps everything still; nothing animates per keystroke.
+- **Apple**: attach media on iPhone and iPad again. The composer has a paperclip (Photo Library, Take Photo, Record Video, Voice Note, Choose File) and accepts dropped photos, video, audio and files, as the Mac does.
+- **Apple**: paste a copied image (or a copied photo, video or audio file on Mac) into any editor to attach it, as `^v` does in the terminal app.
+- **Apple**: attachments land where the cursor is, as their own paragraph, not at the end of the entry.
+- **Apple**: hidden mode for the monitor. Choose "VS Code (hidden)" as the monitor theme (Settings → External display, `,` on the monitor, or ⌥⌘T) and the monitor looks like VS Code on Windows 11 above a light taskbar of look-alike app icons: the entry you're writing or reading is its day file, with line numbers and a caret; a list is the Explorer, with the selected entry in a preview tab; Today is a README; settings is the Settings tab. Paused or locked, it is an empty editor. The phone is unchanged.
+- **Apple**: iPad runs Quire's design. At regular width the tab words become a narrow sidebar that folds to a strip (the sidebar button or ⌃⌘S; remembered) and, where there is room (iPad landscape, an iPhone that opens out), an entry opens beside the list instead of over it; layout follows the size class, not the device.
+- **Apple**: an On this day widget, a Lock Screen Today accessory (a ring of today's words against the goal, or the streak; figures; an inline line), and a Write a Line control that opens Today with its one-line field ready.
+- **Apple**: the Today widget's "Another prompt" button rerolls the prompt for the app and every widget.
+- **Installer**: one line installs Quire on Linux or a Mac: `curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash`. On a Mac the terminal app is now downloaded from the release (Apple silicon and Intel builds, checksummed and signed like Linux's) instead of built, and `quire update` updates it the same way; the Mac's desktop app is still built from source.
+- **Releases**: each release carries the terminal app for macOS, `quire-aarch64-apple-darwin.tar.gz` and `quire-x86_64-apple-darwin.tar.gz`.
 - **Apple**: ⌘K does anything, not only goes places. The open or selected entry's actions come first (open, edit, star, file, return to the Inbox, change the date, delete, which asks in the menu), and the page being written has its own (file, save, date, focus, a prompt, star, voice note, attach, discard) without closing it. Themes and the monitor's looks, the VS Code disguise included, preview as you arrow through them and Esc puts the old one back; settings are toggles that say which way they go; macros, backups, saved searches, tags, split journals, Look back, the Media Library and any entry by name are all on it, with recent commands at the top. Without a keyboard, the ⌘ icon in the masthead, on an entry and while writing opens it. Built on App Kit 0.6.
 - **Apple**: Today, Inbox, Journal and Look back offer a quiet calendar icon opening a themed sheet, with marked entry dates, month/year navigation and entries for the selected day; Inbox shows drafts and Journal follows its chosen journal and star filter.
 - **Apple**: Auto theme picks its looks. Settings → Theme → Auto now asks which light theme to use by day and which dark one at night (Almanac and Cinema until you choose), and switches with the system's appearance. The widgets, the Live Activity and the monitor follow the same pair.
@@ -37,6 +68,19 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Tools**: `make check` tests the installer (syntax and dry runs in a scratch home) and prints `SKIPPED:` for anything it can't run; CI treats a skip as a failure and now lints and tests the desktop app. `make check-scripts` runs the part that needs no Rust.
 
 ### Changed
+- **Apple**: the date picker follows the screen it's on: it matches the monitor's theme, and hidden mode has a small drop-down in VS Code's own colours instead of a card in the phone's theme.
+- **Apple**: the monitor's hint bar lists the keys that work and only those: ⌘K, `t` in the Journal, `u` or `f` on an open entry, `p` on Today, and the letters that go elsewhere; an empty list no longer shows keys for rows it hasn't got. `p` now works only on Today, where the prompt is, and `j` on an open entry scrolls rather than leaving for the Journal.
+- **Apple**: `/` on an open entry with a monitor attached closes the entry first, so Search shows on the monitor.
+- **Linux**: the package description and the sample-journal notices no longer call Quire a prototype.
+- **Releases**: a tag runs `make test`, `make check` and `make smoke` before anything is built, and publishes nothing if they fail; `.github/workflows/ci.yml` runs the same checks when asked.
+- **Terminal**: the migration tests, which nothing ran, are part of `make check`.
+- **Terminal**: the Inbox is set out by year, month and day like the Journal, with the same keys and `/` filter, and each draft shows where it will file to. In a narrow window, moving on to the entries now shows them instead of nothing, in both views, and `e` edits in the Journal too.
+- **Terminal**: `jnl update` and `quire update` now update a copy built from source, including every Mac install, by rebuilding the latest release with cargo. Before, they only printed an install command.
+- **Apple**: on the monitor, Esc always gets you home to Today: from a list or an open entry one press, from anything over the page (a question, the date picker, settings, Search, the Media Library, a sheet) it closes that first, and from the composer it saves and closes as before. A question is cancelled, never answered. The hint bar says Today. Search and the Media Library's filter take Esc too, where a typing field used to keep it.
+- **Apple**: Random is a dice icon in the masthead, beside Search and Settings, on the Inbox and the Journal; the Inbox's File all button is gone (filing every draft is still in Settings → Maintenance).
+- **Apple**: an entry opens with the cursor at the end of its text, ready to carry on writing.
+- **Apple**: on the Mac, attaching has its own paperclip button instead of sitting in the ⋯ menu.
+- **Apple**: the widgets, the Lock Screen New Draft accessory and the writing-timer Live Activity are set in Quire's design instead of Nook's: the app's theme (Marathon included), Newsreader and IBM Plex, and the mark. Small shows today's words, Medium opens on today's prompt, Large is the Today page in miniature; they turn over at midnight on their own and tint on a tinted Home Screen.
 - **Apple**: the title bar keeps the Calendar beside Search on every page; the Media Library and Random buttons, which come and go, sit to its left.
 - **Apple**: on the monitor, Esc from an open entry steps back to the list you came from, with your place in it kept, and the next Esc goes to Today. The hint bar says Back on an open entry.
 - **Core**: Data Saver keeps each original it replaces in `.quire/media-cleanup/` for 30 days (Apple too, and for deletes from the Media Library and cleared unused media), skips animated PNGs and multi-page TIFFs, and encodes video as yuv420p. HEICs it converts are moved there instead of deleted.
@@ -74,6 +118,26 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Releases**: the tag must be on `main`; the signing key is seen by one job that builds nothing; GitHub's actions are pinned to commits.
 
 ### Fixed
+- **Installer**: on Debian or Ubuntu with `rpm` installed, looking for an old Quire package no longer leaves an empty `~/.rpmdb` in your home folder (a dry run made one too).
+- **Backups**: pruning removes every old backup it should when several were made within the same tick of the disk's clock (a fast Linux disk); one could be kept by mistake.
+- **Apple**: long lists on the monitor keep the selected row in view when the selection moves far, as a jump to a date does.
+- **Apple**: a journal folder that can't be reached says so, rather than "Path leaves the journal folder", and a write no longer makes it again; a folder reported as `/private/var/…` before it exists works once it does.
+- **Core**: a sync, a Shortcut or the terminal app landing mid-save can't overwrite an edit: every rewrite of a journal file is now a compare-and-swap that redoes the edit on the new text (Apple: inside one file coordination; desktop and terminal: Quire's writers take turns on a folder lock). The format is unchanged.
+- **Backups**: Restore no longer empties the journal before copying the backup in. It stages and checks a copy, swaps it in, and puts everything back if a step fails. Backups and safety copies are checked against the journal, a failed one is removed, and an iCloud placeholder stops the copy instead of being backed up empty. On Apple, hidden items such as Syncthing's now stay put.
+- **Apple**: markdown in a title shows as it reads: `Felt _really_ ill` sets "really" in italics in the lists (Today, Inbox, Journal, Search), on the monitor's lists and at the top of an open entry, and `**bold**` is bold. Underscores inside a word (snake_case) and the star marker are left as they are.
+- **Apple**: deleting a draft from the Inbox works on the phone again. `d` and press and hold → Delete… asked for nothing: the Inbox's "Delete this draft?" never came up.
+- **Apple**: confirmations work in Monitor Mode. Deleting from the Inbox, the Journal, Today or an open entry, and ^D (discard) while writing, ask on the monitor, worked from the keyboard: ↩ goes ahead, Esc cancels, and nothing else acts while it is up. The selection moves on to the next entry (or the one before). Unplugging, pausing or locking cancels it; without a monitor the phone asks as before. It is drawn as VS Code's dialog in the VS Code theme.
+- **Apple**: a date changed while writing (^T or the date at the top) is saved even when the words haven't changed since the last save. It was dropped once a new page had autosaved, and closing the page lost it.
+- **Apple**: changing an entry's date works in Monitor Mode. `t` (on a list or an open entry) and ^T (writing) open a calendar on the monitor, worked from the keyboard: ← → a day, ↑ ↓ a week, [ ] a month, t today, - = the time by 15 minutes, ↩ sets, Esc cancels. The time of day is kept otherwise. Tapping the date on the phone still opens the phone's picker.
+- **Apple**: italics show in the editor and on the monitor: `_text_` now sets the font's italic face (TextKit 2 drew the old slant upright), and `*text*` italicises too.
+- **Apple**: Esc leaves a new page from the keyboard; the title field kept Esc for itself, so a page opened on its title couldn't be closed.
+- **Apple**: the monitor draws a caret in the title while the title is being written.
+- **Apple**: filing or closing a page from a hardware keyboard (`^j`, Esc) no longer freezes the app until iOS kills it.
+- **Apple**: hidden mode's caret behaves like VS Code's: the text no longer shifts or rewraps around it, it holds solid while you type and blinks when you stop, and it sits in the title while you type the title.
+- **Apple**: the composer's control keys (`^j` file, `^s` save, `^t`, `^f`, `^p`, `^d`) work while you type; they only reached the app when no field had the cursor, and the text field read some of them as cursor moves.
+- **Apple**: a new page's time is fixed at the first keystroke, so typing and deleting before the first save no longer moves it.
+- **Apple**: with the word goal on but never changed, the widget compared today's words against a goal of 1 instead of 750.
+- **Apple**: the Mac camera sheet fits the preview instead of cropping it and keeps it level as a Continuity Camera iPhone turns; recordings and photos are saved the same way up.
 - **Apple**: ^t opens the date picker on the monitor from a new page too: the title, where a new page starts, took it as "transpose".
 - **Apple**: the writing page checks after each edit that its first line still starts at the top, and lays the text out again if TextKit 2 left it a line low (the keyboard's "…" with a tag on the line below).
 - **Apple**: typing on an iPad keeps up again. Each autosave no longer regroups the whole Journal list beneath the page, the editor measures its height once per change instead of twice, and the word count, caret and tag list stop redrawing the page on every keystroke.
@@ -170,70 +234,6 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Releases**: each AppImage and each terminal tarball is published with a signature (`.sig`) made with the updater's key. `quire update` checks it when the release has one (a release without one is noted and rests on SHA-256), and only downloads from GitHub over https.
 - **Core**: the vault refuses absolute paths and `..`; entry paths are checked without case (`.Quire/…`, `Assets/…`) and the preamble files are not entry files. The bindings' `rewrite` accepts entry files only.
 - **Linux**: the backup folder can only be set to a path chosen in a dialog.
-
-## [0.12.0] — not yet released
-
-The monitor and a hardware keyboard: ⌘K, a date picker that follows the screen it's on, keyboard scrolling and a hint bar that lists the keys that work. Also Quire's design on the iPad, new widgets, hidden mode, media in the composer, and a safe restore. Set the date here when the release is cut.
-
-### Added
-- **Terminal**: `jnl update --main` (also `quire update --main`) builds the terminal app from the latest code on main with cargo, for a fix that isn't in a release yet.
-- **Apple**: ⌘K, from a monitor or any hardware keyboard: type a few letters to go to Today, the Inbox, the Journal, Search, a new draft, a date or Settings, with the same fuzzy match as Pippin and MiniOffice. Jump to a date reads `14 March`, `14/3` or `2026-03-14`, or offers yesterday, a week, a month or a year ago, and says where it lands when nothing was written that day. It is drawn on the monitor (as VS Code's Command Palette in hidden mode) or over the phone, and works over the composer, which saves and closes first.
-- **Apple**: the monitor's date picker shows the time with a line on how to change it, and an exact time can be typed: `1430`, `14:30` or `9`, with ⌫ taking a digit back. - and = still move it by 15 minutes, and the hint bar says so.
-- **Apple**: open entries scroll with ↑↓ or j/k, on the phone and the monitor together, and Settings scrolls with them on the phone. Settings and Look back keep the selected row in view on long pages or at large text sizes.
-- **Apple**: Search shows on the monitor what you're typing. ↩ goes to the results and `/` back to the query.
-- **Apple**: entries open on the iPhone play their video and voice memos in place (a memo's transcript reads beneath it), instead of showing the file's path. Voice memos get a player in the theme's own colours and type: play/pause, a timeline to drag or tap to seek, elapsed and remaining time; it is sized up on the monitor.
-- **Apple**: an open entry's actions (star, file or return to inbox, delete, edit) and the composer's star are icons, as the masthead's are.
-- **Apple**: press and hold an entry in Today, the Inbox or the Journal to delete it (it asks first).
-- **Apple**: On this day shows each entry's tags, on the phone and on the monitor.
-- **Apple**: Search has a Tags button listing every tag with its count; a tag searches for itself. The Journal's tag list is gone from the top of the page.
-- **Apple**: the mastheads use icons for Search and Settings, and Today and the Journal have a Media Library icon beside them (the Journal's "Media Library" link is gone).
-- **Apple**: `r` (a random entry) works and is listed on the monitor in the Journal, On this day and open entries, and gives a random draft in the Inbox; another `r` replaces the open entry rather than stacking up. The monitor's key hints step down in size rather than running off the edge, and Search no longer lists keys its sheet doesn't take.
-- **Apple**: words selected in the composer are shaded on the monitor too: a highlighter in the accent colour on Quire's page, VS Code's selection blue in hidden mode.
-- **Apple**: the composer's footer says how many drafts are left in the inbox (or that this is the last one), for working through them one by one.
-- **Apple**: with a monitor connected, ↑ and ↓ in the composer move the cursor by the monitor's lines, not the phone's, so it goes where you see it go; the phone keeps its own wrapping.
-- **Apple**: a whimsy pass, in Quire's calm, bookish manner: pages arrive (titles, labels and rows settle in top to bottom within about 150 ms when a tab or entry opens), the accent rule under a title draws in like a pen stroke, filing an entry turns the page over before it closes, a just-filed entry is set down in Today's list, another prompt (`p`) rolls up into place, On this day cards are dealt onto the page, Look back's figures count up and its weekday bars grow, the current streak breathes a few times, a "Goal met" stamp lands the first time the day's word goal is reached, Today's kicker says the part of the day, and an empty page's placeholder breathes until the first word. Haptics follow one vocabulary: success on filing and the goal, a light land on saving and a new prompt, a warning when a write fails. Reduce Motion keeps everything still; nothing animates per keystroke.
-- **Apple**: attach media on iPhone and iPad again. The composer has a paperclip (Photo Library, Take Photo, Record Video, Voice Note, Choose File) and accepts dropped photos, video, audio and files, as the Mac does.
-- **Apple**: paste a copied image (or a copied photo, video or audio file on Mac) into any editor to attach it, as `^v` does in the terminal app.
-- **Apple**: attachments land where the cursor is, as their own paragraph, not at the end of the entry.
-- **Apple**: hidden mode for the monitor. Choose "VS Code (hidden)" as the monitor theme (Settings → External display, `,` on the monitor, or ⌥⌘T) and the monitor looks like VS Code on Windows 11 above a light taskbar of look-alike app icons: the entry you're writing or reading is its day file, with line numbers and a caret; a list is the Explorer, with the selected entry in a preview tab; Today is a README; settings is the Settings tab. Paused or locked, it is an empty editor. The phone is unchanged.
-- **Apple**: iPad runs Quire's design. At regular width the tab words become a narrow sidebar that folds to a strip (the sidebar button or ⌃⌘S; remembered) and, where there is room (iPad landscape, an iPhone that opens out), an entry opens beside the list instead of over it; layout follows the size class, not the device.
-- **Apple**: an On this day widget, a Lock Screen Today accessory (a ring of today's words against the goal, or the streak; figures; an inline line), and a Write a Line control that opens Today with its one-line field ready.
-- **Apple**: the Today widget's "Another prompt" button rerolls the prompt for the app and every widget.
-
-### Changed
-- **Apple**: the date picker follows the screen it's on: it matches the monitor's theme, and hidden mode has a small drop-down in VS Code's own colours instead of a card in the phone's theme.
-- **Apple**: the monitor's hint bar lists the keys that work and only those: ⌘K, `t` in the Journal, `u` or `f` on an open entry, `p` on Today, and the letters that go elsewhere; an empty list no longer shows keys for rows it hasn't got. `p` now works only on Today, where the prompt is, and `j` on an open entry scrolls rather than leaving for the Journal.
-- **Apple**: `/` on an open entry with a monitor attached closes the entry first, so Search shows on the monitor.
-- **Linux**: the package description and the sample-journal notices no longer call Quire a prototype.
-- **Releases**: a tag runs `make test`, `make check` and `make smoke` before anything is built, and publishes nothing if they fail; the same checks run on every push to `main` (`.github/workflows/ci.yml`).
-- **Terminal**: the migration tests, which nothing ran, are part of `make check`.
-- **Terminal**: the Inbox is set out by year, month and day like the Journal, with the same keys and `/` filter, and each draft shows where it will file to. In a narrow window, moving on to the entries now shows them instead of nothing, in both views, and `e` edits in the Journal too.
-- **Terminal**: `jnl update` and `quire update` now update a copy built from source, including every Mac install, by rebuilding the latest release with cargo. Before, they only printed an install command.
-- **Apple**: on the monitor, Esc always gets you home to Today: from a list or an open entry one press, from anything over the page (a question, the date picker, settings, Search, the Media Library, a sheet) it closes that first, and from the composer it saves and closes as before. A question is cancelled, never answered. The hint bar says Today. Search and the Media Library's filter take Esc too, where a typing field used to keep it.
-- **Apple**: Random is a dice icon in the masthead, beside Search and Settings, on the Inbox and the Journal; the Inbox's File all button is gone (filing every draft is still in Settings → Maintenance).
-- **Apple**: an entry opens with the cursor at the end of its text, ready to carry on writing.
-- **Apple**: on the Mac, attaching has its own paperclip button instead of sitting in the ⋯ menu.
-- **Apple**: the widgets, the Lock Screen New Draft accessory and the writing-timer Live Activity are set in Quire's design instead of Nook's: the app's theme (Marathon included), Newsreader and IBM Plex, and the mark. Small shows today's words, Medium opens on today's prompt, Large is the Today page in miniature; they turn over at midnight on their own and tint on a tinted Home Screen.
-
-### Fixed
-- **Apple**: long lists on the monitor keep the selected row in view when the selection moves far, as a jump to a date does.
-- **Apple**: a journal folder that can't be reached says so, rather than "Path leaves the journal folder", and a write no longer makes it again; a folder reported as `/private/var/…` before it exists works once it does.
-- **Core**: a sync, a Shortcut or the terminal app landing mid-save can't overwrite an edit: every rewrite of a journal file is now a compare-and-swap that redoes the edit on the new text (Apple: inside one file coordination; desktop and terminal: Quire's writers take turns on a folder lock). The format is unchanged.
-- **Backups**: Restore no longer empties the journal before copying the backup in. It stages and checks a copy, swaps it in, and puts everything back if a step fails. Backups and safety copies are checked against the journal, a failed one is removed, and an iCloud placeholder stops the copy instead of being backed up empty. On Apple, hidden items such as Syncthing's now stay put.
-- **Apple**: markdown in a title shows as it reads: `Felt _really_ ill` sets "really" in italics in the lists (Today, Inbox, Journal, Search), on the monitor's lists and at the top of an open entry, and `**bold**` is bold. Underscores inside a word (snake_case) and the star marker are left as they are.
-- **Apple**: deleting a draft from the Inbox works on the phone again. `d` and press and hold → Delete… asked for nothing: the Inbox's "Delete this draft?" never came up.
-- **Apple**: confirmations work in Monitor Mode. Deleting from the Inbox, the Journal, Today or an open entry, and ^D (discard) while writing, ask on the monitor, worked from the keyboard: ↩ goes ahead, Esc cancels, and nothing else acts while it is up. The selection moves on to the next entry (or the one before). Unplugging, pausing or locking cancels it; without a monitor the phone asks as before. It is drawn as VS Code's dialog in the VS Code theme.
-- **Apple**: a date changed while writing (^T or the date at the top) is saved even when the words haven't changed since the last save. It was dropped once a new page had autosaved, and closing the page lost it.
-- **Apple**: changing an entry's date works in Monitor Mode. `t` (on a list or an open entry) and ^T (writing) open a calendar on the monitor, worked from the keyboard: ← → a day, ↑ ↓ a week, [ ] a month, t today, - = the time by 15 minutes, ↩ sets, Esc cancels. The time of day is kept otherwise. Tapping the date on the phone still opens the phone's picker.
-- **Apple**: italics show in the editor and on the monitor: `_text_` now sets the font's italic face (TextKit 2 drew the old slant upright), and `*text*` italicises too.
-- **Apple**: Esc leaves a new page from the keyboard; the title field kept Esc for itself, so a page opened on its title couldn't be closed.
-- **Apple**: the monitor draws a caret in the title while the title is being written.
-- **Apple**: filing or closing a page from a hardware keyboard (`^j`, Esc) no longer freezes the app until iOS kills it.
-- **Apple**: hidden mode's caret behaves like VS Code's: the text no longer shifts or rewraps around it, it holds solid while you type and blinks when you stop, and it sits in the title while you type the title.
-- **Apple**: the composer's control keys (`^j` file, `^s` save, `^t`, `^f`, `^p`, `^d`) work while you type; they only reached the app when no field had the cursor, and the text field read some of them as cursor moves.
-- **Apple**: a new page's time is fixed at the first keystroke, so typing and deleting before the first save no longer moves it.
-- **Apple**: with the word goal on but never changed, the widget compared today's words against a goal of 1 instead of 750.
-- **Apple**: the Mac camera sheet fits the preview instead of cropping it and keeps it level as a Continuity Camera iPhone turns; recordings and photos are saved the same way up.
 
 ## [0.11.0] — 2026-10-26
 
