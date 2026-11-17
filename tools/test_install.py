@@ -61,7 +61,9 @@ class Home:
         r = subprocess.run(["bash", INSTALL, "--dry-run"] + list(args), env=env, cwd=self.path,
                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                            universal_newlines=True, timeout=120)
-        return r, before == snapshot(self.path)
+        after = snapshot(self.path)
+        changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+        return r, changed
 
     def close(self):
         shutil.rmtree(self.path, ignore_errors=True)
@@ -100,9 +102,9 @@ class DryRun(unittest.TestCase):
         self.addCleanup(self.home.close)
 
     def run_dry(self, *args, **extra_env):
-        r, unchanged = self.home.dry_run(*args, **extra_env)
+        r, changed = self.home.dry_run(*args, **extra_env)
         self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertTrue(unchanged, "a dry run changed the home folder:\n" + r.stdout)
+        self.assertEqual(changed, [], "a dry run changed the home folder:\n" + r.stdout)
         self.assertIn("Dry run: nothing was changed.", r.stdout)
         return r.stdout
 
@@ -155,6 +157,22 @@ class DryRun(unittest.TestCase):
         self.assertNotIn("%s? [" % path, out)
         if "• jnl (the original bash script) — %s\n" % path in out:
             self.assertIn("sits where Quire's own goes", out)
+
+    def test_the_terminal_app_is_downloaded_for_this_system(self):
+        # Linux and macOS both get the terminal app from the release: the
+        # tarball named for this machine's target, unpacked, nothing built.
+        arch = "aarch64" if platform.machine() in ("arm64", "aarch64") else "x86_64"
+        target = arch + ("-apple-darwin" if platform.system() == "Darwin" else "-unknown-linux-gnu")
+        cmds = commands(self.run_dry("--tui"))
+        self.assertTrue(any(c.startswith("tar -xzf ") and "quire-%s.tar.gz" % target in c for c in cmds), cmds)
+        self.assertFalse(any(c.startswith("cargo build ") for c in cmds), cmds)
+
+    @unittest.skipUnless(platform.system() == "Darwin", "the Mac's desktop app")
+    def test_the_desktop_app_is_built_on_a_mac(self):
+        # There is no macOS desktop release: asking for it builds from source.
+        out = self.run_dry("--both")
+        self.assertIn("the desktop app has no macOS release build yet", out)
+        self.assertTrue(any(c.startswith("cargo build ") for c in commands(out)), out)
 
     def test_a_listed_jnl_in_the_install_folder_is_told_not_asked(self):
         # A build installs into $CARGO_HOME/bin; here that is ~/.local/bin,

@@ -5,8 +5,9 @@
 # jnl, Nook and Wander and the journal folders they use, offers to remove
 # them, and points Quire at your journal. On Linux (x86_64, arm64) it
 # downloads the latest release (checksummed) and installs the desktop app as
-# the AppImage, which updates itself; elsewhere, or with --build, it builds
-# from source. It never deletes a journal folder:
+# the AppImage, which updates itself; on macOS (Apple silicon, Intel) it
+# downloads the terminal app the same way. The Mac's desktop app, or anything
+# with --build, is built from source. It never deletes a journal folder:
 # removed apps go to the Trash (macOS, or Linux with `gio`) or to a dated
 # folder under ~/.local/state/quire/, and every step is logged there.
 #
@@ -393,7 +394,10 @@ classify_jnl() {
 pkg_installed() {  # pkg_installed name /usr/bin/binary → dpkg | rpm | ""
   if have dpkg-query && [ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" = "install ok installed" ] \
      && dpkg-query -L "$1" 2>/dev/null | grep -q "^$2\$"; then echo dpkg; return; fi
-  if have rpm && rpm -q "$1" >/dev/null 2>&1 && rpm -ql "$1" 2>/dev/null | grep -q "^$2\$"; then echo rpm; fi
+  # Only where rpm has a database: Debian's rpm keeps one in ~/.rpmdb and
+  # makes it on the first query, which a dry run must not do.
+  if have rpm && [ -d "$(rpm --eval '%{_dbpath}' 2>/dev/null)" ] \
+     && rpm -q "$1" >/dev/null 2>&1 && rpm -ql "$1" 2>/dev/null | grep -q "^$2\$"; then echo rpm; fi
 }
 
 detect_jnl() {
@@ -665,6 +669,8 @@ case "$(uname -m)" in
   aarch64|arm64) ARCH=aarch64; PKG_ARCH=arm64 ;;
   *) ARCH=""; PKG_ARCH="" ;;
 esac
+# The terminal app's release tarball is named for the target it was built for.
+if [ $OS = mac ]; then TUI_TARGET="$ARCH-apple-darwin"; else TUI_TARGET="$ARCH-unknown-linux-gnu"; fi
 REL_TAG=""; REL_VER=""
 
 # Sets REL_TAG/REL_VER from where /releases/latest redirects (no API, no token).
@@ -681,7 +687,7 @@ choose_from() {
   if [ $BUILD -eq 1 ]; then WHY_BUILD="--build"
   elif [ -n "$SOURCE_ARG" ]; then WHY_BUILD="--source"
   elif [ -n "${QUIRE_REF:-}" ]; then WHY_BUILD="QUIRE_REF=$QUIRE_REF"
-  elif [ $OS = mac ]; then WHY_BUILD="there are no macOS release builds yet"
+  elif [ $OS = mac ] && [ "${WANT_GUI:-0}" -eq 1 ]; then WHY_BUILD="the desktop app has no macOS release build yet"
   elif [ -z "$ARCH" ]; then WHY_BUILD="there's no release build for $(uname -m)"
   elif [ -z "$RELEASE_REPO" ]; then WHY_BUILD="QUIRE_REPO isn't a GitHub repository"
   elif ! have curl; then WHY_BUILD="curl is needed to download"
@@ -730,8 +736,8 @@ fetch_checked() {
 # fails, or a binary this system can't run, stops here with the old jnl
 # still where it was.
 fetch_tui_release() {
-  local tb="quire-$ARCH-unknown-linux-gnu.tar.gz" d
-  d="$DL/quire-$ARCH-unknown-linux-gnu"
+  local tb="quire-$TUI_TARGET.tar.gz" d
+  d="$DL/quire-$TUI_TARGET"
   fetch_checked "$tb" "$tb.sha256"
   run tar -xzf "$DL/$tb" -C "$DL" || die "couldn't unpack $tb"
   [ $DRY -eq 1 ] && return 0
@@ -742,6 +748,7 @@ fetch_tui_release() {
   PROBE=$(mktemp -d 2>/dev/null || echo "$STATE_DIR/probe-$STAMP")
   mkdir -p "$PROBE"
   if ! "$d/quire" --folder "$PROBE" help >/dev/null 2>&1 </dev/null; then
+    [ $OS = mac ] && die "the downloaded quire doesn't run on this Mac (release builds need macOS 11 or newer). Quire wasn't installed and no old app was touched — run it again with --build to build from source"
     die "the downloaded quire doesn't run here (release builds need glibc 2.35 or newer; this system has $(getconf GNU_LIBC_VERSION 2>/dev/null || echo 'another C library')). Quire wasn't installed and no old app was touched — run it again with --build to build from source"
   fi
   rm -rf "$PROBE"; PROBE=""
@@ -750,7 +757,7 @@ fetch_tui_release() {
 # …and from $DL into $TUI_DIR. `quire update` keeps it current from then on.
 install_tui_release() {
   run mkdir -p "$TUI_DIR"
-  run install -m 755 "$DL/quire-$ARCH-unknown-linux-gnu/quire" "$DL/quire-$ARCH-unknown-linux-gnu/jnl" "$TUI_DIR/" \
+  run install -m 755 "$DL/quire-$TUI_TARGET/quire" "$DL/quire-$TUI_TARGET/jnl" "$TUI_DIR/" \
     || die "couldn't install into $TUI_DIR$(aside_note)"
 }
 
@@ -822,7 +829,11 @@ uninstall_main() {
   detect_quire
   local clone="${XDG_DATA_HOME:-$HOME/.local/share}/quire/src"
   [ -d "$clone/.git" ] && add_q file "$clone" "the source this installer cloned to build from — $clone"
-  if [ ${#Q_KIND[@]} -eq 0 ]; then say "  Quire isn't installed."; return 0; fi
+  if [ ${#Q_KIND[@]} -eq 0 ]; then
+    say "  Quire isn't installed."
+    [ $DRY -eq 1 ] && say "  ${D}Dry run: nothing was changed.${R}"
+    return 0
+  fi
   local i=0 picks=() p
   while [ $i -lt ${#Q_KIND[@]} ]; do
     if ask "Remove ${Q_DESC[$i]}?" y; then picks+=(y); else picks+=(n); fi

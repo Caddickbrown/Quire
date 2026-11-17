@@ -68,6 +68,18 @@ work as in the terminal app, and ⌘K goes anywhere.
 
 ## Installing
 
+One line, on Linux (x86_64, arm64) or a Mac (Apple silicon, Intel):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash
+```
+
+It downloads the latest release, checks it against its SHA-256 and asks before
+each step. On Linux that is the terminal app and the desktop app (the AppImage);
+on a Mac the terminal app is downloaded and the desktop app, if you pick it, is
+built from source (it needs Rust and Xcode's command-line tools; add `-s --
+--tui` after `bash` to skip it). From a checkout:
+
 ```sh
 ./install.sh --dry-run     # see what it finds and every command it would run
 ./install.sh               # ask before each step
@@ -123,11 +135,8 @@ that is not on GitHub, and the desktop app checks that signature every time it
 updates itself from Settings › About. `install.sh` and `quire update` check
 the SHA-256 only. Releases built by the current pipeline put a `.sig` beside
 each AppImage and each terminal tarball (the updater's key; base64 of a
-minisign signature), so the stronger check can be made by hand, and by
-`quire update` once it is taught to.
-
-Without a checkout:
-`curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash`.
+minisign signature), so the stronger check can be made by hand; `quire
+update` makes it whenever the release has one.
 
 ## The terminal
 

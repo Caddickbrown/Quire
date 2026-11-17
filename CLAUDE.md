@@ -303,7 +303,7 @@ legacy/             Nook and Wander, kept for reference: nothing builds from the
 
 Quire ships tagged releases. A release lives on GitHub Releases at
 `Caddickbrown/Quire`: the tag, the CHANGELOG notes, and prebuilt files.
-**Linux first**; macOS and Apple builds come later.
+**Linux first**; the terminal app for macOS since 1.0, the Mac desktop app and Apple builds later.
 
 - **Version** is `MAJOR.MINOR.PATCH`, one number for the whole workspace:
   `Cargo.toml` (`[workspace.package]`), `linux/src-tauri/Cargo.toml`,
@@ -326,7 +326,8 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   --is-ancestor`), checks the tag against the four version fields and that
   CHANGELOG has the section under a dated heading with nothing left in
   `[Unreleased]`, then
-  builds on Ubuntu 22.04 x86_64 and arm64 and publishes the release with the
+  builds on Ubuntu 22.04 x86_64 and arm64 (and the terminal app on macOS,
+  `aarch64-apple-darwin` and `x86_64-apple-darwin`) and publishes the release with the
   CHANGELOG section as notes:
   `quire-<target>.tar.gz` (+ `.sha256`) holding `quire` and `jnl`, and the
   desktop app as `Quire_<v>_<arch>.AppImage`, `.deb` and `.rpm` (+
@@ -344,7 +345,7 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   when the release has one, the `.sig` against the updater's public key (a failed
   signature stops the update; a release without one is noted), and renames the new binaries over
   the old ones (`tui/src/update.rs`). A build without `QUIRE_RELEASE_TARGET`
-  came from source (every Mac, for now) and rebuilds the release tag with `cargo install`,
+  came from source (a Mac installed before 1.0, or with `--build`) and rebuilds the release tag with `cargo install`,
   or is told to re-run `install.sh` if it has no cargo or isn't in a `bin` folder. It updates the desktop
   AppImage too (found from `Quire.desktop`'s `Exec` (or the old `quire.desktop`), else
   `~/Applications/Quire.AppImage`, or `$QUIRE_APPIMAGE`): replaced when its
@@ -370,13 +371,13 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   feature (Windows/macOS only; every zip 2.x/4.x is yanked).
 - **Never automatic**: both shells check only when asked. A journal app
   doesn't phone home on its own.
-- **Installs**: `install.sh` downloads the latest release on Linux x86_64/arm64
-  (found from where `/releases/latest` redirects, no API token) and checks
-  each file against the release's SHA-256 files. The terminal app goes to
+- **Installs**: `install.sh` downloads the latest release on Linux x86_64/arm64,
+  and the terminal app on macOS (found from where `/releases/latest` redirects,
+  no API token), and checks each file against the release's SHA-256 files. The terminal app goes to
   `~/.local/bin`, or replaces an existing `~/.cargo/bin/quire` so nothing
   shadows it; the desktop app defaults to the AppImage. `--build` builds from
-  source as before; so does setting `QUIRE_REF`, `--source`, macOS, or a
-  release that can't be reached.
+  source as before; so does setting `QUIRE_REF`, `--source`, the desktop app
+  on macOS, or a release that can't be reached.
 
 ## Conventions
 

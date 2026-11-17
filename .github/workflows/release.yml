@@ -3,8 +3,8 @@ name: Release
 run-name: Release ${{ inputs.tag || github.ref_name }}
 # Pushing a tag vX.Y.Z builds Linux x86_64 and aarch64 releases and publishes
 # them on GitHub Releases: the terminal app (quire + jnl, one tarball per
-# target, with a .sha256 beside it) and the desktop app (AppImage, .deb,
-# .rpm). With the TAURI_SIGNING_PRIVATE_KEY secret set, the AppImages and the
+# target, with a .sha256 beside it; macOS too, Apple silicon and Intel) and
+# the desktop app (AppImage, .deb, .rpm; Linux only). With the TAURI_SIGNING_PRIVATE_KEY secret set, the AppImages and the
 # terminal tarballs are signed (a .sig beside each) and latest.json lets the
 # AppImage update itself. The key is seen by one job only, `sign`, which
 # builds nothing. The tag must be on main. See "Releases" in CLAUDE.md for
@@ -90,24 +90,31 @@ jobs:
         include:
           - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04 }
           - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm }
+          # Both Mac builds on Apple silicon; the Intel one is cross-compiled.
+          - { target: aarch64-apple-darwin, runner: macos-latest }
+          - { target: x86_64-apple-darwin, runner: macos-latest }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.TAG }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # the stable branch, 2026-11-09
+        with:
+          targets: ${{ matrix.target }}
       - name: Build quire and jnl
         env:
           QUIRE_RELEASE_TARGET: ${{ matrix.target }}
-        run: cargo build --release --locked -p quire-tui
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+        run: cargo build --release --locked -p quire-tui --target ${{ matrix.target }}
       - name: Package
         run: |
           name=quire-${{ matrix.target }}
           mkdir "$name"
-          cp target/release/quire target/release/jnl README.md CHANGELOG.md "$name/"
-          "$name/quire" --version
+          cp target/${{ matrix.target }}/release/quire target/${{ matrix.target }}/release/jnl README.md CHANGELOG.md "$name/"
+          # Run where it can: not the Intel build on an Apple silicon runner.
+          case "${{ matrix.target }}" in "$(uname -m | sed 's/arm64/aarch64/')"-*) "$name/quire" --version ;; esac
           tar czf "$name.tar.gz" "$name"
-          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          if command -v sha256sum >/dev/null; then sha256sum "$name.tar.gz"; else shasum -a 256 "$name.tar.gz"; fi > "$name.tar.gz.sha256"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: terminal-${{ matrix.target }}
@@ -204,8 +211,9 @@ jobs:
             mv "$f.sig" ../signatures/
             n=$((n + 1))
           done
-          # Two AppImages and two tarballs, one of each per architecture.
-          [ "$n" -eq 4 ] || { echo "::error::signed $n files, expected 4"; exit 1; }
+          # Two AppImages (Linux) and four tarballs (Linux and macOS, each
+          # x86_64 and aarch64).
+          [ "$n" -eq 6 ] || { echo "::error::signed $n files, expected 6"; exit 1; }
           ls -l ../signatures
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

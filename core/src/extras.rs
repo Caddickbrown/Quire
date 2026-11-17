@@ -1258,7 +1258,9 @@ pub fn prune_backups_checked(dest_dir: &Path, keep: usize) -> Result<Pruned, Str
     // west) the backup just made can sort as the oldest. The folder made last
     // is told by the disk's own clock instead, and is never the one removed.
     let made = |n: &String| fs::metadata(dest_dir.join(n)).and_then(|m| m.modified()).ok();
-    let latest = names.iter().filter(|n| made(n).is_some()).max_by_key(|n| made(n));
+    // On a tie (a coarse disk clock) the newest by name wins: `names` is
+    // newest first, and max_by_key keeps the last of equals, hence rev().
+    let latest = names.iter().rev().filter(|n| made(n).is_some()).max_by_key(|n| made(n));
     let mut removed = 0;
     for name in names.iter().skip(keep) {
         if Some(name) == latest {
@@ -2610,6 +2612,22 @@ mod tests {
         let doc = d.path().join("notes.pdf");
         fs::write(&doc, b"x").unwrap();
         assert_eq!(attach_media(&j, &doc, "2026-09-30 08:00:00", true, "DEV").unwrap().link, "[30-080000.pdf](assets/2026/09/30-080000.pdf)");
+    }
+
+    #[test]
+    fn prune_keeps_the_newest_names_when_the_disk_clock_ties() {
+        // A coarse filesystem clock (ext4 on a fast machine) gives folders
+        // made a moment apart the same time. The one made last is then the
+        // newest by name, and pruning still removes all it should.
+        let d = tmp();
+        let then = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        for i in 1..=4 {
+            let p = d.path().join(format!("{BACKUP_PREFIX}2026-01-0{i}-000000"));
+            fs::create_dir_all(&p).unwrap();
+            fs::File::open(&p).unwrap().set_modified(then).unwrap();
+        }
+        assert_eq!(prune_backups(d.path(), 2).unwrap(), 2);
+        assert_eq!(list_backups(d.path()), [format!("{BACKUP_PREFIX}2026-01-04-000000"), format!("{BACKUP_PREFIX}2026-01-03-000000")]);
     }
 
     #[test]
