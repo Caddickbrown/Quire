@@ -21,9 +21,11 @@ import UIKit
 //     `undoable` (the app says so with Undo). Destructive rows are drawn red. `CommandSafety` is what an app's tests
 //     hold its list to.
 //   - It doesn't open over a question. Chosen over a sheet, a row leaves the sheet the way Esc does, so a draft is asked
-//     about or kept as usual, and it only runs once the sheet has gone (`CommandGate`).
+//     about or kept as usual, and it only runs once the sheet has gone (`CommandGate`). A row marked `keepsSheet`
+//     (a composer's Send) runs over the sheet instead, leaving it open (0.6.1).
 //   - With nothing typed: recent commands, then what applies to the selected item, then the rest. No cap: it scrolls.
-//   - Typing is fuzzy, in any word order, and finds a row by its synonyms as well as its title.
+//   - Typing is fuzzy, in any word order, and finds a row by its synonyms as well as its title. Punctuation between
+//     words (":", "›", "·", "—") counts as a space, so "theme: dark" finds "Theme: Dark". "…" doesn't: it means a step.
 //   - A follow-up choice ("Theme…", "Move to…") or a typed answer ("Rename…") happens in the menu, not in a sheet.
 //   - A highlighted row can preview what it does (a theme), and Esc puts back what was there.
 //
@@ -32,9 +34,15 @@ import UIKit
 
 /// Fuzzy matching: the letters of each word typed, in order, somewhere in the text. The words can come in any order.
 enum CommandMatch {
-    /// Lower case, without accents, so "cafe" finds "Café".
+    /// Punctuation that sits between words in titles ("Theme: Sepia", "Move to › Home", "Status · Review"): a space,
+    /// in the typing and in the texts alike, so "theme: sepia" finds the row the way it's drawn. Not "…": it marks a
+    /// step, so "tag…" means the step "Tag…" and is matched as typed.
+    static let separators: Set<Character> = [":", ";", ",", "›", "‹", "»", "«", "·", "•", "—", "–", "|", "→"]
+
+    /// Lower case, without accents, so "cafe" finds "Café", and with `separators` as spaces.
     static func fold(_ text: String) -> [Character] {
-        Array(text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil).lowercased())
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil).lowercased()
+            .map { separators.contains($0) ? " " : $0 }
     }
 
     /// The letters of `query` in order within `t`. Runs and word starts score higher. Nil when they aren't all there.
@@ -165,10 +173,14 @@ struct CommandRow<Action: Equatable>: Equatable, Identifiable {
     var state: String?
     /// In a pick, the choice in force now: lit first, and drawn with a tick.
     var isCurrent: Bool
+    /// It runs over the sheet that's open (a composer's Send, Attach, Save draft) rather than leaving it first, which
+    /// is what every other row does. On a pick or a question, its choices and typed answer keep the sheet too.
+    var keepsSheet: Bool
 
     init(_ id: String, _ title: String, detail: String? = nil, symbol: String, step: Step, search: String? = nil,
          confirms: Bool = false, synonyms: [String] = [], destructive: Bool = false, undoable: Bool = false,
-         context: String? = nil, preview: Action? = nil, revert: Action? = nil, isCurrent: Bool = false) {
+         context: String? = nil, preview: Action? = nil, revert: Action? = nil, isCurrent: Bool = false,
+         keepsSheet: Bool = false) {
         self.id = id; self.title = title; self.detail = detail; self.symbol = symbol; self.step = step
         self.search = search ?? title
         self.confirms = confirms
@@ -181,15 +193,16 @@ struct CommandRow<Action: Equatable>: Equatable, Identifiable {
         self.isOn = nil
         self.state = nil
         self.isCurrent = isCurrent
+        self.keepsSheet = keepsSheet
     }
 
     /// A setting or mode that flips: its title says which way it will go ("Pause monitor" while showing, "Resume
     /// monitor" while paused), its state says where it is, and either title finds it.
     static func toggle(_ id: String, isOn: Bool, turnOn: String, turnOff: String, states: (on: String, off: String) = ("On", "Off"),
                        detail: String? = nil, symbol: String, action: Action, synonyms: [String] = [],
-                       context: String? = nil) -> CommandRow {
+                       context: String? = nil, keepsSheet: Bool = false) -> CommandRow {
         var row = CommandRow(id, isOn ? turnOff : turnOn, detail: detail, symbol: symbol, step: .run(action),
-                             synonyms: [isOn ? turnOn : turnOff] + synonyms, context: context)
+                             synonyms: [isOn ? turnOn : turnOff] + synonyms, context: context, keepsSheet: keepsSheet)
         row.isOn = isOn
         row.state = isOn ? states.on : states.off
         return row
@@ -380,6 +393,14 @@ struct CommandPalette<List: CommandList>: Equatable {
     private(set) var selected: String?
     /// The preview showing now, if any.
     private(set) var previewing: List.Action?
+    /// The row whose action the last `.run` carried, so the host can tell how to run it. Nil until then.
+    private(set) var chosen: Row?
+    /// The last `.run` is to happen over the open sheet, without leaving it: the chosen row, or the row that opened
+    /// its step, said `keepsSheet`.
+    var keepsSheet: Bool {
+        guard let chosen else { return false }
+        return chosen.keepsSheet || frames.contains { $0.opener?.keepsSheet == true }
+    }
     private var restore: List.Action?
     private var effects: [Effect] = []
     private var frames: [Frame] = []
@@ -515,6 +536,7 @@ struct CommandPalette<List: CommandList>: Equatable {
 
     /// Closing without choosing: any preview is put back.
     mutating func cancel() {
+        chosen = nil
         guard previewing != nil else { return }
         if let restore { effects.append(.revert(restore)) }
         previewing = nil
@@ -534,6 +556,7 @@ struct CommandPalette<List: CommandList>: Equatable {
             // Chosen: what's previewing stays.
             previewing = nil
             restore = nil
+            chosen = row
             if !row.destructive && !row.confirms, let recents {
                 // A step's choice is remembered as the step, so the list shows "Move to…" rather than one folder.
                 // Destructive rows aren't remembered: Return straight after opening must never delete.
@@ -661,6 +684,7 @@ struct CommandPalette<List: CommandList>: Equatable {
                 v.destructive = choice.destructive || row.destructive
                 v.undoable = choice.undoable || row.undoable
                 v.confirms = choice.confirms || row.confirms
+                v.keepsSheet = choice.keepsSheet || row.keepsSheet
                 return v
             }
         }
@@ -676,7 +700,8 @@ struct CommandPalette<List: CommandList>: Equatable {
             let text = query.trimmingCharacters(in: .whitespaces)
             if !text.isEmpty, let action = ask.make(text) {
                 out.append(Row(opener.id + "#typed", ask.title(text), symbol: ask.symbol, step: .run(action),
-                               destructive: opener.destructive, undoable: opener.undoable, context: opener.context))
+                               destructive: opener.destructive, undoable: opener.undoable, context: opener.context,
+                               keepsSheet: opener.keepsSheet))
             }
             out += blank || !ask.initial.isEmpty && query == ask.initial
                 ? ask.suggestions : CommandMatch.rank(ask.suggestions, query, texts: \.texts)
@@ -796,8 +821,9 @@ enum CommandGate {
     /// How long a sheet gets to go, in seconds.
     static let patience = 1.2
 
-    static func step(sheetUp: Bool, waited: Double) -> Step {
-        guard sheetUp else { return .run }
+    /// `keepsSheet`: the row runs over the sheet (`CommandRow.keepsSheet`), so there's nothing to wait for.
+    static func step(sheetUp: Bool, waited: Double, keepsSheet: Bool = false) -> Step {
+        guard sheetUp, !keepsSheet else { return .run }
         if waited == 0 { return .leave }
         return waited < patience ? .wait : .drop
     }
@@ -997,11 +1023,13 @@ final class CommandHost<List: CommandList>: ObservableObject {
             dismiss()
             onCancel()
         case .run(let action):
-            // It's going somewhere: the keyboard isn't handed back to what's being left.
-            wasTyping = nil
+            let keeps = menu?.keepsSheet ?? false
+            // It's going somewhere: the keyboard isn't handed back to what's being left. A row that runs over the
+            // sheet isn't leaving it, so the composer gets its cursor back as it would from Esc.
+            if !keeps { wasTyping = nil }
             dismiss()
             // On the next turn, not inside the key's own handling: changing things from there is what hung Quire.
-            DispatchQueue.main.async { [weak self] in self?.gate(action, waited: 0) }
+            DispatchQueue.main.async { [weak self] in self?.gate(action, waited: 0, keepsSheet: keeps) }
         }
     }
 
@@ -1018,11 +1046,13 @@ final class CommandHost<List: CommandList>: ObservableObject {
         }
     }
 
-    private func gate(_ action: List.Action, waited: Double) {
+    private func gate(_ action: List.Action, waited: Double, keepsSheet: Bool) {
         let again = { [weak self] in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self?.gate(action, waited: waited + 0.15) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                self?.gate(action, waited: waited + 0.15, keepsSheet: keepsSheet)
+            }
         }
-        switch CommandGate.step(sheetUp: CommandScreen.sheetIsUp, waited: waited) {
+        switch CommandGate.step(sheetUp: CommandScreen.sheetIsUp, waited: waited, keepsSheet: keepsSheet) {
         case .run: perform(action)
         case .leave: leaveSheet(); again()
         case .wait: again()
