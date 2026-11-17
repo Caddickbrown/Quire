@@ -136,8 +136,9 @@ bindings/           quire-bindings: UniFFI callback Vault + native journal API;
 apple/              Quire SwiftUI app + widget/share extensions from Nook
   Quire/Models/     JournalStore façade, CoreJournal adapter, AppleVault
                     (plain reads, coordinated writes); parser/search/list
-                    adapters call Rust. CommandPalette: ⌘K's list, match and
-                    keys, and the typed dates and times, with no UI in it.
+                    adapters call Rust. QuireCommands: ⌘K's list, built from a
+                    plain QuireCommandState, and the typed dates and times, with
+                    no UI in it (the menu itself is kit/swift/CommandPalette.swift).
   Quire/Design/     the iPhone design: QuireTheme (themes.json + type + the
                     Marathon family), shared components, and the screens
                     (Today, Inbox, Journal, Reader, Composer, Search, Look
@@ -259,13 +260,19 @@ legacy/             Nook and Wander, kept for reference: nothing builds from the
   on the monitor, and `t`/^T change a date there with `DeskDatePicker` (`Design/RetimeSheet.swift`: a
   keyboard calendar over the page, in the monitor's own theme, with digits for an exact time; handlers
   may claim ← → and extra keys while on top; hidden mode draws it as `VSDatePicker`, a small drop-down).
-  ⌘K is the command menu, from anywhere with a hardware keyboard: `Models/CommandPalette.swift` has the
-  list (today, inbox, journal, search, new draft, jump to a date, settings), Pippin's and MiniOffice's
-  fuzzy match and the keys, tested hostless; `Design/CommandMenu.swift` is the glue (`CommandHost`).
-  It is drawn on the monitor when that is showing things (`VSCommandPalette` in hidden mode) and over
-  the phone otherwise, and its keys go to a hidden text view in a window of its own, so it works over
-  sheets and the composer and nothing beneath hears it. It only goes places; over the composer it closes
-  it through its own save first (`PhoneRoot.runCommand`). It won't open over a question or the date picker.
+  ⌘K is the command menu: App Kit 0.6's `kit/swift/CommandPalette.swift` (synced into `kit/`, never edited
+  there: `python3 kit/tools/sync_kit.py --check`) holds the keys, recents, steps (`.pick`, `.ask`) and
+  previews. `Models/QuireCommands.swift` is Quire's list, built from a plain `QuireCommandState` and tested
+  hostless: every action in the app, the selected or open entry's first (`CommandFocus`: the reader's page,
+  else a list's selected row), the composer's when it is up (`ComposerCommands`, done in the composer,
+  which stays open), settings and themes as picks that preview live (Esc puts the old look back), toggles
+  that say which way they go, deletes in red that ask inside the menu, macros, backups, saved searches,
+  tags and any entry by name. `Design/CommandMenu.swift` makes the state from the screen, runs what needs
+  no screen, and draws the panel; `PhoneRoot.runCommand` does the rest. It opens from ⌘K or the ⌘ icon
+  (masthead, reader, composer). It is drawn on the monitor when that is showing things (`VSCommandPalette`
+  in hidden mode) and over the phone otherwise; on the monitor, nothing that only the phone draws (the Media
+  Library, Settings' pages, pickers) is listed. A command that goes elsewhere leaves a sheet or the composer
+  first, through its own save. It won't open over a question, the date picker or App Lock.
   Pages without rows scroll with ↑/↓: `QScrollHandle`/`QScrollAttach` hold the `UIScrollView` under a
   SwiftUI one (iOS 17 can't scroll by a distance), the reader and the monitor's page together; every list
   keeps its selection in view. Search's field stays on the phone, so `ExternalDisplayModel.search` shows

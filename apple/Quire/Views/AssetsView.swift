@@ -52,6 +52,9 @@ struct AssetsView: View {
     /// The phone presents the library as a Quire page; Mac/iPad use native navigation.
     var onOpenEntry: ((Entry, EntrySource) -> Void)? = nil
     var onClose: (() -> Void)? = nil
+    /// Opened from ⌘K on one kind ("image", "video", "audio"), or finding a name.
+    var initialKind: String? = nil
+    var initialQuery: String? = nil
     @Environment(\.quire) private var q
     @State private var loading = true
     @State private var query = ""
@@ -288,6 +291,10 @@ struct AssetsView: View {
             }
         }
         .background(onClose == nil ? Color.clear : q.pageColor)
+        .onAppear {
+            if let initialKind { kindFilter = initialKind }
+            if let initialQuery { query = initialQuery }
+        }
         .navigationTitle("Media Library")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

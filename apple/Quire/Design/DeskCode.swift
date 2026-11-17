@@ -205,7 +205,7 @@ struct DeskCode: View {
     @ObservedObject private var settings = ExternalSettingsModel.shared
     @ObservedObject private var confirm = DeskConfirm.shared
     @ObservedObject private var datePicker = DeskDatePicker.shared
-    @ObservedObject private var commands = CommandHost.shared
+    @ObservedObject private var commands = QuireCommandMenu.host
 
     var body: some View {
         GeometryReader { geo in
@@ -1293,14 +1293,16 @@ private struct VSDatePicker: View {
 }
 
 /// ⌘K as VS Code's own Command Palette: the box under the title bar, the prompt in
-/// it, and a list with the focused row in the list's blue.
+/// it, and a list with the focused row in the list's blue. Headings as VS Code's
+/// "recently used" and "other commands"; it scrolls past ten rows.
 private struct VSCommandPalette: View {
-    let menu: CommandPalette
+    let menu: CommandPalette<QuireCommandList>
     let s: VSScale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
+                if let opener = menu.opener { Text(opener.title + " ").foregroundStyle(VS.dim) }
                 if !menu.query.isEmpty { Text(menu.query).foregroundStyle(VS.bright) }
                 Rectangle().fill(VS.caret).frame(width: max(1, 1.5 * s.z), height: s.ui * 1.2)
                 if menu.query.isEmpty { Text(menu.prompt).foregroundStyle(VS.dim) }
@@ -1314,18 +1316,19 @@ private struct VSCommandPalette: View {
                 Text(menu.nothing).font(.system(size: s.ui)).foregroundStyle(VS.dim)
                     .padding(.horizontal, 12 * s.z).padding(.bottom, 8 * s.z)
             }
-            ForEach(menu.rows) { row in
-                let on = row.id == menu.selected
-                HStack(spacing: 8 * s.z) {
-                    Image(systemName: row.symbol).font(.system(size: s.small)).foregroundStyle(on ? VS.bright : VS.icon)
-                        .frame(width: 16 * s.z)
-                    Text(row.title).foregroundStyle(on ? VS.bright : VS.text)
-                    Spacer(minLength: 8 * s.z)
-                    if let detail = row.detail { Text(detail).foregroundStyle(on ? VS.text : VS.dim) }
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(menu.sections) { section in
+                            ForEach(Array(section.rows.enumerated()), id: \.element.id) { i, row in
+                                line(row, heading: i == 0 ? section.title : nil).id(row.id)
+                            }
+                        }
+                    }
                 }
-                .font(.system(size: s.ui)).lineLimit(1)
-                .padding(.horizontal, 10 * s.z).frame(height: s.row)
-                .background(on ? VS.hex(0x04395E) : Color.clear)
+                .frame(maxHeight: s.row * CGFloat(min(menu.rows.count, CommandPaletteLimit.rows)))
+                .onAppear { if let id = menu.selected { proxy.scrollTo(id) } }
+                .onChange(of: menu.selected) { _, id in if let id { proxy.scrollTo(id) } }
             }
         }
         .padding(.bottom, 4 * s.z)
@@ -1333,6 +1336,28 @@ private struct VSCommandPalette: View {
         .background(VS.hex(0x222222))
         .overlay(Rectangle().stroke(VS.hex(0x454545), lineWidth: 1))
         .shadow(color: .black.opacity(0.36), radius: 8 * s.z, y: 2 * s.z)
+    }
+
+    private func line(_ row: CommandRow<QuireCommand>, heading: String?) -> some View {
+        let on = row.id == menu.selected
+        // VS Code's own red for a command that removes something.
+        let ink = row.destructive ? VS.hex(0xF48771) : on ? VS.bright : VS.text
+        return HStack(spacing: 8 * s.z) {
+            Image(systemName: row.symbol).font(.system(size: s.small)).foregroundStyle(on ? VS.bright : VS.icon)
+                .frame(width: 16 * s.z)
+            Text(row.title).foregroundStyle(ink)
+            if let detail = row.detail { Text(detail).foregroundStyle(on ? VS.text : VS.dim) }
+            Spacer(minLength: 8 * s.z)
+            if let state = row.state { Text(state).foregroundStyle(on ? VS.text : VS.dim) }
+            if row.isCurrent { Image(systemName: "checkmark").font(.system(size: s.small)).foregroundStyle(VS.bright) }
+            if let heading { Text(heading.lowercased()).font(.system(size: s.small)).foregroundStyle(VS.dim) }
+        }
+        .font(.system(size: s.ui)).lineLimit(1)
+        .padding(.horizontal, 10 * s.z).frame(height: s.row)
+        .background(on ? VS.hex(0x04395E) : Color.clear)
+        .overlay(alignment: .top) {
+            if heading != nil { Rectangle().fill(VS.hex(0x454545)).frame(height: 1) }
+        }
     }
 }
 

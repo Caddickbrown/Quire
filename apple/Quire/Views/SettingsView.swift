@@ -58,6 +58,22 @@ struct SettingsView: View {
     @AppStorage(SpotlightIndexer.enabledKey) private var spotlightOn = false
     @AppStorage(JournalStore.autoTranscribeKey) private var autoTranscribe = false
 
+    #if os(iOS)
+    /// The iPhone's and iPad's keys, as the terminal app has them.
+    static let shortcuts: [(action: String, keys: String)] = [
+        ("Commands: do or find anything", "⌘K"),
+        ("New entry", "n"),
+        ("Search", "/"),
+        ("Inbox, Journal, Look back", "i  j  l"),
+        ("A random entry", "r"),
+        ("Settings", ","),
+        ("Move, open", "↑↓  j k  ↩"),
+        ("File, edit, star, date, delete", "f  e  *  t  d"),
+        ("Return to the Inbox", "u"),
+        ("Writing: file, save, date, focus, prompt, discard", "^J ^S ^T ^F ^P ^D"),
+        ("Back, close", "⎋  ⌘."),
+    ]
+    #else
     static let shortcuts: [(action: String, keys: String)] = [
         ("New entry", "⌘N"),
         ("Save", "⌘S"),
@@ -70,6 +86,7 @@ struct SettingsView: View {
         ("Random entry (Archive)", "⌘R"),
         ("Settings", "⌘,"),
     ]
+    #endif
 
     static let howTos: [(title: String, body: String)] = [
         ("Writing & autosave",
@@ -461,7 +478,7 @@ struct SettingsView: View {
             } header: {
                 QLabel("External display")
             } footer: {
-                Text("Connected to a monitor, Quire shows your writing on it instead of mirroring, and the keys are the terminal app's, printed along the bottom of the monitor. ↑↓ or j/k browse, Return opens, Esc closes what's open and then goes to Today; n writes, / searches, i inbox, j journal, l look back, r a random entry. In a list: f files, e edits, * stars, t sets the date and time, d deletes. While writing: ^J files, ^S saves, ^T date and time, ^F focus, ^P a prompt, ^D discards, Esc is done. ⌥⌘± changes text size, ⌥⌘T the theme, ⌥⌘P pauses. These controls leave the device's appearance alone. Dimming this screen never affects what's up there, and turning it down saves power; it's restored when you unplug. ⌘K goes anywhere: type a few letters of where.")
+                Text("Connected to a monitor, Quire shows your writing on it instead of mirroring, and the keys are the terminal app's, printed along the bottom of the monitor. ↑↓ or j/k browse, Return opens, Esc closes what's open and then goes to Today; n writes, / searches, i inbox, j journal, l look back, r a random entry. In a list: f files, e edits, * stars, t sets the date and time, d deletes. While writing: ^J files, ^S saves, ^T date and time, ^F focus, ^P a prompt, ^D discards, Esc is done. ⌥⌘± changes text size, ⌥⌘T the theme, ⌥⌘P pauses. These controls leave the device's appearance alone. Dimming this screen never affects what's up there, and turning it down saves power; it's restored when you unplug. ⌘K does anything: type a few letters of what or where.")
             }
             .qRowBackground()
             }

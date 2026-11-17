@@ -245,7 +245,7 @@ struct ExternalRow: Equatable, Identifiable {
         // Settings too: its list is not drawn behind the lock, and must not go on
         // taking keys there.
         if locked {
-            DeskDatePicker.shared.cancel(); DeskConfirm.shared.cancel(); CommandHost.shared.close()
+            DeskDatePicker.shared.cancel(); DeskConfirm.shared.cancel(); QuireCommandMenu.host.close()
             ExternalSettingsModel.shared.close()
         }
         #endif
@@ -284,7 +284,7 @@ struct ExternalRow: Equatable, Identifiable {
         // Settings as well: "Display paused" is all the monitor shows, so ↑/↓ and
         // ↵ must not go on changing rows nobody can see.
         if isPaused {
-            DeskDatePicker.shared.cancel(); DeskConfirm.shared.cancel(); CommandHost.shared.close()
+            DeskDatePicker.shared.cancel(); DeskConfirm.shared.cancel(); QuireCommandMenu.host.close()
             ExternalSettingsModel.shared.close()
         }
         #endif
@@ -352,7 +352,7 @@ struct ExternalRow: Equatable, Identifiable {
         ExternalSettingsModel.shared.close()
         DeskDatePicker.shared.cancel()
         DeskConfirm.shared.cancel()
-        CommandHost.shared.close()
+        QuireCommandMenu.host.close()
         isConnected = false
         updateIdleTimer()
         content = .idle

@@ -1,0 +1,23 @@
+{
+  "about": "Shared cases for relativeDate. Both kit/js/relative-date.js and kit/swift/RelativeDate.swift must produce `expected` for every case. `now` and `date` are UTC; days are counted in `timeZone`.",
+  "cases": [
+    { "name": "seconds ago",               "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-28T15:29:30Z", "expected": "just now" },
+    { "name": "slightly in the future",    "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-28T15:30:20Z", "expected": "just now" },
+    { "name": "exactly a minute",          "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-28T15:29:00Z", "expected": "1 min ago" },
+    { "name": "minutes ago",               "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-28T15:25:00Z", "expected": "5 min ago" },
+    { "name": "just under an hour",        "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-28T14:31:00Z", "expected": "59 min ago" },
+    { "name": "earlier today",             "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-28T14:02:00Z", "expected": "14:02" },
+    { "name": "just after midnight",       "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-28T00:30:00Z", "expected": "00:30" },
+    { "name": "last thing yesterday",      "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-27T23:59:00Z", "expected": "Yesterday 23:59" },
+    { "name": "yesterday morning",         "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-27T08:15:00Z", "expected": "Yesterday 08:15" },
+    { "name": "two days ago",              "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-26T12:00:00Z", "expected": "Mon" },
+    { "name": "summer time, four days ago","timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-24T22:30:00Z", "expected": "Sat" },
+    { "name": "six days ago",              "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-22T09:00:00Z", "expected": "Thu" },
+    { "name": "seven days ago",            "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-21T09:00:00Z", "expected": "21 Oct" },
+    { "name": "this year",                 "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-01-01T10:00:00Z", "expected": "1 Jan" },
+    { "name": "last year",                 "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2025-10-12T10:00:00Z", "expected": "12 Oct 2025" },
+    { "name": "later today",               "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-10-28T18:00:00Z", "expected": "18:00" },
+    { "name": "a future date",             "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "date": "2026-11-03T09:00:00Z", "expected": "3 Nov" },
+    { "name": "day boundary in Tokyo",     "timeZone": "Asia/Tokyo",    "now": "2026-10-28T15:30:00Z", "date": "2026-10-28T14:00:00Z", "expected": "Yesterday 23:00" }
+  ]
+}

@@ -2,247 +2,394 @@
 //  CommandMenu.swift
 //  Quire
 //
-//  ⌘K with a hardware keyboard. What it lists and what the keys mean live in
-//  `CommandPalette` (tested without an app); this is the glue and the drawing.
-//  With the monitor showing things the menu is drawn there (in VS Code's own
-//  dress in hidden mode, `DeskCode.swift`); otherwise it is drawn over the phone
-//  or iPad. Either way the keys go to a text view nobody sees, in a window of its
-//  own above sheets and the composer, so nothing beneath hears them: Esc gives
-//  the keyboard back to whatever had it.
+//  ⌘K, or ⌘ in the masthead without a keyboard. What it lists is
+//  `Models/QuireCommands.swift`, built from a plain `QuireCommandState`; the
+//  keys, recents, steps and previews are App Kit's
+//  (`kit/swift/CommandPalette.swift`). This file makes the state from what's on
+//  screen, does what each command says (with `PhoneRoot.runCommand`), and draws
+//  the panel in Quire's design. With the monitor showing things it is drawn
+//  there (in VS Code's own dress in hidden mode, `DeskCode.swift`); otherwise
+//  over the phone or iPad.
 //
 
 #if os(iOS)
 
+import Combine
 import SwiftUI
 import UIKit
 
-@MainActor final class CommandHost: ObservableObject {
-    static let shared = CommandHost()
+// MARK: - What's selected, and the page being written
+
+/// The entry the menu acts on: a page that's open, or else a list's selected row.
+@MainActor final class CommandFocus {
+    static let shared = CommandFocus()
     private init() {}
 
-    @Published private(set) var menu: CommandPalette?
-    /// Drawn on the monitor rather than over the phone. Decided when it opens.
-    @Published private(set) var onMonitor = false
-    /// Does what was chosen; set by `PhoneRoot`, which owns the tabs and sheets.
-    var perform: ((CommandAction) -> Void)?
+    struct Target {
+        let ref: EntryRef
+        let isPage: Bool
+    }
 
-    private let routerID = UUID()
-    private var window: UIWindow?
-    private weak var previousKey: UIWindow?
-    /// The field that had the keyboard when the menu came up, given it back by Esc.
-    private weak var wasTyping: UIResponder?
+    private var targets: [(id: UUID, target: Target)] = []
 
-    /// ⌘K, from whichever key command heard it. Not behind App Lock, and not over
-    /// a question or the date picker, which are answered first.
-    func toggle() {
-        if menu != nil { close(); return }
-        guard !AppLockManager.shared.showsVeil, !DeskConfirm.shared.isOpen, !DeskDatePicker.shared.isOpen,
-              let store = ExternalDisplayModel.shared.store, let scene = Self.appScene else { return }
+    /// A page or a list says what it has selected (nil: nothing, or it's gone).
+    func set(_ owner: UUID, _ target: Target?) {
+        targets.removeAll { $0.id == owner }
+        if let target { targets.append((owner, target)) }
+        QuireCommandMenu.refreshSoon()
+    }
+
+    var current: Target? { targets.last(where: { $0.target.isPage })?.target ?? targets.last?.target }
+
+    func target(_ id: String) -> Target? { targets.last { $0.target.ref.id == id }?.target }
+}
+
+/// The page being written, for the menu: what it is, and a way to ask it to do things without closing it.
+@MainActor final class ComposerCommands {
+    static let shared = ComposerCommands()
+    private init() {}
+
+    private(set) var state: QuireCommandState.Composer?
+    private var owner: UUID?
+    private var run: ((QuireComposerAction) -> Void)?
+
+    func attach(_ owner: UUID, _ state: QuireCommandState.Composer, run: @escaping (QuireComposerAction) -> Void) {
+        self.owner = owner
+        self.state = state
+        self.run = run
+        QuireCommandMenu.refreshSoon()
+    }
+
+    func update(_ owner: UUID, _ state: QuireCommandState.Composer) {
+        guard owner == self.owner, state != self.state else { return }
+        self.state = state
+        QuireCommandMenu.refreshSoon()
+    }
+
+    func detach(_ owner: UUID) {
+        guard owner == self.owner else { return }
+        self.owner = nil; state = nil; run = nil
+        QuireCommandMenu.refreshSoon()
+    }
+
+    func perform(_ action: QuireComposerAction) { run?(action) }
+}
+
+// MARK: - The menu
+
+@MainActor enum QuireCommandMenu {
+    /// Set by `PhoneRoot`, which owns the faces, the pages and the sheets: what's on screen, as the list wants it.
+    static var screen: () -> QuireCommandState? = { nil }
+    /// What a chosen command does.
+    static var run: (QuireCommand) -> Void = { _ in }
+    /// Leaves the sheet or the page being written, the way Esc does, before a command that goes elsewhere.
+    static var leave: () -> Void = {}
+    /// What's in Search's box (`SearchScreen`), for Pin a search….
+    static var searchQuery = ""
+
+    static let host: CommandHost<QuireCommandList> = {
+        let host = CommandHost<QuireCommandList>()
+        host.list = { screen().map { QuireCommandList(state: $0) } }
+        host.monitorShows = { DeskDatePicker.shared.isAvailable }
+        // Not behind App Lock, and not over a question or the date picker, which are answered first.
+        host.blocked = {
+            AppLockManager.shared.showsVeil || DeskConfirm.shared.isOpen || DeskDatePicker.shared.isOpen
+                || ExternalDisplayModel.shared.store == nil
+        }
+        host.recents = CommandRecents(key: "quire.commands.recents")
+        host.perform = { run($0) }
+        // A theme tried while the highlight passes: the setting, and nothing that follows from it.
+        host.preview = { action in
+            if case .pref(let key, let value) = action { write(key, value) }
+        }
+        host.onHighlight = { row in
+            if let row, case .run(let action) = row.step { lit = action } else { lit = nil }
+        }
+        // A command that is done where it's chosen (one for the page being written, a setting) is done there, and
+        // the page or sheet stays; anything else leaves it first, as Esc would.
+        host.leaveSheet = {
+            if let action = lit, action.staysOverSheets { run(action) } else { leave() }
+        }
+        host.overlay = { AnyView(CommandMenuOverlay()) }
+        return host
+    }()
+
+    /// The row lit last: the one chosen, when the host asks for the sheet to go.
+    private static var lit: QuireCommand?
+    private static var watching: [AnyCancellable] = []
+    private static let routerID = UUID()
+
+    /// Once, at launch.
+    static func install() {
+        _ = host
+        watching = [
+            // Nothing beneath acts while the menu is up, even for a key that reaches the app delegate.
+            host.$menu.map { $0 != nil }.removeDuplicates().sink { open in
+                if open {
+                    KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
+                        moveUp: {}, moveDown: {}, open: {}, clear: { host.close() }, key: { _ in true }))
+                } else {
+                    KeyCommandRouter.shared.unregister(routerID)
+                }
+            },
+            // Whatever changes while it's open (a preview, a star, the monitor going), the list follows.
+            NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+                .receive(on: DispatchQueue.main).sink { _ in refreshSoon() },
+            ExternalDisplayModel.shared.objectWillChange.receive(on: DispatchQueue.main).sink { _ in refreshSoon() },
+        ]
+    }
+
+    private static var refreshPending = false
+
+    /// Soon, and once for a burst of changes (an autosave announces several).
+    static func refreshSoon() {
+        guard host.menu != nil, !refreshPending else { return }
+        refreshPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            refreshPending = false
+            host.refresh()
+        }
+    }
+
+    // MARK: Settings
+
+    static func write(_ key: String, _ value: QuirePref) {
+        let d = UserDefaults.standard
+        switch value {
+        case .bool(let v): d.set(v, forKey: key)
+        case .int(let v): d.set(v, forKey: key)
+        case .double(let v): d.set(v, forKey: key)
+        case .string(let v): d.set(v, forKey: key)
+        }
+    }
+
+    /// A setting, and whatever Settings does when it changes.
+    static func set(_ key: String, _ value: QuirePref, store: JournalStore) {
+        write(key, value)
+        switch key {
+        case QuirePrefKey.reminder:
+            if case .bool(true) = value {
+                Task { @MainActor in
+                    if await ReminderScheduler.requestPermission() { refreshReminder(store) }
+                    else { write(key, .bool(false)) }
+                }
+            } else { refreshReminder(store) }
+        case QuirePrefKey.weekly:
+            if case .bool(true) = value {
+                Task { @MainActor in
+                    if await ReminderScheduler.requestPermission() { ResurfacingScheduler.settingsChanged(store: store) }
+                    else { write(key, .bool(false)) }
+                }
+            } else { ResurfacingScheduler.settingsChanged(store: store) }
+        case QuirePrefKey.weeklyDay, QuirePrefKey.weeklyHour:
+            ResurfacingScheduler.settingsChanged(store: store)
+        case QuirePrefKey.appLock:
+            AppLockManager.shared.preferenceChanged()
+        case QuirePrefKey.spotlight:
+            SpotlightIndexer.scheduleReindex(source: { store.spotlightSource() })
+        case QuirePrefKey.dimPhone, QuirePrefKey.dimLevel:
+            ExternalDisplayModel.shared.autoDimPreferenceChanged()
+        default:
+            break
+        }
+    }
+
+    static func setReminderTime(hour: Int, minute: Int, store: JournalStore) {
+        UserDefaults.standard.set(hour, forKey: ReminderScheduler.hourKey)
+        UserDefaults.standard.set(minute, forKey: ReminderScheduler.minuteKey)
+        refreshReminder(store)
+    }
+
+    private static func refreshReminder(_ store: JournalStore) {
+        let s = store.stats()
+        ReminderScheduler.refresh(hasEntryToday: s.hasEntryToday, streak: s.currentStreak)
+    }
+
+    /// Dark or light, as the monitor's settings list does it: the look Auto uses for that, and the monitor follows.
+    static func setDark(_ dark: Bool) {
+        UserDefaults.standard.set(QuireTheme.autoID(dark: dark), forKey: QuireTheme.storageKey)
+        UserDefaults.standard.set(ExternalTheme.followPhone, forKey: ExternalTheme.key)
+    }
+
+    // MARK: Macros
+
+    /// Settings → Macros, run from the menu. What happened, in words.
+    static func runMacro(_ macro: QuireMacro, store: JournalStore) async -> String {
+        func n(_ count: Int, _ one: String, _ many: String) -> String { count == 1 ? "1 \(one)" : "\(count) \(many)" }
+        switch macro {
+        case .cleanUp:
+            let r = store.cleanup()
+            return "Cleaned up: moved \(r.moved), formatted \(r.formatted), reordered \(r.reordered), removed \(r.deduped) duplicate(s), extracted \(r.extracted) to split journals."
+        case .sortInbox:
+            store.sortInbox()
+            return "The Inbox is in date order."
+        case .fileAll:
+            return "Filed \(n(await store.fileAllDraftsAsync(), "draft", "drafts"))."
+        case .transfer:
+            return "Filed \(n(await store.fileTransferAsync(), "entry", "entries")) from transfer.md."
+        case .conflicts:
+            return "Merged \(n(await store.mergeConflictCopiesAsync(), "entry", "entries")) from conflict copies."
+        case .mergeExSplit:
+            let r = await store.mergeExSplitJournalsAsync()
+            return "Merged \(n(r.entries, "entry", "entries")) from \(n(r.journals, "journal", "journals"))."
+        case .compressMedia:
+            let r = await store.compressExistingMedia()
+            let total = r.images + r.videos + r.audios
+            var said = total == 0 ? "No new media to compress."
+                : "Compressed \(r.images) photo(s), \(r.videos) video(s), \(r.audios) audio — saved \(ByteCountFormatter.string(fromByteCount: Int64(r.bytesSaved), countStyle: .file))."
+            if r.converted > 0 { said = "Converted \(r.converted) HEIC photo(s) to JPEG. " + said }
+            if r.failed > 0 { said += " \(r.failed) couldn't be compressed just now, and will be tried again." }
+            return said
+        case .transcribeAll:
+            let r = await store.transcribeAllMemos()
+            return r.done == 0 && r.failed == 0 ? "No untranscribed voice notes."
+                : "Transcribed \(n(r.done, "voice note", "voice notes"))\(r.failed > 0 ? "; \(r.failed) failed" : "")."
+        case .clearOrphans:
+            let count = await store.orphanAssetsAsync().count
+            guard count > 0 else { return "No orphan media: every file is in use." }
+            let cleared = await store.deleteOrphanAssetsAsync()
+            return "Cleared \(n(cleared, "unused file", "unused files")). Copies are kept in .quire/media-cleanup/ for 30 days."
+        }
+    }
+
+    // MARK: The state, from the app
+
+    /// Saved searches are read from the journal folder: once per change to it, not at every key.
+    private static var searchCache: (revision: Int, searches: [QuireCommandState.Search])?
+
+    /// Everything that isn't about the screen: settings, looks, the journal's days, tags, searches, the monitor.
+    static func appState(store: JournalStore) -> QuireCommandState {
+        var s = QuireCommandState()
+        let d = UserDefaults.standard
+        func flag(_ key: String, _ value: Bool = false) -> Bool { d.object(forKey: key) as? Bool ?? value }
         var counts: [String: Int] = [:]
-        for day in store.archiveEntries { counts[day.date, default: 0] += day.entries.count }
-        onMonitor = DeskDatePicker.shared.isAvailable
-        menu = CommandPalette(CommandSources(counts: counts))
-        wasTyping = UIResponder.quireFirstResponder
-        previousKey = scene.windows.first(where: \.isKeyWindow)
-        let host = UIHostingController(rootView: CommandMenuOverlay())
-        host.view.backgroundColor = .clear
-        let top = UIWindow(windowScene: scene)
-        top.rootViewController = host
-        top.backgroundColor = .clear
-        // Below the App Lock veil, above everything else.
-        top.windowLevel = .alert
-        top.makeKeyAndVisible()
-        window = top
-        // Nothing beneath acts, even for a key that reaches the app delegate.
-        KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
-            moveUp: {}, moveDown: {}, open: {},
-            clear: { [weak self] in self?.close() },
-            key: { _ in true }))
-    }
-
-    func close() {
-        guard menu != nil else { return }
-        menu = nil
-        KeyCommandRouter.shared.unregister(routerID)
-        window?.isHidden = true
-        window = nil
-        previousKey?.makeKey()
-        let field = wasTyping
-        wasTyping = nil
-        // Not under App Lock, which closes the menu as it comes down: the page
-        // behind the veil must not get the keyboard back.
-        DispatchQueue.main.async { if !AppLockManager.shared.showsVeil { field?.becomeFirstResponder() } }
-    }
-
-    func press(_ key: CommandPalette.Key) {
-        guard let outcome = menu?.press(key) else { return }
-        switch outcome {
-        case .stay: break
-        case .close: close()
-        case .run(let action):
-            wasTyping = nil
-            close()
-            // On the next turn, not inside the key's own handling.
-            DispatchQueue.main.async { [weak self] in self?.perform?(action) }
+        var entries: [QuireCommandState.Item] = []
+        func item(_ e: Entry, draft: Bool = false, journal: String? = nil) -> QuireCommandState.Item {
+            .init(id: e.id, title: e.qHasTitle ? e.displayTitle : e.qTitle, when: "\(QDate.shortDay(e.date)), \(QDate.time(e.ts))",
+                  isDraft: draft, isStarred: e.isStarred, journal: journal)
         }
-    }
-
-    /// A row tapped or clicked: the selection goes to it and ↩ is pressed, so a
-    /// touch or a trackpad does exactly what the keys do.
-    func choose(_ row: CommandRow) {
-        guard var palette = menu, palette.rows.contains(where: { $0.id == row.id }) else { return }
-        // The list wraps, so at most once round it.
-        for _ in palette.rows where palette.selected != row.id { _ = palette.press(.down) }
-        guard palette.selected == row.id else { return }
-        menu = palette
-        press(.enter)
-    }
-
-    func type(_ text: String) { menu?.type(text) }
-    func backspace() { menu?.backspace() }
-
-    private static var appScene: UIWindowScene? {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            .filter { $0.session.role == .windowApplication }
-        return scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
-    }
-}
-
-// MARK: - Keys
-
-enum CommandKeys {
-    private static func command(_ input: String, _ flags: UIKeyModifierFlags = []) -> UIKeyCommand {
-        let c = UIKeyCommand(input: input, modifierFlags: flags, action: #selector(UIResponder.quireCommandKey(_:)))
-        // Otherwise a text view takes them for itself.
-        c.wantsPriorityOverSystemBehavior = true
-        return c
-    }
-
-    /// For anything that holds the keyboard: the composer's body, the key catcher.
-    static var toggle: UIKeyCommand { command("k", .command) }
-
-    /// Everything the menu listens for, declared on its own field.
-    static var open: [UIKeyCommand] {
-        [toggle, command(UIKeyCommand.inputEscape), command(".", .command), command("\r"), command("\t"), command("\t", .shift),
-         command(UIKeyCommand.inputUpArrow), command(UIKeyCommand.inputDownArrow)]
-    }
-
-    static func key(for command: UIKeyCommand) -> CommandPalette.Key? {
-        let flags = command.modifierFlags.intersection([.command, .alternate, .shift, .control])
-        switch (command.input, flags) {
-        case ("k", .command): return .toggle
-        case (UIKeyCommand.inputEscape, []), (".", .command): return .esc
-        case ("\r", []): return .enter
-        case ("\t", []): return .tab
-        case ("\t", .shift): return .backTab
-        case (UIKeyCommand.inputUpArrow, []): return .up
-        case (UIKeyCommand.inputDownArrow, []): return .down
-        default: return nil
+        for e in store.inboxDrafts.reversed() { entries.append(item(e, draft: true)) }
+        for day in store.archiveEntries {
+            counts[day.date, default: 0] += day.entries.count
+            for e in day.entries.reversed() { entries.append(item(e)) }
         }
-    }
-}
-
-extension UIResponder {
-    @objc func quireCommandKey(_ command: UIKeyCommand) {
-        guard let key = CommandKeys.key(for: command) else { return }
-        MainActor.assumeIsolated {
-            if key == .toggle { CommandHost.shared.toggle() } else { CommandHost.shared.press(key) }
+        for (name, list) in store.splitEntriesCache.sorted(by: { $0.key < $1.key }) {
+            for e in list.reversed() { entries.append(item(e, journal: name)) }
         }
-    }
-}
-
-/// ⌘K for a SwiftUI field, which can't declare key commands of its own.
-struct CommandMenuShortcut: View {
-    var body: some View {
-        Button("Command Menu") { CommandHost.shared.toggle() }
-            .keyboardShortcut("k", modifiers: .command)
-            .frame(width: 0, height: 0).opacity(0)
-            .accessibilityHidden(true)
-    }
-}
-
-/// Where typing lands while the menu is up: out of sight, always empty, and the
-/// letters go to the menu. No on-screen keyboard: ⌘K means there's a real one.
-private final class CommandField: UITextView, UITextViewDelegate {
-    init() {
-        super.init(frame: CGRect(x: 0, y: 0, width: 1, height: 1), textContainer: nil)
-        delegate = self
-        alpha = 0
-        isUserInteractionEnabled = false
-        inputView = UIView()
-        inputAssistantItem.leadingBarButtonGroups = []
-        inputAssistantItem.trailingBarButtonGroups = []
-        autocorrectionType = .no
-        spellCheckingType = .no
-        autocapitalizationType = .none
-        smartQuotesType = .no
-        smartDashesType = .no
-        smartInsertDeleteType = .no
-    }
-
-    required init?(coder: NSCoder) { fatalError("Built in code.") }
-
-    /// The menu's keys, and the monitor's own (⌥⌘P pauses it) while it is up.
-    override var keyCommands: [UIKeyCommand]? { CommandKeys.open + DisplayKeys.commands }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        if window != nil { DispatchQueue.main.async { self.becomeFirstResponder() } }
-    }
-
-    override func deleteBackward() {
-        MainActor.assumeIsolated { CommandHost.shared.backspace() }
-    }
-
-    func textView(_ v: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-        MainActor.assumeIsolated {
-            if text.isEmpty { CommandHost.shared.backspace() } else { CommandHost.shared.type(text) }
+        s.entries = entries
+        s.counts = counts
+        s.drafts = store.inboxDrafts.count
+        s.splits = store.splitJournals.map(\.name)
+        s.tags = store.tagCounts.map(\.tag)
+        if searchCache?.revision != store.revision {
+            searchCache = (store.revision, store.savedSearches().map { .init(name: $0.name, query: $0.query) })
         }
-        return false
-    }
-}
+        s.searches = searchCache?.searches ?? []
+        s.themes = QuireTheme.all.map { .init(id: $0.id, name: $0.name, dark: $0.dark) }
 
-private struct CommandCatcher: UIViewRepresentable {
-    func makeUIView(context: Context) -> CommandField { CommandField() }
-    func updateUIView(_ view: CommandField, context: Context) {}
-    static func dismantleUIView(_ view: CommandField, coordinator: ()) { view.resignFirstResponder() }
+        var set = QuireCommandState.Settings()
+        set.theme = d.string(forKey: QuireTheme.storageKey) ?? QuireTheme.auto
+        set.dark = set.theme == QuireTheme.auto ? ExternalDisplayModel.shared.colorScheme == .dark
+            : QuireTheme.all.first { $0.id == set.theme }?.dark ?? false
+        set.prompts = flag(PromptDeck.enabledKey)
+        set.goalOn = flag(QuirePrefKey.goalOn)
+        set.goal = d.object(forKey: QuirePrefKey.goal) as? Int ?? 750
+        set.fontSize = d.object(forKey: QuirePrefKey.fontSize) as? Double ?? Double(Theme.defaultFontSize)
+        set.typewriter = flag(QuirePrefKey.typewriter)
+        set.focusParagraph = flag(QuirePrefKey.focusParagraph)
+        set.autoTranscribe = flag(JournalStore.autoTranscribeKey)
+        set.reminder = flag(ReminderScheduler.enabledKey)
+        set.reminderHour = d.object(forKey: ReminderScheduler.hourKey) as? Int ?? ReminderScheduler.defaultHour
+        set.reminderMinute = d.object(forKey: ReminderScheduler.minuteKey) as? Int ?? 0
+        set.weekly = flag(ResurfacingScheduler.enabledKey)
+        set.weeklyDay = d.object(forKey: ResurfacingScheduler.weekdayKey) as? Int ?? ResurfacingScheduler.defaultWeekday
+        set.weeklyHour = d.object(forKey: ResurfacingScheduler.hourKey) as? Int ?? ResurfacingScheduler.defaultHour
+        set.appLock = flag(AppLockManager.enabledKey)
+        set.appLockGrace = d.object(forKey: AppLockManager.graceKey) as? Double ?? 0
+        set.canLock = AppLockManager.canAuthenticate()
+        set.spotlight = flag(SpotlightIndexer.enabledKey)
+        set.dataSaver = flag(QuirePrefKey.dataSaver)
+        set.splitTags = d.string(forKey: QuirePrefKey.splitTags) ?? ""
+        set.backupInterval = d.string(forKey: JournalStore.backupIntervalKey) ?? BackupInterval.off.rawValue
+        set.backupKeep = d.object(forKey: JournalStore.backupKeepKey) as? Int ?? 10
+        set.mediaSort = d.string(forKey: QuirePrefKey.mediaSort) ?? AssetSort.newest.rawValue
+        set.mediaGroup = d.string(forKey: QuirePrefKey.mediaGroup) ?? AssetGrouping.none.rawValue
+        s.settings = set
+        if set.prompts { s.prompt = QuirePrompts.prompt(offset: QuirePrompts.offset) }
+
+        let monitor = ExternalDisplayModel.shared
+        if monitor.isConnected {
+            s.monitor = .init(paused: monitor.isPaused,
+                              theme: d.string(forKey: ExternalTheme.key) ?? ExternalTheme.followPhone,
+                              themes: ExternalTheme.all.map { .init(id: $0.id, name: $0.name, dark: $0.dark) },
+                              textSize: d.string(forKey: ExternalTextSize.key) ?? ExternalTextSize.regular.rawValue,
+                              hints: flag(ShortcutHints.key, true),
+                              dim: flag(ExternalDisplayModel.autoDimKey),
+                              dimLevel: d.object(forKey: ExternalDisplayModel.dimLevelKey) as? Double ?? ExternalDisplayModel.dimFloor)
+        }
+        s.monitorShows = DeskDatePicker.shared.isAvailable
+        s.backupFolderSet = store.backupFolderName != nil
+        s.backupRunning = store.backupRunning
+        s.lastBackup = store.lastBackupAt.map { "Last " + $0.formatted(date: .abbreviated, time: .shortened) }
+        s.composer = ComposerCommands.shared.state
+        if let target = CommandFocus.shared.current {
+            var selected = item(target.ref.entry, draft: target.ref.source == .inbox)
+            selected.isOpen = target.isPage
+            if case .journal(let name) = target.ref.source { selected.journal = name }
+            s.selected = selected
+        }
+        return s
+    }
 }
 
 // MARK: - The screen
 
-/// The menu's own window: the panel over the dimmed page, unless the monitor has
-/// it. Tapping the phone closes it either way.
+/// The menu's own window: the panel over the dimmed page, unless the monitor has it. Tapping outside closes it.
 private struct CommandMenuOverlay: View {
-    @ObservedObject private var host = CommandHost.shared
+    @ObservedObject private var host = QuireCommandMenu.host
     @AppStorage(QuireTheme.storageKey) private var themeID = QuireTheme.auto
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        let q = QuireTheme.resolve(themeID, scheme: scheme)
         ZStack(alignment: .top) {
             Color.black.opacity(host.onMonitor ? 0.001 : 0.18).ignoresSafeArea()
                 .onTapGesture { host.close() }
                 .accessibilityLabel("Close the menu")
-            if let menu = host.menu, !host.onMonitor {
-                CommandMenuPanel(menu: menu, showsKeys: true, onChoose: { host.choose($0) })
-                    .padding(.horizontal, 16).padding(.top, 24)
+                .accessibilityAddTraits(.isButton)
+            if let menu = host.menu {
+                if host.onMonitor {
+                    VStack {
+                        Spacer()
+                        Text("The menu is on the monitor. Tap to close it.")
+                            .font(q.ui(14)).foregroundStyle(q.mutedColor)
+                            .padding(12).background(q.pageColor)
+                            .overlay(Rectangle().strokeBorder(q.lineColor, lineWidth: 1))
+                            .padding(16)
+                    }
+                    .allowsHitTesting(false)
+                } else {
+                    CommandMenuPanel(menu: menu, showsKeys: !host.byTouch, touch: host.byTouch)
+                        .padding(.horizontal, 16).padding(.top, 24)
+                }
             }
-            CommandCatcher().frame(width: 1, height: 1).allowsHitTesting(false).accessibilityHidden(true)
         }
-        .environment(\.quire, QuireTheme.resolve(themeID, scheme: scheme))
+        .environment(\.quire, q)
     }
 }
 
 /// The menu in Quire's design, the same on the phone and the monitor: `z` scales it.
 struct CommandMenuPanel: View {
     @Environment(\.quire) private var q
-    let menu: CommandPalette
+    let menu: CommandPalette<QuireCommandList>
     var z: CGFloat = 1
     /// The monitor has its hint bar for this.
     var showsKeys = false
-    /// A row tapped or clicked, where the menu can be touched (not on the monitor).
-    var onChoose: ((CommandRow) -> Void)? = nil
+    /// Opened by touch: rows take taps, and there's a back and a close button.
+    var touch = false
 
     private var rowHeight: CGFloat { 54 * z }
+    private var host: CommandHost<QuireCommandList> { QuireCommandMenu.host }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -260,7 +407,7 @@ struct CommandMenuPanel: View {
                 keys
             }
         }
-        .frame(maxWidth: 580 * z)
+        .frame(maxWidth: 600 * z)
         .background(q.pageColor)
         .overlay(Rectangle().strokeBorder(q.lineColor, lineWidth: 1))
         .shadow(color: .black.opacity(0.16), radius: 18 * z, y: 6 * z)
@@ -268,7 +415,20 @@ struct CommandMenuPanel: View {
 
     private var field: some View {
         HStack(spacing: 10 * z) {
-            Image(systemName: "magnifyingglass").font(.system(size: 15 * z, weight: .light)).foregroundStyle(q.mutedColor)
+            if touch && menu.depth > 0 {
+                Button { host.back() } label: {
+                    Image(systemName: "chevron.left").font(.system(size: 17 * z, weight: .medium))
+                        .foregroundStyle(q.accentColor).frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Back")
+            } else {
+                Image(systemName: menu.isAsking ? "character.cursor.ibeam" : "magnifyingglass")
+                    .font(.system(size: 15 * z, weight: .light)).foregroundStyle(q.mutedColor)
+            }
+            if let opener = menu.opener {
+                Text(opener.title).font(q.ui(15 * z, weight: .semibold)).foregroundStyle(q.accentColor)
+                    .lineLimit(1).fixedSize()
+            }
             HStack(spacing: 1 * z) {
                 if !menu.query.isEmpty {
                     Text(menu.query).font(q.writing(20 * z)).foregroundStyle(q.inkColor).lineLimit(1).truncationMode(.head)
@@ -279,24 +439,44 @@ struct CommandMenuPanel: View {
                 }
             }
             Spacer(minLength: 0)
+            if touch {
+                Button { host.close() } label: {
+                    Image(systemName: "xmark").font(.system(size: 15 * z, weight: .medium))
+                        .foregroundStyle(q.mutedColor).frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Close")
+            }
         }
         .padding(.horizontal, 18 * z).frame(minHeight: 52 * z)
+        .accessibilityElement(children: .contain)
     }
 
+    /// No cap on the rows: it scrolls, and the lit row stays in view.
     private var list: some View {
-        ScrollViewReader { proxy in
+        let headings = menu.sections.filter { $0.title != nil }.count
+        let shown = CGFloat(min(menu.rows.count, CommandPaletteLimit.rows)) * rowHeight + CGFloat(headings) * 30 * z
+        return ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 0) {
-                    ForEach(menu.rows) { row in
-                        CommandMenuRow(row: row, lit: row.id == menu.selected, z: z).frame(height: rowHeight).id(row.id)
-                            .contentShape(Rectangle())
-                            .onTapGesture { onChoose?(row) }
-                            .accessibilityElement(children: .combine)
-                            .accessibilityAddTraits(onChoose == nil ? [] : .isButton)
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(menu.sections) { section in
+                        if let title = section.title {
+                            Text(q.caps(title)).font(q.label(11 * z)).foregroundStyle(q.mutedColor).lineLimit(1)
+                                .padding(.horizontal, 18 * z).padding(.bottom, 4 * z)
+                                .frame(height: 30 * z, alignment: .bottomLeading)
+                                .accessibilityAddTraits(.isHeader)
+                        }
+                        ForEach(section.rows) { row in
+                            CommandMenuRow(row: row, lit: row.id == menu.selected, z: z).frame(height: rowHeight).id(row.id)
+                                .contentShape(Rectangle())
+                                .onTapGesture { host.choose(row.id) }
+                                .onHover { inside in if inside { host.highlight(row.id) } }
+                                .accessibilityAddTraits(.isButton)
+                        }
                     }
                 }
             }
-            .frame(maxHeight: rowHeight * CGFloat(menu.rows.count))
+            .frame(maxHeight: shown)
+            .onAppear { if let id = menu.selected { proxy.scrollTo(id) } }
             .onChange(of: menu.selected) { _, id in if let id { proxy.scrollTo(id) } }
         }
     }
@@ -318,27 +498,58 @@ struct CommandMenuPanel: View {
 
 private struct CommandMenuRow: View {
     @Environment(\.quire) private var q
-    let row: CommandRow
+    let row: CommandRow<QuireCommand>
     let lit: Bool
     let z: CGFloat
+
+    /// Destructive rows are red, as Delete is on the entry's page.
+    private var ink: Color { row.destructive ? .red : q.inkColor }
 
     var body: some View {
         HStack(spacing: 12 * z) {
             Image(systemName: row.symbol).font(.system(size: 16 * z, weight: .light))
-                .foregroundStyle(lit ? q.accentColor : q.mutedColor).frame(width: 22 * z)
+                .foregroundStyle(row.destructive ? .red : lit ? q.accentColor : q.mutedColor).frame(width: 22 * z)
             VStack(alignment: .leading, spacing: 1 * z) {
-                Text(row.title).font(q.writing(19 * z)).foregroundStyle(q.inkColor).lineLimit(1)
+                Text(row.title).font(q.writing(19 * z)).foregroundStyle(ink).lineLimit(1)
                 if let detail = row.detail {
                     Text(detail).font(q.ui(12 * z)).foregroundStyle(q.mutedColor).lineLimit(1)
                 }
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 8 * z)
+            if let state = row.state {
+                Text(state).font(q.ui(13 * z)).foregroundStyle(row.isOn == true ? q.accentColor : q.mutedColor)
+            }
+            if row.isCurrent {
+                Image(systemName: "checkmark").font(.system(size: 14 * z, weight: .semibold)).foregroundStyle(q.accentColor)
+                    .accessibilityLabel("Current")
+            }
+            if row.leads {
+                Image(systemName: "chevron.right").font(.system(size: 12 * z)).foregroundStyle(q.mutedColor)
+            }
         }
         .padding(.horizontal, 18 * z)
-        .frame(maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(lit ? q.accentSoftColor : Color.clear)
         .overlay(alignment: .leading) { if lit { Rectangle().fill(q.accentColor).frame(width: max(3, 3 * z)) } }
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(row.state ?? "")
         .accessibilityAddTraits(lit ? .isSelected : [])
+    }
+}
+
+/// ⌘ in the masthead, the reader's bar and the composer: the way in without a keyboard.
+struct CommandMenuButton: View {
+    @Environment(\.quire) private var q
+    var size: CGFloat = 18
+
+    var body: some View {
+        Button { QuireCommandMenu.host.present() } label: {
+            Image(systemName: "command").font(.system(size: size, weight: .regular)).foregroundStyle(q.inkColor)
+                .frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Commands")
+        .accessibilityHint("Everything Quire can do, to search and choose")
     }
 }
 

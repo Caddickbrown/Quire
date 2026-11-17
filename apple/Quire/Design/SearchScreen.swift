@@ -65,13 +65,18 @@ struct SearchScreen: View {
                   letter: { _, k in if k == "/" { focused = true; return true }; return false },
                   // And with nothing found, when the field has been left: `/` had
                   // no row to belong to, and went nowhere.
-                  emptyLetter: { k in if k == "/" { focused = true; return true }; return false })
-        .onChange(of: query) { _, _ in selected = nil; mirror() }
+                  emptyLetter: { k in if k == "/" { focused = true; return true }; return false },
+                  focus: { entry in shownResults.first { $0.entry.id == entry.id } })
+        .onChange(of: query) { _, now in selected = nil; mirror(); QuireCommandMenu.searchQuery = now }
         .onChange(of: focused) { _, _ in mirror() }
         .onAppear {
             focused = true
             if let pending = nav.pendingSearchQuery { query = pending; nav.pendingSearchQuery = nil }
             mirror()
+        }
+        // ⌘K's Search for… and saved searches, with Search already open.
+        .onChange(of: nav.pendingSearchQuery) { _, pending in
+            if let pending { query = pending; nav.pendingSearchQuery = nil }
         }
         .onDisappear { ExternalDisplayModel.shared.search = nil }
         .alert("Pin this search", isPresented: $naming) {

@@ -131,6 +131,10 @@ struct QMasthead: View {
                 // The variable one first, so the Calendar never moves.
                 if let onRandom { icon(randomLabel, "dice", onRandom) }
                 if calendarEntries != nil { icon("Calendar", "calendar") { showingCalendar = true } }
+                // Everything Quire can do, without a keyboard (⌘K with one).
+                #if os(iOS)
+                icon("Commands", "command") { QuireCommandMenu.host.present() }
+                #endif
             }
         } else if q.isMarathon {
             HStack(spacing: 0) {
@@ -150,6 +154,9 @@ struct QMasthead: View {
                 if calendarEntries != nil { cell("Calendar", "calendar") { showingCalendar = true } }
                 cell("Search", "magnifyingglass", onSearch)
                 cell("Settings", "gearshape", onSettings)
+                #if os(iOS)
+                cell("Commands", "command") { QuireCommandMenu.host.present() }
+                #endif
             }
             .overlay(alignment: .bottom) { QRule() }
         } else {
@@ -167,6 +174,9 @@ struct QMasthead: View {
                     if calendarEntries != nil { icon("Calendar", "calendar") { showingCalendar = true } }
                     icon("Search", "magnifyingglass", onSearch)
                     icon("Settings", "gearshape", onSettings)
+                    #if os(iOS)
+                icon("Commands", "command") { QuireCommandMenu.host.present() }
+                #endif
                 }
             }
             .foregroundStyle(q.mutedColor)
@@ -176,7 +186,7 @@ struct QMasthead: View {
     private func icon(_ label: String, _ symbol: String, _ run: @escaping () -> Void) -> some View {
         Button(action: run) {
             Image(systemName: symbol).font(.system(size: 18, weight: .regular)).foregroundStyle(q.inkColor)
-                .frame(width: 44, height: 44).contentShape(Rectangle())
+                .frame(width: 40, height: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -185,7 +195,7 @@ struct QMasthead: View {
     private func cell(_ label: String, _ symbol: String, _ run: @escaping () -> Void) -> some View {
         Button(action: run) {
             Image(systemName: symbol).font(.system(size: 16, weight: .medium)).foregroundStyle(q.inkColor)
-                .frame(width: 44, height: 48).contentShape(Rectangle())
+                .frame(width: 40, height: 48).contentShape(Rectangle())
                 .overlay(alignment: .leading) { Rectangle().fill(q.lineColor).frame(width: 1) }
         }
         .buttonStyle(.plain)

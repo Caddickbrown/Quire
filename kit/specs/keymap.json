@@ -1,0 +1,24 @@
+{
+  "about": "The shared key map. Apps list the action ids they support; a shared key is never rebound to anything else. Human-readable copy: KEYS.md.",
+  "actions": [
+    { "id": "move.previous",   "keys": ["ArrowUp", "k"] },
+    { "id": "move.next",       "keys": ["ArrowDown", "j"] },
+    { "id": "open",            "keys": ["Enter"] },
+    { "id": "back",            "keys": ["Escape"] },
+    { "id": "section.jump",    "keys": ["1-9"], "desktop": ["Mod+1-9"] },
+    { "id": "group.previous",  "keys": ["["] },
+    { "id": "group.next",      "keys": ["]"] },
+    { "id": "done",            "keys": ["x"] },
+    { "id": "archive",         "keys": ["a"] },
+    { "id": "snooze",          "keys": ["b"] },
+    { "id": "priority",        "keys": ["p"] },
+    { "id": "new",             "keys": ["n"], "desktop": ["Mod+n"] },
+    { "id": "search",          "keys": ["/"], "desktop": ["Mod+k"] },
+    { "id": "refresh",         "keys": ["r"] },
+    { "id": "undo",            "keys": ["Mod+z"] },
+    { "id": "help",            "keys": ["?"] },
+    { "id": "display.larger",  "keys": ["Alt+Mod+="] },
+    { "id": "display.smaller", "keys": ["Alt+Mod+-"] },
+    { "id": "display.pause",   "keys": ["Alt+Mod+p"] }
+  ]
+}

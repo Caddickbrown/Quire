@@ -1,0 +1,23 @@
+# The kit's checks. Copy to .github/workflows/kit.yml; identical in every app.
+# An app with findings it hasn't fixed yet sets `continue-on-error: true` on that
+# step, with a comment naming what is left, and removes it once the step passes.
+name: kit
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  kit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: The kit copy is unedited
+        run: python3 kit/tools/sync_kit.py --check
+      - name: Colour tokens are complete and readable
+        run: python3 kit/tools/build_tokens.py --check
+      - name: Source follows the kit's rules
+        run: python3 kit/tools/kit_check.py

@@ -22,7 +22,7 @@ struct ExternalDisplayRoot: View {
     @ObservedObject private var settings = ExternalSettingsModel.shared
     @ObservedObject private var datePicker = DeskDatePicker.shared
     @ObservedObject private var confirm = DeskConfirm.shared
-    @ObservedObject private var commands = CommandHost.shared
+    @ObservedObject private var commands = QuireCommandMenu.host
     @AppStorage(QuireTheme.storageKey) private var themeID = QuireTheme.auto
     // Auto's looks, read by `resolve`: here so a change redraws the monitor.
     @AppStorage(QuireTheme.autoLightKey, store: QuireTheme.sharedDefaults) private var autoLight = QuireTheme.defaultAutoLight
@@ -105,8 +105,8 @@ struct ExternalDisplayRoot: View {
         let display = ShortcutHint(key: "⌥⌘ ± T P H", label: "Size Theme Pause Hints")
         // `?` reaches the key catcher, not a field: not while writing or typing a query.
         let help = ShortcutHint(key: "?", label: "Hints")
-        // The menu takes every key while it's up.
-        if commands.onMonitor, let menu = commands.menu { return menu.hints + [display] }
+        // The menu takes every key while it's up, the monitor's chords too (they are commands in it).
+        if commands.onMonitor, let menu = commands.menu { return menu.hints.map { ShortcutHint(key: $0.key, label: $0.label) } }
         // A question on the monitor takes every letter.
         if let question = confirm.request {
             let answer: [ShortcutHint] = [.init(key: "↩", label: question.action), .init(key: "⎋", label: "Cancel")]
@@ -473,7 +473,7 @@ private struct DeskDateOverlay: View {
 /// ⌘K on Quire's pages: the menu over the page, in the monitor's theme.
 private struct DeskCommandOverlay: View {
     let metrics: ExternalDisplayMetrics
-    @ObservedObject private var commands = CommandHost.shared
+    @ObservedObject private var commands = QuireCommandMenu.host
     @ObservedObject private var model = ExternalDisplayModel.shared
     @ObservedObject private var appLock = AppLockManager.shared
     @Environment(\.quire) private var q

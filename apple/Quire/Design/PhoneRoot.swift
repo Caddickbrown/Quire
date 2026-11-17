@@ -48,6 +48,12 @@ struct PhoneRoot: View {
     @State private var showMedia = false
     @State private var showSearch = false
     @State private var showSettings = false
+    /// ⌘K's way into one page of Settings, or the Media Library on one kind or a name.
+    @State private var settingsPage: SettingsGroup?
+    @State private var mediaKind: String?
+    @State private var mediaFind: String?
+    /// What a command from ⌘K did, said under the masthead for a moment.
+    @State private var commandNotice: String?
     @State private var rootKeyID = UUID()
     /// ⌘K, Jump to a date: the day for the Journal to go to.
     @State private var journalJump: String?
@@ -56,7 +62,7 @@ struct PhoneRoot: View {
     /// action, quire://write), or an entry to open (Spotlight, a notification).
     /// The composer is never taken down from here: its last words, a recording
     /// in progress and a save that is failing are all its own to deal with.
-    private enum AfterComposer { case command(CommandAction), open(NavigationModel.OpenRequest) }
+    private enum AfterComposer { case command(QuireCommand), open(NavigationModel.OpenRequest) }
     @State private var afterComposer: AfterComposer?
     /// The composer's entry as its saves move it (a new date, a recovery copy):
     /// the open page follows it only while it is that entry's page.
@@ -150,14 +156,14 @@ struct PhoneRoot: View {
             .environmentObject(store).environmentObject(nav)
             .environment(\.quire, q)
         }
-        .sheet(isPresented: $showMedia) {
+        .sheet(isPresented: $showMedia, onDismiss: { mediaKind = nil; mediaFind = nil }) {
             NavigationStack {
                 AssetsView(onOpenEntry: { entry, source in
                     showMedia = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                         open(EntryRef(entry: entry, source: source))
                     }
-                }, onClose: { showMedia = false })
+                }, onClose: { showMedia = false }, initialKind: mediaKind, initialQuery: mediaFind)
                 .toolbar(.hidden, for: .navigationBar)
             }
             .environmentObject(store).environmentObject(nav)
@@ -165,11 +171,11 @@ struct PhoneRoot: View {
             .tint(q.accentColor)
             .preferredColorScheme(q.colorScheme)
         }
-        .sheet(isPresented: $showSettings) {
+        .sheet(isPresented: $showSettings, onDismiss: { settingsPage = nil }) {
             PhoneSettings(openMedia: {
                 showSettings = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showMedia = true }
-            })
+            }, initialPage: settingsPage)
                 .environmentObject(store).environmentObject(nav)
                 .environment(\.quire, q)
         }
@@ -213,7 +219,13 @@ struct PhoneRoot: View {
         .onChange(of: scenePhase) { _, _ in ExternalDisplayModel.shared.updateIdleTimer() }
         .onChange(of: q.id) { _, _ in ExternalDisplayModel.shared.colorScheme = q.colorScheme }
         .onAppear(perform: registerRootKeys)
-        .onAppear { CommandHost.shared.perform = runCommand }
+        .onAppear {
+            QuireCommandMenu.screen = { commandState() }
+            QuireCommandMenu.run = { runCommand($0) }
+            QuireCommandMenu.leave = { leaveForCommand() }
+        }
+        // The menu doesn't stay open behind the lock.
+        .onChange(of: appLock.showsVeil) { _, up in if up { QuireCommandMenu.host.close() } }
         .onAppear {
             switch ProcessInfo.processInfo.environment["QUIRE_OPEN"] {
             case "settings": showSettings = true
@@ -487,7 +499,7 @@ struct PhoneRoot: View {
     /// said plainly, in the accent, above everything, until it's gone.
     @ViewBuilder private var notice: some View {
         // Files the journal could not read stand here too, until they can be.
-        if let message = store.storageUnavailableMessage ?? store.lastWriteError ?? store.unreadableFilesMessage {
+        if let message = store.storageUnavailableMessage ?? store.lastWriteError ?? store.unreadableFilesMessage ?? commandNotice {
             VStack(spacing: 0) {
                 Text(message)
                     .font(q.ui(13)).foregroundStyle(q.accentColor)
@@ -673,12 +685,122 @@ struct PhoneRoot: View {
         }
     }
 
-    /// What ⌘K chose. Over the composer it closes the composer first, through its
-    /// own save, and carries on from there; if that save fails the page stays and
-    /// the choice is dropped. Sheets are closed before anything is shown.
-    private func runCommand(_ action: CommandAction) {
-        if composing != nil { closeComposer(then: .command(action)); return }
-        let keepsSearch = action == .search && showSearch
+    // MARK: ⌘K
+
+    /// What's on screen, as the menu's list wants it (`QuireCommandList`, tested on its own).
+    private func commandState() -> QuireCommandState? {
+        guard store.baseURL != nil else { return nil }
+        var s = QuireCommandMenu.appState(store: store)
+        switch tab {
+        case .today: s.face = .today
+        case .inbox: s.face = .inbox
+        case .journal: s.face = .journal
+        case .lookBack: s.face = .lookBack
+        }
+        s.searchOpen = showSearch
+        s.searchQuery = QuireCommandMenu.searchQuery
+        s.settingsOpen = showSettings || ExternalSettingsModel.shared.isOpen
+        s.mediaOpen = showMedia
+        s.regularWidth = sizeClass == .regular
+        s.sidebarCollapsed = sidebarCollapsed
+        s.journalStarred = journalStarred
+        s.journalSplit = journalSplit
+        if composing == nil { s.composer = nil } else { s.selected = nil }
+        return s
+    }
+
+    /// Before a command that goes elsewhere: the page being written closes itself, through its own save (and stays
+    /// if that fails, when the command is dropped); a sheet goes as Esc would take it.
+    private func leaveForCommand() {
+        if composing != nil {
+            guard !appLock.showsVeil else { return }
+            KeyCommandRouter.shared.clear()
+        } else {
+            retiming = nil; showSearch = false; showMedia = false; showSettings = false
+        }
+    }
+
+    /// Said under the masthead, then gone.
+    private func say(_ message: String) {
+        commandNotice = message
+        UIAccessibility.post(notification: .announcement, argument: message)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { if commandNotice == message { commandNotice = nil } }
+    }
+
+    /// An entry by id, wherever it lives.
+    private func findEntry(_ id: String) -> EntryRef? {
+        if let e = store.inboxDrafts.first(where: { $0.id == id }) { return EntryRef(entry: e, source: .inbox) }
+        for day in store.archiveEntries {
+            if let e = day.entries.first(where: { $0.id == id }) { return EntryRef(entry: e, source: .archive(date: day.date)) }
+        }
+        for (name, list) in store.splitEntriesCache {
+            if let e = list.first(where: { $0.id == id }) { return EntryRef(entry: e, source: .journal(name: name)) }
+        }
+        return nil
+    }
+
+    /// Goes to the entry's face, with the page open on it.
+    private func showEntry(_ ref: EntryRef) {
+        switch ref.source {
+        case .inbox: tab = .inbox
+        case .archive: tab = .journal; journalSplit = nil
+        case .journal(let name): tab = .journal; journalSplit = name
+        }
+        path = [ref]
+    }
+
+    /// The open or selected entry, done as its own page or row would do it.
+    private func runEntry(_ action: QuireEntryAction, _ id: String) {
+        guard let ref = CommandFocus.shared.target(id)?.ref ?? findEntry(id) else { return }
+        let isOpen = path.last?.id == ref.id
+        func closePage() { if isOpen { path.removeLast(); if splitActive { ExternalDisplayModel.shared.relist() } } }
+        func failed(_ message: String) { say(store.lastWriteError ?? message) }
+        switch action {
+        case .open: open(ref)
+        case .edit: composing = ComposeTarget(ref: ref)
+        case .star, .unstar: store.toggleStar(ref.entry, source: ref.source)
+        case .file:
+            if store.fileDraft(ref.entry) != nil { closePage(); say("Filed.") } else { failed("The draft could not be filed.") }
+        case .unfile:
+            if store.returnToInbox(ref.entry, source: ref.source) { closePage(); say("Back in the Inbox.") }
+            else { failed("The entry could not be returned to the Inbox.") }
+        case .retime: retimeFromKeys(ref)
+        case .delete:
+            // Asked in the menu already (Delete… › Delete this entry).
+            let done: Bool
+            switch ref.source {
+            case .inbox: done = store.deleteEditorDraft(ref.entry)
+            case .archive(let d): done = store.deleteFiledEntry(date: d, entry: ref.entry)
+            case .journal(let n): done = store.deleteJournalEntry(name: n, entry: ref.entry)
+            }
+            if done { closePage(); say("Deleted.") } else { failed("The entry could not be deleted.") }
+        case .close: closePage()
+        }
+    }
+
+    /// What ⌘K chose. The host has already left any sheet or the page being written (`leaveForCommand`), or done
+    /// the command over it (`QuireCommand.staysOverSheets`). Anything that still finds the composer up (a widget's
+    /// New entry) closes it first, through its own save, and carries on from there.
+    private func runCommand(_ action: QuireCommand) {
+        if case .composer(let a) = action { ComposerCommands.shared.perform(a); return }
+        if composing != nil, !action.staysOverSheets { closeComposer(then: .command(action)); return }
+        switch action {
+        case .pref(let key, let value): QuireCommandMenu.set(key, value, store: store); return
+        case .darkMode(let dark): QuireCommandMenu.setDark(dark); return
+        case .reminderTime(let h, let m): QuireCommandMenu.setReminderTime(hour: h, minute: m, store: store); return
+        case .pauseMonitor: ExternalDisplayModel.shared.togglePause(); return
+        case .saveSearch(let query): store.addSavedSearch(name: query, query: query); say("Pinned “\(query)”."); return
+        case .removeSearch(let name): store.removeSavedSearch(named: name); say("Removed “\(name)”."); return
+        case .backupNow:
+            guard store.backupFolderName != nil, !store.backupRunning else { return }
+            say("Backing up…")
+            Task { @MainActor in say((await store.runBackup()).ok ? "Backed up." : "The backup didn't finish.") }
+            return
+        case .closeSettings:
+            ExternalSettingsModel.shared.close(); showSettings = false; return
+        default: break
+        }
+        let keepsSearch = (action == .search || isSearchFor(action)) && showSearch
         let keepsSettings = action == .settings && showSettings
         let wasUp = retiming != nil || showMedia || (showSearch && !keepsSearch) || (showSettings && !keepsSettings)
         retiming = nil; showMedia = false
@@ -690,14 +812,48 @@ struct PhoneRoot: View {
             case .today: path.removeAll(); tab = .today
             case .inbox: path.removeAll(); tab = .inbox
             case .journal: path.removeAll(); tab = .journal
+            case .lookBack: path.removeAll(); tab = .lookBack
             case .search: if !keepsSearch { openSearch() }
+            case .searchFor(let query):
+                nav.pendingSearchQuery = query
+                if !keepsSearch { openSearch() }
             case .newDraft: composing = ComposeTarget(ref: nil)
             case .settings: if !keepsSettings { openSettings() }
+            case .settingsPage(let raw):
+                settingsPage = SettingsGroup(rawValue: raw)
+                showSettings = true
+            case .media(let kind, let find):
+                mediaKind = kind; mediaFind = find
+                showMedia = true
             case .jump(let day): path.removeAll(); tab = .journal; journalJump = day
+            case .randomEntry:
+                if let r = store.randomEntry() { showEntry(EntryRef(entry: r.entry, source: .archive(date: r.date))) }
+            case .randomDraft:
+                if let d = store.inboxDrafts.randomElement() { showEntry(EntryRef(entry: d, source: .inbox)) }
+            case .openEntry(let id):
+                if let ref = findEntry(id) { showEntry(ref) } else { say("That entry has gone.") }
+            case .splitJournal(let name): path.removeAll(); tab = .journal; journalSplit = name
+            case .starredOnly(let on): path.removeAll(); tab = .journal; journalStarred = on
+            case .sidebar(let collapsed): withAnimation(foldAnimation) { sidebarCollapsed = collapsed }
+            case .writeLine(let text):
+                if store.upsertDraft(previous: nil, timestamp: JournalStore.nowTS(), title: "", body: text) != nil {
+                    say("Saved to the Inbox.")
+                }
+            case .anotherPrompt: QuirePrompts.next()
+            case .entry(let a, let id): runEntry(a, id)
+            case .macro(let macro):
+                say("Working…")
+                Task { @MainActor in say(await QuireCommandMenu.runMacro(macro, store: store)) }
+            default: break
             }
         }
         // Let a sheet finish leaving first.
         if wasUp { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: go) } else { go() }
+    }
+
+    private func isSearchFor(_ action: QuireCommand) -> Bool {
+        if case .searchFor = action { return true }
+        return false
     }
 
     /// With the monitor showing things the results go there, and an open entry

@@ -177,7 +177,8 @@ struct JournalScreen: View {
                       case "d": askDelete(entry); return true
                       default: return false
                       }
-                  })
+                  },
+                  focus: { EntryRef(entry: $0, source: source($0)) })
         .confirmationDialog("Delete this entry?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                             titleVisibility: .visible) {
             Button("Delete", role: .destructive) {

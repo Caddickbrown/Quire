@@ -53,7 +53,9 @@ swift_files = [
     ('Media',           'Models/Media.swift',           'Models'),
     ('SearchQuery',     'Models/SearchQuery.swift',     'Models'),
     ('ListContinuation','Models/ListContinuation.swift','Models'),
-    ('CommandPalette',  'Models/CommandPalette.swift',  'Models'),
+    ('QuireCommands',   'Models/QuireCommands.swift',   'Models'),
+    # App Kit's command menu, synced into the repo's kit/ (python3 kit/tools/sync_kit.py --check).
+    ('KitCommandPalette', '../../kit/swift/CommandPalette.swift', 'Quire'),
     ('EscapeChord',     'Models/EscapeChord.swift',     'Models'),
     ('OnThisDayYears',  'Models/OnThisDayYears.swift',  'Models'),
     ('JournalStore',    'Models/JournalStore.swift',    'Models'),
@@ -155,7 +157,7 @@ test_swift_files = [
 # it with the native Vault, adapter and generated bindings, and link the same
 # Rust XCFramework as the app. `init(testingBase:)` supplies a temporary folder. Keep this list closed over its own
 # dependencies; a view type leaking in is the signal it belongs in Models.
-test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListContinuation', 'CommandPalette',
+test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListContinuation', 'QuireCommands', 'KitCommandPalette',
                       'EscapeChord', 'OnThisDayYears',
                       'JournalStore', 'CoreJournal', 'AppleVault', 'QuireCore', 'QuireShared', 'Reminders', 'SpotlightIndexer',
                       'Transcription', 'YearReview']
@@ -320,7 +322,7 @@ def pbxproj():
     # ---- PBXFileReference ----
     a('/* Begin PBXFileReference section */')
     for name, path, _ in swift_files:
-        a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {path if name == "QuireCore" else base(path)}; sourceTree = "<group>"; }};')
+        a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {path if name in ("QuireCore", "KitCommandPalette") else base(path)}; sourceTree = "<group>"; }};')
     for name, path, ftype in resources:
         a(f'\t\t{IDs[name]} /* {base(path)} */ = {{isa = PBXFileReference; lastKnownFileType = {ftype}; path = {path if name == "SharedThemes" else base(path)}; sourceTree = "<group>"; }};')
     a(f'\t\t{IDs["iOSInfoPlist"]} /* iOS/Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};')

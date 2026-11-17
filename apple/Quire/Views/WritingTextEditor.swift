@@ -1456,7 +1456,7 @@ final class PastingTextView: UITextView {
     /// Priority over the text system, which reads ^f ^p ^d ^t as cursor edits.
     override var keyCommands: [UIKeyCommand]? {
         // The monitor's own keys too (⌥⌘P pauses it): the hint bar lists them here.
-        var own = (super.keyCommands ?? []) + [CommandKeys.toggle] + DisplayKeys.commands
+        var own = (super.keyCommands ?? []) + [CommandResponders.toggle] + DisplayKeys.commands
         // With a monitor showing this text, ↑/↓ move by the monitor's lines;
         // the phone keeps its own wrapping for how the text looks. Not while an
         // input method is composing: the arrows are then its own, to move

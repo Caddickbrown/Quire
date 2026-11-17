@@ -73,9 +73,12 @@ struct ReaderScreen: View {
         .toolbar(.hidden, for: .navigationBar)
         .onChange(of: ref) { _, new in entry = new.entry; mirror() }
         .onChange(of: store.revision) { _, _ in refresh(); mirror() }
-        .onAppear { visible = true; mirror(); registerKeys() }
+        .onAppear { visible = true; mirror(); registerKeys(); focus() }
+        // ⌘K's commands act on the entry as it is now: starred, retimed, edited.
+        .onChange(of: entry) { _, _ in focus() }
         .onDisappear {
             visible = false
+            CommandFocus.shared.set(routerID, nil)
             DeskConfirm.shared.cancel(owner: routerID)
             ExternalDisplayModel.shared.releasePage(owner: routerID)
             KeyCommandRouter.shared.unregister(routerID)
@@ -105,6 +108,7 @@ struct ReaderScreen: View {
                 }
                 action("trash", "Delete", color: .red) { askDelete() }
                 action("pencil", "Edit", color: q.inkColor, bold: true) { onEdit(current) }
+                CommandMenuButton()
             }
             .padding(.horizontal, 20)
             Button { onRetime(current) } label: {
@@ -136,6 +140,12 @@ struct ReaderScreen: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
+    }
+
+    /// This page's entry is what ⌘K's commands act on while it is open.
+    private func focus() {
+        guard visible else { return }
+        CommandFocus.shared.set(routerID, .init(ref: current, isPage: true))
     }
 
     /// Show the entry on a connected monitor while it is open.

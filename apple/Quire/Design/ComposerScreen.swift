@@ -99,6 +99,8 @@ struct ComposerScreen: View {
     /// Where the keyboard was when a sheet or picker came up over the page, to go
     /// back there when it closes.
     @State private var refocus: Field?
+    /// Where the keyboard last was, for ⌘K to give it back to after a command done on the page.
+    @State private var lastFocus: Field?
 
     /// Today's prompt, when Settings → Writing prompts is on.
     private static var prompt: String {
@@ -180,7 +182,11 @@ struct ComposerScreen: View {
                 KeyCommandCatcher().frame(width: 0, height: 0).allowsHitTesting(false)
             }
         }
-        .onAppear { scratch.closing = false; ComposerRecovery.live.insert(scratch.recoveryID); load(); registerKeys() }
+        .onAppear {
+            scratch.closing = false; ComposerRecovery.live.insert(scratch.recoveryID); load(); registerKeys()
+            ComposerCommands.shared.attach(routerID, commandState) { runCommand($0) }
+        }
+        .onChange(of: commandState) { _, now in ComposerCommands.shared.update(routerID, now) }
         .onChange(of: title) { _, _ in stampOnFirstKeystroke(); scheduleSave(); mirror() }
         .onReceive(store.$tagCounts) { counts in tagNames = counts.map { String($0.tag.dropFirst()) } }
         .onDisappear {
@@ -201,9 +207,10 @@ struct ComposerScreen: View {
             DeskConfirm.shared.cancel(owner: routerID)
             ExternalDisplayModel.shared.releasePage(owner: routerID)
             KeyCommandRouter.shared.unregister(routerID)
+            ComposerCommands.shared.detach(routerID)
         }
         .interactiveDismissDisabled()
-        .onChange(of: focus) { _, _ in mirror() }
+        .onChange(of: focus) { _, now in mirror(); if let now { lastFocus = now } }
         .onChange(of: starred) { _, _ in scheduleSave(); mirror() }
         .alert("Save a recovery copy?", isPresented: $recoverCopy) {
             Button("Save copy") { saveRecoveryCopy() }
@@ -285,6 +292,7 @@ struct ComposerScreen: View {
                 .accessibilityLabel("\(QDate.longDay(stampDate)), \(QDate.time(stampText))")
                 .accessibilityHint("Changes the date and time")
             Spacer()
+            CommandMenuButton()
             Button { starred.toggle() } label: {
                 Image(systemName: starred ? "star.fill" : "star").font(.system(size: 18))
                     .foregroundStyle(starred ? q.accentColor : q.mutedColor)
@@ -708,6 +716,43 @@ struct ComposerScreen: View {
             }))
     }
 
+    // MARK: ⌘K on the page
+
+    /// The page as the menu lists it.
+    private var commandState: QuireCommandState.Composer {
+        .init(title: title.trimmingCharacters(in: .whitespacesAndNewlines), isDraft: isDraft, starred: starred,
+              focus: focusMode, recording: recorder.isRecording, saveFailed: saveError != nil)
+    }
+
+    /// A command chosen from ⌘K while writing: done here, and the page stays, with the keyboard back where it was.
+    private func runCommand(_ action: QuireComposerAction) {
+        var keepsTyping = true
+        switch action {
+        case .finish: finish(); keepsTyping = false
+        case .save: if saveNow() { flashSaved() }
+        case .retime: changeDate(); keepsTyping = false
+        case .focus: focusMode.toggle()
+        case .prompt: insertPrompt()
+        case .star: starred.toggle()
+        case .voice: toggleRecord()
+        case .photoLibrary: refocus = lastFocus; showingPhotoPicker = true; keepsTyping = false
+        case .takePhoto: refocus = lastFocus; showingPhotoCapture = true; keepsTyping = false
+        case .video: refocus = lastFocus; showingVideoRecorder = true; keepsTyping = false
+        case .file: refocus = lastFocus; showingFilePicker = true; keepsTyping = false
+        case .discard: discard(); keepsTyping = false
+        case .close: close(); keepsTyping = false
+        case .retry: _ = saveNow()
+        case .copyToInbox: recoverCopy = true; keepsTyping = false
+        case .copyText: copyText()
+        case .closeKeeping: closeKeeping(); keepsTyping = false
+        }
+        guard keepsTyping else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            if !leaving, !overPage, focus == nil, !AppLockManager.shared.showsVeil,
+               !DeskDatePicker.shared.isOpen, !DeskConfirm.shared.isOpen { focus = lastFocus ?? .body }
+        }
+    }
+
     /// Esc with something up over the page closes that, and the page stays. A
     /// question is cancelled, never answered. The camera has its own Cancel, and a
     /// recording mustn't go on one key: Esc waits for it.
@@ -1120,7 +1165,7 @@ final class EscapingTextField: UITextField {
     override var keyCommands: [UIKeyCommand]? {
         let esc = EscapeChord.declared(composing: markedTextRange != nil).map { $0.keyCommand(action: #selector(quireEscape)) }
         // The monitor's own keys too (⌥⌘P pauses it), as the body's text view has them.
-        let own = (super.keyCommands ?? []) + esc + [CommandKeys.toggle] + DisplayKeys.commands
+        let own = (super.keyCommands ?? []) + esc + [CommandResponders.toggle] + DisplayKeys.commands
         guard KeyCommandRouter.shared.wantsChords else { return own }
         return own + KeyCommandRouter.chords.map {
             let c = UIKeyCommand(input: $0, modifierFlags: .control, action: #selector(quireChord(_:)))

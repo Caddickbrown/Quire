@@ -103,7 +103,8 @@ struct InboxScreen: View {
                           return true
                       default: return false
                       }
-                  })
+                  },
+                  focus: { EntryRef(entry: $0, source: .inbox) })
         }
         // On the outer view: inside the ScrollViewReader the dialog never
         // presented (the binding went true and nothing came up), so neither `d`

@@ -28,9 +28,11 @@ extension View {
                   publishesEmpty: Bool = true,
                   onOpen: @escaping (Entry) -> Void,
                   letter: @escaping (Entry, String) -> Bool = { _, _ in false },
-                  emptyLetter: ((String) -> Bool)? = nil) -> some View {
+                  emptyLetter: ((String) -> Bool)? = nil,
+                  focus: ((Entry) -> EntryRef?)? = nil) -> some View {
         modifier(QKeyList(entries: entries, index: index, listTitle: listTitle, autoSelect: autoSelect,
-                          publishesEmpty: publishesEmpty, onOpen: onOpen, letter: letter, emptyLetter: emptyLetter))
+                          publishesEmpty: publishesEmpty, onOpen: onOpen, letter: letter, emptyLetter: emptyLetter,
+                          focus: focus))
     }
 
     /// While a sheet or full-screen page is up, keep every key away from the list
@@ -144,6 +146,8 @@ private struct QKeyList: ViewModifier {
     let onOpen: (Entry) -> Void
     let letter: (Entry, String) -> Bool
     let emptyLetter: ((String) -> Bool)?
+    /// Where the selected row's entry lives, for ⌘K's commands on it.
+    let focus: ((Entry) -> EntryRef?)?
 
     @ObservedObject private var monitor = ExternalDisplayModel.shared
 
@@ -188,6 +192,7 @@ private struct QKeyList: ViewModifier {
             .onDisappear {
                 visible = false
                 KeyCommandRouter.shared.unregister(routerID)
+                CommandFocus.shared.set(routerID, nil)
                 if let published { ExternalDisplayModel.shared.clear(ifShowing: published) }
             }
     }
@@ -200,6 +205,8 @@ private struct QKeyList: ViewModifier {
     /// Note which entry the selection is on now.
     private func remember() {
         selectedID = selected?.id
+        let ref = visible ? selected.flatMap { focus?($0) } : nil
+        CommandFocus.shared.set(routerID, ref.map { .init(ref: $0, isPage: false) })
     }
 
     private func register() {

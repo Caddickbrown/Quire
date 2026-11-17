@@ -461,104 +461,246 @@ final class DeskEscapeTests: XCTestCase {
 }
 
 final class CommandPaletteTests: XCTestCase {
+    typealias Menu = CommandPalette<QuireCommandList>
+    typealias Row = CommandRow<QuireCommand>
     private let today = CommandDates.parse("2026-11-06")!
 
-    private func menu(_ counts: [String: Int] = ["2026-03-13": 2, "2026-11-05": 1]) -> CommandPalette {
-        CommandPalette(CommandSources(counts: counts, today: today))
+    /// A state with something of everything, as the app builds it from what's on screen.
+    private func state(_ change: (inout QuireCommandState) -> Void = { _ in }) -> QuireCommandState {
+        var s = QuireCommandState()
+        s.counts = ["2026-03-13": 2, "2026-11-05": 1]
+        s.today = today
+        s.drafts = 2
+        s.entries = [.init(id: "d1", title: "Shopping", when: "Fri 6 Nov, 09:00", isDraft: true),
+                     .init(id: "e1", title: "The walk to Ely", when: "Thu 5 Nov, 18:30", isStarred: true)]
+        s.splits = ["work"]
+        s.searches = [.init(name: "Walks", query: "@walk")]
+        s.tags = ["@walk", "@work"]
+        s.prompt = "What surprised you today?"
+        s.themes = [.init(id: "almanac", name: "Almanac"), .init(id: "sepia", name: "Sepia"),
+                    .init(id: "cinema", name: "Cinema", dark: true)]
+        s.settings.theme = "almanac"
+        s.backupFolderSet = true
+        change(&s)
+        return s
     }
 
-    func testTheShortListIsInOrderAndTheFirstRowIsLit() {
-        let m = menu()
-        XCTAssertEqual(m.rows.map(\.title), ["Today", "Inbox", "Journal", "Search", "New draft", "Jump to a date", "Settings"])
-        XCTAssertEqual(m.lit?.id, "today")
+    private func menu(_ s: QuireCommandState) -> Menu { Menu(QuireCommandList(state: s)) }
+    private func ids(_ s: QuireCommandState) -> [String] { QuireCommandList(state: s).all.map(\.id) }
+    private func everything(_ rows: [Row]) -> [Row] { rows.flatMap { [$0] + $0.underneath } }
+
+    func testNothingDestroysWithoutAWayBackAndDeletesAreRed() {
+        let busy = [state(), state { $0.selected = .init(id: "d1", title: "Shopping", when: "", isDraft: true, isOpen: true) },
+                    state { $0.composer = .init(title: "A page", saveFailed: true) },
+                    state { $0.monitor = .init(); $0.settings.appLock = true; $0.settings.reminder = true
+                            $0.settings.weekly = true; $0.settings.goalOn = true; $0.monitor?.dim = true }]
+        for s in busy {
+            let rows = QuireCommandList(state: s).all
+            XCTAssertEqual(CommandSafety.unguarded(rows).map(\.id), [])
+            XCTAssertEqual(CommandSafety.unmarked(rows).map(\.id), [])
+        }
     }
 
-    func testTheMatchIsPippins() {
-        XCTAssertNil(CommandMatch.score("xz", "Inbox"))
-        XCTAssertEqual(CommandMatch.score("", "Inbox"), 0)
-        // A word start beats letters in the middle of a word.
-        XCTAssertGreaterThan(CommandMatch.score("d", "New draft")!, CommandMatch.score("d", "Today")!)
-        XCTAssertEqual(CommandMatch.rank(["ab", "ba"], "a") { $0 }, ["ab", "ba"])
+    func testTheSelectedEntrysActionsComeFirstUnderItsName() {
+        let s = state { $0.selected = .init(id: "e1", title: "The walk to Ely", when: "", isStarred: true) }
+        let m = menu(s)
+        XCTAssertEqual(m.sections.first?.title, "“The walk to Ely”")
+        XCTAssertEqual(m.sections.first?.rows.map(\.id),
+                       ["entry.open", "entry.edit", "entry.star", "entry.unfile", "entry.retime", "entry.delete"])
+        XCTAssertEqual(m.lit?.id, "entry.open")
+        // Starred, so the toggle offers to take it off and says where it is.
+        let star = m.rows.first { $0.id == "entry.star" }
+        XCTAssertEqual(star?.title, "Unstar")
+        XCTAssertEqual(star?.state, "Starred")
+        XCTAssertEqual(star?.step, .run(.entry(.unstar, "e1")))
     }
 
-    func testTypingNarrowsAndGoes() {
-        var m = menu()
-        m.type("nd")
-        XCTAssertEqual(m.lit?.id, "new")
-        XCTAssertEqual(m.press(.enter), .run(.newDraft))
-        var s = menu()
-        s.type("set")
-        XCTAssertEqual(s.press(.enter), .run(.settings))
-        var none = menu()
-        none.type("zzz")
-        XCTAssertTrue(none.rows.isEmpty)
-        XCTAssertEqual(none.press(.enter), .stay)
+    func testADraftFilesAndAnOpenPageCloses() {
+        let s = state { $0.selected = .init(id: "d1", title: "Shopping", when: "", isDraft: true, isOpen: true) }
+        let rows = QuireCommandList(state: s).all.filter { $0.context != nil }.map(\.id)
+        XCTAssertEqual(rows, ["entry.edit", "entry.star", "entry.file", "entry.retime", "entry.delete", "entry.close"])
     }
 
-    func testEscAndTheToggleCloseFromAnywhere() {
-        var m = menu()
-        m.type("jump")
+    func testDeleteAsksInTheMenuThenDeletes() {
+        var m = menu(state { $0.selected = .init(id: "e1", title: "The walk", when: "") })
+        m.type("delete")
+        XCTAssertEqual(m.lit?.id, "entry.delete")
+        XCTAssertTrue(m.lit?.destructive ?? false)
         XCTAssertEqual(m.press(.enter), .stay)
-        XCTAssertEqual(m.stage, .date)
-        var esc = m, again = m
-        XCTAssertEqual(esc.press(.esc), .close)
-        XCTAssertEqual(again.press(.toggle), .close)
+        XCTAssertEqual(m.prompt, "Delete “The walk”? Esc keeps it.")
+        var kept = m
+        XCTAssertEqual(kept.press(.esc), .stay)
+        XCTAssertEqual(kept.depth, 0)
+        XCTAssertEqual(m.press(.enter), .run(.entry(.delete, "e1")))
     }
 
-    func testMovingWrapsAndFollowsTheRow() {
-        var m = menu()
-        _ = m.press(.up)
-        XCTAssertEqual(m.lit?.id, "settings")
-        _ = m.press(.down)
-        XCTAssertEqual(m.lit?.id, "today")
-        _ = m.press(.tab)
-        XCTAssertEqual(m.lit?.id, "inbox")
-        _ = m.press(.backTab)
-        XCTAssertEqual(m.lit?.id, "today")
+    func testThePageBeingWrittenHasItsOwnCommandsAndHidesTheList() {
+        let s = state {
+            $0.selected = .init(id: "e1", title: "The walk", when: "")
+            $0.composer = .init(title: "A page", isDraft: true, recording: true)
+        }
+        let m = menu(s)
+        XCTAssertEqual(m.sections.first?.title, "“A page”")
+        let mine = m.sections.first?.rows.map(\.id) ?? []
+        XCTAssertEqual(Array(mine.prefix(3)), ["composer.finish", "composer.save", "composer.retime"])
+        XCTAssertTrue(mine.contains("composer.photoLibrary"))
+        XCTAssertTrue(mine.contains("composer.discard"))
+        XCTAssertFalse(ids(s).contains("entry.edit"), "the row beneath isn't what's being worked on")
+        XCTAssertEqual(m.rows.first { $0.id == "composer.voice" }?.title, "Stop recording")
+        XCTAssertTrue(QuireCommand.composer(.star).staysOverSheets, "done in the composer, which stays open")
+        XCTAssertFalse(QuireCommand.inbox.staysOverSheets)
+        // A filed entry's page says Done, and can't be discarded.
+        let filed = ids(state { $0.composer = .init(isDraft: false) })
+        XCTAssertFalse(filed.contains("composer.discard"))
     }
 
-    func testBackspaceTakesALetterThenBacksOut() {
-        var m = menu()
-        m.type("jump")
+    func testTheMonitorNeverGetsAScreenItCantDraw() {
+        let s = state { $0.monitorShows = true; $0.monitor = .init(); $0.composer = .init() }
+        let all = ids(s)
+        for phoneOnly in ["go.media", "media.kind", "media.find", "composer.photoLibrary", "composer.takePhoto",
+                          "composer.video", "composer.file", "settings.page", "export.pdf", "import.dayone"] {
+            XCTAssertFalse(all.contains(phoneOnly), phoneOnly)
+        }
+        XCTAssertTrue(all.contains("go.settings"), "Settings opens on the monitor")
+        XCTAssertTrue(all.contains("composer.voice"))
+    }
+
+    func testAThemePreviewsAsTheHighlightMovesAndEscPutsItBack() {
+        var m = menu(state())
+        m.type("theme")
+        XCTAssertEqual(m.lit?.id, "theme")
         _ = m.press(.enter)
-        m.type("1")
-        XCTAssertEqual(m.query, "1")
-        m.backspace()
-        XCTAssertEqual(m.stage, .date)
-        m.backspace()
-        XCTAssertEqual(m.stage, .top)
-        m.backspace()
-        XCTAssertEqual(m.stage, .top)
+        XCTAssertEqual(m.lit?.id, "almanac", "the theme in force is lit first")
+        _ = m.takeEffects()
+        _ = m.press(.down)
+        XCTAssertEqual(m.takeEffects(), [.preview(.pref(QuirePrefKey.theme, .string("sepia")))])
+        XCTAssertEqual(m.press(.esc), .stay)
+        XCTAssertEqual(m.takeEffects(), [.revert(.pref(QuirePrefKey.theme, .string("almanac")))])
+        // Chosen, it stays.
+        _ = m.press(.enter)
+        _ = m.press(.down)
+        _ = m.takeEffects()
+        XCTAssertEqual(m.press(.enter), .run(.pref(QuirePrefKey.theme, .string("sepia"))))
+        XCTAssertEqual(m.takeEffects(), [])
     }
 
-    func testTheHintsAreTheKeysThatWork() {
-        var m = menu()
-        XCTAssertEqual(m.hints.map(\.key), ["↑↓ ⇥", "↩", "Type", "⎋ ⌘K"])
-        m.type("zzz")
-        XCTAssertEqual(m.hints.map(\.key), ["Type", "⌫", "⎋ ⌘K"])
+    func testTypingFindsAThemeByNameInAnyOrder() {
+        var m = menu(state())
+        m.type("sepia theme")
+        XCTAssertEqual(m.lit?.title, "Theme: Sepia")
+        XCTAssertEqual(m.press(.enter), .run(.pref(QuirePrefKey.theme, .string("sepia"))))
+    }
+
+    func testTheMonitorsLooksIncludeTheVSCodeDisguise() {
+        let s = state { $0.monitor = .init(paused: true, theme: "phone") }
+        var m = menu(s)
+        m.type("vs code")
+        XCTAssertEqual(m.lit?.step, .run(.pref(QuirePrefKey.monitorTheme, .string("vscode"))))
+        let pause = QuireCommandList(state: s).all.first { $0.id == "monitor.pause" }
+        XCTAssertEqual(pause?.title, "Resume the monitor")
+        XCTAssertEqual(pause?.state, "Paused")
+        XCTAssertFalse(ids(state()).contains("monitor.pause"), "no monitor, no monitor commands")
+    }
+
+    func testTogglesSayWhichWayTheyGo() {
+        let off = QuireCommandList(state: state()).all.first { $0.id == "prompts" }
+        XCTAssertEqual(off?.title, "Show writing prompts")
+        XCTAssertEqual(off?.step, .run(.pref(QuirePrefKey.prompts, .bool(true))))
+        let on = QuireCommandList(state: state { $0.settings.prompts = true }).all.first { $0.id == "prompts" }
+        XCTAssertEqual(on?.title, "Stop showing writing prompts")
+        XCTAssertEqual(on?.state, "On")
     }
 
     func testAJumpSaysWhereItLands() {
-        var m = menu()
+        var m = menu(state())
         m.type("jump")
         _ = m.press(.enter)
         XCTAssertEqual(m.rows.map(\.title), ["Today", "Yesterday", "A week ago", "A month ago", "A year ago"])
+        XCTAssertEqual(m.rows[1].detail, "Thursday 5 November 2026 · 1 entry")
         m.type("14 march")
-        XCTAssertEqual(m.lit?.title, "Saturday 14 March 2026")
-        XCTAssertEqual(m.lit?.detail, "Nothing that day: opens Friday 13 March 2026")
+        XCTAssertEqual(m.lit?.title, "Saturday 14 March 2026 · Nothing that day: opens Friday 13 March 2026")
         XCTAssertEqual(m.press(.enter), .run(.jump("2026-03-13")))
 
-        var hit = menu()
-        hit.type("jump")
-        _ = hit.press(.enter)
-        hit.type("yest")
-        XCTAssertEqual(hit.lit?.detail, "Thursday 5 November 2026 · 1 entry")
-        XCTAssertEqual(hit.press(.enter), .run(.jump("2026-11-05")))
+        var nonsense = menu(state())
+        nonsense.type("jump")
+        _ = nonsense.press(.enter)
+        nonsense.type("bananas")
+        XCTAssertTrue(nonsense.rows.isEmpty)
+        XCTAssertEqual(nonsense.nothing, "That isn't a date. Try 14 March.")
+    }
 
-        var empty = menu([:])
-        empty.type("jump")
-        _ = empty.press(.enter)
-        XCTAssertEqual(empty.lit?.detail, "Nothing is filed yet")
+    func testAnEntryOpensByName() {
+        var m = menu(state())
+        m.type("open an entry")
+        XCTAssertEqual(m.lit?.id, "go.entry")
+        _ = m.press(.enter)
+        m.type("ely")
+        XCTAssertEqual(m.lit?.title, "The walk to Ely")
+        XCTAssertEqual(m.press(.enter), .run(.openEntry("e1")))
+    }
+
+    func testTypedAnswersStayInTheMenu() {
+        var line = menu(state())
+        line.type("write a line")
+        _ = line.press(.enter)
+        XCTAssertTrue(line.isAsking)
+        line.type("Milk")
+        XCTAssertEqual(line.lit?.title, "Save “Milk” to the Inbox")
+        XCTAssertEqual(line.press(.enter), .run(.writeLine("Milk")))
+
+        var pin = menu(state())
+        pin.type("pin a search")
+        _ = pin.press(.enter)
+        pin.type("is:starred")
+        XCTAssertEqual(pin.press(.enter), .run(.saveSearch("is:starred")))
+
+        var time = menu(state { $0.settings.reminder = true })
+        time.type("daily reminder at")
+        _ = time.press(.enter)
+        time.type("2115")
+        XCTAssertEqual(time.lit?.title, "Remind me at 21:15")
+        XCTAssertEqual(time.press(.enter), .run(.reminderTime(hour: 21, minute: 15)))
+    }
+
+    func testSavedSearchesAndTags() {
+        var m = menu(state())
+        m.type("walks")
+        XCTAssertEqual(m.lit?.title, "Saved search: Walks")
+        XCTAssertEqual(m.press(.enter), .run(.searchFor("@walk")))
+        var tag = menu(state())
+        tag.type("tag work")
+        XCTAssertEqual(tag.lit?.step, .run(.searchFor("@work")))
+    }
+
+    func testAMacroThatChangesALotAsksFirst() {
+        var m = menu(state())
+        m.type("file every draft")
+        _ = m.press(.enter)
+        XCTAssertEqual(m.lit?.title, "File all 2 drafts")
+        XCTAssertEqual(m.press(.enter), .run(.macro(.fileAll)))
+        var clean = menu(state())
+        clean.type("clean up")
+        XCTAssertEqual(clean.press(.enter), .run(.macro(.cleanUp)))
+    }
+
+    func testEveryPlaceIsOnTheList() {
+        let all = ids(state { $0.regularWidth = true; $0.settingsOpen = true })
+        for place in ["go.today", "go.inbox", "go.journal", "go.lookBack", "go.search", "go.settings", "go.media",
+                      "go.date", "go.entry", "go.random", "go.randomDraft", "journal.split", "journal.starred",
+                      "sidebar", "settings.close", "new", "writeLine", "writePrompt", "anotherPrompt"] {
+            XCTAssertTrue(all.contains(place), place)
+        }
+    }
+
+    func testTheSettingsKeysAreTheAppsOwn() {
+        XCTAssertEqual(QuirePrefKey.backupInterval, JournalStore.backupIntervalKey)
+        XCTAssertEqual(QuirePrefKey.backupKeep, JournalStore.backupKeepKey)
+        XCTAssertEqual(QuirePrefKey.reminder, ReminderScheduler.enabledKey)
+        XCTAssertEqual(QuirePrefKey.weekly, ResurfacingScheduler.enabledKey)
+        XCTAssertEqual(QuirePrefKey.weeklyDay, ResurfacingScheduler.weekdayKey)
+        XCTAssertEqual(QuirePrefKey.weeklyHour, ResurfacingScheduler.hourKey)
+        XCTAssertEqual(QuirePrefKey.spotlight, SpotlightIndexer.enabledKey)
+        XCTAssertEqual(QuirePrefKey.autoTranscribe, JournalStore.autoTranscribeKey)
     }
 
     func testTheNearestDayWithSomethingFiled() {

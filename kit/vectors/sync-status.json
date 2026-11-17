@@ -1,0 +1,12 @@
+{
+  "about": "Shared cases for statusLine. Both kit/js/sync-status.js and kit/swift/SyncStatus.swift must produce `text` and `tone` for every case.",
+  "cases": [
+    { "status": { "state": "connected", "lastSync": "2026-10-28T15:28:00Z" }, "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "text": "Connected · Last synced 2 min ago", "tone": "done" },
+    { "status": { "state": "connected", "lastSync": "2026-10-28T15:29:40Z" }, "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "text": "Connected · Last synced just now", "tone": "done" },
+    { "status": { "state": "connected", "lastSync": "2026-10-27T21:10:00Z" }, "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "text": "Connected · Last synced yesterday 21:10", "tone": "done" },
+    { "status": { "state": "syncing" },      "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "text": "Syncing…", "tone": "inkSecondary" },
+    { "status": { "state": "unreachable" },  "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "text": "Couldn't reach the server. Your changes are safe on this device.", "tone": "late" },
+    { "status": { "state": "unauthorised" }, "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "text": "The server didn't accept the token.", "tone": "late" },
+    { "status": { "state": "never" },        "timeZone": "Europe/London", "now": "2026-10-28T15:30:00Z", "text": "Not connected", "tone": "inkSecondary" }
+  ]
+}

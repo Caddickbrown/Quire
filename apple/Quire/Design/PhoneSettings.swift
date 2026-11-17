@@ -13,6 +13,8 @@ import SwiftUI
 
 struct PhoneSettings: View {
     var openMedia: () -> Void = {}
+    /// Opened from ⌘K on one of the pages below.
+    var initialPage: SettingsGroup? = nil
     @EnvironmentObject private var store: JournalStore
     @Environment(\.quire) private var q
     @Environment(\.dismiss) private var dismiss
@@ -99,6 +101,11 @@ struct PhoneSettings: View {
             }
         }
         .tint(q.accentColor)
+        .onAppear {
+            guard let initialPage, path.isEmpty else { return }
+            var now = Transaction(); now.disablesAnimations = true
+            withTransaction(now) { path = [initialPage] }
+        }
         // Esc pops a page, then the root's closes the sheet.
         .qKeyBlocker(active: !path.isEmpty, onEscape: { if !path.isEmpty { path.removeLast() } })
     }

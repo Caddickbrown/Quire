@@ -81,7 +81,8 @@ struct LookBackScreen: View {
         // list of its own said "No entries here yet" over a page that has plenty.
         .qKeyList(entries: refs.map(\.entry), index: $selected, listTitle: "On this day", autoSelect: true,
                   publishesEmpty: false,
-                  onOpen: { entry in if let r = refs.first(where: { $0.entry.id == entry.id }) { open(r) } })
+                  onOpen: { entry in if let r = refs.first(where: { $0.entry.id == entry.id }) { open(r) } },
+                  focus: { entry in refs.first { $0.entry.id == entry.id } })
         }
     }
 

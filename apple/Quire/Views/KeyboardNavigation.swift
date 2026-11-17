@@ -213,7 +213,7 @@ final class KeyCommandController: UIViewController {
                 return c
             } : []
         return arrows + letters + chords + DisplayKeys.commands + [
-            CommandKeys.toggle,
+            CommandResponders.toggle,
             UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(openSelection)),
             UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(clearSelection)),
             EscapeChord.commandPeriod.keyCommand(action: #selector(clearSelection)),

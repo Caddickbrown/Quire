@@ -103,7 +103,7 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
                 return c
             } : []
         return arrows + displayKeys + letters + chords + [
-            CommandKeys.toggle,
+            CommandResponders.toggle,
             UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(quireOpenSelection)),
             UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(quireClearSelection)),
             EscapeChord.commandPeriod.keyCommand(action: #selector(quireClearSelection)),
@@ -133,6 +133,8 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // ⌘K: the menu's host, and what it watches.
+        QuireCommandMenu.install()
         // Register home screen quick actions.
         QuireQuickAction.register()
         // If launched via a quick action, stash it — RootView picks it up.
