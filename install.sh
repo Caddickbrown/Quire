@@ -228,6 +228,18 @@ run_loud() {
 }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+# A python3 that runs, not only one on PATH: on a Mac without the
+# command-line tools /usr/bin/python3 is a stub that offers to install them
+# and fails. That one isn't even started (it would open the offer); any other
+# has to run a line first.
+have_python() {
+  have python3 || return 1
+  if [ "$(uname -s)" = Darwin ] && [ "$(command -v python3)" = /usr/bin/python3 ] \
+    && ! xcode-select -p >/dev/null 2>&1; then
+    return 1
+  fi
+  python3 -I -c 'import json, os, shutil, sys' >/dev/null 2>&1 </dev/null
+}
 
 # Root needs no sudo (and containers often have none).
 if [ "$(id -u)" = 0 ]; then SUDO=""; else SUDO=sudo; fi
@@ -1409,7 +1421,7 @@ install_main() {
   if [ $DO_MIGRATE -eq 1 ]; then
     if [ -n "$QUIRE_CLI" ]; then
       run "$QUIRE_CLI" --folder "$FOLDER" migrate || die "moving the drafts failed — inbox.md is untouched; see $LOG"
-    elif have python3 && [ -n "${SRC:-}" ] && [ -f "$SRC/tools/migrate_journal.py" ]; then
+    elif have_python && [ -n "${SRC:-}" ] && [ -f "$SRC/tools/migrate_journal.py" ]; then
       # Without --keep-nook: the tool moves .nook/ to .quire/ before it makes
       # .quire/migration/, so Nook's templates and searches stay visible.
       run python3 -I "$SRC/tools/migrate_journal.py" "$FOLDER" --apply \
@@ -1619,7 +1631,7 @@ write_settings() {
   say "  ${D}folder → $QUIRE_SETTINGS${R}"
   [ $DRY -eq 1 ] && return 0
   mkdir -p "$(dirname "$QUIRE_SETTINGS")"
-  if have python3; then
+  if have_python; then
     # A settings file that can't be read as JSON is copied to
     # settings.json.bad-<stamp> before a new one is written; if the copy
     # fails, nothing is written.
@@ -1649,7 +1661,7 @@ PY
     esc=$(printf '%s' "$FOLDER" | sed 's/\\/\\\\/g; s/"/\\"/g')
     printf '{\n  "folder": "%s"\n}\n' "$esc" >"$QUIRE_SETTINGS"
   else
-    warn "No python3 to edit $QUIRE_SETTINGS; choose the folder in Quire's Settings."
+    warn "No working python3 to edit $QUIRE_SETTINGS; choose the folder in Quire's Settings."
   fi
 }
 
@@ -1689,4 +1701,6 @@ main() {
   if [ $MODE = uninstall ]; then uninstall_main; else install_main; fi
 }
 
+# tools/test_install.py loads the functions above without running anything.
+[ "${QUIRE_INSTALL_FUNCTIONS_ONLY:-0}" = 1 ] && { return 0 2>/dev/null || exit 0; }
 main; exit $?

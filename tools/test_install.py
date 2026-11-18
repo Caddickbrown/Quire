@@ -2,9 +2,11 @@
 """Checks for install.sh that change nothing: its syntax, shellcheck when it
 is installed, and dry runs against a made-up home folder.
 
-A dry run is the only way the installer is ever started here. Each one gets
-a scratch HOME and a bare PATH, and the test fails if a single file in that
-home is different afterwards.
+A dry run is the only way the whole installer is ever started here. Each one
+gets a scratch HOME and a bare PATH, and the test fails if a single file in
+that home is different afterwards. `Functions` loads the installer's
+functions without running it and calls a few for real (the checksum check,
+the settings writer), inside a scratch folder with a fake curl.
 
     python3 tools/test_install.py
 """
@@ -190,6 +192,77 @@ class DryRun(unittest.TestCase):
             moved = [i for i, c in enumerate(cmds) if c.startswith(("mv ", "gio trash ")) and path in c]
             self.assertEqual(len(moved), 1, "moved once, and not again as a removal:\n" + out)
             self.assertGreater(moved[0], build[0])
+
+
+class Functions(unittest.TestCase):
+    """Single functions of install.sh run for real (not a dry run), in a
+    scratch home, with `curl` replaced by a copy from a local folder."""
+
+    def setUp(self):
+        self.home = Home()
+        self.addCleanup(self.home.close)
+        self.bin = self.home.file("fakebin")
+        self.served = self.home.file("served")
+        os.makedirs(self.served)
+        # (The installer's exit takes its download folder away, as it should.)
+        # `curl -fsSL -o DEST URL`: DEST gets the served file named as URL ends.
+        write(os.path.join(self.bin, "curl"),
+              '#!/bin/sh\nwhile [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift ;; -*) ;; *) url=$1 ;; esac; shift; done\n'
+              'cp "%s/${url##*/}" "$out"\n' % self.served, 0o755)
+
+    def shell(self, script, **extra_env):
+        env = {"HOME": self.home.path, "PATH": self.bin + ":/usr/bin:/bin", "TERM": "dumb", "SHELL": "/bin/bash",
+               "QUIRE_INSTALL_FUNCTIONS_ONLY": "1", "INSTALL": INSTALL}
+        env.update(extra_env)
+        return subprocess.run(["bash", "-c", 'set -- --yes; . "$INSTALL"; DRY=0; ' + script], env=env, cwd=self.home.path,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              universal_newlines=True, timeout=60)
+
+    def serve(self, name, data, sums=None):
+        with open(os.path.join(self.served, name), "wb") as f:
+            f.write(data)
+        digest = hashlib.sha256(data).hexdigest() if sums is None else sums
+        write(os.path.join(self.served, name + ".sha256"), "%s  %s\n" % (digest, name))
+
+    def fetch(self, name):
+        dl = self.home.file("dl")
+        os.makedirs(dl, exist_ok=True)
+        return self.shell('DL="%s"; RELEASE_REPO=a/b; REL_TAG=v1.2.3; fetch_checked %s %s.sha256 && echo FETCHED && cat "$DL/%s"'
+                          % (dl, name, name, name))
+
+    def test_a_download_that_matches_its_checksum_is_kept(self):
+        self.serve("quire-test.tar.gz", b"the real tarball")
+        r = self.fetch("quire-test.tar.gz")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("quire-test.tar.gz matches its SHA-256", r.stdout)
+        self.assertTrue(r.stdout.endswith("FETCHED\nthe real tarball"), r.stdout)
+
+    def test_a_download_that_doesnt_match_stops_the_install(self):
+        self.serve("quire-test.tar.gz", b"something else", sums=hashlib.sha256(b"the real tarball").hexdigest())
+        r = self.fetch("quire-test.tar.gz")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("doesn't match its published checksum", r.stdout)
+        self.assertNotIn("FETCHED", r.stdout)
+
+    def test_a_python3_that_doesnt_run_is_not_used(self):
+        # As on a Mac without the command-line tools: python3 is there and fails.
+        write(os.path.join(self.bin, "python3"), "#!/bin/sh\necho 'xcode-select: install the tools' >&2\nexit 1\n", 0o755)
+        settings = self.home.file("config/quire/settings.json")
+        r = self.shell('if have_python; then echo USABLE; fi; QUIRE_SETTINGS="%s"; FOLDER="%s"; STAMP=t; write_settings'
+                       % (settings, self.home.file("notes")))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertNotIn("USABLE", r.stdout)
+        with open(settings, encoding="utf-8") as f:
+            self.assertEqual(f.read(), '{\n  "folder": "%s"\n}\n' % self.home.file("notes"))
+
+    @unittest.skipUnless(shutil.which("python3", path="/usr/bin:/bin"), "no python3 in /usr/bin")
+    def test_a_python3_that_runs_is_used(self):
+        r = self.shell("have_python && echo USABLE")
+        if platform.system() == "Darwin" and subprocess.run(["xcode-select", "-p"], stdout=subprocess.DEVNULL,
+                                                             stderr=subprocess.DEVNULL).returncode != 0:
+            self.assertNotIn("USABLE", r.stdout)
+        else:
+            self.assertIn("USABLE", r.stdout)
 
 
 if __name__ == "__main__":

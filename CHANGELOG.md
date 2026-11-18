@@ -26,6 +26,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: pinning or unpinning a search while searches.json can't be read (evicted from iCloud) changes nothing and says why, rather than writing over every other pinned search.
 - **Core**: "Merge ex-split journals" leaves a file in the journal root alone unless its entries carry its tag, as the migration does: an export saved there (`journal-2026.md`) is no longer folded into the day files and deleted.
 - **Core**: the iPhone Inbox shows each draft once after a fold of `inbox.md` that stopped part way, as the journal list already did.
+- **Install**: `install.sh` uses python3 only when it actually runs: on a Mac without the command-line tools the `/usr/bin/python3` stub is passed over (never started, so no install offer pops up) and the settings are written without it.
 
 ### Security
 - **Terminal**: `quire update` refuses a release that has no signature for the file it would install, instead of installing it on its SHA-256 alone.
