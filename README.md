@@ -132,11 +132,12 @@ GitHub release as the files they describe. A match means the download arrived
 whole; it does not prove who built it, since anyone able to replace a release
 file could replace its checksum too. The AppImage is also signed with a key
 that is not on GitHub, and the desktop app checks that signature every time it
-updates itself from Settings › About. `install.sh` and `quire update` check
-the SHA-256 only. Releases built by the current pipeline put a `.sig` beside
-each AppImage and each terminal tarball (the updater's key; base64 of a
-minisign signature), so the stronger check can be made by hand; `quire
-update` makes it whenever the release has one.
+updates itself from Settings › About. `install.sh` checks the SHA-256 only.
+Releases built by the current pipeline put a `.sig` beside each AppImage and
+each terminal tarball (the updater's key; base64 of a minisign signature), so
+the stronger check can be made by hand; `quire update` always makes it, and
+refuses a release that has no signature (the release pipeline won't publish
+one without).
 
 ## The terminal
 

@@ -153,13 +153,16 @@ pub fn verify_signature(pubkey: &str, bytes: &[u8], sig: &str) -> Result<(), Str
     key.verify(bytes, &sig, true).map_err(|e| format!("the signature doesn't match: {e}"))
 }
 
-/// Check a downloaded release file against its `.sig`, when the release has
-/// one. A signature that is there and fails stops the update. A release with
-/// none (0.11.0 and older) is said in a line and rests on its SHA-256 alone.
+/// Check a downloaded release file against its `.sig`. A signature that
+/// fails, or none at all, stops the update: the SHA-256 comes from the same
+/// release, so on its own it says nothing about who made it. (Releases from
+/// 0.11.0 and older have no signatures; they are installed by hand.)
 fn check_signature(agent: &ureq::Agent, rel: &Release, name: &str, bytes: &[u8]) -> Result<(), String> {
     let Some(url) = url_of(rel, &format!("{name}.sig")) else {
-        println!("  note: this release has no signature for {name}; it was checked against its SHA-256 only.");
-        return Ok(());
+        return Err(format!(
+            "release {} has no signature for {name}, so it can't be checked; nothing was changed.",
+            rel.tag_name
+        ));
     };
     let sig = String::from_utf8(download(agent, &url)?).map_err(|_| format!("The signature of {name} isn't text; nothing was changed."))?;
     verify_signature(UPDATER_PUBKEY, bytes, &sig).map_err(|e| format!("{name} is not signed by Quire's release key ({e}); nothing was changed."))
@@ -639,6 +642,21 @@ pub fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A release without a signature for the file is refused before
+    /// anything is downloaded: a SHA-256 from the same release proves nothing
+    /// about who made it.
+    #[test]
+    fn a_release_with_no_signature_is_refused() {
+        let rel = Release {
+            tag_name: "v9.0.0".into(),
+            body: String::new(),
+            assets: vec![Asset { name: "quire-x.tar.gz".into(), browser_download_url: "https://github.com/a/b".into() }],
+        };
+        let agent = ureq::Agent::new_with_defaults();
+        let err = check_signature(&agent, &rel, "quire-x.tar.gz", b"bytes").unwrap_err();
+        assert!(err.contains("no signature") && err.contains("nothing was changed"), "{err}");
+    }
 
     #[test]
     fn versions() {

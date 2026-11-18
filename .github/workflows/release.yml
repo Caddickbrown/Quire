@@ -197,9 +197,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           mkdir ../signatures
+          # Unsigned is never published: `quire update` refuses a release
+          # with no .sig, so it would strand every terminal install.
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "::warning::no TAURI_SIGNING_PRIVATE_KEY secret: nothing is signed, and the AppImage won't be able to update itself"
-            exit 0
+            echo "::error::no TAURI_SIGNING_PRIVATE_KEY secret: nothing can be signed, so nothing is published"
+            exit 1
           fi
           [ -n "$(jq -r '.plugins.updater.pubkey' src-tauri/tauri.conf.json)" ] \
             || { echo "::error::the signing key is set but plugins.updater.pubkey in tauri.conf.json is empty"; exit 1; }

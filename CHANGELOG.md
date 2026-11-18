@@ -20,6 +20,10 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Security
+- **Terminal**: `quire update` refuses a release that has no signature for the file it would install, instead of installing it on its SHA-256 alone.
+- **Releases**: the release workflow fails when the signing key secret is missing, so an unsigned release is never published.
+
 ## [1.0.0] — 2026-11-17
 
 Quire 1.0: no longer a prototype, but a journal to keep every day. The terminal app, the Linux desktop app and the app for iPhone, iPad and Mac all read and write the same plain Markdown files, a sync landing mid-save can't overwrite an edit, a restore can't empty the journal, and updates are signed and checked. One line installs it on Linux or a Mac: `curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash` (new in this release, the Mac gets the terminal app as a download too).
