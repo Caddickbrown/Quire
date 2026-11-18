@@ -35,6 +35,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 ### Security
 - **Terminal**: `quire update` refuses a release that has no signature for the file it would install, instead of installing it on its SHA-256 alone.
 - **Releases**: the release workflow fails when the signing key secret is missing, so an unsigned release is never published.
+- **Terminal**: `quire update` checks a new `<tarball>.release.sig`, which signs the release tag and file name with the tarball's SHA-256, so an older signed tarball re-uploaded under a new tag is refused. Releases keep publishing the tarball's own `.sig` for clients from before this; a release without `.release.sig` is refused by this one.
+- **Terminal**: `quire update` no longer renames over a `jnl` beside `quire` that isn't Quire's (the Go CLI, the bash script, anything put there by hand): it stops with nothing changed and says so.
 
 ## [1.0.0] — 2026-11-17
 

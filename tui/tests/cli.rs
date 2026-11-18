@@ -150,3 +150,12 @@ fn a_bad_option_is_said_and_writes_nothing() {
     }
     assert!(!run.home.path().join("notes").exists());
 }
+
+/// Review 12: `quire update` replaces a `jnl` beside it only when it is
+/// Quire's, judged by its bytes; both built binaries pass that test.
+#[test]
+fn both_binaries_are_recognised_as_quires() {
+    for bin in [env!("CARGO_BIN_EXE_quire"), env!("CARGO_BIN_EXE_jnl")] {
+        assert!(quire_tui::update::is_quires(Path::new(bin)), "{bin}");
+    }
+}

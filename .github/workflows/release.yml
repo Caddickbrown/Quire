@@ -213,9 +213,25 @@ jobs:
             mv "$f.sig" ../signatures/
             n=$((n + 1))
           done
+          # Each terminal tarball's name carries no version, and its .sig
+          # covers its bytes only: an older signed tarball re-uploaded under a
+          # new tag would pass. <file>.release.sig signs the tag, the name and
+          # the SHA-256 together; `quire update` rebuilds this text and checks
+          # it (release_statement in tui/src/update.rs, a test holds the two
+          # together). The bytes' .sig stays for clients from before that.
+          mkdir ../statements
+          for f in ../dist/quire-*.tar.gz; do
+            name=$(basename "$f")
+            stmt="../statements/$name.release"
+            printf 'Quire release file\ntag: %s\nfile: %s\nsha256: %s\n' "$TAG" "$name" "$(sha256sum "$f" | cut -d' ' -f1)" >"$stmt"
+            npx tauri signer sign "$stmt" >/dev/null
+            [ -s "$stmt.sig" ] || { echo "::error::no release signature was written for $name"; exit 1; }
+            mv "$stmt.sig" ../signatures/
+            n=$((n + 1))
+          done
           # Two AppImages (Linux) and four tarballs (Linux and macOS, each
-          # x86_64 and aarch64).
-          [ "$n" -eq 6 ] || { echo "::error::signed $n files, expected 6"; exit 1; }
+          # x86_64 and aarch64), and the four tarballs' release statements.
+          [ "$n" -eq 10 ] || { echo "::error::signed $n files, expected 10"; exit 1; }
           ls -l ../signatures
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

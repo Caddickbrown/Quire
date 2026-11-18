@@ -168,6 +168,35 @@ fn check_signature(agent: &ureq::Agent, rel: &Release, name: &str, bytes: &[u8])
     verify_signature(UPDATER_PUBKEY, bytes, &sig).map_err(|e| format!("{name} is not signed by Quire's release key ({e}); nothing was changed."))
 }
 
+/// What a terminal tarball's `<file>.release.sig` signs: the release's tag,
+/// the file's name and its SHA-256, one per line. The tarball's own `.sig`
+/// covers its bytes only, and its name carries no version, so an older
+/// signed tarball uploaded under a new tag passed as the new release. This
+/// one names the tag. .github/workflows/release.yml writes the same text,
+/// byte for byte; a test holds the format.
+pub fn release_statement(tag: &str, name: &str, bytes: &[u8]) -> String {
+    format!("Quire release file\ntag: {tag}\nfile: {name}\nsha256: {}\n", hex_sha256(bytes))
+}
+
+/// Check a downloaded terminal tarball against its `.release.sig`: signed by
+/// the release key for this release's tag and this file name. None at all
+/// stops the update too. (Releases made before this check have only the bytes' `.sig`;
+/// a client from before this change still checks that one, which every
+/// release keeps publishing.)
+fn check_release_signature(agent: &ureq::Agent, rel: &Release, name: &str, bytes: &[u8]) -> Result<(), String> {
+    let sig_name = format!("{name}.release.sig");
+    let Some(url) = url_of(rel, &sig_name) else {
+        return Err(format!(
+            "release {} has no {sig_name}, so it can't be checked as this release's; nothing was changed.",
+            rel.tag_name
+        ));
+    };
+    let sig = String::from_utf8(download(agent, &url)?).map_err(|_| format!("{sig_name} isn't text; nothing was changed."))?;
+    verify_signature(UPDATER_PUBKEY, release_statement(&rel.tag_name, name, bytes).as_bytes(), &sig).map_err(|e| {
+        format!("{name} is not signed by Quire's release key as release {}'s ({e}); nothing was changed.", rel.tag_name)
+    })
+}
+
 /// The named binaries from a release tarball, by file name (any directory).
 pub fn unpack(tarball: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     let mut out = Vec::new();
@@ -224,13 +253,34 @@ fn sync_dir(dir: &Path) {
     }
 }
 
+/// What every Quire terminal binary holds (the repository `update` reads
+/// releases from), and an older jnl (the Go CLI, the bash script) doesn't.
+const QUIRE_MARK: &[u8] = b"Caddickbrown/Quire";
+
+/// Whether the file at `path` is one of Quire's terminal binaries, judged by
+/// its bytes. A link is judged by what it points at.
+pub fn is_quires(path: &Path) -> bool {
+    std::fs::read(path).is_ok_and(|b| b.windows(QUIRE_MARK.len()).any(|w| w == QUIRE_MARK))
+}
+
 /// Put the new binaries beside the running one. Every one is written in full
 /// first, under a temporary name; only then is each renamed over the old
 /// name, so a full disk or a failed write leaves both old binaries as they
 /// were, never a new `quire` beside an old `jnl`. If a rename itself fails,
 /// the ones already done are put back from a link to the old file. The
-/// running process keeps its own (now unlinked) copy throughout.
+/// running process keeps its own (now unlinked) copy throughout. A file
+/// already there that isn't Quire's (another `jnl`, put beside it by hand)
+/// is never written over: the update stops first, with nothing changed.
 pub fn replace_bins(dir: &Path, bins: &[(String, Vec<u8>)]) -> Result<(), String> {
+    for (name, _) in bins {
+        let dest = dir.join(name);
+        if std::fs::symlink_metadata(&dest).is_ok() && !std::fs::metadata(&dest).is_ok_and(|m| m.is_dir()) && !is_quires(&dest) {
+            return Err(format!(
+                "{} isn't Quire's (another {name}?), so it wasn't replaced; nothing was changed. Move it elsewhere and run the update again.",
+                dest.display()
+            ));
+        }
+    }
     let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
     let drop_staged = |staged: &[(PathBuf, PathBuf)]| staged.iter().for_each(|(tmp, _)| { let _ = std::fs::remove_file(tmp); });
     for (name, data) in bins {
@@ -407,7 +457,7 @@ fn update_terminal(agent: &ureq::Agent, rel: &Release, check_only: bool) -> Resu
     if hex_sha256(&tarball) != want {
         return Err("The download doesn't match its checksum; nothing was changed.".into());
     }
-    check_signature(agent, rel, &name, &tarball)?;
+    check_release_signature(agent, rel, &name, &tarball)?;
     replace_bins(&dir, &unpack(&tarball)?)?;
     println!("  ✓ Quire {version} installed in {}.", dir.display());
     Ok(())
@@ -813,7 +863,7 @@ mod tests {
         assert_eq!(bins.iter().map(|b| b.0.as_str()).collect::<Vec<_>>(), ["quire", "jnl"]);
         assert!(unpack(&tarball(&["quire"])).unwrap_err().contains("no jnl"));
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(d.path().join("quire"), "old").unwrap();
+        std::fs::write(d.path().join("quire"), "old Caddickbrown/Quire build").unwrap();
         replace_bins(d.path(), &bins).unwrap();
         assert_eq!(std::fs::read_to_string(d.path().join("quire")).unwrap(), "#!quire");
         assert_eq!(std::fs::read_to_string(d.path().join("jnl")).unwrap(), "#!jnl");
@@ -826,18 +876,72 @@ mod tests {
     #[test]
     fn a_failed_stage_or_rename_leaves_both_old_binaries() {
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(d.path().join("quire"), "old quire").unwrap();
+        std::fs::write(d.path().join("quire"), "old quire, Caddickbrown/Quire").unwrap();
         // A folder where `jnl` should go: its rename fails after quire's worked.
         std::fs::create_dir(d.path().join("jnl")).unwrap();
         std::fs::write(d.path().join("jnl/keep"), "x").unwrap();
         let bins = vec![("quire".to_string(), b"new quire".to_vec()), ("jnl".to_string(), b"new jnl".to_vec())];
         let e = replace_bins(d.path(), &bins).unwrap_err();
         assert!(e.contains("nothing was changed"), "{e}");
-        assert_eq!(std::fs::read_to_string(d.path().join("quire")).unwrap(), "old quire");
+        assert_eq!(std::fs::read_to_string(d.path().join("quire")).unwrap(), "old quire, Caddickbrown/Quire");
         assert_eq!(names_in(d.path()), ["jnl", "quire"]);
         // A folder that can't be written to: nothing is staged, nothing renamed.
         let e = replace_bins(&d.path().join("missing"), &bins).unwrap_err();
         assert!(e.contains("nothing was changed"), "{e}");
+    }
+
+    /// Review 12: a `jnl` beside `quire` that isn't Quire's (the Go CLI, the
+    /// bash script) is not renamed over; Quire's own, or a link to it, is.
+    #[test]
+    fn a_jnl_that_isnt_quires_is_left_where_it_is() {
+        let bins = vec![("quire".to_string(), b"new quire Caddickbrown/Quire".to_vec()), ("jnl".to_string(), b"new jnl Caddickbrown/Quire".to_vec())];
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("quire"), "old quire Caddickbrown/Quire").unwrap();
+        std::fs::write(d.path().join("jnl"), "#!/usr/bin/env bash\n# the original jnl\n: \"${JNL_DIR:=$HOME/notes}\"\n").unwrap();
+        let e = replace_bins(d.path(), &bins).unwrap_err();
+        assert!(e.contains("isn't Quire's") && e.contains("nothing was changed"), "{e}");
+        assert!(std::fs::read_to_string(d.path().join("jnl")).unwrap().contains("the original jnl"));
+        assert_eq!(std::fs::read_to_string(d.path().join("quire")).unwrap(), "old quire Caddickbrown/Quire", "not half done");
+        assert_eq!(names_in(d.path()), ["jnl", "quire"]);
+        // Quire's own jnl, as a link to quire: replaced.
+        std::fs::remove_file(d.path().join("jnl")).unwrap();
+        std::os::unix::fs::symlink("quire", d.path().join("jnl")).unwrap();
+        replace_bins(d.path(), &bins).unwrap();
+        assert_eq!(std::fs::read_to_string(d.path().join("jnl")).unwrap(), "new jnl Caddickbrown/Quire");
+        // None there yet: written.
+        std::fs::remove_file(d.path().join("jnl")).unwrap();
+        replace_bins(d.path(), &bins).unwrap();
+        assert!(d.path().join("jnl").is_file());
+    }
+
+    /// The format release.yml signs, byte for byte, and a statement signed by
+    /// a throwaway key (`tauri signer sign` on that text) checked against it:
+    /// another tag, another name or other bytes don't verify.
+    #[test]
+    fn a_tarballs_signature_names_its_release() {
+        const KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQzODZBM0ZGNDY2OUVBMzgKUldRNDZtbEcvNk9HMDBOSmx2ZGxIdWlGbm5wbEI5YTBXU3VpRGhjRU1DVGZsR0ZsalQzMld6V08K";
+        const SIG: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRNDZtbEcvNk9HMDNqNjJDb1dpazdkeHBMT1dBTXZSOU53VDZneUVUSGlhYmdpby9kNUhmNmIxTndQMDhPYTc5cWI3MldxL1NWZm9ac21QWmNZNkNISkM4YzdQMi9lcHdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0OTkyMjM3CWZpbGU6cXVpcmUtdGVzdC50YXIuZ3oucmVsZWFzZQo0ckczVUloWXV4R3JmMmFxYXlPdHd2V3IwV0gyM3FIeHFyb05GeEZxaXRMb2pvMm15dGFZejRKb0dqM1V1ZERwN2JiLzQ1bDFpTitYM1JNWkRIN0JEZz09Cg==";
+        let statement = release_statement("v9.9.9", "quire-test.tar.gz", SIGNED);
+        assert_eq!(statement, format!("Quire release file\ntag: v9.9.9\nfile: quire-test.tar.gz\nsha256: {}\n", hex_sha256(SIGNED)));
+        assert_eq!(verify_signature(KEY, statement.as_bytes(), SIG), Ok(()));
+        for other in [release_statement("v9.9.10", "quire-test.tar.gz", SIGNED), release_statement("v9.9.9", "quire-other.tar.gz", SIGNED),
+                      release_statement("v9.9.9", "quire-test.tar.gz", b"an older tarball")] {
+            assert!(verify_signature(KEY, other.as_bytes(), SIG).is_err(), "{other}");
+        }
+        // The tarball's own .sig, of its bytes only, is not this signature.
+        assert!(verify_signature(TEST_KEY, statement.as_bytes(), TEST_SIG).is_err());
+        // release.yml writes the same lines.
+        let workflow = include_str!("../../.github/workflows/release.yml");
+        assert!(workflow.contains(r"printf 'Quire release file\ntag: %s\nfile: %s\nsha256: %s\n' "), "release.yml's statement format changed");
+    }
+
+    /// A release with only the bytes' signature is refused by this client.
+    #[test]
+    fn a_release_with_no_release_signature_is_refused() {
+        let rel = Release { tag_name: "v9.9.9".into(), body: String::new(),
+                            assets: vec![Asset { name: "quire-x.tar.gz.sig".into(), browser_download_url: "https://github.com/x".into() }] };
+        let err = check_release_signature(&ureq::Agent::new_with_defaults(), &rel, "quire-x.tar.gz", b"bytes").unwrap_err();
+        assert!(err.contains("quire-x.tar.gz.release.sig") && err.contains("nothing was changed"), "{err}");
     }
 
     fn names_in(dir: &Path) -> Vec<String> {

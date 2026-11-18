@@ -268,7 +268,8 @@ legacy/             Nook and Wander, kept for reference: nothing builds from the
   which stays open), settings and themes as picks that preview live (Esc puts the old look back), toggles
   that say which way they go, deletes in red that ask inside the menu, macros, backups, saved searches,
   tags and any entry by name. `Design/CommandMenu.swift` makes the state from the screen, runs what needs
-  no screen, and draws the panel; `PhoneRoot.runCommand` does the rest. It opens from ⌘K or the ⌘ icon
+  no screen, and draws the panel; `Models/QuireMacros.swift` runs the macros (cross-platform, so the
+  tests run them on a real store); `PhoneRoot.runCommand` does the rest. It opens from ⌘K or the ⌘ icon
   (masthead, reader, composer). It is drawn on the monitor when that is showing things (`VSCommandPalette`
   in hidden mode) and over the phone otherwise; on the monitor, nothing that only the phone draws (the Media
   Library, Settings' pages, pickers) is listed. A command that goes elsewhere leaves a sheet or the composer
@@ -333,7 +334,10 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   desktop app as `Quire_<v>_<arch>.AppImage`, `.deb` and `.rpm` (+
   `SHA256SUMS-desktop-<arch>`). With the signing secrets set, each AppImage and
   each terminal tarball also gets a `<file>.sig` (the updater's key; base64 of
-  a minisign signature). The SHA-256 files prove a download arrived whole, not
+  a minisign signature), and each terminal tarball a `<file>.release.sig`: the
+  same key over `Quire release file` / `tag:` / `file:` / `sha256:` lines
+  (`release_statement` in `tui/src/update.rs`), so a signature names its
+  release. The SHA-256 files prove a download arrived whole, not
   who made it: they sit in the same release. Asset names for the terminal app carry no
   version, so `releases/latest/download/quire-<target>.tar.gz` is stable.
 - **Terminal updates**: `quire update --main` (also `jnl update --main`) runs
@@ -342,9 +346,9 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   `quire update` (also `jnl update`; `--check` only reports) reads the latest release from the GitHub API, compares its tag
   with `CARGO_PKG_VERSION`, downloads the tarball for the target baked in as
   `QUIRE_RELEASE_TARGET` (https from GitHub's hosts only), checks the SHA-256 and,
-  when the release has one, the `.sig` against the updater's public key (a failed
-  signature stops the update; a release without one is noted), and renames the new binaries over
-  the old ones (`tui/src/update.rs`). A build without `QUIRE_RELEASE_TARGET`
+  the `.release.sig` against the updater's public key for this tag and file name (a
+  failed or missing signature stops the update), and renames the new binaries over
+  the old ones (`tui/src/update.rs`), never over a `jnl` there that isn't Quire's. A build without `QUIRE_RELEASE_TARGET`
   came from source (a Mac installed before 1.0, or with `--build`) and rebuilds the release tag with `cargo install`,
   or is told to re-run `install.sh` if it has no cargo or isn't in a `bin` folder. It updates the desktop
   AppImage too (found from `Quire.desktop`'s `Exec` (or the old `quire.desktop`), else
