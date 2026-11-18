@@ -1213,6 +1213,37 @@ final class JournalStoreTests: XCTestCase {
                        "its JPEG is taken away again")
     }
 
+    /// Review L20: a link form the rewrite can't see (a plain [text](...) link, another case) keeps
+    /// the HEIC where it is, even though another link to it was rewritten.
+    func testAHEICStillNamedByALinkTheRewriteCantSeeIsNotParked() async throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let side = 64
+        let context = try XCTUnwrap(CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                                              space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(CGColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        let image = try XCTUnwrap(context.makeImage())
+        let data = NSMutableData()
+        let made = CGImageDestinationCreateWithData(data, "public.heic" as CFString, 1, nil)
+        try XCTSkipIf(made == nil, "this host can't write HEIC")
+        CGImageDestinationAddImage(made!, image, nil)
+        try XCTSkipUnless(CGImageDestinationFinalize(made!), "this host can't write HEIC")
+        let heic = base.appendingPathComponent("assets/2026/11/IMG_0003.heic")
+        try FileManager.default.createDirectory(at: heic.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try (data as Data).write(to: heic)
+        write("[2026-11-17 08:00:00] photo\n![](assets/2026/11/IMG_0003.heic)\n[full size](assets/2026/11/IMG_0003.heic)\n",
+              to: day(base, "2026-11-17"))
+        write("[2026-11-18 08:00:00] again\n![](assets/2026/11/img_0003.HEIC)\n", to: day(base, "2026-11-18"))
+        store.reload()
+        try await waitForIndex(store)
+        let res = await store.compressExistingMedia()
+        XCTAssertEqual(res.converted, 0, "parked with links still naming it")
+        XCTAssertTrue(read(day(base, "2026-11-17")).contains("![](assets/2026/11/IMG_0003.jpg)"), "the link it can see still moves")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: heic.path), "a link the rewrite can't see would be dead")
+    }
+
     /// A8: a changed file is our own echo only while it still looks like
     /// something we left there.
     func testAFileWeWroteThatSomeoneElseThenChangedIsNotOurEcho() throws {

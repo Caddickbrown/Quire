@@ -3022,12 +3022,27 @@ final class JournalStore: ObservableObject {
             // too, so a later run doesn't find a second copy.
             if !pointedAt { try? FileManager.default.removeItem(at: jpgURL) }
             guard relinked, pointedAt else { continue }
+            // Still named after the rewrite, in any form (a plain [text](...) link, ./assets from a
+            // subfolder, another case): parked, that link would be dead. The HEIC and its JPEG both
+            // stay; the links that moved show the JPEG (review L20).
+            guard !Self.stillNamed(heic.lastPathComponent, in: texts.values) else { continue }
             // Parked, not removed: a link this didn't know to rewrite (a
             // template, transfer.md) can still be put right by hand.
             try? vault.rename(from: heicRel, to: recovery + "/" + heicRel)
             converted += 1
         }
         return converted
+    }
+
+    /// Whether any of `texts` still mentions `name` ("IMG_0001.heic"), ignoring case, as written or
+    /// percent-encoded. Errs towards yes: another folder's photo of the same name counts too.
+    nonisolated static func stillNamed(_ name: String, in texts: some Sequence<String>) -> Bool {
+        let plain = name.lowercased()
+        let encoded = (name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name).lowercased()
+        return texts.contains { text in
+            let lower = text.lowercased()
+            return lower.contains(plain) || lower.contains(encoded)
+        }
     }
 
     /// Where a HEIC's JPEG goes: beside it under the same name, or `name-1.jpg`,
