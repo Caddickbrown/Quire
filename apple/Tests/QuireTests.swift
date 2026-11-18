@@ -859,7 +859,14 @@ final class ThirteenNovemberTests: XCTestCase {
         let code = try source("Quire/Design/DeskCode.swift")
         XCTAssertFalse(code.contains("row.time + \":00\""), "no made-up seconds")
         XCTAssertTrue(code.contains("row.time + \":\" + row.seconds"))
-        XCTAssertTrue(code.contains("headerHint: weekday.string(from: date)"), "an open entry names its day")
+        XCTAssertTrue(code.contains("day: weekday.string(from: date)"), "an open entry names its day")
+        // The day sits at the end of the breadcrumb bar, not inside the
+        // header's timestamp ("[2026-11-18 Wednesday 11:13:05]" looked odd).
+        XCTAssertFalse(code.contains("inlay"), "no weekday drawn into the header line")
+        XCTAssertTrue(code.contains("VSCrumbs(path: f.path, name: f.name, day: f.day, s: s)"))
+        let crumbs = try XCTUnwrap(code.range(of: "private struct VSCrumbs: View {"))
+        let crumbsEnd = try XCTUnwrap(code.range(of: "private struct VSStatusBar: View {"))
+        XCTAssertTrue(code[crumbs.upperBound..<crumbsEnd.lowerBound].contains("if let day"), "the breadcrumb draws the day after the file")
         let rows = try source("Quire/Views/ExternalDisplayView.swift")
         XCTAssertFalse(rows.contains("prefix(1500)"), "long previews are no longer cut at 1,500 characters")
     }
