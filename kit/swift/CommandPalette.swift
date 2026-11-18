@@ -402,6 +402,9 @@ struct CommandPalette<List: CommandList>: Equatable {
         return chosen.keepsSheet || frames.contains { $0.opener?.keepsSheet == true }
     }
     private var restore: List.Action?
+    /// Which kind of preview `restore` puts back: the pick or step the previewing row belongs to. Arrowing from
+    /// "Theme: Sepia" to "Monitor theme: Sepia" changes kind, so the first is put back before the second shows.
+    private var restoreKind: String?
     private var effects: [Effect] = []
     private var frames: [Frame] = []
     private var marks: [Mark] = []
@@ -541,6 +544,7 @@ struct CommandPalette<List: CommandList>: Equatable {
         if let restore { effects.append(.revert(restore)) }
         previewing = nil
         restore = nil
+        restoreKind = nil
     }
 
     /// What to do now for previews, in order. Each call hands them over once.
@@ -556,6 +560,7 @@ struct CommandPalette<List: CommandList>: Equatable {
             // Chosen: what's previewing stays.
             previewing = nil
             restore = nil
+            restoreKind = nil
             chosen = row
             if !row.destructive && !row.confirms, let recents {
                 // A step's choice is remembered as the step, so the list shows "Move to…" rather than one folder.
@@ -596,6 +601,7 @@ struct CommandPalette<List: CommandList>: Equatable {
             previewing = nil
             restore = nil
         }
+        restoreKind = nil
         query = mark.query
         layOut()
         selected = rows.contains { $0.id == mark.selected } ? mark.selected : rows.first?.id
@@ -620,6 +626,13 @@ struct CommandPalette<List: CommandList>: Equatable {
         let want = lit?.preview
         guard want != previewing else { return }
         if let want {
+            let kind = previewKind
+            if kind != restoreKind {
+                // A preview of another kind: put the first back (if it's still showing) and remember this kind's own.
+                if previewing != nil, let restore { effects.append(.revert(restore)) }
+                restore = nil
+                restoreKind = kind
+            }
             if restore == nil { restore = lit?.revert ?? stepRevert }
             previewing = want
             effects.append(.preview(want))
@@ -627,6 +640,15 @@ struct CommandPalette<List: CommandList>: Equatable {
             if let restore { effects.append(.revert(restore)) }
             previewing = nil
         }
+    }
+
+    /// The kind of preview the lit row makes: inside a pick, the pick; at the top, the step a spread choice came from
+    /// ("theme" for "theme/sepia"), or the row itself.
+    private var previewKind: String? {
+        guard let row = lit else { return nil }
+        if case .pick(let opener, _)? = frames.last { return opener.id }
+        if let slash = row.id.firstIndex(of: "/") { return String(row.id[..<slash]) }
+        return row.id
     }
 
     private var stepRevert: List.Action? {

@@ -35,7 +35,7 @@ CommandRow("item.delete", "Delete", symbol: "trash", step: .run(.delete(id)),
 - **Toggles.** `CommandRow.toggle(id, isOn:, turnOn:, turnOff:, states:, symbol:, action:)` makes a row whose title says what choosing it does ("Pause monitor" while showing, "Resume monitor" while paused), with `isOn` and `state` ("Paused") for drawing. Either title finds it.
 - **Destructive.** `destructive: true` is drawn red, and needs `confirms` or `undoable`. Destructive rows never go into Recents, so ⌘K then Return can't delete.
 - **Context.** Rows with `context` set act on the selected item. With nothing typed they come right after Recents, under that name; typing ranks them a little higher.
-- **Preview.** `preview: .theme("sepia")` is done while the row is lit; `revert` (or the pick's `revert`) puts back what was there. The revert is read once, at the first preview, so a list rebuilt mid-preview can't make the previewed theme the one put back. Opening the palette never previews: the first key does.
+- **Preview.** `preview: .theme("sepia")` is done while the row is lit; `revert` (or the pick's `revert`) puts back what was there. The revert is read once, at the first preview, so a list rebuilt mid-preview can't make the previewed theme the one put back. Each pick (or step, for its spread choices) is its own kind: arrowing from "Theme: Sepia" to "Monitor theme: Sepia" puts the app theme back before the monitor previews (0.7.1). Opening the palette never previews: the first key does.
 
 ## Steps
 

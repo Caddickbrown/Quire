@@ -10,13 +10,15 @@ copy, so --check needs nothing but the app's own repo: a file that no longer
 matches its hash was edited in place, which the kit's rules forbid. Fix it in
 the kit, then sync again.
 
-kit/tests/ stays in the kit's home and is never copied.
+kit/tests/ stays in the kit's home and is never copied. In a git checkout only
+files git tracks are shipped: `git add` a new kit file before --manifest.
 """
 
 import argparse
 import hashlib
 import pathlib
 import shutil
+import subprocess
 import sys
 
 KIT = pathlib.Path(__file__).resolve().parent.parent
@@ -27,11 +29,24 @@ def sha256(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def tracked(kit: pathlib.Path) -> list[pathlib.Path] | None:
+    """The files git tracks under kit/, or None when kit/ isn't in a git checkout (or git isn't here)."""
+    try:
+        result = subprocess.run(["git", "-C", str(kit), "ls-files", "-z", "--", "."],
+                                capture_output=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return [pathlib.Path(name) for name in result.stdout.decode().split("\0") if name]
+
+
 def shipped(kit: pathlib.Path) -> list[pathlib.Path]:
+    """What a copy carries: in a git checkout, only files git tracks (so a .DS_Store or a cargo target/ never
+    ships); elsewhere, every file. Either way, never tests/, __pycache__ or the MANIFEST itself."""
+    listed = tracked(kit)
+    candidates = listed if listed is not None else [p.relative_to(kit) for p in kit.rglob("*")]
     out = []
-    for path in sorted(kit.rglob("*")):
-        rel = path.relative_to(kit)
-        if path.is_file() and rel.as_posix() != "MANIFEST" and not NOT_SHIPPED.intersection(rel.parts):
+    for rel in sorted(set(candidates)):
+        if (kit / rel).is_file() and rel.as_posix() != "MANIFEST" and not NOT_SHIPPED.intersection(rel.parts):
             out.append(rel)
     return out
 

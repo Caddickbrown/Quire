@@ -1,0 +1,128 @@
+{
+ "about": "Firmware versions and what an update's signature covers (app-kit docs/DEVICES.md section 3, Signed OTA).",
+ "version": 1,
+ "parse": [
+  {
+   "text": "2.6.0",
+   "version": [
+    2,
+    6,
+    0
+   ]
+  },
+  {
+   "text": "v2.5",
+   "version": [
+    2,
+    5,
+    0
+   ]
+  },
+  {
+   "text": "V2.10.3",
+   "version": [
+    2,
+    10,
+    3
+   ]
+  },
+  {
+   "text": " 2.6.1 ",
+   "version": [
+    2,
+    6,
+    1
+   ]
+  },
+  {
+   "text": "2",
+   "version": null
+  },
+  {
+   "text": "2.6.0.1",
+   "version": null
+  },
+  {
+   "text": "2.x",
+   "version": null
+  },
+  {
+   "text": "2.6-beta",
+   "version": null
+  },
+  {
+   "text": "",
+   "version": null
+  },
+  {
+   "text": "-2.6",
+   "version": null
+  },
+  {
+   "text": "2..6",
+   "version": null
+  },
+  {
+   "text": "1234567890.0",
+   "version": null
+  },
+  {
+   "text": "٢.6",
+   "version": null,
+   "why": "only ASCII digits"
+  }
+ ],
+ "newer": [
+  {
+   "candidate": "2.6.0",
+   "current": "v2.5",
+   "newer": true
+  },
+  {
+   "candidate": "v2.10",
+   "current": "v2.4",
+   "newer": true
+  },
+  {
+   "candidate": "2.6.0",
+   "current": "2.6.0",
+   "newer": false
+  },
+  {
+   "candidate": "2.6",
+   "current": "2.6.0",
+   "newer": false
+  },
+  {
+   "candidate": "2.5.9",
+   "current": "2.6.0",
+   "newer": false
+  },
+  {
+   "candidate": "3.0.0",
+   "current": "2.99.99",
+   "newer": true
+  },
+  {
+   "candidate": "junk",
+   "current": "2.6.0",
+   "newer": false
+  },
+  {
+   "candidate": "2.7.0",
+   "current": "junk",
+   "newer": false
+  }
+ ],
+ "message": [
+  {
+   "product": "pala",
+   "board": "pala-s3",
+   "version": "2.6.1",
+   "size": 1534976,
+   "sha256": "9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08",
+   "bytes": "pala|pala-s3|2.6.1|1534976|9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  }
+ ],
+ "signature": "ECDSA P-256 with SHA-256 over the message bytes, DER encoded, standard base64 in the manifest's sig. The manifest's key_id picks one of the public keys built into the firmware."
+}

@@ -23,7 +23,9 @@ servers in any language. `kit/MANIFEST` records a hash of every file, and
 | `tools/sync_kit.py` | Copies the kit into an app; `--check` for drift; `--manifest` after changing the kit |
 | `swift/` | `Color(hex:)`, `Color(light:dark:)`, `Contrast`, `Font.scaled`, `KitMotion`, `RelativeDate`, `SyncStatus`, `CommandPalette` (the ⌘K menu's rules, keys, steps, previews and recents, and its host; the app draws the panel; see `specs/PALETTE.md`), `KitFieldEscape` (Esc and ⌘. on every field and the window; the app says what a press does) |
 | `js/` | `relativeDate`, `statusLine` (ES modules, no dependencies) |
-| `vectors/` | Shared test cases the Swift and JS halves must both pass |
+| `python/home_pairing.py` | The pairing rules every home server shares (`docs/DEVICES.md` section 1): codes, tidying, keys and their hashes, scopes, limits, firmware versions and what an update's signature covers. Standard library only |
+| `rust/home-pairing/` | The same rules as a Rust crate (`sha2` only; callers pass random bytes in). Add it as a path dependency |
+| `vectors/` | Shared test cases the Swift and JS halves must both pass; `pairing.json` and `ota.json` for the Python and Rust pairing halves (and any firmware) |
 | `ci/kit.yml` | The standard GitHub Actions workflow running the three checks |
 | `tests/` | The kit's own tests; never copied into an app |
 
@@ -54,6 +56,7 @@ Change it here, never in an app's copy. Then:
 ```sh
 python3 -m unittest discover -s kit/tests      # tools, and the Swift palette rules
 node --test kit/tests/vectors.test.mjs          # JS against the shared vectors
+cargo test -p home-pairing                      # Rust pairing against the same vectors
 python3 kit/tools/sync_kit.py --manifest        # refresh the hashes
 ```
 

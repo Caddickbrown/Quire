@@ -1,0 +1,603 @@
+{
+ "about": "Shared pairing rules (app-kit docs/DEVICES.md section 1). Every server's pairing code must pass these: kit/python/home_pairing.py and kit/rust/home-pairing do. Times are seconds.",
+ "version": 1,
+ "code": {
+  "alphabet": "23456789ABCDEFGHJKLMNPQRSTUVWXYZ",
+  "length": 6,
+  "seconds": 600,
+  "max_waiting": 20,
+  "poll_wait_max": 25,
+  "ignored": "space, tab, CR, LF, '-' and '.'"
+ },
+ "tidy": [
+  {
+   "typed": "7Q4M2X",
+   "code": "7Q4M2X"
+  },
+  {
+   "typed": "7q4-m2x",
+   "code": "7Q4M2X"
+  },
+  {
+   "typed": " 7Q4 M2X ",
+   "code": "7Q4M2X"
+  },
+  {
+   "typed": "7q4.m2x",
+   "code": "7Q4M2X"
+  },
+  {
+   "typed": "7Q4–M2X",
+   "code": null,
+   "why": "an en dash is not a dash"
+  },
+  {
+   "typed": "7Q4_M2X",
+   "code": null,
+   "why": "only spaces, dashes and dots are ignored"
+  },
+  {
+   "typed": "7Q4M2",
+   "code": null,
+   "why": "too short"
+  },
+  {
+   "typed": "7Q4M2XX",
+   "code": null,
+   "why": "too long"
+  },
+  {
+   "typed": "7Q4M20",
+   "code": null,
+   "why": "0 is never in a code"
+  },
+  {
+   "typed": "7Q4M2O",
+   "code": null,
+   "why": "O is never in a code: typing it is not taken as 0"
+  },
+  {
+   "typed": "1Q4M2X",
+   "code": null,
+   "why": "1 is never in a code"
+  },
+  {
+   "typed": "IQ4M2X",
+   "code": null,
+   "why": "I is never in a code"
+  },
+  {
+   "typed": "",
+   "code": null
+  },
+  {
+   "typed": "------",
+   "code": null
+  },
+  {
+   "typed": "zzz-zzz",
+   "code": "ZZZZZZ"
+  },
+  {
+   "typed": "éQ4M2X",
+   "code": null,
+   "why": "not ASCII"
+  }
+ ],
+ "pretty": [
+  {
+   "code": "7Q4M2X",
+   "shown": "7Q4-M2X"
+  },
+  {
+   "code": "222222",
+   "shown": "222-222"
+  }
+ ],
+ "code_from_bytes": [
+  {
+   "bytes": "000000000000",
+   "code": "222222"
+  },
+  {
+   "bytes": "1f1f1f1f1f1f",
+   "code": "ZZZZZZ"
+  },
+  {
+   "bytes": "2021e0ff7f05",
+   "code": "232ZZ7"
+  },
+  {
+   "bytes": "0123456789ab",
+   "code": "3579BD"
+  }
+ ],
+ "keys": {
+  "random_bytes": 32,
+  "encoding": "base64url, no padding",
+  "length_after_prefix": 43,
+  "hash": "sha256 of the key's UTF-8 bytes, lower-case hex",
+  "cases": [
+   {
+    "prefix": "pala_dev_",
+    "bytes": "0000000000000000000000000000000000000000000000000000000000000000",
+    "key": "pala_dev_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "sha256": "ac9d6989d5319bbed7436e5a1e8efa288e0165e9c4ed9fd2f41ca074543e18e1",
+    "tail": "AAAA",
+    "display": "pala_dev_…AAAA"
+   },
+   {
+    "prefix": "pala_dev_",
+    "bytes": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "key": "pala_dev___________________________________________8",
+    "sha256": "d720f53d7cb8a027b3a7081cd0aea381edbabfec278731086be0e27a0487998b",
+    "tail": "___8",
+    "display": "pala_dev_…___8"
+   },
+   {
+    "prefix": "pala_app_",
+    "bytes": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "key": "pala_app_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "sha256": "5160869fd1521b2291311fc725fe39987eb5af84255a6588adb3f4a927768da9",
+    "tail": "dHh8",
+    "display": "pala_app_…dHh8"
+   },
+   {
+    "prefix": "fdk_",
+    "bytes": "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e0",
+    "key": "fdk___79_Pv6-fj39vX08_Lx8O_u7ezr6uno5-bl5OPi4eA",
+    "sha256": "03eb44d9d0a41895a22229a3acadf8454a111db9f9950ebbfc9d459163ccd88a",
+    "tail": "i4eA",
+    "display": "fdk_…i4eA"
+   },
+   {
+    "prefix": "ark_app_",
+    "bytes": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a55a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+    "key": "ark_app_paWlpaWlpaWlpaWlpaWlpVpaWlpaWlpaWlpaWlpaWlo",
+    "sha256": "6947824b2511f36437066f18e01585fef62468511d71fca8865c0ffd6e9ced9a",
+    "tail": "aWlo",
+    "display": "ark_app_…aWlo"
+   }
+  ]
+ },
+ "scopes": {
+  "all": [
+   "display",
+   "touch",
+   "sensor",
+   "voice",
+   "record",
+   "read",
+   "write",
+   "devices"
+  ],
+  "cases": [
+   {
+    "ceiling": [
+     "record",
+     "display"
+    ],
+    "requested": null,
+    "scopes": [
+     "display",
+     "record"
+    ]
+   },
+   {
+    "ceiling": [
+     "read",
+     "write",
+     "devices"
+    ],
+    "default": [
+     "read",
+     "write"
+    ],
+    "requested": null,
+    "scopes": [
+     "read",
+     "write"
+    ]
+   },
+   {
+    "ceiling": [
+     "read",
+     "write",
+     "devices"
+    ],
+    "default": [
+     "read",
+     "write"
+    ],
+    "requested": [
+     "devices",
+     "read"
+    ],
+    "scopes": [
+     "read",
+     "devices"
+    ]
+   },
+   {
+    "ceiling": [
+     "record",
+     "display"
+    ],
+    "requested": [
+     "record"
+    ],
+    "scopes": [
+     "record"
+    ]
+   },
+   {
+    "ceiling": [
+     "record",
+     "display"
+    ],
+    "requested": [
+     "record",
+     "record"
+    ],
+    "scopes": [
+     "record"
+    ]
+   },
+   {
+    "ceiling": [
+     "record",
+     "display"
+    ],
+    "requested": [
+     "write"
+    ],
+    "error": "this kind of device can't have write"
+   },
+   {
+    "ceiling": [
+     "record",
+     "display"
+    ],
+    "requested": [
+     "admin"
+    ],
+    "error": "unknown scope: admin"
+   },
+   {
+    "ceiling": [
+     "record",
+     "display"
+    ],
+    "requested": [],
+    "error": "a key needs at least one scope"
+   },
+   {
+    "ceiling": [
+     "record",
+     "display"
+    ],
+    "requested": "record",
+    "error": "scopes must be a list of names"
+   },
+   {
+    "ceiling": [
+     "record",
+     "display"
+    ],
+    "requested": [
+     "record",
+     3
+    ],
+    "error": "scopes must be a list of names"
+   }
+  ]
+ },
+ "limits": {
+  "wrong_per_address": {
+   "window": 600,
+   "limit": 5,
+   "lockout": 600
+  },
+  "wrong_total": {
+   "window": 600,
+   "limit": 20,
+   "lockout": 600
+  },
+  "start_per_address": {
+   "window": 60,
+   "limit": 10,
+   "lockout": 0
+  },
+  "bad_key_per_address": {
+   "window": 60,
+   "limit": 30,
+   "lockout": 300
+  },
+  "device_calls": {
+   "window": 60,
+   "limit": 1,
+   "lockout": 0
+  }
+ },
+ "limiter": [
+  {
+   "name": "five wrong codes from one address lock it for ten minutes",
+   "window": 600,
+   "limit": 5,
+   "lockout": 600,
+   "steps": [
+    {
+     "t": 0,
+     "op": "record",
+     "key": "a",
+     "locked_now": false
+    },
+    {
+     "t": 10,
+     "op": "record",
+     "key": "a",
+     "locked_now": false
+    },
+    {
+     "t": 20,
+     "op": "record",
+     "key": "a",
+     "locked_now": false
+    },
+    {
+     "t": 30,
+     "op": "record",
+     "key": "a",
+     "locked_now": false
+    },
+    {
+     "t": 40,
+     "op": "blocked",
+     "key": "a",
+     "blocked": false
+    },
+    {
+     "t": 40,
+     "op": "record",
+     "key": "a",
+     "locked_now": true
+    },
+    {
+     "t": 41,
+     "op": "blocked",
+     "key": "a",
+     "blocked": true
+    },
+    {
+     "t": 41,
+     "op": "blocked",
+     "key": "b",
+     "blocked": false
+    },
+    {
+     "t": 639,
+     "op": "blocked",
+     "key": "a",
+     "blocked": true
+    },
+    {
+     "t": 640,
+     "op": "blocked",
+     "key": "a",
+     "blocked": false
+    },
+    {
+     "t": 640,
+     "op": "record",
+     "key": "a",
+     "locked_now": false,
+     "why": "the lockout cleared the count"
+    }
+   ]
+  },
+  {
+   "name": "old misses fall out of the window",
+   "window": 600,
+   "limit": 5,
+   "lockout": 600,
+   "steps": [
+    {
+     "t": 0,
+     "op": "record",
+     "key": "a",
+     "locked_now": false
+    },
+    {
+     "t": 1,
+     "op": "record",
+     "key": "a",
+     "locked_now": false
+    },
+    {
+     "t": 2,
+     "op": "record",
+     "key": "a",
+     "locked_now": false
+    },
+    {
+     "t": 3,
+     "op": "record",
+     "key": "a",
+     "locked_now": false
+    },
+    {
+     "t": 600,
+     "op": "record",
+     "key": "a",
+     "locked_now": false,
+     "why": "t=0 is exactly one window old, so it no longer counts"
+    },
+    {
+     "t": 601,
+     "op": "record",
+     "key": "a",
+     "locked_now": false
+    },
+    {
+     "t": 602,
+     "op": "record",
+     "key": "a",
+     "locked_now": false
+    },
+    {
+     "t": 603,
+     "op": "record",
+     "key": "a",
+     "locked_now": false,
+     "why": "t=3 has left too, so this is the fourth in the window"
+    },
+    {
+     "t": 604,
+     "op": "record",
+     "key": "a",
+     "locked_now": true
+    }
+   ]
+  },
+  {
+   "name": "ten pair/start a minute from one address, no lockout",
+   "window": 60,
+   "limit": 10,
+   "lockout": 0,
+   "steps": [
+    {
+     "t": 0,
+     "op": "hit",
+     "key": "a",
+     "allowed": true
+    },
+    {
+     "t": 1,
+     "op": "hit",
+     "key": "a",
+     "allowed": true
+    },
+    {
+     "t": 2,
+     "op": "hit",
+     "key": "a",
+     "allowed": true
+    },
+    {
+     "t": 3,
+     "op": "hit",
+     "key": "a",
+     "allowed": true
+    },
+    {
+     "t": 4,
+     "op": "hit",
+     "key": "a",
+     "allowed": true
+    },
+    {
+     "t": 5,
+     "op": "hit",
+     "key": "a",
+     "allowed": true
+    },
+    {
+     "t": 6,
+     "op": "hit",
+     "key": "a",
+     "allowed": true
+    },
+    {
+     "t": 7,
+     "op": "hit",
+     "key": "a",
+     "allowed": true
+    },
+    {
+     "t": 8,
+     "op": "hit",
+     "key": "a",
+     "allowed": true
+    },
+    {
+     "t": 9,
+     "op": "hit",
+     "key": "a",
+     "allowed": true
+    },
+    {
+     "t": 10,
+     "op": "hit",
+     "key": "a",
+     "allowed": false
+    },
+    {
+     "t": 10,
+     "op": "hit",
+     "key": "b",
+     "allowed": true
+    },
+    {
+     "t": 59,
+     "op": "hit",
+     "key": "a",
+     "allowed": false
+    },
+    {
+     "t": 60,
+     "op": "hit",
+     "key": "a",
+     "allowed": true,
+     "why": "t=0 has left the window"
+    },
+    {
+     "t": 60,
+     "op": "hit",
+     "key": "a",
+     "allowed": false,
+     "why": "the refused hits were not counted, the one at t=60 was"
+    },
+    {
+     "t": 61,
+     "op": "hit",
+     "key": "a",
+     "allowed": true
+    }
+   ]
+  },
+  {
+   "name": "hello once a minute",
+   "window": 60,
+   "limit": 1,
+   "lockout": 0,
+   "steps": [
+    {
+     "t": 0,
+     "op": "hit",
+     "key": "dev1",
+     "allowed": true
+    },
+    {
+     "t": 59.5,
+     "op": "hit",
+     "key": "dev1",
+     "allowed": false
+    },
+    {
+     "t": 60,
+     "op": "hit",
+     "key": "dev1",
+     "allowed": true
+    }
+   ]
+  }
+ ],
+ "server_rules": [
+  "A code is one use: approving or using it a second time is a wrong code (409).",
+  "The key is minted at handover: the poll after approval creates it, stores only its hash and returns it once. The next poll with the same token is 410.",
+  "Expired requests are deleted. A poll for an expired, unknown or collected token is 410.",
+  "Wrong codes count against the address and the total. While either is locked, code entry is 429 even for a right code.",
+  "A revoked or unknown key is 401 with the same body, so a 401 never says whether a key existed.",
+  "Keys go in Authorization: Bearer, never in an address, form field or cookie."
+ ]
+}
