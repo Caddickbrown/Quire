@@ -7,6 +7,9 @@
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
+#[cfg(feature = "book")]
+pub mod book;
+
 pub const ALPHABET: &str = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 pub const CODE_LENGTH: usize = 6;
 pub const CODE_SECONDS: i64 = 600;

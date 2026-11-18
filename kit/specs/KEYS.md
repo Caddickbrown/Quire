@@ -30,3 +30,21 @@ The machine-readable copy is `keymap.json`.
 | ⌥⌘P | Pause external display | |
 
 In a form: tab moves to the next field, ↵ saves, esc cancels.
+
+## In the ⌘K palette
+
+`specs/PALETTE.md` has the whole model; these are the keys inside it.
+
+| Key | Action | Notes |
+|---|---|---|
+| ⌘K | Open, or close from anywhere | |
+| ↑ ↓ ⇥ ⇧⇥ | Move | Page Up/Down, Home/End, ⌘↑ ⌘↓ too |
+| ↵ | Go; in a typed step, commit; in a confirm, confirm | |
+| esc | Back one step; at the top, close | ⌘. too |
+| ⌫ | A letter; with the box empty, back one step | |
+| ⌥⌫ | A word | 0.9 |
+| ⌘⌫ | Empty the box (type afresh over a prefilled name) | 0.9 |
+| ⌘V | Paste into the box | 0.9 |
+| Space | In a multi pick: tick or untick the lit option | 0.9 |
+| ↵ or ⌘↩ | In a multi pick: Done, with what's ticked | 0.9 |
+| ⌘Z | Undo what the latest Undo notice offers, while it shows | 0.9; an app's own ⌘Z comes first |
