@@ -1,6 +1,12 @@
 #!/bin/bash
 # Build a universal macOS / iOS device / iOS simulator Rust XCFramework.
 set -euo pipefail
+# A caller's CARGO_TARGET_DIR is honoured (e.g. on an external disk); a relative
+# one is read from the caller's directory, before the cd below.
+caller_target="${CARGO_TARGET_DIR:-}"
+if [[ -n "$caller_target" && "$caller_target" != /* ]]; then
+    caller_target="$PWD/$caller_target"
+fi
 cd "$(dirname "$0")/.."
 if [[ "$(uname -s)" != Darwin ]] || ! command -v xcodebuild >/dev/null; then
     echo 'Apple builds require macOS with full Xcode selected by xcode-select.' >&2
@@ -14,8 +20,14 @@ if command -v rustup >/dev/null && toolchain_cargo="$(rustup which cargo 2>/dev/
     PATH="$(dirname "$toolchain_cargo"):$PATH"
     export PATH
 fi
-# Keep the workspace target stable even when the caller has a custom target dir.
-export CARGO_TARGET_DIR="$PWD/target/apple"
+# Apple builds get their own "apple" folder inside the target dir, so the
+# deployment-target settings below don't rebuild the host's artifacts. With no
+# CARGO_TARGET_DIR (Xcode Cloud, CI) that is the workspace's target/apple.
+if [[ -n "$caller_target" ]]; then
+    export CARGO_TARGET_DIR="$caller_target/apple"
+else
+    export CARGO_TARGET_DIR="$PWD/target/apple"
+fi
 export IPHONEOS_DEPLOYMENT_TARGET=17.0
 export MACOSX_DEPLOYMENT_TARGET=14.0
 build_root="$PWD/apple/Frameworks/build"

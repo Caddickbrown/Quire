@@ -21,6 +21,12 @@ make -C apple uitest  # XCUITest over the writing page in an iPhone simulator (s
 Or `make -C apple open` prepares the Rust library and opens
 `Quire.xcodeproj`. Select Quire and a Mac, simulator or connected iPhone.
 After changing Rust, run `make -C apple core` again before building in Xcode.
+`build-core.sh` puts its Cargo output in `target/apple` unless
+`CARGO_TARGET_DIR` is set, in which case it uses an `apple` folder inside
+that. To keep the multi-gigabyte cross builds off the internal disk, point it
+at the external SSD:
+`CARGO_TARGET_DIR="/Volumes/Crucial X9/claude-dd/quire-cargo" make -C apple core`.
+CI and Xcode Cloud don't set it, so they keep using `target/apple`.
 The project is generated: edit `gen_pbxproj.py`, then `make -C apple project`.
 Generated Swift/C bindings and compiled libraries are ignored, and recreated
 by `build-core.sh`; there is no dependency on files in the Nook checkout.
