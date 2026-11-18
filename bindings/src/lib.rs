@@ -261,6 +261,8 @@ fn snapshot(j: &core::Journal, files: Vec<String>) -> std::result::Result<Snapsh
             }
         }
     }
+    // As `load` shows them: an interrupted legacy fold's entries once each.
+    out.entries = core::Journal::without_folded(out.entries);
     Ok(out)
 }
 
@@ -331,7 +333,8 @@ impl NativeJournal {
                 for file in j.try_inbox_files()? {
                     entries.extend(j.try_load_file(&file)?);
                 }
-                json(entries)
+                // A fold of inbox.md that stopped part way shows each draft once.
+                json(core::Journal::without_folded(entries))
             }
             // The usual case is one strict pass, exactly as `load`; the files
             // are only gone through one at a time when that fails.
@@ -442,7 +445,7 @@ impl NativeJournal {
                 core::delete_template(j, &name)?;
                 json(true)
             }
-            Request::Searches => json(core::load_searches(j)),
+            Request::Searches => json(core::try_load_searches(j)?),
             Request::SaveSearches { searches } => {
                 core::save_searches(j, &searches)?;
                 json(true)
@@ -629,6 +632,25 @@ mod tests {
     }
     fn edit(w: &Value, ts: &str, title: &str) -> Value {
         json!({"op":"update", "file":w["file"], "index":w["index"], "raw":w["raw"], "ts":ts,"title":title,"body":"edited"})
+    }
+    /// A fold of inbox.md that stopped after copying leaves each draft in
+    /// both places; the iPhone's Inbox (strict and lenient) shows it once, as
+    /// `load` does.
+    #[test]
+    fn an_interrupted_fold_shows_each_draft_once_in_the_inbox() {
+        let d = tempfile::tempdir().unwrap();
+        let fs = core::FsVault::new(d.path());
+        fs.write("inbox.md", b"[2026-01-05 09:00:00] a\nbody\n\n[2026-01-07 09:00:00] only here\n").unwrap();
+        fs.write("inbox/2026/01/05.md", b"[2026-01-05 09:00:00] a\nbody\n").unwrap();
+        let j = journal(&d);
+        let titles = |v: &Value| -> Vec<String> {
+            let mut t: Vec<String> = v.as_array().unwrap().iter().map(|e| e["title"].as_str().unwrap().to_string()).collect();
+            t.sort();
+            t
+        };
+        assert_eq!(titles(&call(&j, json!({"op":"inbox"}))), vec!["a", "only here"]);
+        assert_eq!(titles(&call(&j, json!({"op":"inbox_lenient"}))["entries"]), vec!["a", "only here"]);
+        assert_eq!(titles(&call(&j, json!({"op":"load"}))), vec!["a", "only here"]);
     }
     #[test]
     fn callback_roundtrip_moves_draft_split_and_back() {

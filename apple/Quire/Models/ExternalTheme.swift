@@ -4,10 +4,10 @@ import SwiftUI
 struct ExternalTheme: Decodable, Identifiable {
     static let key = "deskMonitorTheme"
     /// The monitor takes the phone's theme, unless it was given its own.
-    static let followPhone = "phone"
+    static let followPhone = MonitorThemeRule.followPhone
     /// Hidden mode: the monitor dresses as VS Code on Windows (`DeskCode.swift`).
     /// Monitor only, so it lives here rather than in themes.json.
-    static let vsCode = "vscode"
+    static let vsCode = MonitorThemeRule.disguise
     static let vsCodeName = "VS Code (hidden)"
     /// Every monitor choice in cycle order.
     static var monitorIDs: [String] { [followPhone] + all.map(\.id) + [vsCode] }

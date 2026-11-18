@@ -33,6 +33,18 @@ enum DeskEscape {
     }
 }
 
+/// The monitor's look after ⌘K's Dark or Light mode: it follows the phone,
+/// unless it's in disguise (hidden mode's VS Code), which it keeps, or the
+/// monitor would show Quire's own page with the journal on it. The ids are
+/// `ExternalTheme.followPhone` and `ExternalTheme.vsCode`.
+enum MonitorThemeRule {
+    static let followPhone = "phone"
+    static let disguise = "vscode"
+    static func afterDarkOrLight(_ current: String?) -> String {
+        current == disguise ? disguise : followPhone
+    }
+}
+
 /// What the app has just now, for the menu to list.
 struct CommandSources: Equatable {
     /// The days with something filed, oldest first ("2026-03-14"), with how many.

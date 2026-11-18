@@ -206,9 +206,12 @@ import UIKit
     }
 
     /// Dark or light, as the monitor's settings list does it: the look Auto uses for that, and the monitor follows.
+    /// A monitor in its hidden (VS Code) look stays hidden: following the phone
+    /// would put Quire's own page, journal text and all, on the screen.
     static func setDark(_ dark: Bool) {
         UserDefaults.standard.set(QuireTheme.autoID(dark: dark), forKey: QuireTheme.storageKey)
-        UserDefaults.standard.set(ExternalTheme.followPhone, forKey: ExternalTheme.key)
+        UserDefaults.standard.set(MonitorThemeRule.afterDarkOrLight(UserDefaults.standard.string(forKey: ExternalTheme.key)),
+                                  forKey: ExternalTheme.key)
     }
 
     // MARK: Macros

@@ -1157,6 +1157,62 @@ final class JournalStoreTests: XCTestCase {
         XCTAssertEqual(JournalStore.freeJPEGURL(for: heic).lastPathComponent, "IMG_0001-2.jpg")
     }
 
+    /// Links to a dated asset are rewritten by the asset they resolve to, not
+    /// by bare name: `assets/2026/11/IMG.heic` is the link Quire writes.
+    func testRenamingALinkMatchesTheAssetsFullPath() {
+        let text = "![](assets/2026/11/IMG_0001.heic)\n![a](<assets/2026/11/IMG_0001.heic>)\n![](assets/2026/10/IMG_0001.heic)\n"
+        let out = MediaLinks.renaming(text, file: "journal/2026/11/17.md",
+                                      from: "assets/2026/11/IMG_0001.heic", to: "assets/2026/11/IMG_0001-1.jpg")
+        XCTAssertEqual(out, "![](assets/2026/11/IMG_0001-1.jpg)\n![a](<assets/2026/11/IMG_0001-1.jpg>)\n![](assets/2026/10/IMG_0001.heic)\n",
+                       "the October photo of the same name is another photo")
+        XCTAssertNil(MediaLinks.renaming("![](assets/IMG_0001.heic)", file: "journal/2026/11/17.md",
+                                         from: "assets/2026/11/IMG_0001.heic", to: "assets/2026/11/IMG_0001.jpg"))
+        XCTAssertEqual(MediaLinks.renaming("![](assets/2026/11/My%20photo.heic#x)", file: "j.md",
+                                           from: "assets/2026/11/My photo.heic", to: "assets/2026/11/My photo.jpg"),
+                       "![](assets/2026/11/My%20photo.jpg#x)")
+    }
+
+    /// "Compress existing media" on a photo in a dated folder: the JPEG is
+    /// written, the entry's link points at it, and only then is the HEIC
+    /// parked. A HEIC whose link wasn't rewritten stays where it is.
+    func testCompressingADatedHEICRewritesItsLinkBeforeParkingIt() async throws {
+        let (store, base) = makeStore()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let side = 64
+        let context = try XCTUnwrap(CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                                              space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(CGColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        let image = try XCTUnwrap(context.makeImage())
+        let data = NSMutableData()
+        let made = CGImageDestinationCreateWithData(data, "public.heic" as CFString, 1, nil)
+        try XCTSkipIf(made == nil, "this host can't write HEIC")
+        let dest = made!
+        CGImageDestinationAddImage(dest, image, nil)
+        try XCTSkipUnless(CGImageDestinationFinalize(dest), "this host can't write HEIC")
+        let linked = base.appendingPathComponent("assets/2026/11/IMG_0001.heic")
+        let unlinked = base.appendingPathComponent("assets/2026/11/IMG_0002.heic")
+        for url in [linked, unlinked] {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try (data as Data).write(to: url)
+        }
+        // IMG_0002 is linked in a way the rewrite can't follow (an absolute path).
+        write("[2026-11-17 08:00:00] photo\n![](assets/2026/11/IMG_0001.heic)\n![](/elsewhere/assets/2026/11/IMG_0002.heic)\n",
+              to: day(base, "2026-11-17"))
+        store.reload()
+        try await waitForIndex(store)
+        let res = await store.compressExistingMedia()
+        XCTAssertEqual(res.converted, 1)
+        let entry = read(day(base, "2026-11-17"))
+        XCTAssertTrue(entry.contains("![](assets/2026/11/IMG_0001.jpg)"), entry)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: base.appendingPathComponent("assets/2026/11/IMG_0001.jpg").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: linked.path), "the linked HEIC was parked")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unlinked.path), "a HEIC with no rewritten link was parked")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: base.appendingPathComponent("assets/2026/11/IMG_0002.jpg").path),
+                       "its JPEG is taken away again")
+    }
+
     /// A8: a changed file is our own echo only while it still looks like
     /// something we left there.
     func testAFileWeWroteThatSomeoneElseThenChangedIsNotOurEcho() throws {

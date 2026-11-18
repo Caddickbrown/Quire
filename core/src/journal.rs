@@ -967,7 +967,7 @@ impl Journal {
     /// be read back, a sidecar that can't be written) leaves both; shown
     /// together, every draft would be there twice. The legacy file is not
     /// touched, and the next fold still finds everything in it.
-    fn without_folded(mut entries: Vec<Entry>) -> Vec<Entry> {
+    pub fn without_folded(mut entries: Vec<Entry>) -> Vec<Entry> {
         let legacy = |e: &Entry| !e.file.contains('/') && e.source != "journal";
         if !entries.iter().any(legacy) {
             return entries;

@@ -20,6 +20,13 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Fixed
+- **Apple**: "Compress existing media" finds a photo's links by its full path (`assets/2026/11/IMG.heic`), so the entry points at the new JPEG; a HEIC whose links weren't rewritten is never moved to recovery, so no link is left dead.
+- **Apple**: ⌘K Dark or Light mode leaves a monitor in hidden (VS Code) mode in disguise, instead of showing Quire's own page with the journal on it.
+- **Apple**: pinning or unpinning a search while searches.json can't be read (evicted from iCloud) changes nothing and says why, rather than writing over every other pinned search.
+- **Core**: "Merge ex-split journals" leaves a file in the journal root alone unless its entries carry its tag, as the migration does: an export saved there (`journal-2026.md`) is no longer folded into the day files and deleted.
+- **Core**: the iPhone Inbox shows each draft once after a fold of `inbox.md` that stopped part way, as the journal list already did.
+
 ### Security
 - **Terminal**: `quire update` refuses a release that has no signature for the file it would install, instead of installing it on its SHA-256 alone.
 - **Releases**: the release workflow fails when the signing key secret is missing, so an unsigned release is never published.

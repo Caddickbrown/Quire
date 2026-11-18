@@ -2986,8 +2986,12 @@ final class JournalStore: ObservableObject {
             guard written else { continue }
             var relinked = index.complete
             var pointedAt = false
+            // By full path from the journal's root ("assets/2026/11/IMG.heic"):
+            // assets live in dated folders, and a link is to one of them.
+            let heicRel = Self.relativePath(of: heic, under: base)
+            let jpgRel = (heicRel as NSString).deletingLastPathComponent + "/" + jpgName
             for (rel, text) in texts {
-                guard let renamed = MediaLinks.renaming(text, from: heic.lastPathComponent, to: jpgName) else { continue }
+                guard let renamed = MediaLinks.renaming(text, file: rel, from: heicRel, to: jpgRel) else { continue }
                 do {
                     try writeFile(base.appendingPathComponent(rel), renamed, replacing: text)
                     texts[rel] = renamed
@@ -2997,12 +3001,14 @@ final class JournalStore: ObservableObject {
             // The HEIC stays for the next run, which makes its JPEG again: one
             // that no link was pointed at is taken away, or each run that
             // couldn't finish would leave another copy behind.
-            if !relinked, !pointedAt { try? FileManager.default.removeItem(at: jpgURL) }
-            guard relinked else { continue }
+            // A HEIC no link was rewritten for is never parked: a link this
+            // couldn't read would be left pointing at nothing. Its JPEG goes
+            // too, so a later run doesn't find a second copy.
+            if !pointedAt { try? FileManager.default.removeItem(at: jpgURL) }
+            guard relinked, pointedAt else { continue }
             // Parked, not removed: a link this didn't know to rewrite (a
             // template, transfer.md) can still be put right by hand.
-            let rel = Self.relativePath(of: heic, under: base)
-            try? vault.rename(from: rel, to: recovery + "/" + rel)
+            try? vault.rename(from: heicRel, to: recovery + "/" + heicRel)
             converted += 1
         }
         return converted

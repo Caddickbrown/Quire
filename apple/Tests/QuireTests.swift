@@ -15,6 +15,15 @@ import XCTest
 
 // MARK: - jnl parser parity (mirrors ~/Code/jnl/main_test.go)
 
+final class MonitorThemeRuleTests: XCTestCase {
+    /// ⌘K Dark or Light mode leaves a monitor in disguise (hidden mode) as it is.
+    func testDarkOrLightKeepsTheMonitorsDisguise() {
+        XCTAssertEqual(MonitorThemeRule.afterDarkOrLight("vscode"), "vscode")
+        XCTAssertEqual(MonitorThemeRule.afterDarkOrLight("paper"), "phone")
+        XCTAssertEqual(MonitorThemeRule.afterDarkOrLight(nil), "phone")
+    }
+}
+
 final class JournalParserTests: XCTestCase {
     /// The per-line check behind the editors' body escaper must agree with
     /// the parser on what opens an entry.

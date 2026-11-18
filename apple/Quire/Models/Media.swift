@@ -58,13 +58,45 @@ enum MediaLinks {
 }
 
 extension MediaLinks {
-    /// `content` with every link to `assets/<from>` pointed at `assets/<to>`
-    /// instead, or nil when it has none — so a caller rewrites only the files
-    /// that actually change.
-    static func renaming(_ content: String, from: String, to: String) -> String? {
-        let old = "(assets/\(from))"
-        guard content.contains(old) else { return nil }
-        return content.replacingOccurrences(of: old, with: "(assets/\(to))")
+    /// `content`, the entry file at `file` (root-relative), with every media
+    /// link to the root-relative asset `from` ("assets/2026/11/IMG.heic")
+    /// pointed at `to` instead ("assets/2026/11/IMG.jpg", the same folder), or
+    /// nil when it has none — so a caller rewrites only the files that
+    /// actually change. A link is matched by the asset it resolves to, so the
+    /// dated folders count, and so do links written relative to the entry.
+    static func renaming(_ content: String, file: String, from: String, to: String) -> String? {
+        let ns = content as NSString
+        let fromName = (from as NSString).lastPathComponent
+        let toName = (to as NSString).lastPathComponent
+        let fromStem = (fromName as NSString).deletingPathExtension
+        let toStem = (toName as NSString).deletingPathExtension
+        let toExt = (toName as NSString).pathExtension
+        var edits: [(NSRange, String)] = []
+        for match in regex.matches(in: content, range: NSRange(location: 0, length: ns.length)) {
+            let angled = match.range(at: 1).location != NSNotFound
+            let range = angled ? match.range(at: 1) : match.range(at: 2)
+            let raw = ns.substring(with: range)
+            guard resolved(destination(raw), file: file) == from else { continue }
+            // The path, and any #anchor or ?query after it, kept as written.
+            let cut = raw.firstIndex(where: { $0 == "#" || $0 == "?" }) ?? raw.endIndex
+            let path = String(raw[..<cut]), tail = String(raw[cut...])
+            let slash = path.lastIndex(of: "/").map { path.index(after: $0) } ?? path.startIndex
+            let dir = String(path[..<slash]), last = String(path[slash...])
+            let lastStem = (last as NSString).deletingPathExtension
+            // "IMG%200001.heic" → "IMG%200001-1.jpg": the name keeps its own
+            // escaping, and only what the new name adds is appended.
+            let newLast: String
+            if (lastStem.removingPercentEncoding ?? lastStem) == fromStem, toStem.hasPrefix(fromStem) {
+                newLast = lastStem + toStem.dropFirst(fromStem.count) + "." + toExt
+            } else {
+                newLast = angled ? toName : (toName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? toName)
+            }
+            edits.append((range, dir + newLast + tail))
+        }
+        guard !edits.isEmpty else { return nil }
+        let out = NSMutableString(string: content)
+        for (range, text) in edits.reversed() { out.replaceCharacters(in: range, with: text) }
+        return out as String
     }
 }
 

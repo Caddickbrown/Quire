@@ -109,11 +109,27 @@ pub struct SavedSearch {
     pub query: String,
 }
 
+/// The pinned searches, for showing: nothing when the file can't be read.
+/// Anything that changes them reads with [`try_load_searches`].
 pub fn load_searches(j: &Journal) -> Vec<SavedSearch> {
-    serde_json::from_str(&j.read(&format!("{}/searches.json", j.sidecar()))).unwrap_or_default()
+    try_load_searches(j).unwrap_or_default()
 }
 
+/// The pinned searches, or why they can't be read (an evicted iCloud file, a
+/// broken edit by hand). No file is no searches.
+pub fn try_load_searches(j: &Journal) -> Result<Vec<SavedSearch>, String> {
+    let text = j.try_read(&format!("{}/searches.json", j.sidecar()))?;
+    if text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(&text).map_err(|e| format!("searches.json isn't readable ({e})"))
+}
+
+/// Writes the pinned searches, unless searches.json is there and can't be
+/// read: the list a caller has then was made without it, and writing it
+/// would lose every search it didn't have.
 pub fn save_searches(j: &Journal, list: &[SavedSearch]) -> Result<(), String> {
+    try_load_searches(j).map_err(|e| format!("{e}; the pinned searches weren't changed, so none are lost. Try again once it has downloaded."))?;
     j.write(&format!("{}/searches.json", j.sidecar_mut()?), &serde_json::to_string_pretty(list).map_err(|e| e.to_string())?)
 }
 
@@ -822,6 +838,12 @@ pub fn merge_ex_split(j: &Journal, split_tags: &[String]) -> Result<MergeReport,
         };
         let entries = parse_entries(&content);
         if entries.is_empty() {
+            continue;
+        }
+        // A root file is a split journal only when its entries carry its tag
+        // (jnl put them there for it), as the migration decides: an export
+        // saved in the root ("journal-2026.md") is left as it is.
+        if !name.contains('/') && !entries.iter().any(|e| TAG_RE.find_iter(&e.raw).any(|m| m.as_str()[1..].eq_ignore_ascii_case(&tag))) {
             continue;
         }
         let mut groups: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
@@ -3017,11 +3039,34 @@ mod tests {
         assert_eq!(read(&d.path().join("split/work/2026/09/30.md")), "[2026-09-30 10:00:00] job @work\n");
     }
 
+    /// searches.json that can't be read (an evicted iCloud file, a bad edit by
+    /// hand) is never written over with what little the caller had: pinning a
+    /// search then would lose every other one.
+    #[test]
+    fn an_unreadable_searches_file_is_not_written_over() {
+        let d = tmp();
+        let j = jn(d.path());
+        let one = vec![SavedSearch { name: "Starred".into(), query: "is:starred".into() }];
+        save_searches(&j, &one).unwrap();
+        assert_eq!(try_load_searches(&j).unwrap().len(), 1);
+        let file = d.path().join(".quire/searches.json");
+        fs::write(&file, "[{\"name\": \"Starred\", \"query\": ").unwrap();
+        assert!(try_load_searches(&j).is_err());
+        assert!(load_searches(&j).is_empty(), "the lenient read still shows nothing rather than failing");
+        let err = save_searches(&j, &[SavedSearch { name: "New".into(), query: "x".into() }]).unwrap_err();
+        assert!(err.contains("searches.json"), "{err}");
+        assert_eq!(read(&file), "[{\"name\": \"Starred\", \"query\": ", "written over");
+    }
+
     #[test]
     fn merge_ex_split_macro() {
         let d = tmp();
-        w(d.path(), "old.md", "[2026-09-30 09:00:00] o1\n![](../x.jpg) ![](./assets/y.jpg)\n\n[2026-10-01 09:00:00] o2\n");
-        w(d.path(), "notes.md", "My notes\n\n[2026-09-30 07:00:00] n1\n");
+        w(d.path(), "old.md", "[2026-09-30 09:00:00] o1 @old\n![](../x.jpg) ![](./assets/y.jpg)\n\n[2026-10-01 09:00:00] o2\n");
+        w(d.path(), "notes.md", "My notes\n\n[2026-09-30 07:00:00] n1 @notes\n");
+        // An export saved in the root is no split journal: none of its
+        // entries carry @journal-2026. It stays as it is.
+        let export = "[2026-10-13 17:00:00] Retro\nGood week.\n\n[2026-10-14 09:00:00] Standup @work\n";
+        w(d.path(), "journal-2026.md", export);
         w(d.path(), "work.md", "[2026-09-30 07:00:00] w1\n");
         w(d.path(), "readme.md", "[2026-09-30 07:00:00] r1\n");
         w(d.path(), "journal/2026/09/30.md", "[2026-09-30 08:00:00] here\n");
@@ -3030,9 +3075,11 @@ mod tests {
         assert!(!d.path().join("old.md").exists());
         assert_eq!(read(&d.path().join("notes.md")), "My notes\n");
         assert!(d.path().join("work.md").exists() && d.path().join("readme.md").exists());
+        assert_eq!(read(&d.path().join("journal-2026.md")), export, "an export in the root was folded");
+        assert!(!d.path().join("journal/2026/10/13.md").exists());
         assert_eq!(
             read(&d.path().join("journal/2026/09/30.md")),
-            "[2026-09-30 07:00:00] n1\n\n[2026-09-30 08:00:00] here\n\n[2026-09-30 09:00:00] o1\n![](../x.jpg) ![](assets/y.jpg)\n"
+            "[2026-09-30 07:00:00] n1 @notes\n\n[2026-09-30 08:00:00] here\n\n[2026-09-30 09:00:00] o1 @old\n![](../x.jpg) ![](assets/y.jpg)\n"
         );
         assert_eq!(read(&d.path().join("journal/2026/10/01.md")), "[2026-10-01 09:00:00] o2\n");
         // A split/ journal whose tag was dropped: its day files fold back too.
