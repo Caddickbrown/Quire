@@ -252,6 +252,14 @@ fn inventory(j: &Journal) -> Result<BTreeSet<String>, String> {
             }
         }
     }
+    // The entry trees as the journal reads them: through a linked folder
+    // (`journal/` itself a link, or a year in it), which the walk above never
+    // follows. Missed, every file their entries use looked unused.
+    for tree in [crate::journal::INBOX_DIR, crate::journal::JOURNAL_DIR, crate::journal::SPLIT_DIR] {
+        if j.vault().is_dir(tree) {
+            files.extend(j.try_walk_files(tree)?);
+        }
+    }
     Ok(files)
 }
 
@@ -746,6 +754,33 @@ mod tests {
             .contains("Unsafe destination"));
         assert!(j.is_file("assets/a.jpg"));
         assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
+    }
+
+    // Review 8: the entry trees are read through a link, as the journal reads
+    // them; media an entry there uses is not an orphan.
+    #[cfg(unix)]
+    #[test]
+    fn media_used_from_a_linked_journal_folder_is_not_an_orphan() {
+        let temp = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let j = Journal::open(temp.path());
+        std::fs::create_dir_all(elsewhere.path().join("filed/2026/10")).unwrap();
+        std::fs::write(elsewhere.path().join("filed/2026/10/01.md"), "[2026-10-01 08:00:00]\n![](../../../assets/2026/10/used.jpg)\n").unwrap();
+        std::os::unix::fs::symlink(elsewhere.path().join("filed"), temp.path().join("journal")).unwrap();
+        std::fs::create_dir_all(elsewhere.path().join("drafts")).unwrap();
+        std::fs::write(elsewhere.path().join("drafts/02.md"), "[2026-10-02 08:00:00]\n![](assets/2026/10/draft.jpg)\n").unwrap();
+        std::fs::create_dir_all(temp.path().join("inbox/2026")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path().join("drafts"), temp.path().join("inbox/2026/10")).unwrap();
+        put(&j, "assets/2026/10/used.jpg", b"used");
+        put(&j, "assets/2026/10/draft.jpg", b"draft");
+        put(&j, "assets/2026/10/unused.jpg", b"unused");
+        assert_eq!(orphan_media(&j).unwrap(), vec!["assets/2026/10/unused.jpg".to_string()]);
+        let offered = orphan_media(&j).unwrap();
+        assert_eq!(archive_orphan_media(&j, &offered).unwrap().0, 1);
+        assert!(j.is_file("assets/2026/10/used.jpg") && j.is_file("assets/2026/10/draft.jpg"));
+        // Media cleanup reads them too: nothing it reports as missing or unused.
+        let report = cleanup_media(&j).unwrap();
+        assert_eq!(report.unreferenced, 0, "{report:?}");
     }
 
     #[test]

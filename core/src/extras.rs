@@ -959,12 +959,15 @@ pub fn copy_tree(from: &Path, to: &Path, skip_hidden_top: bool) -> Result<(), St
 }
 
 /// Where a tree walk is: `Journal` is the top of a journal being backed up,
-/// `Sidecar` one of its sidecars, `All` anywhere nothing is left out.
+/// `Sidecar` one of its sidecars, `Entries(n)` a folder `n` deep in one of
+/// its entry trees (`inbox/`, `journal/`, `split/`; the tree itself is 1),
+/// `All` anywhere nothing is left out.
 #[derive(Clone, Copy, PartialEq)]
 enum Walk {
     All,
     Journal,
     Sidecar,
+    Entries(usize),
 }
 
 impl Walk {
@@ -982,16 +985,35 @@ impl Walk {
             Walk::All => false,
             Walk::Journal => name.starts_with('.') && name != SIDECAR && name != LEGACY_SIDECAR,
             Walk::Sidecar => name == crate::media_cleanup::RECOVERY_NAME,
+            Walk::Entries(_) => false,
         }
     }
 
     /// The walk inside the folder called `name` here.
     fn into(self, name: &str) -> Walk {
-        if self == Walk::Journal && (name == SIDECAR || name == LEGACY_SIDECAR) {
-            Walk::Sidecar
-        } else {
-            Walk::All
+        match self {
+            Walk::Journal if name == SIDECAR || name == LEGACY_SIDECAR => Walk::Sidecar,
+            Walk::Journal if [INBOX_DIR, JOURNAL_DIR, SPLIT_DIR].contains(&name) => Walk::Entries(1),
+            Walk::Entries(n) => Walk::Entries(n + 1),
+            _ => Walk::All,
         }
+    }
+
+    /// Whether a link called `name` here, to the folder `target`, is copied
+    /// as that folder: in a journal's entry trees (and as the trees
+    /// themselves), as `Journal::walk` reads them, so a backup holds the
+    /// entries and not a link back to the live folder. No deeper than a day
+    /// file's folder, never to `from` or above it (that would copy the same
+    /// day files again under a longer name), never to the copy itself.
+    fn follows(self, name: &str, from: &Path, target: &Path, to: &Path) -> bool {
+        let depth = match self.into(name) {
+            Walk::Entries(n) => n,
+            _ => return false,
+        };
+        let real = |p: &Path| fs::canonicalize(p).ok();
+        let (Some(target), Some(from)) = (real(target), real(from)) else { return false };
+        let into_copy = real(to).is_some_and(|to| to.starts_with(&target) || target.starts_with(&to));
+        depth <= crate::journal::LINK_DEPTH + 1 && target.is_dir() && !from.starts_with(&target) && !into_copy
     }
 }
 
@@ -1015,7 +1037,15 @@ fn copy_tree_walk(from: &Path, to: &Path, walk: Walk) -> Result<(u64, u64), Stri
         }
         let t = to.join(&name);
         let ft = e.file_type().map_err(|e| e.to_string())?;
-        if ft.is_symlink() {
+        if ft.is_symlink() && walk.follows(&name, from, &e.path(), to) {
+            let (f, b) = copy_tree_walk(&e.path(), &t, walk.into(&name))?;
+            files += f;
+            bytes += b;
+        } else if ft.is_symlink() && matches!(walk.into(&name), Walk::Entries(_)) && e.path().is_dir() {
+            // A folder link in an entry tree that isn't followed (it leads
+            // back up its own tree, or too deep): the journal never reads it,
+            // and kept, it would point the copy back at the live folder.
+        } else if ft.is_symlink() {
             #[cfg(unix)]
             {
                 let target = fs::read_link(e.path()).map_err(|e| e.to_string())?;
@@ -1056,7 +1086,7 @@ fn tree_stats_walk(root: &Path, walk: Walk) -> Result<(u64, u64), String> {
             continue;
         }
         let ft = e.file_type().map_err(|e| e.to_string())?;
-        if ft.is_dir() {
+        if ft.is_dir() || (ft.is_symlink() && walk.follows(&name, root, &e.path(), Path::new(""))) {
             let (f, b) = tree_stats_walk(&e.path(), walk.into(&name))?;
             files += f;
             bytes += b;
@@ -2477,6 +2507,44 @@ mod tests {
     #[test]
     fn tag_rename_leaves_a_longer_accented_word_alone() {
         assert_eq!(replace_tags("@caf @caf\u{e9} @caf. (@caf) @caf\u{f1}on @CAF", &["@caf".into()], "@x"), "@x @caf\u{e9} @x. (@x) @caf\u{f1}on @x");
+    }
+
+    // Review 8: a backup holds the entries of a linked journal/ (and of a
+    // linked folder inside an entry tree), not a link back to the live folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_backup_copies_a_linked_journal_folder_rather_than_the_link() {
+        use std::os::unix::fs::symlink;
+        let d = tmp();
+        let root = d.path().join("journal-root");
+        let elsewhere = d.path().join("elsewhere");
+        w(&elsewhere, "filed/2026/10/01.md", "[2026-10-01 08:00:00] filed\n");
+        w(&elsewhere, "old/10/01.md", "[2025-10-01 08:00:00] last year\n");
+        w(&elsewhere, "drafts/02.md", "[2026-10-02 08:00:00] draft\n");
+        w(&root, "assets/2026/10/a.jpg", "jpeg");
+        symlink(elsewhere.join("filed"), root.join("journal")).unwrap();
+        symlink(elsewhere.join("old"), elsewhere.join("filed/2025")).unwrap();
+        fs::create_dir_all(root.join("inbox/2026")).unwrap();
+        symlink(elsewhere.join("drafts"), root.join("inbox/2026/10")).unwrap();
+        // A link that points back up its own tree, and one outside the entry trees.
+        symlink(elsewhere.join("filed"), elsewhere.join("filed/2026/again")).unwrap();
+        symlink(elsewhere.join("old"), root.join("assets/linked")).unwrap();
+
+        let made = PathBuf::from(backup(&jn(&root), &d.path().join("backups")).unwrap());
+        for rel in ["journal", "journal/2025", "inbox/2026/10"] {
+            let md = fs::symlink_metadata(made.join(rel)).unwrap();
+            assert!(md.is_dir() && !md.file_type().is_symlink(), "{rel} is a real folder in the backup");
+        }
+        assert_eq!(read(&made.join("journal/2026/10/01.md")), "[2026-10-01 08:00:00] filed\n");
+        assert_eq!(read(&made.join("journal/2025/10/01.md")), "[2025-10-01 08:00:00] last year\n");
+        assert_eq!(read(&made.join("inbox/2026/10/02.md")), "[2026-10-02 08:00:00] draft\n");
+        assert!(fs::symlink_metadata(made.join("journal/2026/again")).is_err(), "not followed round again, nor kept pointing at the live folder");
+        assert!(fs::symlink_metadata(made.join("assets/linked")).unwrap().file_type().is_symlink(), "outside the trees, kept as a link");
+        // Restored, the journal reads as it did.
+        let titles = |root: &Path| jn(root).try_load_all().unwrap().iter().map(|e| e.title.clone()).collect::<Vec<_>>();
+        let restored = Journal::open(&made);
+        assert_eq!(restored.try_load_all().unwrap().len(), 3);
+        assert_eq!(titles(&made), titles(&root));
     }
 
     // M10

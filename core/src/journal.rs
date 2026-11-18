@@ -93,7 +93,7 @@ const EDIT_PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
 const MIGRATE_ATTEMPTS: usize = 5;
 /// How far below `inbox/`, `journal/` or `split/` a linked folder is still
 /// followed: `split/<tag>/YYYY/MM` is the deepest folder a day file sits in.
-const LINK_DEPTH: usize = 4;
+pub(crate) const LINK_DEPTH: usize = 4;
 /// A random wait that grows with each lost attempt, so writers that collided
 /// don't collide again in step.
 fn backoff(attempt: u64) -> std::time::Duration {

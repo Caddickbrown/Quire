@@ -20,6 +20,9 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Changed
+- **Apple**: the monitor's hidden mode shows an entry's day of the week at the end of the breadcrumb bar (`inbox › 2026 › 11 › 18.md › Wednesday`), not inside the header's timestamp; the header line reads as it is on disk.
+
 ### Fixed
 - **Apple**: "Compress existing media" finds a photo's links by its full path (`assets/2026/11/IMG.heic`), so the entry points at the new JPEG; a HEIC whose links weren't rewritten is never moved to recovery, so no link is left dead.
 - **Apple**: ⌘K Dark or Light mode leaves a monitor in hidden (VS Code) mode in disguise, instead of showing Quire's own page with the journal on it.
@@ -27,6 +30,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Core**: "Merge ex-split journals" leaves a file in the journal root alone unless its entries carry its tag, as the migration does: an export saved there (`journal-2026.md`) is no longer folded into the day files and deleted.
 - **Core**: the iPhone Inbox shows each draft once after a fold of `inbox.md` that stopped part way, as the journal list already did.
 - **Install**: `install.sh` uses python3 only when it actually runs: on a Mac without the command-line tools the `/usr/bin/python3` stub is passed over (never started, so no install offer pops up) and the settings are written without it.
+- **Core**: a journal whose `journal/` (or a year or month inside `inbox/`, `journal/` or `split/`) is a link to another folder: "Clear orphan media" and media cleanup read the entries through the link, so media those entries use is no longer offered as unused or cleared; backups copy the linked folder itself rather than a link back to the live one.
 
 ### Security
 - **Terminal**: `quire update` refuses a release that has no signature for the file it would install, instead of installing it on its SHA-256 alone.
