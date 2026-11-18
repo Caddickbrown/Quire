@@ -34,7 +34,15 @@ struct CoreWritten: Decodable { let file: String; let index: Int; let raw: Strin
 
 final class CoreJournal: @unchecked Sendable {
     private let journal: NativeJournal
-    init(base: URL) { journal = NativeJournal(vault: AppleVault(base: base)) }
+    private let vault: AppleVault
+    /// `skippingPlaceholders`: listings leave out files iCloud hasn't brought
+    /// down (see `AppleVault.skipsPlaceholders`), for reads that only show.
+    init(base: URL, skippingPlaceholders: Bool = false) {
+        vault = AppleVault(base: base, skipsPlaceholders: skippingPlaceholders)
+        journal = NativeJournal(vault: vault)
+    }
+    /// The files a skipping read left out because they are still in iCloud.
+    var placeholdersSkipped: Int { vault.skippedPlaceholders.count }
 
     func call<T: Decodable>(_ op: String, _ fields: [String: Any] = [:], as: T.Type = T.self) throws -> T {
         var request = fields

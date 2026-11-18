@@ -15,7 +15,18 @@ final class AppleVault: NativeVault, @unchecked Sendable {
     /// Whether the folder was itself a symlink when opened. A link appearing
     /// there later is a swap, and the root isn't re-resolved through it.
     private let baseWasLink: Bool
-    init(base: URL) {
+    /// Whether a listing leaves out the iCloud placeholders it meets (asking
+    /// for each) instead of failing. Only for reads that show the journal: one
+    /// evicted day file used to mean no journal at all. Anything that decides
+    /// what to delete or rewrite keeps the strict listing, which fails.
+    let skipsPlaceholders: Bool
+    private let skippedLock = NSLock()
+    private var skipped = Set<String>()
+    /// The placeholders a skipping listing has left out so far (as the files
+    /// they stand for, relative to the journal folder).
+    var skippedPlaceholders: Set<String> { skippedLock.lock(); defer { skippedLock.unlock() }; return skipped }
+    init(base: URL, skipsPlaceholders: Bool = false) {
+        self.skipsPlaceholders = skipsPlaceholders
         self.base = base.standardizedFileURL
         rootPath = Self.normalised(self.base.resolvingSymlinksInPath().path)
         baseWasLink = (try? FileManager.default.destinationOfSymbolicLink(atPath: self.base.path)) != nil
@@ -231,12 +242,19 @@ final class AppleVault: NativeVault, @unchecked Sendable {
             // rather than publishing an incomplete journal as if it is empty.
             // Every one in the folder is asked for before failing: asking for
             // the first alone brought a month of day files down one per try.
+            // A skipping listing leaves them out (and remembers them) instead.
             let placeholders = items.filter { $0.pathExtension == "icloud" }
             if !placeholders.isEmpty {
                 for item in placeholders { try? self.fm.startDownloadingUbiquitousItem(at: item) }
-                throw self.failure(Self.downloadingMessage)
+                guard self.skipsPlaceholders else { throw self.failure(Self.downloadingMessage) }
+                let names = placeholders.map { item -> String in
+                    let name = item.lastPathComponent
+                    let real = name.hasPrefix(".") ? String(name.dropFirst().dropLast(".icloud".count)) : name
+                    return rel.isEmpty ? real : rel + "/" + real
+                }
+                self.skippedLock.lock(); self.skipped.formUnion(names); self.skippedLock.unlock()
             }
-            return try items.map { item in
+            return try items.filter { $0.pathExtension != "icloud" }.map { item in
                 let v = try item.resourceValues(forKeys: keys)
                 let link = v.isSymbolicLink == true
                 return VaultItem(name: item.lastPathComponent, isDir: !link && v.isDirectory == true,

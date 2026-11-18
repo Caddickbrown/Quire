@@ -1259,13 +1259,19 @@ final class JournalStoreTests: XCTestCase {
         XCTAssertThrowsError(try vault.read(rel: "journal/2026/11/14.md")) { error in
             XCTAssertEqual(journalErrorMessage(error), AppleVault.downloadingMessage)
         }
+        // A skipping vault (reads that only show) lists the rest and names
+        // what it left out.
+        write("[2026-11-12 08:00:00] here\n", to: base.appendingPathComponent("journal/2026/11/12.md"))
+        let skipping = AppleVault(base: base, skipsPlaceholders: true)
+        XCTAssertEqual(try skipping.list(rel: "journal/2026/11").map(\.name), ["12.md"])
+        XCTAssertEqual(skipping.skippedPlaceholders, ["journal/2026/11/13.md", "journal/2026/11/14.md"])
         XCTAssertEqual(JournalStore.downloadRetryDelay(attempt: 0), 3)
         XCTAssertEqual(JournalStore.downloadRetryDelay(attempt: 40), 30)
         XCTAssertNil(JournalStore.downloadRetryDelay(attempt: 60))
     }
 
-    /// A2: with files still to come the journal is not shown short; it says how
-    /// many are coming, and opens by itself once they are here.
+    /// A2 (review 7): with files still to come the journal opens without them;
+    /// it says how many are coming, and they appear by themselves once here.
     func testAJournalStillDownloadingOpensWhenItsFilesArrive() async throws {
         let (store, base) = makeStore()
         defer { try? FileManager.default.removeItem(at: base) }
@@ -1276,7 +1282,8 @@ final class JournalStoreTests: XCTestCase {
         store.reload()
         for _ in 0..<500 where store.downloadsPending == 0 { try await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertEqual(store.downloadsPending, 1)
-        XCTAssertEqual(store.archiveDays.map(\.date), [], "not a journal with a day missing")
+        for _ in 0..<500 where store.archiveDays.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(store.archiveDays.map(\.date), ["2026-05-10"], "the rest of the journal, not none of it")
         XCTAssertEqual(store.lastWriteError?.contains("Downloading 1 journal file"), true)
         // The file lands; nobody asks, and the journal opens.
         try FileManager.default.removeItem(at: placeholder)

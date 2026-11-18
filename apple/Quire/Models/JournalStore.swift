@@ -1454,13 +1454,15 @@ final class JournalStore: ObservableObject {
         attempt < 60 ? min(30, 3 + Double(attempt) * 2) : nil
     }
 
-    /// The read failed with `waiting` files still to come: say so (once per
-    /// change in the number, not on every try) and read again shortly. The
-    /// retry costs a listing, which stops at the first placeholder.
-    private func retryWhenDownloaded(waiting: Int, base: URL) {
+    /// `waiting` files are still to come (the read failed, or, `shown`, the
+    /// journal is showing without them): say so (once per change in the
+    /// number, not on every try) and read again shortly.
+    private func retryWhenDownloaded(waiting: Int, base: URL, shown: Bool = false) {
         if waiting != downloadsPending {
             downloadsPending = waiting
-            lastWriteError = "Downloading \(waiting) journal file\(waiting == 1 ? "" : "s") from iCloud. Your journal opens when \(waiting == 1 ? "it is" : "they are") here."
+            lastWriteError = !shown
+                ? "Downloading \(waiting) journal file\(waiting == 1 ? "" : "s") from iCloud. Your journal opens when \(waiting == 1 ? "it is" : "they are") here."
+                : "Downloading \(waiting) journal file\(waiting == 1 ? "" : "s") from iCloud. \(waiting == 1 ? "Its entries appear" : "Their entries appear") when \(waiting == 1 ? "it is" : "they are") here."
         }
         downloadRetry?.cancel()
         guard let delay = Self.downloadRetryDelay(attempt: downloadRetries) else { return }
@@ -1542,11 +1544,13 @@ final class JournalStore: ObservableObject {
     /// a legacy file: `migrate` lists the whole journal, and this runs after
     /// every discrete change.
     private func loadInbox() {
-        guard let core else { inboxDrafts = []; return }
+        guard core != nil, let baseURL else { inboxDrafts = []; return }
         migrateLegacyIfPresent()
         // Lenient: a draft file that isn't text is left out (and named when
         // the index lands), where it used to leave the Inbox as it was.
-        do { inboxDrafts = JournalParser.withOccurrences(try core.inboxLenient().entries.map(\.entry)) }
+        // A draft file iCloud hasn't brought down is left out and asked for;
+        // the index read that follows says so and reads again as it lands.
+        do { inboxDrafts = JournalParser.withOccurrences(try CoreJournal(base: baseURL, skippingPlaceholders: true).inboxLenient().entries.map(\.entry)) }
         catch {
             // While files are coming down the retry says so once, not each time.
             let message = journalErrorMessage(error)
@@ -1567,6 +1571,9 @@ final class JournalStore: ObservableObject {
         var splitEntries: [String: [Entry]] = [:]
         /// Entry files that were read but aren't text, left out of the above.
         var unreadable: [String] = []
+        /// Entry files still in iCloud (placeholders), left out of the above
+        /// and asked for; the journal is read again as they land.
+        var waiting = 0
     }
 
     /// Coalesce a burst of mutations into one rebuild. Nothing waits on it for
@@ -1666,8 +1673,13 @@ final class JournalStore: ObservableObject {
                 guard let self, self.baseURL == base, self.indexGeneration == generation else { return }
                 self.lastSignatures = signatures
                 self.loadFailed = false
-                self.downloadRetry?.cancel(); self.downloadRetry = nil; self.downloadRetries = 0
-                if self.downloadsPending != 0 { self.downloadsPending = 0 }
+                if idx.waiting > 0 {
+                    // Shown without them, and read again as they land.
+                    self.retryWhenDownloaded(waiting: idx.waiting, base: base, shown: true)
+                } else {
+                    self.downloadRetry?.cancel(); self.downloadRetry = nil; self.downloadRetries = 0
+                    if self.downloadsPending != 0 { self.downloadsPending = 0 }
+                }
                 if self.unreadableFiles != idx.unreadable {
                     self.unreadableFiles = idx.unreadable
                     if let message = Self.unreadableMessage(idx.unreadable) { self.lastWriteError = message }
@@ -2004,9 +2016,13 @@ final class JournalStore: ObservableObject {
 
         // Lenient: one file that isn't text used to mean no journal at all.
         // It is left out and named (`unreadable`); a file or folder that can't
-        // be read at all (evicted, unreachable) still throws.
-        let snapshot = try CoreJournal(base: base).loadLenient()
+        // be read at all (unreachable) still throws. A file iCloud hasn't
+        // brought down is left out and asked for (`waiting`): one evicted day
+        // file used to mean no journal at all.
+        let core = CoreJournal(base: base, skippingPlaceholders: true)
+        let snapshot = try core.loadLenient()
         idx.unreadable = snapshot.unreadable.map(\.file)
+        idx.waiting = core.placeholdersSkipped
         let all = snapshot.entries
         let grouped = Dictionary(grouping: all.filter { $0.source == "journal" }, by: \.date)
         let urls = grouped.keys.sorted(by: >).map { base.appendingPathComponent("journal/" + $0.replacingOccurrences(of: "-", with: "/") + ".md") }
