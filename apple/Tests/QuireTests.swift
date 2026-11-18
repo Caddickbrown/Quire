@@ -441,7 +441,7 @@ final class DeskEscapeTests: XCTestCase {
 
     func testAnOpenEntrySaysBackAndAListSaysToday() throws {
         let hints = try source("Quire/Design/DeskViews.swift")
-        let reading = try XCTUnwrap(hints.range(of: "case .reading(_, _, _, _, let isDraft):"))
+        let reading = try XCTUnwrap(hints.range(of: "case .reading(_, _, let text, _, let isDraft):"))
         let end = try XCTUnwrap(hints.range(of: "// MARK: - Confirmations"))
         XCTAssertLessThan(reading.lowerBound, end.lowerBound, "the hints come first")
         let bar = hints[reading.lowerBound..<end.lowerBound]
