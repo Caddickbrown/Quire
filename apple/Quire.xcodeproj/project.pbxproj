@@ -17,6 +17,7 @@
 		4028D0B82AF25463B54185A2 /* SearchQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A46BCF298F15920B60123F7 /* SearchQuery.swift */; };
 		26D1241AF445512281F08D8F /* ListContinuation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1519EDC250CB540183D54A2F /* ListContinuation.swift */; };
 		272BD1DA757B5AFEA58051AA /* QuireCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7824C8FC787C58978657B803 /* QuireCommands.swift */; };
+		AF20AFBE01F9589EBC56A9A5 /* QuireMacros.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05007DBA995E5B0FB3FF66FB /* QuireMacros.swift */; };
 		A7E7F443465C58B69C162287 /* CommandPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CEC17AFA5F85220A194C6F5 /* CommandPalette.swift */; };
 		112677D9F63455519217CD08 /* EscapeChord.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47DF0150D675801B65C669B /* EscapeChord.swift */; };
 		0DBAE8D2312253439BC1DF7B /* OnThisDayYears.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118E76BF92015B29A8FA166E /* OnThisDayYears.swift */; };
@@ -103,6 +104,7 @@
 		3357E305632F5EF2827BA2C4 /* SearchQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A46BCF298F15920B60123F7 /* SearchQuery.swift */; };
 		0B464C0579FF5E4A91B492C2 /* ListContinuation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1519EDC250CB540183D54A2F /* ListContinuation.swift */; };
 		491E70533D825209A82D5CEF /* QuireCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7824C8FC787C58978657B803 /* QuireCommands.swift */; };
+		A1C4B358C65E5C85911E4A03 /* QuireMacros.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05007DBA995E5B0FB3FF66FB /* QuireMacros.swift */; };
 		013E4404AA195F46B0AB6FCC /* CommandPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CEC17AFA5F85220A194C6F5 /* CommandPalette.swift */; };
 		543AD8D57117599096FD35CF /* EscapeChord.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47DF0150D675801B65C669B /* EscapeChord.swift */; };
 		46A4321A9EA55866B24B0F51 /* OnThisDayYears.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118E76BF92015B29A8FA166E /* OnThisDayYears.swift */; };
@@ -170,6 +172,7 @@
 		4A46BCF298F15920B60123F7 /* SearchQuery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchQuery.swift; sourceTree = "<group>"; };
 		1519EDC250CB540183D54A2F /* ListContinuation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListContinuation.swift; sourceTree = "<group>"; };
 		7824C8FC787C58978657B803 /* QuireCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireCommands.swift; sourceTree = "<group>"; };
+		05007DBA995E5B0FB3FF66FB /* QuireMacros.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireMacros.swift; sourceTree = "<group>"; };
 		0CEC17AFA5F85220A194C6F5 /* CommandPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../kit/swift/CommandPalette.swift; sourceTree = "<group>"; };
 		C47DF0150D675801B65C669B /* EscapeChord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EscapeChord.swift; sourceTree = "<group>"; };
 		118E76BF92015B29A8FA166E /* OnThisDayYears.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnThisDayYears.swift; sourceTree = "<group>"; };
@@ -358,6 +361,7 @@
 				4A46BCF298F15920B60123F7 /* SearchQuery.swift */,
 				1519EDC250CB540183D54A2F /* ListContinuation.swift */,
 				7824C8FC787C58978657B803 /* QuireCommands.swift */,
+				05007DBA995E5B0FB3FF66FB /* QuireMacros.swift */,
 				C47DF0150D675801B65C669B /* EscapeChord.swift */,
 				118E76BF92015B29A8FA166E /* OnThisDayYears.swift */,
 				64DA39CFB5BC597A836E29E3 /* JournalStore.swift */,
@@ -672,6 +676,7 @@
 				4028D0B82AF25463B54185A2 /* SearchQuery.swift in Sources */,
 				26D1241AF445512281F08D8F /* ListContinuation.swift in Sources */,
 				272BD1DA757B5AFEA58051AA /* QuireCommands.swift in Sources */,
+				AF20AFBE01F9589EBC56A9A5 /* QuireMacros.swift in Sources */,
 				A7E7F443465C58B69C162287 /* CommandPalette.swift in Sources */,
 				112677D9F63455519217CD08 /* EscapeChord.swift in Sources */,
 				0DBAE8D2312253439BC1DF7B /* OnThisDayYears.swift in Sources */,
@@ -771,6 +776,7 @@
 				3357E305632F5EF2827BA2C4 /* SearchQuery.swift in Sources */,
 				0B464C0579FF5E4A91B492C2 /* ListContinuation.swift in Sources */,
 				491E70533D825209A82D5CEF /* QuireCommands.swift in Sources */,
+				A1C4B358C65E5C85911E4A03 /* QuireMacros.swift in Sources */,
 				013E4404AA195F46B0AB6FCC /* CommandPalette.swift in Sources */,
 				543AD8D57117599096FD35CF /* EscapeChord.swift in Sources */,
 				46A4321A9EA55866B24B0F51 /* OnThisDayYears.swift in Sources */,

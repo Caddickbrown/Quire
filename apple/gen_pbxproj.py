@@ -54,6 +54,7 @@ swift_files = [
     ('SearchQuery',     'Models/SearchQuery.swift',     'Models'),
     ('ListContinuation','Models/ListContinuation.swift','Models'),
     ('QuireCommands',   'Models/QuireCommands.swift',   'Models'),
+    ('QuireMacros',     'Models/QuireMacros.swift',     'Models'),
     # App Kit's command menu, synced into the repo's kit/ (python3 kit/tools/sync_kit.py --check).
     ('KitCommandPalette', '../../kit/swift/CommandPalette.swift', 'Quire'),
     ('EscapeChord',     'Models/EscapeChord.swift',     'Models'),
@@ -157,7 +158,7 @@ test_swift_files = [
 # it with the native Vault, adapter and generated bindings, and link the same
 # Rust XCFramework as the app. `init(testingBase:)` supplies a temporary folder. Keep this list closed over its own
 # dependencies; a view type leaking in is the signal it belongs in Models.
-test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListContinuation', 'QuireCommands', 'KitCommandPalette',
+test_shared_models = ['Entry', 'JournalParser', 'Media', 'SearchQuery', 'ListContinuation', 'QuireCommands', 'QuireMacros', 'KitCommandPalette',
                       'EscapeChord', 'OnThisDayYears',
                       'JournalStore', 'CoreJournal', 'AppleVault', 'QuireCore', 'QuireShared', 'Reminders', 'SpotlightIndexer',
                       'Transcription', 'YearReview']

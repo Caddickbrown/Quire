@@ -366,6 +366,10 @@ struct QuireCommandState: Equatable {
         var fontSize = 18.0
         var typewriter = false
         var focusParagraph = false
+        /// Whether this app's editor has typewriter scrolling and paragraph
+        /// focus. The Mac's does; the iPhone and iPad design reads neither, so
+        /// they aren't offered there.
+        var editorAids = true
         var autoTranscribe = false
         var reminder = false
         var reminderHour = 20
@@ -896,11 +900,15 @@ struct QuireCommandList: CommandList {
             out.append(Row("goalAmount", "Daily word goal…", detail: "\(set.goal) words", symbol: "target",
                            step: .pick(CommandPick(prompt: "How many words a day?", choices: goals)), synonyms: ["target"]))
         }
+        if set.editorAids {
+            out += [
+                flag("typewriter", set.typewriter, "Typewriter scrolling", "Stop typewriter scrolling", QuirePrefKey.typewriter,
+                     "text.aligncenter", ["centre line", "center"]),
+                flag("focusParagraph", set.focusParagraph, "Focus the current paragraph", "Stop focusing the paragraph",
+                     QuirePrefKey.focusParagraph, "text.justify", ["dim", "highlight paragraph"]),
+            ]
+        }
         out += [
-            flag("typewriter", set.typewriter, "Typewriter scrolling", "Stop typewriter scrolling", QuirePrefKey.typewriter,
-                 "text.aligncenter", ["centre line", "center"]),
-            flag("focusParagraph", set.focusParagraph, "Focus the current paragraph", "Stop focusing the paragraph",
-                 QuirePrefKey.focusParagraph, "text.justify", ["dim", "highlight paragraph"]),
             flag("transcribe", set.autoTranscribe, "Transcribe voice notes", "Stop transcribing voice notes",
                  QuirePrefKey.autoTranscribe, "text.quote", ["memo", "speech", "dictation"]),
             flag("dataSaver", set.dataSaver, "Turn on Data Saver", "Turn off Data Saver", QuirePrefKey.dataSaver,

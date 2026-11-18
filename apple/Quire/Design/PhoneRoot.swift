@@ -919,7 +919,7 @@ struct PhoneRoot: View {
             case .entry(let a, let id): runEntry(a, id)
             case .macro(let macro):
                 say("Working…")
-                Task { @MainActor in say(await QuireCommandMenu.runMacro(macro, store: store)) }
+                Task { @MainActor in say(await QuireMacros.run(macro, store: store)) }
             default: break
             }
         }

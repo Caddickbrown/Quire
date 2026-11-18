@@ -48,6 +48,8 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Install**: `install.sh` uses python3 only when it actually runs: on a Mac without the command-line tools the `/usr/bin/python3` stub is passed over (never started, so no install offer pops up) and the settings are written without it.
 - **Core**: a journal whose `journal/` (or a year or month inside `inbox/`, `journal/` or `split/`) is a link to another folder: "Clear orphan media" and media cleanup read the entries through the link, so media those entries use is no longer offered as unused or cleared; backups copy the linked folder itself rather than a link back to the live one.
 - **Apple**: one journal file still in iCloud (evicted, or not yet downloaded on a new device) no longer means no journal: the rest opens, the missing files are asked for and named in a count ("Downloading 2 journal files from iCloud"), and their entries appear as they arrive. Anything that deletes or rewrites still waits for every file.
+- **Apple**: ⌘K on iPhone and iPad no longer offers "Typewriter scrolling" and "Focus the current paragraph", which only the Mac's editor has.
+- **Apple**: setting the daily word goal from ⌘K or the iPhone's Settings updates the widget's ring at once, as the Mac's Settings does.
 
 ### Security
 - **Terminal**: `quire update` refuses a release that has no signature for the file it would install, instead of installing it on its SHA-256 alone.

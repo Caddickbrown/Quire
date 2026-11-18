@@ -72,6 +72,9 @@ struct PhoneSettings: View {
                                         selected: String(goal)) { goal = Int($0) ?? goal }
                         }
                     }
+                    // As the Mac's Settings does: the widget's ring reads it.
+                    .onChange(of: goalOn) { _, _ in store.reload() }
+                    .onChange(of: goal) { _, _ in store.reload() }
                     section("More") {
                         ForEach(Self.pages, id: \.group) { page in
                             NavigationLink(value: page.group) {

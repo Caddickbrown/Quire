@@ -1083,3 +1083,115 @@ final class ThirteenNovemberTests: XCTestCase {
         XCTAssertTrue(phone.contains("(.macros, \"Macros\""))
     }
 }
+
+// MARK: - ⌘K commands, run
+
+/// The menu's rows chosen as a person would (typed, Return, the confirmation
+/// where one is asked), and what they do then done against a real store in a
+/// temporary folder: the list tests above stop at the action a row names.
+@MainActor
+final class CommandRunTests: XCTestCase {
+    typealias Menu = CommandPalette<QuireCommandList>
+
+    private func folder() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("quire-cmd-\(UUID().uuidString)", isDirectory: true)
+    }
+    private func write(_ text: String, _ rel: String, in base: URL) {
+        let url = base.appendingPathComponent(rel)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! text.write(to: url, atomically: true, encoding: .utf8)
+    }
+    private func exists(_ rel: String, in base: URL) -> Bool {
+        FileManager.default.fileExists(atPath: base.appendingPathComponent(rel).path)
+    }
+    private func ready(_ store: JournalStore) async throws {
+        for _ in 0..<500 where !store.indexed { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertTrue(store.indexed, "the index never landed")
+    }
+    /// The state the app builds, as far as these rows need it.
+    private func state(_ store: JournalStore) -> QuireCommandState {
+        var s = QuireCommandState()
+        s.drafts = store.inboxDrafts.count
+        return s
+    }
+    /// Type `typed`, press Return (twice where the row asks first), and the
+    /// macro it comes to.
+    private func choose(_ typed: String, _ s: QuireCommandState) -> QuireMacro? {
+        var m = Menu(QuireCommandList(state: s))
+        m.type(typed)
+        var outcome = m.press(.enter)
+        if case .run = outcome {} else { outcome = m.press(.enter) }
+        guard case .run(.macro(let macro)) = outcome else { return nil }
+        return macro
+    }
+
+    func testFileEveryDraftFilesThem() async throws {
+        let base = folder()
+        defer { try? FileManager.default.removeItem(at: base) }
+        write("[2026-11-06 09:00:00] Shopping\nmilk\n\n[2026-11-06 10:00:00] Call\nthe bank\n", "inbox/2026/11/06.md", in: base)
+        let store = JournalStore(testingBase: base)
+        try await ready(store)
+        XCTAssertEqual(store.inboxDrafts.count, 2)
+        let macro = try XCTUnwrap(choose("file every draft", state(store)))
+        XCTAssertEqual(macro, .fileAll)
+        let said = await QuireMacros.run(macro, store: store)
+        XCTAssertEqual(said, "Filed 2 drafts.")
+        XCTAssertEqual(store.inboxDrafts.count, 0)
+        XCTAssertFalse(exists("inbox/2026/11/06.md", in: base))
+        let filed = try String(contentsOf: base.appendingPathComponent("journal/2026/11/06.md"), encoding: .utf8)
+        XCTAssertTrue(filed.contains("Shopping") && filed.contains("the bank"), filed)
+    }
+
+    func testClearOrphanMediaMovesOnlyTheUnused() async throws {
+        let base = folder()
+        defer { try? FileManager.default.removeItem(at: base) }
+        write("[2026-11-05 18:30:00] Walk\n![](assets/2026/11/used.jpg)\n", "journal/2026/11/05.md", in: base)
+        write("jpeg", "assets/2026/11/used.jpg", in: base)
+        write("jpeg", "assets/2026/11/unused.jpg", in: base)
+        let store = JournalStore(testingBase: base)
+        try await ready(store)
+        let macro = try XCTUnwrap(choose("clear orphan media", state(store)))
+        XCTAssertEqual(macro, .clearOrphans)
+        let said = await QuireMacros.run(macro, store: store)
+        XCTAssertTrue(said.hasPrefix("Cleared 1 unused file."), said)
+        XCTAssertTrue(exists("assets/2026/11/used.jpg", in: base))
+        XCTAssertFalse(exists("assets/2026/11/unused.jpg", in: base))
+        // Nothing left to clear: it says so and touches nothing.
+        let again = await QuireMacros.run(macro, store: store)
+        XCTAssertEqual(again, "No orphan media: every file is in use.")
+        XCTAssertTrue(exists("assets/2026/11/used.jpg", in: base))
+    }
+
+    func testCleanUpTidiesTheJournal() async throws {
+        let base = folder()
+        defer { try? FileManager.default.removeItem(at: base) }
+        // Out of order, and the same entry twice.
+        write("[2026-11-05 18:30:00] Later\nb\n\n[2026-11-05 08:00:00] Earlier\na\n\n[2026-11-05 08:00:00] Earlier\na\n",
+              "journal/2026/11/05.md", in: base)
+        let store = JournalStore(testingBase: base)
+        try await ready(store)
+        let macro = try XCTUnwrap(choose("clean up", state(store)))
+        XCTAssertEqual(macro, .cleanUp)
+        let said = await QuireMacros.run(macro, store: store)
+        XCTAssertTrue(said.contains("removed 1 duplicate"), said)
+        let text = try String(contentsOf: base.appendingPathComponent("journal/2026/11/05.md"), encoding: .utf8)
+        let earlier = try XCTUnwrap(text.range(of: "Earlier")), later = try XCTUnwrap(text.range(of: "Later"))
+        XCTAssertLessThan(earlier.lowerBound, later.lowerBound, text)
+        XCTAssertEqual(text.components(separatedBy: "Earlier").count, 2, text)
+    }
+
+    /// Review 10a: typewriter scrolling and paragraph focus are offered only
+    /// where the editor has them (the Mac), not on the iPhone or iPad.
+    func testEditorAidsAreOfferedOnlyWhereTheEditorHasThem() {
+        var s = QuireCommandState()
+        func all(_ s: QuireCommandState) -> [String] {
+            QuireCommandList(state: s).all.flatMap { [$0] + $0.underneath }.map(\.id)
+        }
+        XCTAssertTrue(all(s).contains("typewriter"))
+        XCTAssertTrue(all(s).contains("focusParagraph"))
+        s.settings.editorAids = false
+        XCTAssertFalse(all(s).contains("typewriter"))
+        XCTAssertFalse(all(s).contains("focusParagraph"))
+        XCTAssertTrue(all(s).contains("transcribe"))
+    }
+}
