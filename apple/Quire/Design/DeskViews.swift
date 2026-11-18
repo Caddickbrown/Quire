@@ -14,6 +14,22 @@
 
 import SwiftUI
 
+/// The caret beside typed text: drawn, one line high in the field's font, never
+/// a "|" typed into the string, which takes a letter's width and leaves a gap
+/// (App Kit 0.9.1, `text-caret`). As the Sample App's.
+struct Caret: View {
+    let font: Font
+    let color: Color
+    var width: CGFloat = 2
+
+    var body: some View {
+        Text("Ag").font(font).hidden()
+            .frame(width: width)
+            .overlay(Rectangle().fill(color))
+            .accessibilityHidden(true)
+    }
+}
+
 // MARK: - The window shown on the monitor
 
 struct ExternalDisplayRoot: View {
@@ -23,6 +39,7 @@ struct ExternalDisplayRoot: View {
     @ObservedObject private var datePicker = DeskDatePicker.shared
     @ObservedObject private var confirm = DeskConfirm.shared
     @ObservedObject private var commands = QuireCommandMenu.host
+    @ObservedObject private var playback = MediaPlayback.shared
     @AppStorage(QuireTheme.storageKey) private var themeID = QuireTheme.auto
     // Auto's looks, read by `resolve`: here so a change redraws the monitor.
     @AppStorage(QuireTheme.autoLightKey, store: QuireTheme.sharedDefaults) private var autoLight = QuireTheme.defaultAutoLight
@@ -57,6 +74,11 @@ struct ExternalDisplayRoot: View {
                             .overlay { DeskDateOverlay(metrics: metrics) }
                             .overlay { DeskConfirmOverlay(metrics: metrics) }
                             .overlay { DeskCommandOverlay(metrics: metrics) }
+                            // What a command did, or why it didn't: the phone may be face down.
+                            .overlay(alignment: .bottom) {
+                                CommandNoticeStack(z: metrics.caption / 14) { DeskNoticeCard(notice: $0, metrics: metrics) }
+                                    .padding(.horizontal, metrics.padding).padding(.bottom, metrics.caption)
+                            }
                         DeskHintBar(hints: hints, metrics: metrics)
                     }
                     .environmentObject(store)
@@ -99,6 +121,12 @@ struct ExternalDisplayRoot: View {
     /// dimmed; the same keys as the terminal app. The rule: exactly the keys that
     /// work, so the monitor's own (⌥⌘…) are on every page, `?` wherever a letter
     /// isn't typed into something, and j/k beside the arrows they double.
+    /// The Journal's own keys: starred only, and the split journals either side.
+    private var journalKeys: [ShortcutHint] {
+        [.init(key: "s", label: "Starred")]
+            + ((model.store?.splitJournals.isEmpty ?? true) ? [] : [.init(key: "[ ]", label: "Journals")])
+    }
+
     private var hints: [ShortcutHint] {
         // ⌥⌘ with + or -, T, P, H: declared by whatever holds the keyboard
         // (`DisplayKeys`), the composer's text and ⌘K's field included.
@@ -152,7 +180,7 @@ struct ExternalDisplayRoot: View {
             // its letters to the root: `j` is the Journal again, not "down".
             if rows.isEmpty, listTitle != "Search" {
                 let go: ShortcutHint = .init(key: "n i j l /", label: "New Inbox Journal Look Search")
-                return [DeskEscape.list.hint] + random + [go] + tail
+                return [DeskEscape.list.hint] + random + (listTitle == "Journal" ? journalKeys : []) + [go] + tail
             }
             // Esc goes home from any list; Search is a sheet, so it closes that first.
             let base: [ShortcutHint] = [.init(key: "↑↓ j k", label: "Move"), .init(key: "↩", label: "Open"),
@@ -165,7 +193,7 @@ struct ExternalDisplayRoot: View {
                 return base + keys + tail
             case "Journal":
                 let keys: [ShortcutHint] = [.init(key: "e", label: "Edit"), .init(key: "u", label: "Inbox"), .init(key: "*", label: "Star"),
-                               .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), go]
+                               .init(key: "t", label: "Time"), .init(key: "d", label: "Delete")] + journalKeys + [go]
                 return base + random + keys + tail
             case "Search":
                 // The search sheet keeps the app's letters away (they type).
@@ -182,21 +210,25 @@ struct ExternalDisplayRoot: View {
             default:
                 return base + random + [go] + tail
             }
-        case .composing:
+        case .composing(_, _, _, _, let inTitle):
             // No `?` or `,` here: with the editor focused they type.
             let chords: [ShortcutHint] = [.init(key: "^J", label: "File"), .init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"),
-                    .init(key: "^F", label: "Focus"), .init(key: "^P", label: "Prompt"), .init(key: "^D", label: "Discard"),
+                    .init(key: "^F", label: "Focus"), .init(key: "^P", label: "Prompt"),
+                    .init(key: "^U", label: inTitle ? "Text" : "Title"), .init(key: "^D", label: "Discard"),
                     .init(key: "⎋", label: "Done")]
             return chords + [menu, display]
-        case .editing(_, _, _, _, _, let isDraft, _):
+        case .editing(_, _, _, _, _, let isDraft, let inTitle):
             let file: [ShortcutHint] = isDraft ? [.init(key: "^J", label: "File")] : []
             let chords: [ShortcutHint] = [.init(key: "^S", label: "Save"), .init(key: "^T", label: "Date"),
-                                          .init(key: "^F", label: "Focus"), .init(key: "^P", label: "Prompt")]
+                                          .init(key: "^F", label: "Focus"), .init(key: "^P", label: "Prompt"),
+                                          .init(key: "^U", label: inTitle ? "Text" : "Title")]
             let discard: [ShortcutHint] = isDraft ? [.init(key: "^D", label: "Discard")] : []
             return file + chords + discard + [ShortcutHint(key: "⎋", label: "Back"), menu, display]
-        case .reading(_, _, _, _, let isDraft):
+        case .reading(_, _, let text, _, let isDraft):
             let move: ShortcutHint = isDraft ? .init(key: "f", label: "File") : .init(key: "u", label: "Inbox")
+            let plays = MediaLinks.paths(in: text).contains { MediaKind(path: $0) != .image }
             let first: [ShortcutHint] = [.init(key: "↑↓ j k", label: "Scroll"), .init(key: "e", label: "Edit")]
+                + (plays ? [.init(key: "space", label: playback.current == nil ? "Play" : "Stop")] : [])
             let rest: [ShortcutHint] = [move, .init(key: "*", label: "Star"),
                     .init(key: "t", label: "Time"), .init(key: "d", label: "Delete"), DeskEscape.entry.hint, go]
             return first + random + rest + tail
@@ -488,6 +520,34 @@ private struct DeskCommandOverlay: View {
     }
 }
 
+/// A notice from ⌘K on the monitor, in Quire's own dress: the page's colour
+/// over a hairline, failures in the accent. "Finish on the phone" says what to do there.
+struct DeskNoticeCard: View {
+    let notice: CommandNotice
+    let metrics: ExternalDisplayMetrics
+    @Environment(\.quire) private var q
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: metrics.caption * 0.8) {
+            Image(systemName: notice.symbol).font(.system(size: metrics.caption, weight: .medium))
+                .foregroundStyle(q.accentColor).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: metrics.caption * 0.2) {
+                Text(notice.text).font(q.ui(metrics.caption * 1.1, weight: .medium))
+                    .foregroundStyle(notice.kind == .failure ? q.accentColor : q.inkColor)
+                if let detail = notice.detail {
+                    Text(detail).font(q.ui(metrics.caption * 0.95)).foregroundStyle(q.mutedColor)
+                }
+            }
+        }
+        .padding(.horizontal, metrics.caption * 1.2).padding(.vertical, metrics.caption * 0.8)
+        .frame(maxWidth: metrics.caption * 40, alignment: .leading)
+        .background(q.pageColor)
+        .overlay(Rectangle().strokeBorder(notice.kind == .failure ? q.accentColor : q.lineColor, lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: metrics.caption * 0.8, y: metrics.caption * 0.2)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 /// The keys along the bottom, over a hairline. Hidden with `?`.
 private struct DeskHintBar: View {
     let hints: [ShortcutHint]
@@ -719,8 +779,11 @@ private struct DeskBrowse: View {
     }
 
     private func searchLine(_ search: DeskSearch) -> some View {
-        (Text(search.query) + Text(search.typing ? "|" : "").foregroundColor(q.accentColor))
-            .font(q.writing(metrics.text * 0.9)).foregroundStyle(q.inkColor).lineLimit(1).truncationMode(.head)
+        HStack(spacing: 1) {
+            Text(search.query).font(q.writing(metrics.text * 0.9)).foregroundStyle(q.inkColor)
+                .lineLimit(1).truncationMode(.head)
+            if search.typing { Caret(font: q.writing(metrics.text * 0.9), color: q.accentColor) }
+        }
             .padding(.bottom, metrics.caption * 0.4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .bottom) { Rectangle().fill(q.lineColor).frame(height: 1) }
@@ -824,9 +887,13 @@ private struct DeskEntry: View {
                     }
                 } else {
                     // After the words, wrapping with them.
-                    (Text(q.caps(displayTitle)).foregroundColor(q.inkColor)
-                        + Text("|").foregroundColor(q.accentColor.opacity(on ? 1 : 0)))
-                        .font(q.display(metrics.title * 1.25))
+                    HStack(alignment: .lastTextBaseline, spacing: 1) {
+                        Text(q.caps(displayTitle)).foregroundColor(q.inkColor)
+                            .font(q.display(metrics.title * 1.25))
+                        Caret(font: q.display(metrics.title * 1.25), color: q.accentColor,
+                              width: max(2, metrics.title * 0.08))
+                            .opacity(on ? 1 : 0)
+                    }
                 }
             }
             .lineLimit(2).minimumScaleFactor(0.6)
@@ -847,7 +914,8 @@ private struct DeskEntry: View {
                 // shows: a full-size decode of each one, on the main thread and
                 // again whenever the page was redrawn, held the monitor up.
                 MediaBody(text: text, font: q.writing(metrics.text), textColor: q.inkColor, contentPadding: 0,
-                          onUpdateText: nil, thumbnailSide: 2048, mediaScale: max(1, metrics.text / 20))
+                          onUpdateText: nil, thumbnailSide: 2048, mediaScale: max(1, metrics.text / 20),
+                          answersMenu: true)
                     .background(QScrollAttach(handle: ExternalDisplayModel.shared.pageScroll))
             }
         }

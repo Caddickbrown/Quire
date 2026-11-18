@@ -434,9 +434,16 @@ struct ComposerScreen: View {
             if let data = recorder.stop(), let rel = store.saveAsset(data, ext: "m4a") {
                 link(rel)
                 autoTranscribeIfEnabled(rel)
+                if DeskDatePicker.shared.isAvailable { CommandNotices.shared.say("Voice note added.") }
             }
         } else {
-            Task { await recorder.start() }
+            Task {
+                await recorder.start()
+                // The timer and Stop are on the phone's footer: the monitor says it's recording, and how to stop.
+                if recorder.isRecording, DeskDatePicker.shared.isAvailable {
+                    CommandNotices.shared.phone("⌘K › Stop recording when you're done.", text: "Recording a voice note")
+                }
+            }
         }
     }
 
@@ -645,6 +652,11 @@ struct ComposerScreen: View {
         savedFlash = false
         failedBeat += 1
         saveError = (store.lastWriteError ?? "The entry could not be saved.") + " Your edits are still open here. Retry, or save a copy to Inbox."
+        // The phone's banner can't be seen from the monitor: said there too, with the ways on.
+        if DeskDatePicker.shared.isAvailable {
+            CommandNotices.shared.fail(store.lastWriteError ?? "The entry could not be saved.",
+                                       detail: "⌘K: Retry the save, Save a copy to the Inbox, Copy the text, or Close and keep.")
+        }
     }
 
     private func close() {
@@ -711,6 +723,7 @@ struct ComposerScreen: View {
                 case "f": focusMode.toggle(); return true
                 case "p": insertPrompt(); return true
                 case "d": if isDraft { askDiscard(); return true }; return false
+                case "u": focus = focus == .title ? .body : .title; return true
                 default: return false
                 }
             }))
@@ -721,7 +734,7 @@ struct ComposerScreen: View {
     /// The page as the menu lists it.
     private var commandState: QuireCommandState.Composer {
         .init(title: title.trimmingCharacters(in: .whitespacesAndNewlines), isDraft: isDraft, starred: starred,
-              focus: focusMode, recording: recorder.isRecording, saveFailed: saveError != nil)
+              focus: focusMode, recording: recorder.isRecording, saveFailed: saveError != nil, inTitle: focus == .title)
     }
 
     /// A command chosen from ⌘K while writing: done here, and the page stays, with the keyboard back where it was.
@@ -739,10 +752,14 @@ struct ComposerScreen: View {
         case .takePhoto: refocus = lastFocus; showingPhotoCapture = true; keepsTyping = false
         case .video: refocus = lastFocus; showingVideoRecorder = true; keepsTyping = false
         case .file: refocus = lastFocus; showingFilePicker = true; keepsTyping = false
+        case .attach(let rel): link(rel)
+        case .editTitle: focus = .title; keepsTyping = false
+        case .editText: focus = .body; keepsTyping = false
         case .discard: discard(); keepsTyping = false
         case .close: close(); keepsTyping = false
         case .retry: _ = saveNow()
-        case .copyToInbox: recoverCopy = true; keepsTyping = false
+        // Asked in the menu already (Save a copy to the Inbox… › Save the copy).
+        case .copyToInbox: saveRecoveryCopy()
         case .copyText: copyText()
         case .closeKeeping: closeKeeping(); keepsTyping = false
         }

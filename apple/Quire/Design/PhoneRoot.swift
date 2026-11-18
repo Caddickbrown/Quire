@@ -269,6 +269,10 @@ struct PhoneRoot: View {
         .onAppear(perform: checkRecovery)
         .onChange(of: store.indexed) { _, _ in checkRecovery() }
         .onChange(of: store.baseURL) { _, _ in checkRecovery() }
+        .onChange(of: recovery?.id) { _, _ in
+            QuireCommandMenu.recovery = recovery.map { Self.recoveryDescription($0) }
+            QuireCommandMenu.refreshSoon()
+        }
         .alert("Quire closed before this page was saved.",
                isPresented: Binding(get: { recovery != nil && !appLock.showsVeil },
                                     set: { if !$0 { recovery = nil } }),
@@ -539,7 +543,27 @@ struct PhoneRoot: View {
             if journalHolds(record) { ComposerRecovery.remove(record.id); continue }
             recoveryNote = nil
             recovery = record
+            if DeskDatePicker.shared.isAvailable {
+                CommandNotices.shared.fail("Quire closed before a page was saved.",
+                                           detail: Self.recoveryDescription(record) + " · ⌘K to save, copy or discard it.")
+            }
             return
+        }
+    }
+
+    /// The question from ⌘K, which the monitor can show when the phone's alert can't be seen.
+    private func answerRecovery(_ answer: QuireRecoveryAnswer) {
+        guard let record = recovery else { return }
+        recovery = nil
+        switch answer {
+        case .save:
+            saveRecovered(record)
+            say(ComposerRecovery.all().contains { $0.id == record.id }
+                ? (store.lastWriteError ?? "The page couldn't be saved. It's kept for later.") : "Saved to the Inbox.",
+                failed: ComposerRecovery.all().contains { $0.id == record.id })
+        case .copy: copyRecovered(record); say("Copied the page's text.")
+        case .discard: ComposerRecovery.remove(record.id); say("Discarded."); checkRecoverySoon()
+        case .later: say("Kept. Quire asks again next time.")
         }
     }
 
@@ -720,10 +744,12 @@ struct PhoneRoot: View {
         }
     }
 
-    /// Said under the masthead, then gone.
-    private func say(_ message: String) {
+    /// Said under the masthead, then gone; and on the monitor, where the phone
+    /// may be face down (`CommandNotices`, drawn by the monitor's notice stack,
+    /// which says it to VoiceOver too).
+    private func say(_ message: String, failed: Bool = false) {
         commandNotice = message
-        UIAccessibility.post(notification: .announcement, argument: message)
+        if failed { CommandNotices.shared.fail(message) } else { CommandNotices.shared.say(message) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { if commandNotice == message { commandNotice = nil } }
     }
 
@@ -754,7 +780,7 @@ struct PhoneRoot: View {
         guard let ref = CommandFocus.shared.target(id)?.ref ?? findEntry(id) else { return }
         let isOpen = path.last?.id == ref.id
         func closePage() { if isOpen { path.removeLast(); if splitActive { ExternalDisplayModel.shared.relist() } } }
-        func failed(_ message: String) { say(store.lastWriteError ?? message) }
+        func failed(_ message: String) { say(store.lastWriteError ?? message, failed: true) }
         switch action {
         case .open: open(ref)
         case .edit: composing = ComposeTarget(ref: ref)
@@ -794,8 +820,15 @@ struct PhoneRoot: View {
         case .backupNow:
             guard store.backupFolderName != nil, !store.backupRunning else { return }
             say("Backing up…")
-            Task { @MainActor in say((await store.runBackup()).ok ? "Backed up." : "The backup didn't finish.") }
+            Task { @MainActor in
+                let ok = (await store.runBackup()).ok
+                say(ok ? "Backed up." : "The backup didn't finish.", failed: !ok)
+            }
             return
+        case .autoTheme(let dark, let id):
+            QuireTheme.sharedDefaults.set(id, forKey: dark ? QuireTheme.autoDarkKey : QuireTheme.autoLightKey); return
+        case .stopPlaying: MediaPlayback.shared.stop(); return
+        case .nothing: return
         case .closeSettings:
             ExternalSettingsModel.shared.close(); showSettings = false; return
         default: break
@@ -831,7 +864,50 @@ struct PhoneRoot: View {
             case .randomDraft:
                 if let d = store.inboxDrafts.randomElement() { showEntry(EntryRef(entry: d, source: .inbox)) }
             case .openEntry(let id):
-                if let ref = findEntry(id) { showEntry(ref) } else { say("That entry has gone.") }
+                if let ref = findEntry(id) { showEntry(ref) } else { say("That entry has gone.", failed: true) }
+            case .play(let path):
+                if let url = store.assetURL(forRelative: path), FileManager.default.fileExists(atPath: url.path) {
+                    MediaPlayback.shared.play(path, url: url)
+                    say("Playing \((path as NSString).lastPathComponent). ⌘K › Stop playing to stop.")
+                } else { say("That file isn't in the journal's media any more.", failed: true) }
+            case .mediaEntry(let path):
+                guard let url = store.assetURL(forRelative: path) else { return }
+                if let use = store.usages(ofAsset: url).first { showEntry(EntryRef(entry: use.entry, source: use.source)) }
+                else { say("No entry uses \((path as NSString).lastPathComponent).", failed: true) }
+            case .mediaDelete(let path):
+                guard let url = store.assetURL(forRelative: path) else { return }
+                if store.deleteAsset(url) {
+                    say("Deleted \(url.lastPathComponent). A copy is kept in .quire/media-cleanup/ for 30 days.")
+                    QuireCommandMenu.loadExtras(store: store, force: true)
+                } else { say(store.lastWriteError ?? "Couldn't delete \(url.lastPathComponent).", failed: true) }
+            case .newTemplate(let name):
+                if let made = store.createTemplate(named: name) {
+                    say("Made the template “\(made)”.")
+                    QuireCommandMenu.loadExtras(store: store, force: true)
+                } else { say(store.lastWriteError ?? "The template couldn't be made.", failed: true) }
+            case .deleteTemplate(let name):
+                store.deleteTemplate(named: name)
+                if store.templateNames().contains(name) { say(store.lastWriteError ?? "The template is still there.", failed: true) }
+                else { say("Deleted the template “\(name)”."); QuireCommandMenu.loadExtras(store: store, force: true) }
+            case .restoreBackup(let name):
+                say("Restoring…")
+                Task { @MainActor in
+                    let r = await store.restoreBackup(named: name)
+                    say(r.message, failed: !r.ok)
+                    QuireCommandMenu.loadExtras(store: store, force: true)
+                }
+            case .mergeTags(let from, let to):
+                say("Merging…")
+                Task { @MainActor in
+                    let changed = await store.mergeTagsAsync(from.map { (from: $0, to: to) })
+                    say("Merged into “\(to)”: \(changed == 1 ? "1 entry" : "\(changed) entries") changed.")
+                    QuireCommandMenu.loadExtras(store: store, force: true)
+                }
+            case .ignoreTags(let tags):
+                store.ignoreTagGroup(JournalStore.TagGroup(variants: tags.map { .init(tag: $0, count: 0) }, caseOnly: false))
+                say("Left “\(tags.joined(separator: "”, “"))” as they are.")
+                QuireCommandMenu.loadExtras(store: store, force: true)
+            case .recovery(let answer): answerRecovery(answer)
             case .splitJournal(let name): path.removeAll(); tab = .journal; journalSplit = name
             case .starredOnly(let on): path.removeAll(); tab = .journal; journalStarred = on
             case .sidebar(let collapsed): withAnimation(foldAnimation) { sidebarCollapsed = collapsed }

@@ -126,6 +126,7 @@ import UIKit
             // Nothing beneath acts while the menu is up, even for a key that reaches the app delegate.
             host.$menu.map { $0 != nil }.removeDuplicates().sink { open in
                 if open {
+                    if let store = ExternalDisplayModel.shared.store { loadExtras(store: store) }
                     KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
                         moveUp: {}, moveDown: {}, open: {}, clear: { host.close() }, key: { _ in true }))
                 } else {
@@ -255,6 +256,55 @@ import UIKit
         }
     }
 
+    // MARK: What takes a moment to read: media, backups, templates, tag review
+
+    /// Set by `PhoneRoot` while it asks about a page Quire closed on: that page, in words.
+    static var recovery: String?
+
+    private struct Extras {
+        var revision = -1
+        var media: [QuireCommandState.Media] = []
+        var backups: [QuireCommandState.Backup] = []
+        var templates: [String] = []
+        var tagGroups: [QuireCommandState.TagGroup] = []
+    }
+    private static var extras = Extras()
+    private static var loadingExtras = false
+
+    /// Read off the main thread as the menu opens, and once per change to the journal; the list follows when they land.
+    static func loadExtras(store: JournalStore, force: Bool = false) {
+        guard !loadingExtras, force || extras.revision != store.revision else { return }
+        loadingExtras = true
+        let revision = store.revision
+        Task { @MainActor in
+            defer { loadingExtras = false }
+            var next = Extras()
+            next.revision = revision
+            let base = store.baseURL
+            next.media = await store.allAssetsAsync().map { item in
+                let kind: String
+                switch MediaKind(path: item.name) { case .image: kind = "image"; case .video: kind = "video"; case .audio: kind = "audio" }
+                let path = base.map { JournalStore.relativePath(of: item.url, under: $0) } ?? item.name
+                return .init(path: path, name: item.name, kind: kind, date: item.date, size: item.size)
+            }
+            if store.backupFolderName != nil {
+                next.backups = await store.listBackups().map { .init(name: $0.name, date: $0.date, isSafetyCopy: $0.isSafetyCopy) }
+            }
+            next.templates = store.templateNames()
+            next.tagGroups = await store.similarTagGroupsAsync().map { g in
+                .init(tags: g.variants.map(\.tag), counts: g.variants.map(\.count), caseOnly: g.caseOnly)
+            }
+            extras = next
+            refreshSoon()
+        }
+    }
+
+    /// The voice notes and videos an entry links, by path from the journal's root.
+    static func playable(_ entry: Entry) -> [String] {
+        MediaLinks.paths(in: entry.raw).compactMap { MediaLinks.resolved($0, file: entry.file ?? "inbox.md") }
+            .filter { MediaKind(path: $0) != .image }
+    }
+
     // MARK: The state, from the app
 
     /// Saved searches are read from the journal folder: once per change to it, not at every key.
@@ -292,6 +342,8 @@ import UIKit
 
         var set = QuireCommandState.Settings()
         set.theme = d.string(forKey: QuireTheme.storageKey) ?? QuireTheme.auto
+        set.autoLight = QuireTheme.sharedDefaults.string(forKey: QuireTheme.autoLightKey) ?? QuireTheme.defaultAutoLight
+        set.autoDark = QuireTheme.sharedDefaults.string(forKey: QuireTheme.autoDarkKey) ?? QuireTheme.defaultAutoDark
         set.dark = set.theme == QuireTheme.auto ? ExternalDisplayModel.shared.colorScheme == .dark
             : QuireTheme.all.first { $0.id == set.theme }?.dark ?? false
         set.prompts = flag(PromptDeck.enabledKey)
@@ -335,9 +387,18 @@ import UIKit
         s.backupRunning = store.backupRunning
         s.lastBackup = store.lastBackupAt.map { "Last " + $0.formatted(date: .abbreviated, time: .shortened) }
         s.composer = ComposerCommands.shared.state
+        if extras.revision != store.revision { loadExtras(store: store) }
+        s.media = extras.media
+        s.backups = extras.backups
+        s.templates = extras.templates
+        s.tagGroups = extras.tagGroups
+        s.recovery = recovery
+        s.playing = MediaPlayback.shared.current
         if let target = CommandFocus.shared.current {
             var selected = item(target.ref.entry, draft: target.ref.source == .inbox)
             selected.isOpen = target.isPage
+            // Played where the monitor shows the page; the phone's own players are under a finger.
+            if target.isPage, s.monitorShows { selected.media = playable(target.ref.entry) }
             if case .journal(let name) = target.ref.source { selected.journal = name }
             s.selected = selected
         }
@@ -436,7 +497,7 @@ struct CommandMenuPanel: View {
                 if !menu.query.isEmpty {
                     Text(menu.query).font(q.writing(20 * z)).foregroundStyle(q.inkColor).lineLimit(1).truncationMode(.head)
                 }
-                Text("|").font(q.writing(20 * z)).foregroundStyle(q.accentColor)
+                Caret(font: q.writing(20 * z), color: q.accentColor, width: max(2, 2 * z))
                 if menu.query.isEmpty {
                     Text(menu.prompt).font(q.writing(20 * z, italic: true)).foregroundStyle(q.faintColor).lineLimit(1)
                 }

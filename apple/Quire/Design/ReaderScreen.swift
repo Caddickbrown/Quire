@@ -180,9 +180,16 @@ struct ReaderScreen: View {
                 case "u": if !isDraft { unfile() }; return !isDraft
                 case "t": (onRetimeKey ?? onRetime)(current); return true
                 case "d": askDelete(); return true
+                // Space plays the entry's first voice note or video where the monitor shows the page; again stops it.
+                case " ":
+                    guard DeskDatePicker.shared.isAvailable, let first = QuireCommandMenu.playable(entry).first else { return false }
+                    if MediaPlayback.shared.current == first { MediaPlayback.shared.stop() }
+                    else { QuireCommandMenu.run(.play(first)) }
+                    return true
                 default: return false
                 }
-            }))
+            },
+            letters: [" "]))
     }
 
     /// On the monitor in desk mode, where the keyboard can answer; the phone's

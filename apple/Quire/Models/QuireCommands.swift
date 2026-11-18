@@ -199,10 +199,19 @@ enum QuireEntryAction: String, Equatable {
     case open, edit, star, unstar, file, unfile, retime, delete, close
 }
 
+/// The answers to "Quire closed before this page was saved", as the phone's question has them.
+enum QuireRecoveryAnswer: String, Equatable {
+    case save, copy, discard, later
+}
+
 /// What can be done on the page being written, without closing it.
-enum QuireComposerAction: String, Equatable {
+enum QuireComposerAction: Equatable {
     case finish, save, retime, focus, prompt, star, voice
     case photoLibrary, takePhoto, video, file
+    /// A file already in the journal's media, by its path from the journal's root ("assets/2026/a.jpg").
+    case attach(String)
+    /// The keyboard to the title, or back to the text.
+    case editTitle, editText
     case discard, close
     /// The save failed: the ways on.
     case retry, copyToInbox, copyText, closeKeeping
@@ -244,11 +253,31 @@ enum QuireCommand: Equatable {
     case backupNow
     case macro(QuireMacro)
     case closeSettings
+    /// A voice note or video in the open entry, by its path from the journal's root, played where the monitor shows it.
+    case play(String)
+    case stopPlaying
+    /// A file in the journal's media: the entry it's in, or deleted (kept 30 days in .quire/media-cleanup).
+    case mediaEntry(String)
+    case mediaDelete(String)
+    /// The look Auto uses by day (`dark: false`) or at night.
+    case autoTheme(dark: Bool, String)
+    case newTemplate(String)
+    case deleteTemplate(String)
+    /// A backup by its folder name.
+    case restoreBackup(String)
+    /// Tag review: every spelling in `from` becomes `to`.
+    case mergeTags(from: [String], to: String)
+    case recovery(QuireRecoveryAnswer)
+    /// Tag review's "Not a match": the group is left as it is and not offered again.
+    case ignoreTags([String])
+    /// The keys, as a list in the menu; choosing one closes it.
+    case nothing
 
     /// Done where it's chosen, over a sheet or the page being written, rather than after leaving it.
     var staysOverSheets: Bool {
         switch self {
-        case .composer, .pref, .darkMode, .reminderTime, .pauseMonitor, .backupNow, .saveSearch, .removeSearch:
+        case .composer, .pref, .darkMode, .reminderTime, .pauseMonitor, .backupNow, .saveSearch, .removeSearch,
+             .autoTheme, .stopPlaying, .nothing:
             return true
         default:
             return false
@@ -272,6 +301,33 @@ struct QuireCommandState: Equatable {
         var isOpen = false
         /// The split journal it's in, if one.
         var journal: String?
+        /// Its voice notes and videos, by path from the journal's root, while its page is open.
+        var media: [String] = []
+    }
+
+    /// A file in the journal's media folder.
+    struct Media: Equatable {
+        /// From the journal's root: "assets/2026/11/walk.jpg".
+        var path: String
+        var name: String
+        /// "image", "video" or "audio".
+        var kind: String
+        var date: Date
+        var size: Int = 0
+    }
+
+    struct Backup: Equatable {
+        /// The folder's name, which restoring asks for.
+        var name: String
+        var date: Date?
+        var isSafetyCopy = false
+    }
+
+    /// Tags that differ only by case, or by a letter: Tag review's groups.
+    struct TagGroup: Equatable {
+        var tags: [String]
+        var counts: [Int]
+        var caseOnly: Bool
     }
 
     /// The page being written.
@@ -282,6 +338,8 @@ struct QuireCommandState: Equatable {
         var focus = false
         var recording = false
         var saveFailed = false
+        /// The keyboard is in the title.
+        var inTitle = false
     }
 
     struct Theme: Equatable {
@@ -297,6 +355,9 @@ struct QuireCommandState: Equatable {
 
     struct Settings: Equatable {
         var theme = "auto"
+        /// The looks Auto uses by day and at night.
+        var autoLight = "almanac"
+        var autoDark = "cinema"
         /// What shows now, "auto" resolved.
         var dark = false
         var prompts = false
@@ -365,6 +426,15 @@ struct QuireCommandState: Equatable {
     var backupFolderSet = false
     var backupRunning = false
     var lastBackup: String?
+    /// The journal's media files, as the Media Library lists them (sorted here by `settings.mediaSort`).
+    var media: [Media] = []
+    var backups: [Backup] = []
+    var templates: [String] = []
+    var tagGroups: [TagGroup] = []
+    /// A page Quire closed on before it was saved, in words ("9 Nov, 14:02 · Walk"), while it's being asked about.
+    var recovery: String?
+    /// The voice note or video playing from the menu, by path.
+    var playing: String?
 
     static let vsCode = "vscode"
     static let followPhone = "phone"
@@ -382,6 +452,22 @@ struct QuireCommandState: Equatable {
     static let mediaSorts = [("newest", "Newest first"), ("oldest", "Oldest first"), ("largest", "Largest first"),
                              ("kind", "By kind"), ("name", "By name")]
     static let mediaGroups = [("none", "No grouping"), ("day", "By day"), ("month", "By month"), ("year", "By year")]
+    /// The keys, as Keyboard shortcuts lists them in the menu.
+    static let keys: [(String, String)] = [
+        ("⌘K", "The menu: do anything, or go anywhere"), ("⎋", "Back, or Today"),
+        ("i", "Inbox"), ("j", "Journal"), ("l", "Look back"), ("/", "Search"), (",", "Settings"),
+        ("n", "New draft"), ("r", "A random entry"), ("p", "Another prompt (Today)"),
+        ("↑↓ j k", "Move in a list"), ("↩", "Open, or write"), ("e", "Edit"), ("*", "Star or unstar"),
+        ("f", "File a draft"), ("u", "Return to the Inbox"), ("t", "Change date and time"), ("d", "Ask before an entry goes"),
+        ("s", "Starred entries only (Journal)"), ("[ ]", "The journal before or after (Journal)"),
+        ("space", "Play the voice note or video (an open entry)"),
+        ("^J", "File, or Done (writing)"), ("^S", "Save now"), ("^T", "Date and time"), ("^F", "Focus mode"),
+        ("^P", "Insert a prompt"), ("^U", "The title, or back to the text"), ("^D", "Ask before a draft goes"),
+        ("⌘Z", "Undo what the menu just did, while it says so"),
+        ("⌥⌘P", "Pause the monitor"), ("⌥⌘T", "Monitor theme"), ("⌥⌘+ ⌥⌘−", "Monitor text size"),
+        ("⌥⌘H", "Hide or show key hints"), ("?", "Key hints"),
+    ]
+
     /// Settings' pages on the phone: `SettingsGroup`'s raw values.
     static let pages: [(id: String, title: String, words: [String])] = [
         ("folder", "Folder and backups", ["storage", "icloud", "restore", "location"]),
@@ -418,10 +504,15 @@ struct QuireCommandList: CommandList {
 
     private static func build(_ s: QuireCommandState) -> [Row] {
         var out: [Row] = []
+        if s.recovery != nil { out += recovery(s) }
         if let c = s.composer {
             out += composer(c, s)
         } else if let item = s.selected {
             out += entry(item, s)
+        }
+        if let playing = s.playing {
+            out.append(Row("media.stop", "Stop playing", detail: (playing as NSString).lastPathComponent, symbol: "stop.fill",
+                           step: .run(.stopPlaying), synonyms: ["pause", "stop", "voice note", "video"]))
         }
         out += places(s)
         out += writing(s)
@@ -431,9 +522,30 @@ struct QuireCommandList: CommandList {
         out += reminders(s)
         if let m = s.monitor { out += monitor(m, s) }
         out += data(s)
+        out += media(s)
         out += macros(s)
-        if !s.monitorShows { out += pages(s) }
+        out += templates(s)
+        out += pages(s)
         return out
+    }
+
+    // MARK: A page Quire closed on before it was saved
+
+    /// The phone's question, in the menu: the monitor can't show the phone's alert.
+    private static func recovery(_ s: QuireCommandState) -> [Row] {
+        let named = s.recovery ?? "The unsaved page"
+        let discard = CommandConfirm<QuireCommand>(prompt: "Discard the unsaved page? It can't be got back.",
+                                                   title: "Discard it", action: .recovery(.discard))
+        return [
+            Row("recovery.save", "Save the unsaved page to the Inbox", symbol: "tray.and.arrow.down",
+                step: .run(.recovery(.save)), synonyms: ["recover", "closed before saved", "keep"], context: named),
+            Row("recovery.copy", "Copy the unsaved page's text", symbol: "doc.on.doc", step: .run(.recovery(.copy)),
+                synonyms: ["clipboard", "recover"], context: named),
+            Row("recovery.discard", "Discard the unsaved page…", symbol: "trash", step: .confirm(discard),
+                synonyms: ["throw away", "recover"], destructive: true, context: named),
+            Row("recovery.later", "Ask about the unsaved page later", symbol: "clock", step: .run(.recovery(.later)),
+                synonyms: ["not now", "recover"], context: named),
+        ]
     }
 
     // MARK: The entry that's selected or open
@@ -468,6 +580,16 @@ struct QuireCommandList: CommandList {
                        step: .pick(CommandPick(prompt: "Delete \(named)? Esc keeps it.", choices: [yes], searchable: false)),
                        confirms: true, synonyms: ["remove", "bin", "trash"], destructive: true, context: named))
         if item.isOpen {
+            for path in item.media {
+                let video = MediaKind(path: path) == .video
+                let many = item.media.filter { (MediaKind(path: $0) == .video) == video }.count > 1
+                let what = video ? "the video" : "the voice note"
+                let title = many ? "Play “\((path as NSString).lastPathComponent)”" : "Play " + what
+                out.append(Row("entry.play." + path, title, detail: path == item.media.first ? "space" : nil,
+                               symbol: video ? "play.rectangle" : "play.circle", step: .run(.play(path)),
+                               synonyms: ["play", "listen", "watch", video ? "video" : "voice note", "audio", "memo"],
+                               context: named))
+            }
             out.append(Row("entry.close", "Close the page", detail: "⎋", symbol: "xmark", step: .run(.entry(.close, id)),
                            synonyms: ["back", "list"], context: named))
         }
@@ -486,7 +608,12 @@ struct QuireCommandList: CommandList {
         var out: [Row] = []
         if c.saveFailed {
             out += [row("retry", "Retry the save", nil, "arrow.clockwise", .retry, ["again", "save"]),
-                    row("copyToInbox", "Save a copy to the Inbox", nil, "tray.and.arrow.down", .copyToInbox, ["recover", "keep"]),
+                    Row("composer.copyToInbox", "Save a copy to the Inbox…", symbol: "tray.and.arrow.down",
+                        step: .confirm(CommandConfirm(prompt: "Save a copy to the Inbox? The original entry is kept.",
+                                                      title: "Save the copy", detail: "Your edits become a new Inbox draft.",
+                                                      symbol: "tray.and.arrow.down", action: .composer(.copyToInbox),
+                                                      destructive: false)),
+                        synonyms: ["recover", "keep"], context: named),
                     row("copyText", "Copy the text", nil, "doc.on.doc", .copyText, ["clipboard"]),
                     row("closeKeeping", "Close and keep for later", nil, "xmark.circle", .closeKeeping, ["leave"])]
         }
@@ -498,18 +625,35 @@ struct QuireCommandList: CommandList {
                               detail: "^F", symbol: "eye", action: .composer(.focus), synonyms: ["quiet", "distraction"],
                               context: named))
         out.append(row("prompt", "Insert a prompt", "^P", "text.bubble", .prompt, ["idea", "question"]))
+        out.append(c.inTitle ? row("text", "Back to the text", "^U", "text.alignleft", .editText, ["body", "words", "write"])
+                             : row("title", "Edit the title", "^U", "character.cursor.ibeam", .editTitle, ["heading", "name", "rename"]))
         out.append(Row.toggle("composer.star", isOn: c.starred, turnOn: "Star this page", turnOff: "Unstar this page",
                               states: ("Starred", "Not starred"), symbol: c.starred ? "star.fill" : "star",
                               action: .composer(.star), synonyms: ["favourite", "favorite"], context: named))
         out.append(Row.toggle("composer.voice", isOn: c.recording, turnOn: "Record a voice note", turnOff: "Stop recording",
                               states: ("Recording", "Off"), symbol: "mic", action: .composer(.voice),
                               synonyms: ["audio", "memo", "dictate"], context: named))
-        // The pickers and the camera are the phone's own screens.
-        if !s.monitorShows {
-            out += [row("photoLibrary", "Attach from Photos", nil, "photo.on.rectangle", .photoLibrary, ["picture", "image", "library"]),
-                    row("takePhoto", "Take a photo", nil, "camera", .takePhoto, ["camera", "picture"]),
-                    row("video", "Record a video", nil, "video", .video, ["film", "movie", "camera"]),
-                    row("file", "Attach a file", nil, "paperclip", .file, ["document", "attachment"])]
+        // The pickers and the camera are the phone's own screens: chosen on the monitor, it says to finish there.
+        func phone(_ id: String, _ title: String, _ symbol: String, _ action: QuireComposerAction, _ synonyms: [String],
+                   _ there: String) -> Row {
+            Row("composer." + id, title, detail: s.monitorShows ? "On the phone" : nil, symbol: symbol,
+                step: .run(.composer(action)), synonyms: synonyms + ["attach"], context: named,
+                onPhone: s.monitorShows ? there : nil)
+        }
+        out += [phone("photoLibrary", "Attach from Photos", "photo.on.rectangle", .photoLibrary, ["picture", "image", "library"],
+                      "Choose the photo or video on the phone."),
+                phone("takePhoto", "Take a photo", "camera", .takePhoto, ["camera", "picture"], "Take the photo with the phone."),
+                phone("video", "Record a video", "video", .video, ["film", "movie", "camera"], "Record the video with the phone."),
+                phone("file", "Attach a file", "paperclip", .file, ["document", "attachment"], "Choose the file on the phone.")]
+        if !s.media.isEmpty {
+            let choices = sortedMedia(s).map { m in
+                Row("attach." + m.path, m.name, detail: mediaDetail(m), symbol: mediaSymbol(m.kind),
+                    step: .run(.composer(.attach(m.path))), synonyms: mediaWords(m.kind))
+            }
+            out.append(Row("composer.attachMedia", "Attach from the journal’s media…", symbol: "photo.stack",
+                           step: .pick(CommandPick(prompt: "Which file? Type part of its name", choices: choices,
+                                                   nothing: "No file by that name.", searchable: false)),
+                           synonyms: ["attach", "media library", "photo", "picture", "existing", "reuse"], context: named))
         }
         if c.isDraft {
             let yes = Row("composer.discard.yes", "Discard this draft", symbol: "trash", step: .run(.composer(.discard)),
@@ -540,6 +684,7 @@ struct QuireCommandList: CommandList {
             Row("go.settings", "Settings", detail: ",", symbol: "gearshape", step: .run(.settings),
                 synonyms: ["preferences", "options"]),
         ]
+        // monitor-alt: "Media…" pick (open its entry, delete), in media()
         if !s.monitorShows {
             out.append(Row("go.media", "Media Library", symbol: "photo.on.rectangle", step: .run(.media(kind: nil, find: nil)),
                            synonyms: ["photos", "attachments", "pictures", "video", "audio", "files"]))
@@ -702,6 +847,21 @@ struct QuireCommandList: CommandList {
             Row.toggle("dark", isOn: set.dark, turnOn: "Dark mode", turnOff: "Light mode", states: ("Dark", "Light"),
                        symbol: "circle.lefthalf.filled", action: .darkMode(!set.dark), synonyms: ["night", "day", "appearance"]),
         ]
+        // Which look Auto uses by day, and which at night (Settings › Writing and display).
+        for dark in [false, true] {
+            let current = dark ? set.autoDark : set.autoLight
+            let looks = s.themes.filter { $0.dark == dark }.map { t in
+                Row("auto\(dark ? "Dark" : "Light")." + t.id, t.name, symbol: dark ? "moon" : "sun.max",
+                    step: .run(.autoTheme(dark: dark, t.id)), preview: .autoTheme(dark: dark, t.id), isCurrent: t.id == current)
+            }
+            guard !looks.isEmpty else { continue }
+            out.append(Row(dark ? "theme.autoDark" : "theme.autoLight", dark ? "Auto at night…" : "Auto by day…",
+                           detail: s.themes.first { $0.id == current }?.name, symbol: dark ? "moon" : "sun.max",
+                           step: .pick(CommandPick(prompt: dark ? "Which dark look at night? ↑↓ to try each"
+                                                                : "Which light look by day? ↑↓ to try each",
+                                                   choices: looks, revert: .autoTheme(dark: dark, current))),
+                           synonyms: ["auto theme", dark ? "night theme" : "day theme", dark ? "dark" : "light"]))
+        }
         let sizes = QuireCommandState.fontSizes.map { size in
             Row("size.\(Int(size))", "\(Int(size)) px", symbol: "textformat.size", step: .run(.pref(QuirePrefKey.fontSize, .double(size))),
                 preview: .pref(QuirePrefKey.fontSize, .double(size)), isCurrent: set.fontSize == size)
@@ -903,6 +1063,7 @@ struct QuireCommandList: CommandList {
         out.append(Row("media.group", "Group media…", detail: QuireCommandState.mediaGroups.first { $0.0 == set.mediaGroup }?.1,
                        symbol: "square.grid.2x2", step: .pick(CommandPick(prompt: "Group media by?", choices: groups)),
                        synonyms: ["media library", "photos"]))
+        // monitor-alt: "Media…" pick, which finds by name and kind, in media()
         if !s.monitorShows {
             let kinds = QuireCommandState.mediaKinds.map { id, title in
                 Row("kind." + id, title, symbol: "photo", step: .run(.media(kind: id, find: nil)))
@@ -915,6 +1076,139 @@ struct QuireCommandList: CommandList {
                                                  title: { "Media named “\($0)”" }, make: { $0.isEmpty ? nil : .media(kind: nil, find: $0) })),
                            synonyms: ["photo", "file", "attachment"]))
         }
+        return out
+    }
+
+    // MARK: The journal's media, in the menu
+
+    static func sortedMedia(_ s: QuireCommandState) -> [QuireCommandState.Media] {
+        let all = s.media
+        switch s.settings.mediaSort {
+        case "oldest": return all.sorted { $0.date < $1.date }
+        case "largest": return all.sorted { $0.size > $1.size }
+        case "kind": return all.sorted { ($0.kind, $1.date) < ($1.kind, $0.date) }
+        case "name": return all.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        default: return all.sorted { $0.date > $1.date }
+        }
+    }
+
+    private static let mediaDay: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_GB"); f.dateFormat = "EEE d MMM yyyy"; return f
+    }()
+
+    static func mediaKindName(_ kind: String) -> String {
+        switch kind { case "video": return "Video"; case "audio": return "Audio"; default: return "Photo" }
+    }
+
+    static func mediaDetail(_ m: QuireCommandState.Media) -> String {
+        var out = mediaKindName(m.kind) + " · " + mediaDay.string(from: m.date)
+        if m.size > 0 { out += " · " + ByteCountFormatter.string(fromByteCount: Int64(m.size), countStyle: .file) }
+        return out
+    }
+
+    static func mediaSymbol(_ kind: String) -> String {
+        switch kind { case "video": return "video"; case "audio": return "waveform"; default: return "photo" }
+    }
+
+    static func mediaWords(_ kind: String) -> [String] {
+        switch kind {
+        case "video": return ["video", "film", "movie"]
+        case "audio": return ["audio", "voice note", "memo", "sound"]
+        default: return ["photo", "image", "picture"]
+        }
+    }
+
+    /// The Media Library, as a pick: a file by name, kind or date, then its entry or Delete.
+    private static func media(_ s: QuireCommandState) -> [Row] {
+        guard !s.media.isEmpty else { return [] }
+        let files = sortedMedia(s).map { m -> Row in
+            let delete = CommandConfirm<QuireCommand>(prompt: "Delete “\(m.name)”? A copy is kept for 30 days.",
+                                                      title: "Delete this file", detail: "Entries that show it lose the picture.",
+                                                      action: .mediaDelete(m.path))
+            var then: [Row] = [Row("entry", "Open its entry", symbol: "doc.text", step: .run(.mediaEntry(m.path)),
+                                   synonyms: ["go to entry", "show"])]
+            if m.kind != "image" {
+                then.append(Row("play", m.kind == "video" ? "Play it" : "Listen", symbol: "play.circle",
+                                step: .run(.play(m.path)), synonyms: ["play", "listen", "watch"]))
+            }
+            if s.composer != nil {
+                then.append(Row("attach", "Attach to this page", symbol: "paperclip",
+                                step: .run(.composer(.attach(m.path))), synonyms: ["insert", "link"]))
+            }
+            then.append(Row("delete", "Delete this file…", symbol: "trash", step: .confirm(delete),
+                            synonyms: ["remove", "bin"], destructive: true))
+            return Row("media." + m.path, m.name, detail: mediaDetail(m), symbol: mediaSymbol(m.kind),
+                       step: .pick(CommandPick(prompt: m.name, choices: then, searchable: false)),
+                       synonyms: mediaWords(m.kind) + [mediaDay.string(from: m.date)])
+        }
+        let count = s.media.count
+        return [Row("media.browse", "Media…", detail: count == 1 ? "1 file" : "\(count) files", symbol: "photo.on.rectangle",
+                    step: .pick(CommandPick(prompt: "Which file? Type its name, its kind or a date", choices: files,
+                                            nothing: "No file by that name.", searchable: false)),
+                    synonyms: ["media library", "photos", "attachments", "pictures", "videos", "audio", "files",
+                               "find media", "delete media"])]
+    }
+
+    // MARK: Templates, backups and tag review, without the phone
+
+    private static func templates(_ s: QuireCommandState) -> [Row] {
+        var out = [Row("template.new", "New template…", symbol: "doc.badge.plus",
+                       step: .ask(CommandAsk(prompt: "The template's name", initial: "New Template", symbol: "doc.badge.plus",
+                                             title: { "New template “\($0)”" },
+                                             make: { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : .newTemplate($0) })),
+                       synonyms: ["add template", "templates"])]
+        if !s.templates.isEmpty {
+            let choices = s.templates.map { name in
+                Row("template." + name, name, symbol: "doc.on.doc",
+                    step: .confirm(CommandConfirm(prompt: "Delete the template “\(name)”?", title: "Delete it",
+                                                  action: .deleteTemplate(name))),
+                    destructive: true)
+            }
+            out.append(Row("template.delete", "Delete a template…", symbol: "trash",
+                           step: .pick(CommandPick(prompt: "Which template?", choices: choices, searchable: false)),
+                           confirms: true, synonyms: ["remove template", "templates"], destructive: true))
+        }
+        if !s.backups.isEmpty {
+            let day = DateFormatter(); day.locale = Locale(identifier: "en_GB"); day.dateFormat = "EEE d MMM yyyy, HH:mm"
+            let choices = s.backups.map { b -> Row in
+                let when = b.date.map { day.string(from: $0) } ?? b.name
+                return Row("restore." + b.name, when, detail: b.isSafetyCopy ? "Safety copy · the journal before a restore" : nil,
+                           symbol: b.isSafetyCopy ? "arrow.uturn.backward.circle" : "externaldrive",
+                           step: .confirm(CommandConfirm(prompt: "Restore the backup from \(when)?", title: "Restore it",
+                                                         detail: "Your journal now is saved as a safety copy first.",
+                                                         symbol: "clock.arrow.circlepath", action: .restoreBackup(b.name))),
+                           destructive: true)
+            }
+            out.append(Row("backup.restoreNow", "Restore a backup…", symbol: "clock.arrow.circlepath",
+                           step: .pick(CommandPick(prompt: "Which backup?", choices: choices, searchable: false)),
+                           confirms: true, synonyms: ["undo", "recover", "backups"], destructive: true))
+        }
+        if !s.tagGroups.isEmpty {
+            let choices = s.tagGroups.map { g -> Row in
+                let keeps = g.tags.enumerated().map { i, tag in
+                    Row("keep." + tag, "Keep “\(tag)”", detail: "\(g.counts.indices.contains(i) ? g.counts[i] : 0) uses",
+                        symbol: "checkmark.seal",
+                        step: .confirm(CommandConfirm(prompt: "Merge into “\(tag)”?", title: "Merge them",
+                                                      detail: "Every " + g.tags.filter { $0 != tag }.map { "“\($0)”" }
+                                                          .joined(separator: ", ") + " becomes “\(tag)”.",
+                                                      symbol: "arrow.triangle.merge",
+                                                      action: .mergeTags(from: g.tags.filter { $0 != tag }, to: tag))),
+                        destructive: true)
+                } + [Row("ignore", "Not a match — leave them", symbol: "xmark.circle", step: .run(.ignoreTags(g.tags)))]
+                return Row("tags." + g.tags.joined(separator: "|"), g.tags.joined(separator: " · "),
+                           detail: g.caseOnly ? "Different case" : "Similar spelling", symbol: "number",
+                           step: .pick(CommandPick(prompt: "Which spelling stays?", choices: keeps, searchable: false)))
+            }
+            out.append(Row("tags.merge", "Merge tags…", detail: "\(s.tagGroups.count) to look at", symbol: "checkmark.seal",
+                           step: .pick(CommandPick(prompt: "Which tags?", choices: choices, searchable: false)),
+                           synonyms: ["tag review", "duplicate tags", "case"]))
+        }
+        let keys = QuireCommandState.keys.map { key, what in
+            Row("key." + key, what, detail: key, symbol: "keyboard", step: .run(.nothing))
+        }
+        out.append(Row("help.keyList", "Keyboard shortcuts", symbol: "keyboard",
+                       step: .pick(CommandPick(prompt: "The keys. Type to find one", choices: keys, searchable: false)),
+                       synonyms: ["help", "keys", "how to", "shortcuts"]))
         return out
     }
 
@@ -963,13 +1257,18 @@ struct QuireCommandList: CommandList {
         let choices = QuireCommandState.pages.map { page in
             Row("page." + page.id, page.title, symbol: "gearshape", step: .run(.settingsPage(page.id)), synonyms: page.words)
         }
+        // On the monitor these still open on the phone (a file picker, or a page the monitor doesn't draw), and the
+        // monitor says to finish there.
+        let there = s.monitorShows ? "Finish in Settings on the phone." : nil
         func page(_ id: String, _ title: String, _ to: String, _ symbol: String, _ synonyms: [String]) -> Row {
-            Row(id, title, detail: QuireCommandState.pages.first { $0.id == to }.map { "Settings › " + $0.title },
-                symbol: symbol, step: .run(.settingsPage(to)), synonyms: synonyms)
+            Row(id, title, detail: QuireCommandState.pages.first { $0.id == to }.map { (s.monitorShows ? "On the phone · " : "")
+                    + "Settings › " + $0.title },
+                symbol: symbol, step: .run(.settingsPage(to)), synonyms: synonyms, onPhone: there)
         }
         return [
-            Row("settings.page", "Settings page…", symbol: "gearshape",
-                step: .pick(CommandPick(prompt: "Which page?", choices: choices)), synonyms: ["preferences", "options"]),
+            Row("settings.page", "Settings page…", detail: s.monitorShows ? "On the phone" : nil, symbol: "gearshape",
+                step: .pick(CommandPick(prompt: "Which page?", choices: choices)), synonyms: ["preferences", "options"],
+                onPhone: there),
             page("folder.choose", "Choose the journal folder…", "folder", "folder", ["location", "storage", "icloud", "default folder"]),
             page("backup.folder", "Choose a backup folder…", "folder", "externaldrive", ["backups"]),
             page("backup.restore", "Restore a backup…", "folder", "clock.arrow.circlepath", ["undo", "recover"]),

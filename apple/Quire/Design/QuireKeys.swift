@@ -29,10 +29,12 @@ extension View {
                   onOpen: @escaping (Entry) -> Void,
                   letter: @escaping (Entry, String) -> Bool = { _, _ in false },
                   emptyLetter: ((String) -> Bool)? = nil,
+                  listKeys: [String] = [],
+                  listLetter: ((String) -> Bool)? = nil,
                   focus: ((Entry) -> EntryRef?)? = nil) -> some View {
         modifier(QKeyList(entries: entries, index: index, listTitle: listTitle, autoSelect: autoSelect,
                           publishesEmpty: publishesEmpty, onOpen: onOpen, letter: letter, emptyLetter: emptyLetter,
-                          focus: focus))
+                          listKeys: listKeys, listLetter: listLetter, focus: focus))
     }
 
     /// While a sheet or full-screen page is up, keep every key away from the list
@@ -146,6 +148,10 @@ private struct QKeyList: ViewModifier {
     let onOpen: (Entry) -> Void
     let letter: (Entry, String) -> Bool
     let emptyLetter: ((String) -> Bool)?
+    /// Keys for the list itself, with or without a row selected or any rows at all (the Journal's `s` and `[ ]`):
+    /// declared while the list is on top, and tried before the row's letters.
+    let listKeys: [String]
+    let listLetter: ((String) -> Bool)?
     /// Where the selected row's entry lives, for ⌘K's commands on it.
     let focus: ((Entry) -> EntryRef?)?
 
@@ -218,11 +224,13 @@ private struct QKeyList: ViewModifier {
         guard !entries.isEmpty else {
             // Unless the page has a letter of its own that needs no row: it keeps
             // that one and Esc, and the arrows and ↩ have nothing to act on.
-            if let emptyLetter {
+            if emptyLetter != nil || listLetter != nil {
+                let listLetter = listLetter, emptyLetter = emptyLetter
                 KeyCommandRouter.shared.register(routerID, QuireKeyHandlers(
                     moveUp: {}, moveDown: {}, open: {},
                     clear: { KeyCommandRouter.shared.onBack?() },
-                    key: emptyLetter))
+                    key: { k in listLetter?(k) == true || emptyLetter?(k) == true },
+                    letters: listKeys))
             } else {
                 KeyCommandRouter.shared.deactivate(routerID)
             }
@@ -237,9 +245,11 @@ private struct QKeyList: ViewModifier {
                 // The terminal's j/k: down and up, as the arrows.
                 if k == "j" { move(1); return true }
                 if k == "k" { move(-1); return true }
+                if listLetter?(k) == true { return true }
                 guard let e = selected else { return false }
                 return letter(e, k)
-            }
+            },
+            letters: listKeys
         ))
     }
 

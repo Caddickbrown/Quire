@@ -564,14 +564,178 @@ final class CommandPaletteTests: XCTestCase {
     }
 
     func testTheMonitorNeverGetsAScreenItCantDraw() {
-        let s = state { $0.monitorShows = true; $0.monitor = .init(); $0.composer = .init() }
+        let s = state { $0.monitorShows = true; $0.monitor = .init(); $0.composer = .init()
+                        $0.media = [.init(path: "assets/a.jpg", name: "a.jpg", kind: "image", date: today)] }
         let all = ids(s)
-        for phoneOnly in ["go.media", "media.kind", "media.find", "composer.photoLibrary", "composer.takePhoto",
-                          "composer.video", "composer.file", "settings.page", "export.pdf", "import.dayone"] {
+        // The phone's Media Library isn't drawn on the monitor: "Media…" is its way there.
+        for phoneOnly in ["go.media", "media.kind", "media.find"] {
             XCTAssertFalse(all.contains(phoneOnly), phoneOnly)
         }
+        XCTAssertTrue(all.contains("media.browse"))
         XCTAssertTrue(all.contains("go.settings"), "Settings opens on the monitor")
         XCTAssertTrue(all.contains("composer.voice"))
+        // What needs the phone's own screen is still listed, and says to finish there.
+        let rows = everything(QuireCommandList(state: s).all)
+        for onPhone in ["composer.photoLibrary", "composer.takePhoto", "composer.video", "composer.file",
+                        "settings.page", "export.pdf", "import.dayone", "folder.choose", "help.new"] {
+            let row = rows.first { $0.id == onPhone }
+            XCTAssertNotNil(row?.onPhone, onPhone)
+        }
+        // Without the monitor nothing says so.
+        let phone = everything(QuireCommandList(state: state { $0.composer = .init() }).all)
+        XCTAssertNil(phone.first { $0.id == "composer.photoLibrary" }?.onPhone)
+    }
+
+    // MARK: Monitor Mode: every phone action from ⌘K (18 Nov)
+
+    private func media() -> [QuireCommandState.Media] {
+        [.init(path: "assets/2026/walk.jpg", name: "walk.jpg", kind: "image", date: today, size: 2_000),
+         .init(path: "assets/2026/memo.m4a", name: "memo.m4a", kind: "audio", date: today.addingTimeInterval(-86_400), size: 9_000)]
+    }
+
+    func testAPageAttachesAFileAlreadyInTheJournal() {
+        var m = menu(state { $0.composer = .init(title: "A page"); $0.media = media(); $0.monitorShows = true })
+        m.type("attach from the journal")
+        XCTAssertEqual(m.lit?.id, "composer.attachMedia")
+        XCTAssertEqual(m.press(.enter), .stay)
+        m.type("memo")
+        XCTAssertEqual(m.press(.enter), .run(.composer(.attach("assets/2026/memo.m4a"))))
+        XCTAssertTrue(QuireCommand.composer(.attach("x")).staysOverSheets, "the page stays open")
+    }
+
+    func testTheTitleAndTheTextTakeTurns() {
+        let inText = QuireCommandList(state: state { $0.composer = .init() }).all.first { $0.id == "composer.title" }
+        XCTAssertEqual(inText?.title, "Edit the title")
+        XCTAssertEqual(inText?.detail, "^U")
+        XCTAssertEqual(inText?.step, .run(.composer(.editTitle)))
+        let inTitle = QuireCommandList(state: state { $0.composer = .init(inTitle: true) }).all.first { $0.id == "composer.text" }
+        XCTAssertEqual(inTitle?.step, .run(.composer(.editText)))
+    }
+
+    func testASaveCopyIsAskedInTheMenu() {
+        var m = menu(state { $0.composer = .init(title: "A page", saveFailed: true) })
+        m.type("save a copy")
+        XCTAssertEqual(m.lit?.id, "composer.copyToInbox")
+        XCTAssertEqual(m.press(.enter), .stay)
+        XCTAssertTrue(m.isConfirming)
+        XCTAssertEqual(m.press(.enter), .run(.composer(.copyToInbox)))
+    }
+
+    func testMediaOpensItsEntryPlaysOrDeletesAfterAQuestion() {
+        let s = state { $0.media = media(); $0.monitorShows = true }
+        var m = menu(s)
+        m.type("media…")
+        XCTAssertEqual(m.lit?.id, "media.browse")
+        XCTAssertEqual(m.press(.enter), .stay)
+        // Newest first, as the Media Library's default sort.
+        XCTAssertEqual(m.rows.map(\.title), ["walk.jpg", "memo.m4a"])
+        var open = m
+        XCTAssertEqual(open.press(.enter), .stay)
+        XCTAssertEqual(open.press(.enter), .run(.mediaEntry("assets/2026/walk.jpg")))
+        m.type("memo")
+        XCTAssertEqual(m.press(.enter), .stay)
+        XCTAssertTrue(m.rows.contains { $0.step == .run(.play("assets/2026/memo.m4a")) })
+        m.type("delete")
+        XCTAssertEqual(m.press(.enter), .stay)
+        XCTAssertTrue(m.isConfirming)
+        XCTAssertEqual(m.press(.enter), .run(.mediaDelete("assets/2026/memo.m4a")))
+        // Sort media… orders the pick too.
+        let byName = QuireCommandList(state: state { $0.media = media(); $0.settings.mediaSort = "name" })
+        guard case .pick(let p)? = byName.all.first(where: { $0.id == "media.browse" })?.step else { return XCTFail("no pick") }
+        XCTAssertEqual(p.choices.map(\.title), ["memo.m4a", "walk.jpg"])
+    }
+
+    func testAnOpenEntryPlaysItsVoiceNoteAndStops() {
+        let s = state {
+            $0.selected = .init(id: "e1", title: "The walk", when: "", isOpen: true, media: ["assets/memo.m4a"])
+            $0.monitorShows = true
+        }
+        let play = QuireCommandList(state: s).all.first { $0.id == "entry.play.assets/memo.m4a" }
+        XCTAssertEqual(play?.title, "Play the voice note")
+        XCTAssertEqual(play?.detail, "space")
+        XCTAssertEqual(play?.step, .run(.play("assets/memo.m4a")))
+        XCTAssertFalse(ids(s).contains("media.stop"))
+        XCTAssertTrue(ids(state { $0.playing = "assets/memo.m4a" }).contains("media.stop"))
+    }
+
+    func testAPageQuireClosedOnIsAskedAboutInTheMenu() {
+        let s = state { $0.recovery = "9 Nov, 14:02 · Walk"; $0.monitorShows = true }
+        let m = menu(s)
+        XCTAssertEqual(m.sections.first?.title, "9 Nov, 14:02 · Walk")
+        XCTAssertEqual(m.sections.first?.rows.map(\.id), ["recovery.save", "recovery.copy", "recovery.discard", "recovery.later"])
+        var d = m
+        d.type("discard the unsaved")
+        XCTAssertEqual(d.press(.enter), .stay)
+        XCTAssertEqual(d.press(.enter), .run(.recovery(.discard)))
+        XCTAssertFalse(ids(state()).contains("recovery.save"))
+    }
+
+    func testAutoPicksALookByDayAndAtNight() {
+        var m = menu(state())
+        m.type("auto at night")
+        XCTAssertEqual(m.lit?.id, "theme.autoDark")
+        XCTAssertEqual(m.press(.enter), .stay)
+        XCTAssertEqual(m.rows.map(\.title), ["Cinema"], "only the dark looks")
+        XCTAssertEqual(m.press(.enter), .run(.autoTheme(dark: true, "cinema")))
+        var day = menu(state())
+        day.type("auto by day")
+        XCTAssertEqual(day.press(.enter), .stay)
+        XCTAssertEqual(day.rows.map(\.title), ["Almanac", "Sepia"])
+    }
+
+    func testTemplatesBackupsAndTagReviewWithoutThePhone() {
+        let s = state {
+            $0.templates = ["Morning"]
+            $0.backups = [.init(name: "Quire-Backup-2026-11-01-09-00-00", date: today)]
+            $0.tagGroups = [.init(tags: ["@walk", "@Walk"], counts: [5, 1], caseOnly: true)]
+            $0.monitorShows = true
+        }
+        var new = menu(s)
+        new.type("new template")
+        XCTAssertEqual(new.press(.enter), .stay)
+        _ = new.press(.clear)
+        new.type("Evening")
+        XCTAssertEqual(new.press(.enter), .run(.newTemplate("Evening")))
+        var delete = menu(s)
+        delete.type("delete a template")
+        XCTAssertEqual(delete.press(.enter), .stay)
+        XCTAssertEqual(delete.press(.enter), .stay)
+        XCTAssertEqual(delete.press(.enter), .run(.deleteTemplate("Morning")))
+        var restore = menu(s)
+        restore.type("restore a backup")
+        XCTAssertEqual(restore.lit?.id, "backup.restoreNow")
+        XCTAssertEqual(restore.press(.enter), .stay)
+        XCTAssertEqual(restore.press(.enter), .stay)
+        XCTAssertTrue(restore.isConfirming)
+        XCTAssertEqual(restore.press(.enter), .run(.restoreBackup("Quire-Backup-2026-11-01-09-00-00")))
+        var tags = menu(s)
+        tags.type("merge tags")
+        XCTAssertEqual(tags.press(.enter), .stay)
+        XCTAssertEqual(tags.press(.enter), .stay)
+        XCTAssertEqual(tags.rows.map(\.title), ["Keep “@walk”", "Keep “@Walk”", "Not a match — leave them"])
+        XCTAssertEqual(tags.press(.enter), .stay)
+        XCTAssertEqual(tags.press(.enter), .run(.mergeTags(from: ["@Walk"], to: "@walk")))
+        var keys = menu(s)
+        keys.type("keyboard shortcuts")
+        XCTAssertEqual(keys.lit?.id, "help.keyList")
+        XCTAssertEqual(keys.press(.enter), .stay)
+        XCTAssertTrue(keys.rows.contains { $0.detail == "^U" })
+    }
+
+    func testTheNewCommandsAreGuardedEverywhere() {
+        let busy = [
+            state { $0.media = media(); $0.composer = .init(saveFailed: true); $0.monitorShows = true },
+            state { $0.templates = ["A"]; $0.backups = [.init(name: "b")]; $0.recovery = "x"
+                    $0.tagGroups = [.init(tags: ["@a", "@A"], counts: [1, 1], caseOnly: true)] },
+            state { $0.selected = .init(id: "e1", title: "T", when: "", isOpen: true, media: ["a.mov", "b.mov"])
+                    $0.monitorShows = true; $0.playing = "a.mov" },
+        ]
+        for s in busy {
+            let rows = QuireCommandList(state: s).all
+            XCTAssertEqual(CommandSafety.unguarded(rows).map(\.id), [])
+            XCTAssertEqual(CommandSafety.unmarked(rows).map(\.id), [])
+            XCTAssertEqual(Set(rows.map(\.id)).count, rows.count, "ids are unique")
+        }
     }
 
     func testAThemePreviewsAsTheHighlightMovesAndEscPutsItBack() {

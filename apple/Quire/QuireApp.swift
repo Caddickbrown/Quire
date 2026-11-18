@@ -97,7 +97,7 @@ final class QuireAppDelegate: UIResponder, UIApplicationDelegate {
         // Control chords while writing, declared only then, and ahead of the text
         // system (which would otherwise read ^f, ^p, ^d, ^t as cursor edits).
         let chords: [UIKeyCommand] = KeyCommandRouter.shared.wantsChords
-            ? ["j", "s", "t", "f", "p", "d"].map {
+            ? KeyCommandRouter.chords.map {
                 let c = UIKeyCommand(input: $0, modifierFlags: .control, action: #selector(quireChord(_:)))
                 c.wantsPriorityOverSystemBehavior = true
                 return c

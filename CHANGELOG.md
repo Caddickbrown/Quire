@@ -20,10 +20,26 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+- **Apple**: in Monitor Mode every phone action is in ⌘K. Attach from Photos, the camera, a video or a file stay listed on the monitor and say to finish on the phone; "Attach from the journal's media…" picks a file already in the journal, no phone needed.
+- **Apple**: ⌘K "Media…" lists the journal's media (in the Media Library's sort), by name, kind or date: open its entry, play it, attach it to the page being written, or delete it after a question in the menu.
+- **Apple**: ⌘K "Play the voice note" / "Play the video" on an open entry, and space on the monitor, play it from the phone with a video shown on the monitor's page; "Stop playing" stops it.
+- **Apple**: ⌘K "Edit the title" / "Back to the text" while writing, and ^U.
+- **Apple**: ⌘K "Auto by day…" and "Auto at night…" choose the looks Auto uses, previewed as you go.
+- **Apple**: ⌘K "New template…", "Delete a template…", "Restore a backup…" (with a question in the menu) and "Merge tags…" (Tag review: keep one spelling, or leave a pair alone), without opening Settings.
+- **Apple**: ⌘K "Keyboard shortcuts" lists every key in the menu.
+- **Apple**: when Quire closed before a page was saved, ⌘K offers Save to the Inbox, Copy, Discard (asked in the menu) or Later, and the monitor says so.
+- **Apple**: the Journal's `s` shows starred entries only (again for every entry), and `[` `]` go to the journal before or after among split journals.
+
 ### Changed
+- **Apple**: what a ⌘K command did, or why it failed ("Filed.", "Backed up.", a macro's result, a failed save), is said on the monitor as well as the phone; a voice note being recorded says so there with how to stop it.
+- **Apple**: "Save a copy to the Inbox…" after a failed save asks in the menu, not in a phone alert.
+- **Apple**: Settings' pages, exports, imports and folder choices stay in ⌘K on the monitor, marked "On the phone", and the monitor says to finish there.
+- **Apple**: App Kit 0.9.1.
 - **Apple**: the monitor's hidden mode shows an entry's day of the week at the end of the breadcrumb bar (`inbox › 2026 › 11 › 18.md › Wednesday`), not inside the header's timestamp; the header line reads as it is on disk.
 
 ### Fixed
+- **Apple**: the caret beside typed text on the monitor (⌘K's box, Search, the title being written, hidden mode's search box) is drawn rather than typed as "|", so no gap opens beside it.
 - **Apple**: "Compress existing media" finds a photo's links by its full path (`assets/2026/11/IMG.heic`), so the entry points at the new JPEG; a HEIC whose links weren't rewritten is never moved to recovery, so no link is left dead.
 - **Apple**: ⌘K Dark or Light mode leaves a monitor in hidden (VS Code) mode in disguise, instead of showing Quire's own page with the journal on it.
 - **Apple**: pinning or unpinning a search while searches.json can't be read (evicted from iCloud) changes nothing and says why, rather than writing over every other pinned search.

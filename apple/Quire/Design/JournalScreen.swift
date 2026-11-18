@@ -178,6 +178,8 @@ struct JournalScreen: View {
                       default: return false
                       }
                   },
+                  listKeys: ["s", "[", "]"],
+                  listLetter: listKey,
                   focus: { EntryRef(entry: $0, source: source($0)) })
         .confirmationDialog("Delete this entry?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                             titleVisibility: .visible) {
@@ -187,6 +189,21 @@ struct JournalScreen: View {
             }
         }
         .qKeyBlocker(active: deleting != nil, onEscape: { deleting = nil })
+        }
+    }
+
+    /// The Journal's own keys, as ⌘K has them: `s` starred only (again for every
+    /// entry), `[` and `]` the journal before or after among the split ones.
+    private func listKey(_ k: String) -> Bool {
+        switch k {
+        case "s": starredOnly.toggle(); selected = nil; return true
+        case "[", "]":
+            let names: [String?] = [nil] + store.splitJournals.map(\.name)
+            guard names.count > 1 else { return false }
+            let here = names.firstIndex(of: splitName) ?? 0
+            splitName = names[(here + (k == "]" ? 1 : names.count - 1)) % names.count]
+            return true
+        default: return false
         }
     }
 

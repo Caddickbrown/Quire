@@ -132,8 +132,8 @@ struct QuireKeyHandlers {
     /// Whether the visible page wants the control chords declared.
     var wantsChords: Bool { top?.wantsChords ?? false }
 
-    /// The composer's control chords: file, save, time, focus, prompt, discard.
-    static let chords = ["j", "s", "t", "f", "p", "d"]
+    /// The composer's control chords: file, save, time, focus, prompt, discard, and the title or the text.
+    static let chords = ["j", "s", "t", "f", "p", "d", "u"]
 
     /// Whether the visible page takes ← and →.
     var wantsSideways: Bool { top?.sideways != nil }
@@ -207,7 +207,7 @@ final class KeyCommandController: UIViewController {
         let letters = (["n", "i", "j", "k", "l", "/", "r", "f", "e", "t", "d", "u", "p", ",", "*"] + router.extraLetters)
             .map { UIKeyCommand(input: $0, modifierFlags: [], action: #selector(letter(_:))) }
         let chords: [UIKeyCommand] = KeyCommandRouter.shared.wantsChords
-            ? ["j", "s", "t", "f", "p", "d"].map {
+            ? KeyCommandRouter.chords.map {
                 let c = UIKeyCommand(input: $0, modifierFlags: .control, action: #selector(chord(_:)))
                 c.wantsPriorityOverSystemBehavior = true
                 return c

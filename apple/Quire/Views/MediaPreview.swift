@@ -95,6 +95,8 @@ struct MediaBody: View {
     var thumbnailSide: Int? = nil
     /// Sizes inline players up for the monitor.
     var mediaScale: CGFloat = 1
+    /// The monitor's page: a video ⌘K plays shows here.
+    var answersMenu = false
 
     @State private var editingIndex: Int?
     @State private var draftCaption = ""
@@ -372,7 +374,7 @@ struct MediaBody: View {
         switch MediaKind(path: path) {
         case .video:
             if let url {
-                VideoView(url: url)
+                VideoView(url: url, answersMenu: answersMenu)
                     .frame(height: min(300, maxImageHeight))
                     .frame(maxWidth: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -562,12 +564,46 @@ struct EntryThumbnail: View {
 /// Sizing and clipping are left to the caller.
 struct VideoView: View {
     let url: URL
+    /// On the monitor: a video ⌘K plays (`MediaPlayback`) is shown here, playing.
+    var answersMenu = false
     @State private var player: AVPlayer?
+    @ObservedObject private var playback = MediaPlayback.shared
 
     var body: some View {
-        VideoPlayer(player: player)
+        VideoPlayer(player: answersMenu && playback.url == url ? playback.player : player)
             .onAppear { if player == nil { player = AVPlayer(url: url) } }
             .onDisappear { player?.pause() }
+    }
+}
+
+/// A voice note or video played from ⌘K, as the phone's own players can't be
+/// pressed from the keyboard: one at a time, sounding from the phone, a video
+/// shown on the monitor's page as it plays (`VideoView(answersMenu:)`).
+@MainActor final class MediaPlayback: ObservableObject {
+    static let shared = MediaPlayback()
+    private init() {}
+
+    /// What's playing, by path from the journal's root; nil when nothing is.
+    @Published private(set) var current: String?
+    @Published private(set) var url: URL?
+    private(set) var player: AVPlayer?
+    private var ended: NSObjectProtocol?
+
+    func play(_ path: String, url: URL) {
+        stop()
+        let p = AVPlayer(url: url)
+        player = p; current = path; self.url = url
+        ended = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification,
+                                                       object: p.currentItem, queue: .main) { _ in
+            MainActor.assumeIsolated { MediaPlayback.shared.stop() }
+        }
+        p.play()
+    }
+
+    func stop() {
+        player?.pause()
+        if let ended { NotificationCenter.default.removeObserver(ended) }
+        ended = nil; player = nil; current = nil; url = nil
     }
 }
 

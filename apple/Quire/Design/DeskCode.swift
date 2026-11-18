@@ -15,6 +15,30 @@
 
 import SwiftUI
 
+/// A notice from ⌘K in VS Code's notification dress.
+private struct VSNotice: View {
+    let notice: CommandNotice
+    let s: VSScale
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8 * s.z) {
+            Image(systemName: notice.kind == .failure ? "xmark.circle.fill" : "info.circle.fill")
+                .font(.system(size: s.ui)).foregroundStyle(notice.kind == .failure ? VS.hex(0xF14C4C) : VS.hex(0x3794FF))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2 * s.z) {
+                Text(notice.text).font(.system(size: s.ui)).foregroundStyle(VS.text)
+                if let detail = notice.detail { Text(detail).font(.system(size: s.small)).foregroundStyle(VS.dim) }
+            }
+        }
+        .padding(.horizontal, 12 * s.z).padding(.vertical, 9 * s.z)
+        .frame(maxWidth: 420 * s.z, alignment: .leading)
+        .background(VS.hex(0x252526))
+        .overlay(Rectangle().stroke(VS.hex(0x454545), lineWidth: 1))
+        .shadow(color: .black.opacity(0.4), radius: 6 * s.z, y: 2 * s.z)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 // MARK: - Palette and sizes
 
 /// VS Code's Dark Modern colours, and Dark+ for the markdown tokens.
@@ -312,6 +336,11 @@ private struct VSWindow: View {
                     VSExplorer(tree: file?.tree ?? VSFiles.tree(open: nil, children: []), selected: file?.selectedRow, s: s)
                         .frame(width: min(max(geo.size.width * 0.17, 220 * s.z), 340 * s.z))
                     editorGroup
+                        // ⌘K's notices as VS Code's own, in the editor's corner.
+                        .overlay(alignment: .bottomTrailing) {
+                            CommandNoticeStack(z: s.z) { VSNotice(notice: $0, s: s) }
+                                .padding(12 * s.z)
+                        }
                 }
                 VSStatusBar(caret: file?.caret, showsFile: file != nil && !(file?.name.isEmpty ?? true), hints: hints, s: s)
                 VSTaskbar(s: s)
@@ -355,7 +384,7 @@ private struct VSTitleBar: View {
     /// VS Code's search box: the workspace, or what's being searched for.
     private var boxText: String {
         guard let search else { return "notes" }
-        return search.query + (search.typing ? "|" : "")
+        return search.query
     }
 
     var body: some View {
@@ -373,7 +402,10 @@ private struct VSTitleBar: View {
             .font(.system(size: s.small)).foregroundStyle(VS.icon).padding(.trailing, 8 * s.z)
             HStack(spacing: 6 * s.z) {
                 Image(systemName: "magnifyingglass").font(.system(size: s.small))
-                Text(boxText).font(.system(size: s.ui))
+                HStack(spacing: 1) {
+                    Text(boxText).font(.system(size: s.ui))
+                    if search?.typing == true { Caret(font: .system(size: s.ui), color: VS.text, width: max(1.5, 1.5 * s.z)) }
+                }
             }
             .foregroundStyle(VS.dim)
             .frame(maxWidth: 34 * s.ui).frame(height: 22 * s.z)
