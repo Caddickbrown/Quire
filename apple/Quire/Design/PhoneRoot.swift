@@ -43,6 +43,8 @@ struct PhoneRoot: View {
 
     @State private var tab: PhoneTab = Self.startTab
     @State private var path: [EntryRef] = []
+    /// Re-taps of each face (App Kit TabReselect): its scroll-to-top signal.
+    @State private var reselects = TabReselect<PhoneTab>()
     @State private var composing: ComposeTarget?
     @State private var retiming: EntryRef?
     @State private var showMedia = false
@@ -398,8 +400,18 @@ struct PhoneRoot: View {
     /// closes the page, as the phone's tab bar never shows over one. Done where
     /// the face is chosen, not by watching `tab`: an entry link sets the face and
     /// the page together, and a watcher then closed the page it had just opened.
+    ///
+    /// The face you're on, tapped again (GUIDE, 19 Nov): the first tap closes the
+    /// pages open over it, the next scrolls the face to its top (`qFaceReselect`).
     private func select(_ new: PhoneTab) {
-        if new != tab { path.removeAll() }
+        if new == tab {
+            switch TabReselect<PhoneTab>.step(pushed: path.count) {
+            case .popToRoot: path.removeAll()
+            case .scrollToTop: reselects.tapped(new, current: tab)
+            }
+            return
+        }
+        path.removeAll()
         tab = new
     }
 
@@ -415,6 +427,7 @@ struct PhoneRoot: View {
             VStack(spacing: 0) {
                 if withChrome { notice }
                 face
+                    .environment(\.qFaceReselect, reselects.signal(tab))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .qArrivalRoot(key: tab)
                 if withChrome {
@@ -438,6 +451,7 @@ struct PhoneRoot: View {
     private var splitContent: some View {
         HStack(spacing: 0) {
             face
+                .environment(\.qFaceReselect, reselects.signal(tab))
                 .frame(width: Self.listWidth)
                 .frame(maxHeight: .infinity)
                 .qArrivalRoot(key: tab)

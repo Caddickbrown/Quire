@@ -13,6 +13,7 @@ import SwiftUI
 struct JournalScreen: View {
     @EnvironmentObject private var store: JournalStore
     @Environment(\.quire) private var q
+    @Environment(\.qFaceReselect) private var faceReselect
 
     var open: (EntryRef) -> Void
     var edit: (EntryRef) -> Void
@@ -140,10 +141,12 @@ struct JournalScreen: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 26).padding(.top, 14).padding(.bottom, 24)
+            .id(QFaceTop.id)
         }
         .onChange(of: selectedID) { _, id in
             if let id { withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(id, anchor: .center) } }
         }
+        .scrollsToTopOnReselect(proxy, signal: faceReselect, target: QFaceTop.id)
         // A split journal that is gone (its tag removed, merged back, another
         // folder chosen) leaves nothing to read: back to the main journal.
         .onChange(of: store.splitJournals) { _, _ in dropMissingSplit() }

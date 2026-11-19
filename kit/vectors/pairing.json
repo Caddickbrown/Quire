@@ -599,5 +599,34 @@
   "Wrong codes count against the address and the total. While either is locked, code entry is 429 even for a right code.",
   "A revoked or unknown key is 401 with the same body, so a 401 never says whether a key existed.",
   "Keys go in Authorization: Bearer, never in an address, form field or cookie."
- ]
+ ],
+ "cert_sha256": {
+  "about": "What a server puts in /.well-known/pair as cert_sha256 and the /pair page shows: SHA-256 of the first CERTIFICATE block's DER bytes, lower-case hex. The phone hashes the leaf the TLS handshake presented the same way, so the two can be compared by eye (first 16 hex, in four groups).",
+  "cases": [
+   {
+    "pem": "-----BEGIN CERTIFICATE-----\nMIIBXTCCAQSgAwIBAgIUYH7aMV751X528g14+E4OJgM+4g0wCgYIKoZIzj0EAwIw\nFTETMBEGA1UEAwwKa2l0LXZlY3RvcjAeFw0yNjExMTgxMjEyMzNaFw0zNjExMTUx\nMjEyMzNaMBUxEzARBgNVBAMMCmtpdC12ZWN0b3IwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAAR8KM6xXurtN+Nv3WEdc6DyKj7y+fwpYMZL26DYTwaRO+AjVqxMQb2q\n8e0pFikO59XqlFBoUYdRPK4fJeSOp57NozIwMDAdBgNVHQ4EFgQUlTO3fNOInMA6\nrbB+IvFWja/MW4EwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNHADBEAiBd\nuSzxEtkbLw12WnVkXELMj8bUhfKo3mDGKvfpTJHaUQIgVQfN3ns2oJ+G48s9IdD7\nMfeZ+8iCRd7qlgi79KycRLw=\n-----END CERTIFICATE-----\n",
+    "sha256": "884f4dcdba84f399e4175fa762da590a5270480be77879853cf45ccba7b0f70e",
+    "short": "884f 4dcd ba84 f399"
+   },
+   {
+    "pem": "-----BEGIN CERTIFICATE-----\r\nMIIBXTCCAQSgAwIBAgIUYH7aMV751X528g14+E4OJgM+4g0wCgYIKoZIzj0EAwIw\r\nFTETMBEGA1UEAwwKa2l0LXZlY3RvcjAeFw0yNjExMTgxMjEyMzNaFw0zNjExMTUx\r\nMjEyMzNaMBUxEzARBgNVBAMMCmtpdC12ZWN0b3IwWTATBgcqhkjOPQIBBggqhkjO\r\nPQMBBwNCAAR8KM6xXurtN+Nv3WEdc6DyKj7y+fwpYMZL26DYTwaRO+AjVqxMQb2q\r\n8e0pFikO59XqlFBoUYdRPK4fJeSOp57NozIwMDAdBgNVHQ4EFgQUlTO3fNOInMA6\r\nrbB+IvFWja/MW4EwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNHADBEAiBd\r\nuSzxEtkbLw12WnVkXELMj8bUhfKo3mDGKvfpTJHaUQIgVQfN3ns2oJ+G48s9IdD7\r\nMfeZ+8iCRd7qlgi79KycRLw=\r\n-----END CERTIFICATE-----\r\n",
+    "sha256": "884f4dcdba84f399e4175fa762da590a5270480be77879853cf45ccba7b0f70e",
+    "why": "CRLF line ends"
+   },
+   {
+    "pem": "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n-----BEGIN CERTIFICATE-----\nMIIBXTCCAQSgAwIBAgIUYH7aMV751X528g14+E4OJgM+4g0wCgYIKoZIzj0EAwIw\nFTETMBEGA1UEAwwKa2l0LXZlY3RvcjAeFw0yNjExMTgxMjEyMzNaFw0zNjExMTUx\nMjEyMzNaMBUxEzARBgNVBAMMCmtpdC12ZWN0b3IwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAAR8KM6xXurtN+Nv3WEdc6DyKj7y+fwpYMZL26DYTwaRO+AjVqxMQb2q\n8e0pFikO59XqlFBoUYdRPK4fJeSOp57NozIwMDAdBgNVHQ4EFgQUlTO3fNOInMA6\nrbB+IvFWja/MW4EwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNHADBEAiBd\nuSzxEtkbLw12WnVkXELMj8bUhfKo3mDGKvfpTJHaUQIgVQfN3ns2oJ+G48s9IdD7\nMfeZ+8iCRd7qlgi79KycRLw=\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIBXTCCAQSgAwIBAgIUYH7aMV751X528g14+E4OJgM+4g0wCgYIKoZIzj0EAwIw\nFTETMBEGA1UEAwwKa2l0LXZlY3RvcjAeFw0yNjExMTgxMjEyMzNaFw0zNjExMTUx\nMjEyMzNaMBUxEzARBgNVBAMMCmtpdC12ZWN0b3IwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAAR8KM6xXurtN+Nv3WEdc6DyKj7y+fwpYMZL26DYTwaRO+AjVqxMQb2q\n8e0pFikO59XqlFBoUYdRPK4fJeSOp57NozIwMDAdBgNVHQ4EFgQUlTO3fNOInMA6\nrbB+IvFWja/MW4EwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNHADBEAiBd\nuSzxEtkbLw12WnVkXELMj8bUhfKo3mDGKvfpTJHaUQIgVQfN3ns2oJ+G48s9IdD7\nMfeZ+8iCRd7qlgi79KycRLw=\n-----END CERTIFICATE-----\n",
+    "sha256": "884f4dcdba84f399e4175fa762da590a5270480be77879853cf45ccba7b0f70e",
+    "why": "a key first and a chain after: the first certificate is the leaf"
+   },
+   {
+    "pem": "not a certificate",
+    "sha256": null
+   },
+   {
+    "pem": "-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n",
+    "sha256": null,
+    "why": "not base64"
+   }
+  ]
+ }
 }

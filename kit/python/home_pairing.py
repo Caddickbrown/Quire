@@ -7,6 +7,7 @@ rules in Rust and must pass the same file.
     from home_pairing import tidy_code, pretty_code, new_code, new_key, key_hash, ...
 """
 import base64
+import binascii
 import hashlib
 import hmac
 import secrets
@@ -120,12 +121,51 @@ def narrow_scopes(ceiling, requested, default=None):
     return [s for s in SCOPES if s in chosen], None
 
 
+_PEM_BEGIN = "-----BEGIN CERTIFICATE-----"
+_PEM_END = "-----END CERTIFICATE-----"
+
+
+def cert_sha256_from_pem(pem):
+    """SHA-256 of the first certificate's DER bytes in PEM text, lower-case hex, or None. This is what
+    a server puts in /.well-known/pair as cert_sha256: the /pair page shows it, and the phone shows the
+    hash of the certificate its TLS handshake saw, so a relay on the Wi-Fi shows up as a mismatch."""
+    if not isinstance(pem, str):
+        return None
+    start = pem.find(_PEM_BEGIN)
+    end = pem.find(_PEM_END, start + len(_PEM_BEGIN)) if start >= 0 else -1
+    if start < 0 or end < 0:
+        return None
+    body = "".join(pem[start + len(_PEM_BEGIN):end].split())
+    try:
+        der = base64.b64decode(body, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return hashlib.sha256(der).hexdigest() if der else None
+
+
+def cert_sha256_from_file(path):
+    """cert_sha256_from_pem for the server's certificate file; None if it can't be read."""
+    try:
+        with open(path, encoding="ascii", errors="replace") as f:
+            return cert_sha256_from_pem(f.read())
+    except OSError:
+        return None
+
+
+def short_hash(hex_hash):
+    """The first 16 hex characters in four groups, the way the phone and the /pair page show it."""
+    if not hex_hash or len(hex_hash) < 16:
+        return None
+    return " ".join(hex_hash[i:i + 4] for i in range(0, 16, 4))
+
+
 def parse_version(text):
     """MAJOR.MINOR[.PATCH], with an optional leading v, as a tuple of three numbers. Anything else is
-    None, and an unreadable version is never an update."""
+    None, and an unreadable version is never an update. The rule every firmware shares (DEVICES.md
+    section 3, vectors/ota.json): only spaces, tabs, CR and LF are trimmed; parts are 1 to 9 ASCII digits."""
     if not isinstance(text, str):
         return None
-    t = text.strip()
+    t = text.strip(" \t\r\n")
     if t[:1] in ("v", "V"):
         t = t[1:]
     parts = t.split(".")

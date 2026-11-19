@@ -67,6 +67,68 @@ pub fn b64url(raw: &[u8]) -> String {
     out
 }
 
+/// SHA-256 of the first certificate's DER bytes in PEM text, lower-case hex, or None. What a server
+/// puts in /.well-known/pair as cert_sha256: the /pair page shows it, and the phone shows the hash of the
+/// certificate its TLS handshake saw, so a relay on the Wi-Fi shows up as a mismatch.
+pub fn cert_sha256_from_pem(pem: &str) -> Option<String> {
+    const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+    const END: &str = "-----END CERTIFICATE-----";
+    let start = pem.find(BEGIN)? + BEGIN.len();
+    let end = start + pem[start..].find(END)?;
+    let body: Vec<u8> = pem[start..end].bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    let der = b64_decode(&body)?;
+    if der.is_empty() {
+        return None;
+    }
+    Some(Sha256::digest(&der).iter().map(|b| format!("{:02x}", b)).collect())
+}
+
+/// cert_sha256_from_pem for the server's certificate file; None if it can't be read.
+pub fn cert_sha256_from_file(path: &std::path::Path) -> Option<String> {
+    cert_sha256_from_pem(&std::fs::read_to_string(path).ok()?)
+}
+
+/// The first 16 hex characters in four groups, the way the phone and the /pair page show it.
+pub fn short_hash(hex: &str) -> Option<String> {
+    if hex.len() < 16 || !hex.is_ascii() {
+        return None;
+    }
+    Some((0..16).step_by(4).map(|i| &hex[i..i + 4]).collect::<Vec<_>>().join(" "))
+}
+
+/// Standard base64 with padding, strict: anything else is None.
+fn b64_decode(text: &[u8]) -> Option<Vec<u8>> {
+    if text.len() % 4 != 0 {
+        return None;
+    }
+    let val = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let chunks = text.len() / 4;
+    for (i, q) in text.chunks(4).enumerate() {
+        let pad = q.iter().rev().take_while(|&&c| c == b'=').count();
+        if pad > 2 || (pad > 0 && i + 1 != chunks) {
+            return None;
+        }
+        let mut n = 0u32;
+        for &c in &q[..4 - pad] {
+            n = n << 6 | val(c)?;
+        }
+        n <<= 6 * pad as u32;
+        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+        out.extend_from_slice(&bytes[..3 - pad]);
+    }
+    Some(out)
+}
+
 pub fn key_from_bytes(prefix: &str, raw: &[u8; KEY_BYTES]) -> String {
     format!("{}{}", prefix, b64url(raw))
 }
@@ -126,9 +188,10 @@ pub fn narrow_scopes(ceiling: &[&str], requested: Requested, default: Option<&[&
 }
 
 /// MAJOR.MINOR[.PATCH] with an optional leading v. None for anything else: an unreadable version
-/// is never an update.
+/// is never an update. The rule every firmware shares (DEVICES.md section 3, vectors/ota.json):
+/// only spaces, tabs, CR and LF are trimmed; parts are 1 to 9 ASCII digits.
 pub fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
-    let t = text.trim_matches(|c: char| c.is_whitespace());
+    let t = text.trim_matches([' ', '\t', '\r', '\n']);
     let t = t.strip_prefix(['v', 'V']).unwrap_or(t);
     let parts: Vec<&str> = t.split('.').collect();
     if !(2..=3).contains(&parts.len()) || !parts.iter().all(|p| !p.is_empty() && p.len() <= 9 && p.bytes().all(|b| b.is_ascii_digit())) {
@@ -309,6 +372,18 @@ mod vectors {
                 assert_eq!(got, want.as_bool().unwrap(), "{} step {}", c["name"], i);
             }
         }
+    }
+
+    #[test]
+    fn cert_fingerprints() {
+        let v = load("pairing");
+        for c in v["cert_sha256"]["cases"].as_array().unwrap() {
+            assert_eq!(cert_sha256_from_pem(c["pem"].as_str().unwrap()).as_deref(), c["sha256"].as_str(), "{:?}", c.get("why"));
+            if let Some(short) = c.get("short") {
+                assert_eq!(short_hash(c["sha256"].as_str().unwrap()).as_deref(), short.as_str());
+            }
+        }
+        assert_eq!(short_hash("abc"), None);
     }
 
     #[test]

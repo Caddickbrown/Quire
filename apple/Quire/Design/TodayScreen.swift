@@ -14,6 +14,7 @@ struct TodayScreen: View {
     @EnvironmentObject private var store: JournalStore
     @EnvironmentObject private var nav: NavigationModel
     @Environment(\.quire) private var q
+    @Environment(\.qFaceReselect) private var faceReselect
     @AppStorage("wordGoalEnabled") private var goalOn = false
     @AppStorage("wordGoal") private var goal = 750
 
@@ -93,6 +94,7 @@ struct TodayScreen: View {
     }
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 QMasthead(calendarEntries: { store.archiveEntries.flatMap { day in day.entries.map { EntryRef(entry: $0, source: .archive(date: day.date)) } } }, onCalendarOpen: open, onMedia: media, onSearch: search, onSettings: settings)
@@ -117,6 +119,9 @@ struct TodayScreen: View {
             .padding(.horizontal, 26)
             .padding(.top, 14)
             .padding(.bottom, 24)
+            .id(QFaceTop.id)
+        }
+        .scrollsToTopOnReselect(proxy, signal: faceReselect, target: QFaceTop.id)
         }
         .scrollDismissesKeyboard(.interactively)
         // The "Write a line" control (quire://capture) lands on this field.

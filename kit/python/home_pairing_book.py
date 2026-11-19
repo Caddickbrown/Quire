@@ -328,11 +328,11 @@ class PairingBook:
 
     def check(self, key, ip):
         """("ok", device view), ("bad", None) or ("limited", None). A revoked or unknown key is the same
-        "bad", so a 401 never says whether a key existed. Last seen is written at most once a minute."""
+        "bad", so a 401 never says whether a key existed. Last seen is written at most once a minute.
+        An address locked for wrong keys is still let in with a right one (review LOW 44): another phone
+        behind the same address isn't locked out, and a key can't be guessed anyway."""
         t = self.clock()
         with self.cond:
-            if self.bad_keys.blocked(ip, t):
-                return "limited", None
             found = None
             if key:
                 for d in self.devices:
@@ -340,6 +340,8 @@ class PairingBook:
                         found = d
                         break
             if found is None:
+                if self.bad_keys.blocked(ip, t):
+                    return "limited", None
                 self.bad_keys.record(ip, t)
                 return "bad", None
             if t - (found.get("last_seen_s") or 0) >= hp.SEEN_EVERY_SECONDS:

@@ -1,6 +1,7 @@
 {
- "about": "Firmware versions and what an update's signature covers (app-kit docs/DEVICES.md section 3, Signed OTA).",
- "version": 1,
+ "about": "Firmware versions, what an update's signature covers, signed manifests and the failed-build retry rule (app-kit docs/DEVICES.md section 3, Signed OTA). Made by kit/tests/make_ota_vectors.py; replayed by the kit's Python and Rust, home-core (kit/cpp/home-core) in every firmware, and the OTA servers.",
+ "version": 2,
+ "rule": "Surrounding spaces, tabs, CR and LF are trimmed (nothing else: not other Unicode spaces). Then an optional single leading v or V, then MAJOR.MINOR or MAJOR.MINOR.PATCH (PATCH is 0 when missing), each part 1 to 9 ASCII digits, leading zeros allowed. Anything else is unreadable, and an unreadable version is never an update. Newer means strictly higher, part by part.",
  "parse": [
   {
    "text": "2.6.0",
@@ -35,6 +36,42 @@
    ]
   },
   {
+   "text": "\t2.6.1\r\n",
+   "version": [
+    2,
+    6,
+    1
+   ],
+   "why": "spaces, tabs, CR and LF are trimmed"
+  },
+  {
+   "text": "02.06.007",
+   "version": [
+    2,
+    6,
+    7
+   ],
+   "why": "leading zeros"
+  },
+  {
+   "text": "123456789.0",
+   "version": [
+    123456789,
+    0,
+    0
+   ],
+   "why": "9 digits is the most"
+  },
+  {
+   "text": "1234567.0",
+   "version": [
+    1234567,
+    0,
+    0
+   ],
+   "why": "Pala 2.6.3 and earlier stopped at 6 digits"
+  },
+  {
    "text": "2",
    "version": null
   },
@@ -63,11 +100,46 @@
    "version": null
   },
   {
-   "text": "1234567890.0",
+   "text": "2.6.",
    "version": null
   },
   {
-   "text": "٢.6",
+   "text": ".2.6",
+   "version": null
+  },
+  {
+   "text": "v",
+   "version": null
+  },
+  {
+   "text": "vv2.6",
+   "version": null
+  },
+  {
+   "text": "+2.6",
+   "version": null
+  },
+  {
+   "text": "2 .6",
+   "version": null,
+   "why": "no space inside"
+  },
+  {
+   "text": "2.6.0 rc",
+   "version": null
+  },
+  {
+   "text": "1234567890.0",
+   "version": null,
+   "why": "10 digits"
+  },
+  {
+   "text": "\u00a02.6.1",
+   "version": null,
+   "why": "a no-break space isn't trimmed"
+  },
+  {
+   "text": "\u0662.6",
    "version": null,
    "why": "only ASCII digits"
   }
@@ -104,6 +176,16 @@
    "newer": true
   },
   {
+   "candidate": "2.10.0",
+   "current": "2.9.9",
+   "newer": true
+  },
+  {
+   "candidate": "2.6.1",
+   "current": "2.6.0",
+   "newer": true
+  },
+  {
    "candidate": "junk",
    "current": "2.6.0",
    "newer": false
@@ -111,6 +193,11 @@
   {
    "candidate": "2.7.0",
    "current": "junk",
+   "newer": false
+  },
+  {
+   "candidate": "",
+   "current": "",
    "newer": false
   }
  ],
@@ -122,7 +209,1085 @@
    "size": 1534976,
    "sha256": "9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08",
    "bytes": "pala|pala-s3|2.6.1|1534976|9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  },
+  {
+   "product": "reread",
+   "board": "sticky",
+   "version": "2.3.9",
+   "size": 4096,
+   "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+   "bytes": "reread|sticky|2.3.9|4096|d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca"
   }
  ],
- "signature": "ECDSA P-256 with SHA-256 over the message bytes, DER encoded, standard base64 in the manifest's sig. The manifest's key_id picks one of the public keys built into the firmware."
+ "signature": "ECDSA P-256 with SHA-256 over the message bytes, DER encoded, standard base64 in the manifest's sig (at most 200 characters). The manifest's key_id picks one of the public keys built into the firmware.",
+ "test_key": {
+  "warning": "TEST ONLY. Never trusted by a firmware, never used to sign a real build. Its private half is kit/tests/ota-TEST-ONLY-signing-key.pem, committed so these vectors can be remade.",
+  "key_id": "test-only-a",
+  "public_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElwlAWcPEM5i8kEqAz71+QPWFwAcE\n3+Dyyqz4zYcPbTWihTXEViUv3LouYzrsvxZKCgMFtd5IOKOSDnl6010SHA==\n-----END PUBLIC KEY-----\n"
+ },
+ "image": {
+  "about": "Every signed case is for this image: size bytes, byte i is i % 251.",
+  "size": 4096,
+  "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca"
+ },
+ "verify": [
+  {
+   "why": "good",
+   "message": "pala|pala-s3|2.6.4|4096|d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+   "sig": "MEUCIBxJ5o1VWTeHbcW8D+VNdc5xS7rOnRw3D3s1HdHjOp8/AiEArJmEpyQU4zrWI3dbBjnFVWsF8z0mZgAeFDzCX0tbP7E=",
+   "ok": true
+  },
+  {
+   "why": "one byte more in the message",
+   "message": "pala|pala-s3|2.6.4|4096|d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffcax",
+   "sig": "MEUCIBxJ5o1VWTeHbcW8D+VNdc5xS7rOnRw3D3s1HdHjOp8/AiEArJmEpyQU4zrWI3dbBjnFVWsF8z0mZgAeFDzCX0tbP7E=",
+   "ok": false
+  },
+  {
+   "why": "signed by another key",
+   "message": "pala|pala-s3|2.6.4|4096|d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+   "sig": "MEYCIQC4QI0ztWu1k+vRaTk9vHRI9JpiigG+pWXnSw/7gfJ+mgIhAJTji3RgKYO/oK+47CvwzkBKIFtcsqGYSkpYZJyt+QAW",
+   "ok": false
+  },
+  {
+   "why": "the signature of another message",
+   "message": "pala|pala-s3|2.6.4|4096|d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+   "sig": "MEUCIDU1brUFJqZw5FDzXVFJsgiOyR4mf5DIlfXZZGpv7sTfAiEA1kBaSZkIhji7/S7AkGulYxtezD8QpiVo5dGqy71G/v8=",
+   "ok": false
+  },
+  {
+   "why": "not base64",
+   "message": "pala|pala-s3|2.6.4|4096|d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+   "sig": "not base64!",
+   "ok": false
+  },
+  {
+   "why": "empty",
+   "message": "pala|pala-s3|2.6.4|4096|d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+   "sig": "",
+   "ok": false
+  },
+  {
+   "why": "cut short",
+   "message": "pala|pala-s3|2.6.4|4096|d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+   "sig": "MEUCIBxJ5o1VWTeHbcW8D+VNdc5xS7rOnRw3D3s1",
+   "ok": false
+  },
+  {
+   "why": "longer than 200 characters",
+   "message": "pala|pala-s3|2.6.4|4096|d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+   "sig": "MEUCIBxJ5o1VWTeHbcW8D+VNdc5xS7rOnRw3D3s1HdHjOp8/AiEArJmEpyQU4zrWI3dbBjnFVWsF8z0mZgAeFDzCX0tbP7E=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "ok": false
+  }
+ ],
+ "manifests": {
+  "about": "Flat manifests (Pala, Glance) checked by home-core's parseManifest then manifestAcceptable against running. verdict is its why ('ok' when accepted, 'unreadable' when parseManifest refuses). served: whether a Pala server offers it to that device.",
+  "running": {
+   "product": "pala",
+   "board": "pala-s3",
+   "version": "2.6.3",
+   "max_size": 3342336
+  },
+  "cases": [
+   {
+    "name": "good",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQCVjk4+8BLo082olBJuP6rD+0tiqrY9DpviCdJs33pXRwIhAKk9N5dxDPajS+Nx2eT6JPlLZaVA/oykjj4udR3qoi7S"
+    },
+    "verdict": "ok",
+    "served": true
+   },
+   {
+    "name": "unknown key id",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-z",
+     "sig": "MEYCIQCVjk4+8BLo082olBJuP6rD+0tiqrY9DpviCdJs33pXRwIhAKk9N5dxDPajS+Nx2eT6JPlLZaVA/oykjj4udR3qoi7S"
+    },
+    "verdict": "unknown key id",
+    "served": true
+   },
+   {
+    "name": "signed by another key",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQC4QI0ztWu1k+vRaTk9vHRI9JpiigG+pWXnSw/7gfJ+mgIhAJTji3RgKYO/oK+47CvwzkBKIFtcsqGYSkpYZJyt+QAW"
+    },
+    "verdict": "bad signature",
+    "served": true
+   },
+   {
+    "name": "size changed after signing",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 4097,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQCVjk4+8BLo082olBJuP6rD+0tiqrY9DpviCdJs33pXRwIhAKk9N5dxDPajS+Nx2eT6JPlLZaVA/oykjj4udR3qoi7S"
+    },
+    "verdict": "bad signature",
+    "served": true
+   },
+   {
+    "name": "version changed after signing",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.5",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQCVjk4+8BLo082olBJuP6rD+0tiqrY9DpviCdJs33pXRwIhAKk9N5dxDPajS+Nx2eT6JPlLZaVA/oykjj4udR3qoi7S"
+    },
+    "verdict": "bad signature",
+    "served": true
+   },
+   {
+    "name": "hash changed after signing",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "210277cb6266afe7c6cc4227ff3e9efc818f55234a7d7fbf033ab602440f2437",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQCVjk4+8BLo082olBJuP6rD+0tiqrY9DpviCdJs33pXRwIhAKk9N5dxDPajS+Nx2eT6JPlLZaVA/oykjj4udR3qoi7S"
+    },
+    "verdict": "bad signature",
+    "served": true
+   },
+   {
+    "name": "upper-case hash",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "D67C656E01756650D77717B0839985A056EC28FFE174601D690FC407A2CEFFCA",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQCVjk4+8BLo082olBJuP6rD+0tiqrY9DpviCdJs33pXRwIhAKk9N5dxDPajS+Nx2eT6JPlLZaVA/oykjj4udR3qoi7S"
+    },
+    "verdict": "sha256 is not 64 lower-case hex",
+    "served": false
+   },
+   {
+    "name": "63-digit hash",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffc",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEQCIBg2RUFY58Ai5hMVngYeeBKw7z3dFviyyRgKaFB3tcq9AiBP922HCk8VLO5KcmjqqV7E+ZOheO7xMAzv6uKlHAnttA=="
+    },
+    "verdict": "sha256 is not 64 lower-case hex",
+    "served": false
+   },
+   {
+    "name": "signed, for another board",
+    "manifest": {
+     "product": "pala",
+     "board": "other-board",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQDBzt2fMhlaO4BXnVTEajymwzc9oC6X9ou4bIGbNFEmHQIhAJ7s+dQ4vFwINsaW/4Ej9ZR1CncoFEmx85iOrO+qCJbR"
+    },
+    "verdict": "wrong board",
+    "served": false
+   },
+   {
+    "name": "signed, for another product",
+    "manifest": {
+     "product": "reread",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQDBxzwJldFdDc/xEf38HV1/ocUDibaIlxJp139CBaQPaAIhAL5HgAuG3Csu55JquqnXxDfboROGTLK0zZFTJ4vOZX0P"
+    },
+    "verdict": "wrong product",
+    "served": false
+   },
+   {
+    "name": "signed, but older",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.2",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEQCICGRvJtw75Eyb1n3RCMpuZjOdOjeBF+SNAXPMmmUwIJMAiA72nSZlAaocSF1Mq2lBmrm45qaWaHL/yhtI/tRPkjMKA=="
+    },
+    "verdict": "not newer",
+    "served": false
+   },
+   {
+    "name": "signed, the same version",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.3",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEUCIGnDMHl5XHoORDBwCweRmdbIFV89S3LVDfMn6EmnqB35AiEAmYYRPjXOw22LdSuysohtYAtnyxBaYRLUC63bN4hVyBs="
+    },
+    "verdict": "not newer",
+    "served": false
+   },
+   {
+    "name": "signed, too small",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 1000,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEUCIBggLMYZNY+tTNNyWeJLr3R7gQvLyJeVgAnsKBHYaDq9AiEAwQ994a28Bf5s86IEbk91KlSmzeE/E3ILXtAxHrUkmRM="
+    },
+    "verdict": "size doesn't fit",
+    "served": true
+   },
+   {
+    "name": "signed, bigger than the slot",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 3342337,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQDK8DzdNtpPe3dd/f56P0VsfDL3cubEQbLhCH9cFJkKAQIhAJsI2ELWh7FajDtZoK0BnFJ7rJkr1uP+R2mi2kxcTu5c"
+    },
+    "verdict": "size doesn't fit",
+    "served": true
+   },
+   {
+    "name": "no sig",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a"
+    },
+    "verdict": "unreadable",
+    "served": false
+   },
+   {
+    "name": "no key_id",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "sig": "MEYCIQCVjk4+8BLo082olBJuP6rD+0tiqrY9DpviCdJs33pXRwIhAKk9N5dxDPajS+Nx2eT6JPlLZaVA/oykjj4udR3qoi7S"
+    },
+    "verdict": "unreadable",
+    "served": false
+   },
+   {
+    "name": "no url",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQCVjk4+8BLo082olBJuP6rD+0tiqrY9DpviCdJs33pXRwIhAKk9N5dxDPajS+Nx2eT6JPlLZaVA/oykjj4udR3qoi7S"
+    },
+    "verdict": "unreadable",
+    "served": true
+   },
+   {
+    "name": "size as a string",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": "4096",
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQCVjk4+8BLo082olBJuP6rD+0tiqrY9DpviCdJs33pXRwIhAKk9N5dxDPajS+Nx2eT6JPlLZaVA/oykjj4udR3qoi7S"
+    },
+    "verdict": "ok",
+    "served": false
+   },
+   {
+    "name": "negative size",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "channel": "stable",
+     "size": -4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "notes": "Fixes.",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQCVjk4+8BLo082olBJuP6rD+0tiqrY9DpviCdJs33pXRwIhAKk9N5dxDPajS+Nx2eT6JPlLZaVA/oykjj4udR3qoi7S"
+    },
+    "verdict": "unreadable",
+    "served": false
+   },
+   {
+    "name": "no channel or notes (optional)",
+    "manifest": {
+     "product": "pala",
+     "board": "pala-s3",
+     "version": "2.6.4",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "/api/ota/firmware/x.bin",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQCVjk4+8BLo082olBJuP6rD+0tiqrY9DpviCdJs33pXRwIhAKk9N5dxDPajS+Nx2eT6JPlLZaVA/oykjj4udR3qoi7S"
+    },
+    "verdict": "ok",
+    "served": true
+   }
+  ]
+ },
+ "reread_flat": {
+  "about": "The Sticky's flat manifest (the same fields as Pala's), served by Narrowcast beside the GitHub-shaped fields older Stickies read. Checked by home-core's parseManifest then manifestAcceptable against running (an RC build also takes the same number: the Sticky's own rule, reread_newer). verdict 'unreadable': parseManifest refuses, the Sticky falls back to the GitHub fields and otasig::check.",
+  "running": {
+   "product": "reread",
+   "board": "sticky",
+   "version": "2.3.8",
+   "max_size": 6553600
+  },
+  "cases": [
+   {
+    "name": "good",
+    "manifest": {
+     "tag_name": "2.3.9",
+     "release_notes": [
+      "One",
+      "Two"
+     ],
+     "assets": [
+      {
+       "name": "firmware.bin",
+       "size": 4096,
+       "browser_download_url": "https://192.168.4.185:8771/api/ota/firmware.bin"
+      }
+     ],
+     "product": "reread",
+     "board": "sticky",
+     "version": "2.3.9",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "https://192.168.4.185:8771/api/ota/firmware.bin",
+     "notes": "One\nTwo",
+     "key_id": "test-only-a",
+     "sig": "MEQCIHpNziTq1NGIuP+tnr5p73XeOm0Mz1urHOTKROxrD/49AiAtEDTheja+fY42UXvRQaoSCEB+ztUx3i3344nTZchQcA=="
+    },
+    "verdict": "ok",
+    "served": true
+   },
+   {
+    "name": "GitHub fields only (an older Narrowcast, or unsigned)",
+    "manifest": {
+     "tag_name": "2.3.9",
+     "release_notes": [
+      "One",
+      "Two"
+     ],
+     "assets": [
+      {
+       "name": "firmware.bin",
+       "size": 4096,
+       "browser_download_url": "https://192.168.4.185:8771/api/ota/firmware.bin"
+      }
+     ]
+    },
+    "verdict": "unreadable",
+    "served": false
+   },
+   {
+    "name": "signed for Pala",
+    "manifest": {
+     "tag_name": "2.3.9",
+     "release_notes": [
+      "One",
+      "Two"
+     ],
+     "assets": [
+      {
+       "name": "firmware.bin",
+       "size": 4096,
+       "browser_download_url": "https://192.168.4.185:8771/api/ota/firmware.bin"
+      }
+     ],
+     "product": "pala",
+     "board": "sticky",
+     "version": "2.3.9",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "https://192.168.4.185:8771/api/ota/firmware.bin",
+     "notes": "One\nTwo",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQC/Sdc7PpEBgzZ8m2xZlBiK6epDL/APbzPNiX6JdyBC2QIhAPVHKwAaBSyhWLSNsRVAyP7qrZCpTS27sCyKTkMSv7Us"
+    },
+    "verdict": "wrong product",
+    "served": false
+   },
+   {
+    "name": "signed for another board",
+    "manifest": {
+     "tag_name": "2.3.9",
+     "release_notes": [
+      "One",
+      "Two"
+     ],
+     "assets": [
+      {
+       "name": "firmware.bin",
+       "size": 4096,
+       "browser_download_url": "https://192.168.4.185:8771/api/ota/firmware.bin"
+      }
+     ],
+     "product": "reread",
+     "board": "sticky-mini",
+     "version": "2.3.9",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "https://192.168.4.185:8771/api/ota/firmware.bin",
+     "notes": "One\nTwo",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQDWvI59WUzjlqEuthDGWj48PdwIbf8L+nDql0fz0LKKlQIhAMUhnQIpYy1/ZRc03VBquS1rdCyOPJ9QpQ2yy7BsD3R8"
+    },
+    "verdict": "wrong board",
+    "served": true
+   },
+   {
+    "name": "signed, but older",
+    "manifest": {
+     "tag_name": "2.3.7",
+     "release_notes": [
+      "One",
+      "Two"
+     ],
+     "assets": [
+      {
+       "name": "firmware.bin",
+       "size": 4096,
+       "browser_download_url": "https://192.168.4.185:8771/api/ota/firmware.bin"
+      }
+     ],
+     "product": "reread",
+     "board": "sticky",
+     "version": "2.3.7",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "https://192.168.4.185:8771/api/ota/firmware.bin",
+     "notes": "One\nTwo",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQD5gYly7dkaKVcFxjD6nw/ATb1URb/vaKC1GMHy5tIRfwIhAL27OA6ltnpuo/N18YuUQi8cAOCJ8+jDL4k9E1VtYGW7"
+    },
+    "verdict": "not newer",
+    "served": true
+   },
+   {
+    "name": "size changed after signing",
+    "manifest": {
+     "tag_name": "2.3.9",
+     "release_notes": [
+      "One",
+      "Two"
+     ],
+     "assets": [
+      {
+       "name": "firmware.bin",
+       "size": 4096,
+       "browser_download_url": "https://192.168.4.185:8771/api/ota/firmware.bin"
+      }
+     ],
+     "product": "reread",
+     "board": "sticky",
+     "version": "2.3.9",
+     "channel": "stable",
+     "size": 4097,
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "url": "https://192.168.4.185:8771/api/ota/firmware.bin",
+     "notes": "One\nTwo",
+     "key_id": "test-only-a",
+     "sig": "MEQCIHpNziTq1NGIuP+tnr5p73XeOm0Mz1urHOTKROxrD/49AiAtEDTheja+fY42UXvRQaoSCEB+ztUx3i3344nTZchQcA=="
+    },
+    "verdict": "bad signature",
+    "served": false
+   },
+   {
+    "name": "upper-case hash",
+    "manifest": {
+     "tag_name": "2.3.9",
+     "release_notes": [
+      "One",
+      "Two"
+     ],
+     "assets": [
+      {
+       "name": "firmware.bin",
+       "size": 4096,
+       "browser_download_url": "https://192.168.4.185:8771/api/ota/firmware.bin"
+      }
+     ],
+     "product": "reread",
+     "board": "sticky",
+     "version": "2.3.9",
+     "channel": "stable",
+     "size": 4096,
+     "sha256": "D67C656E01756650D77717B0839985A056EC28FFE174601D690FC407A2CEFFCA",
+     "url": "https://192.168.4.185:8771/api/ota/firmware.bin",
+     "notes": "One\nTwo",
+     "key_id": "test-only-a",
+     "sig": "MEQCIHpNziTq1NGIuP+tnr5p73XeOm0Mz1urHOTKROxrD/49AiAtEDTheja+fY42UXvRQaoSCEB+ztUx3i3344nTZchQcA=="
+    },
+    "verdict": "sha256 is not 64 lower-case hex",
+    "served": false
+   }
+  ]
+ },
+ "reread": {
+  "about": "The Sticky's signature fields beside its GitHub-shaped manifest, checked by otasig::check. served: whether Narrowcast serves those fields with tag 2.3.9 and an image of asset_size bytes.",
+  "cases": [
+   {
+    "name": "good",
+    "signed": {
+     "version": "2.3.9",
+     "board": "sticky",
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "key_id": "test-only-a",
+     "sig": "MEUCIHxJuD14rLjwtQ0AkFqNrztdMLvgYG8b5WqpPOX5iffbAiEAnRq3lNAYR4pzPLxjHxSSX9K+TtRueN9eAefTnHNanOE="
+    },
+    "asset_size": 4096,
+    "running_board": "sticky",
+    "max_size": 6553600,
+    "verdict": "ok",
+    "served": true
+   },
+   {
+    "name": "unsigned",
+    "signed": {
+     "version": "2.3.9",
+     "board": "sticky",
+     "sha256": "",
+     "key_id": "",
+     "sig": ""
+    },
+    "asset_size": 4096,
+    "running_board": "sticky",
+    "max_size": 6553600,
+    "verdict": "unsigned",
+    "served": false
+   },
+   {
+    "name": "no sig",
+    "signed": {
+     "version": "2.3.9",
+     "board": "sticky",
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "key_id": "test-only-a",
+     "sig": ""
+    },
+    "asset_size": 4096,
+    "running_board": "sticky",
+    "max_size": 6553600,
+    "verdict": "malformed signature fields",
+    "served": false
+   },
+   {
+    "name": "upper-case hash",
+    "signed": {
+     "version": "2.3.9",
+     "board": "sticky",
+     "sha256": "D67C656E01756650D77717B0839985A056EC28FFE174601D690FC407A2CEFFCA",
+     "key_id": "test-only-a",
+     "sig": "MEUCIHxJuD14rLjwtQ0AkFqNrztdMLvgYG8b5WqpPOX5iffbAiEAnRq3lNAYR4pzPLxjHxSSX9K+TtRueN9eAefTnHNanOE="
+    },
+    "asset_size": 4096,
+    "running_board": "sticky",
+    "max_size": 6553600,
+    "verdict": "malformed signature fields",
+    "served": false
+   },
+   {
+    "name": "unknown key id",
+    "signed": {
+     "version": "2.3.9",
+     "board": "sticky",
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "key_id": "test-only-z",
+     "sig": "MEUCIHxJuD14rLjwtQ0AkFqNrztdMLvgYG8b5WqpPOX5iffbAiEAnRq3lNAYR4pzPLxjHxSSX9K+TtRueN9eAefTnHNanOE="
+    },
+    "asset_size": 4096,
+    "running_board": "sticky",
+    "max_size": 6553600,
+    "verdict": "unknown key id",
+    "served": true
+   },
+   {
+    "name": "asset bigger than signed",
+    "signed": {
+     "version": "2.3.9",
+     "board": "sticky",
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "key_id": "test-only-a",
+     "sig": "MEUCIHxJuD14rLjwtQ0AkFqNrztdMLvgYG8b5WqpPOX5iffbAiEAnRq3lNAYR4pzPLxjHxSSX9K+TtRueN9eAefTnHNanOE="
+    },
+    "asset_size": 4097,
+    "running_board": "sticky",
+    "max_size": 6553600,
+    "verdict": "bad signature",
+    "served": false
+   },
+   {
+    "name": "tag changed after signing",
+    "signed": {
+     "version": "2.3.10",
+     "board": "sticky",
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "key_id": "test-only-a",
+     "sig": "MEUCIHxJuD14rLjwtQ0AkFqNrztdMLvgYG8b5WqpPOX5iffbAiEAnRq3lNAYR4pzPLxjHxSSX9K+TtRueN9eAefTnHNanOE="
+    },
+    "asset_size": 4096,
+    "running_board": "sticky",
+    "max_size": 6553600,
+    "verdict": "bad signature",
+    "served": false
+   },
+   {
+    "name": "hash of another image",
+    "signed": {
+     "version": "2.3.9",
+     "board": "sticky",
+     "sha256": "210277cb6266afe7c6cc4227ff3e9efc818f55234a7d7fbf033ab602440f2437",
+     "key_id": "test-only-a",
+     "sig": "MEUCIHxJuD14rLjwtQ0AkFqNrztdMLvgYG8b5WqpPOX5iffbAiEAnRq3lNAYR4pzPLxjHxSSX9K+TtRueN9eAefTnHNanOE="
+    },
+    "asset_size": 4096,
+    "running_board": "sticky",
+    "max_size": 6553600,
+    "verdict": "bad signature",
+    "served": false
+   },
+   {
+    "name": "signed for another board",
+    "signed": {
+     "version": "2.3.9",
+     "board": "sticky-mini",
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "key_id": "test-only-a",
+     "sig": "MEYCIQDdqrv7gJM/MYffkXmWBFYLX8dDfLeckPGNmp4XjyVnjwIhAKuXb3sfHdVVWRyDj/2Z6hV4GM3nfwb3u0Zl9jylRaA8"
+    },
+    "asset_size": 4096,
+    "running_board": "sticky",
+    "max_size": 6553600,
+    "verdict": "signed for another board",
+    "served": true
+   },
+   {
+    "name": "bigger than the slot",
+    "signed": {
+     "version": "2.3.9",
+     "board": "sticky",
+     "sha256": "d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca",
+     "key_id": "test-only-a",
+     "sig": "MEUCIHxJuD14rLjwtQ0AkFqNrztdMLvgYG8b5WqpPOX5iffbAiEAnRq3lNAYR4pzPLxjHxSSX9K+TtRueN9eAefTnHNanOE="
+    },
+    "asset_size": 4096,
+    "running_board": "sticky",
+    "max_size": 4095,
+    "verdict": "size doesn't match",
+    "served": true
+   }
+  ]
+ },
+ "reread_newer": {
+  "about": "OtaUpdater::isUpdateNewer on the stable channel: the release tag against the running CROSSPOINT_VERSION, whose number ends at the first - or +; an -rc build takes the release of its own number as newer.",
+  "cases": [
+   {
+    "latest": "2.3.9",
+    "running": "2.3.8",
+    "newer": true
+   },
+   {
+    "latest": "2.4.0",
+    "running": "2.3.9",
+    "newer": true
+   },
+   {
+    "latest": "v2.3.9",
+    "running": "2.3.8",
+    "newer": true
+   },
+   {
+    "latest": "2.4",
+    "running": "2.3.9",
+    "newer": true
+   },
+   {
+    "latest": "2.3.8",
+    "running": "2.3.8",
+    "newer": false
+   },
+   {
+    "latest": "2.3.7",
+    "running": "2.3.8",
+    "newer": false
+   },
+   {
+    "latest": "2.3",
+    "running": "2.3.0",
+    "newer": false
+   },
+   {
+    "latest": "latest",
+    "running": "2.3.8",
+    "newer": false
+   },
+   {
+    "latest": "2.3.9-beta",
+    "running": "2.3.8",
+    "newer": false
+   },
+   {
+    "latest": "",
+    "running": "2.3.8",
+    "newer": false
+   },
+   {
+    "latest": "2.3.9",
+    "running": "2.3.8-rc+5064d90",
+    "newer": true
+   },
+   {
+    "latest": "2.3.9",
+    "running": "2.3.9-rc+5064d90",
+    "newer": true
+   },
+   {
+    "latest": "1.5.2",
+    "running": "1.5.2-cn-rc+5064d90",
+    "newer": true
+   },
+   {
+    "latest": "2.3.8",
+    "running": "2.3.9-rc+5064d90",
+    "newer": false
+   },
+   {
+    "latest": "2.3.9",
+    "running": "2.3.9+5064d90",
+    "newer": false
+   },
+   {
+    "latest": "2.3.9",
+    "running": "garbage",
+    "newer": false
+   }
+  ]
+ },
+ "retry": {
+  "retry_seconds": 86400,
+  "clock_valid_from": 1700000000,
+  "failed_version": [
+   {
+    "remembered_bad": "",
+    "attempted_to": "",
+    "running": "2.6.3",
+    "failed": "",
+    "why": "nothing tried"
+   },
+   {
+    "remembered_bad": "",
+    "attempted_to": "2.6.3",
+    "running": "2.6.3",
+    "failed": "",
+    "why": "tried, and running it"
+   },
+   {
+    "remembered_bad": "",
+    "attempted_to": "2.6.4",
+    "running": "2.6.3",
+    "failed": "2.6.4",
+    "why": "tried, and back on the old one"
+   },
+   {
+    "remembered_bad": "2.6.4",
+    "attempted_to": "",
+    "running": "2.6.3",
+    "failed": "2.6.4",
+    "why": "remembered after hello cleared the attempt"
+   },
+   {
+    "remembered_bad": "2.6.4",
+    "attempted_to": "2.6.5",
+    "running": "2.6.3",
+    "failed": "2.6.5",
+    "why": "the newer failure wins"
+   },
+   {
+    "remembered_bad": "2.6.5",
+    "attempted_to": "2.6.4",
+    "running": "2.6.3",
+    "failed": "2.6.5",
+    "why": "the newer failure wins"
+   }
+  ],
+  "blocked": [
+   {
+    "candidate": "2.6.4",
+    "failed": "2.6.4",
+    "failed_at": 1795000000,
+    "now": 1795000060,
+    "timer_syncs": 0,
+    "blocked": true,
+    "why": "the same build a minute later"
+   },
+   {
+    "candidate": "2.6.4",
+    "failed": "2.6.4",
+    "failed_at": 1795000000,
+    "now": 1795086399,
+    "timer_syncs": 5,
+    "blocked": true,
+    "why": "within 24 h: the clock wins over the count"
+   },
+   {
+    "candidate": "2.6.4",
+    "failed": "2.6.4",
+    "failed_at": 1795000000,
+    "now": 1795086400,
+    "timer_syncs": 0,
+    "blocked": false,
+    "why": "24 h on: try it again"
+   },
+   {
+    "candidate": "2.6.4",
+    "failed": "2.6.4",
+    "failed_at": 1795000000,
+    "now": 1795259200,
+    "timer_syncs": 0,
+    "blocked": false
+   },
+   {
+    "candidate": "2.6.3",
+    "failed": "2.6.4",
+    "failed_at": 1795000000,
+    "now": 1795000060,
+    "timer_syncs": 0,
+    "blocked": true,
+    "why": "an older one waits too"
+   },
+   {
+    "candidate": "2.6.3",
+    "failed": "2.6.4",
+    "failed_at": 1795000000,
+    "now": 1795086400,
+    "timer_syncs": 0,
+    "blocked": false
+   },
+   {
+    "candidate": "2.6.5",
+    "failed": "2.6.4",
+    "failed_at": 1795000000,
+    "now": 1795000060,
+    "timer_syncs": 0,
+    "blocked": false,
+    "why": "a newer one: at once"
+   },
+   {
+    "candidate": "2.6.4",
+    "failed": "",
+    "failed_at": 1795000000,
+    "now": 1795000060,
+    "timer_syncs": 0,
+    "blocked": false,
+    "why": "nothing failed"
+   },
+   {
+    "candidate": "2.6.4",
+    "failed": "garbage",
+    "failed_at": 1795000000,
+    "now": 1795000060,
+    "timer_syncs": 0,
+    "blocked": false,
+    "why": "an unreadable record never blocks"
+   },
+   {
+    "candidate": "2.6.4",
+    "failed": "2.6.4",
+    "failed_at": 0,
+    "now": 1795000060,
+    "timer_syncs": 0,
+    "blocked": true,
+    "why": "failed with no clock: wait for the daily timer"
+   },
+   {
+    "candidate": "2.6.4",
+    "failed": "2.6.4",
+    "failed_at": 0,
+    "now": 1795000060,
+    "timer_syncs": 1,
+    "blocked": false
+   },
+   {
+    "candidate": "2.6.4",
+    "failed": "2.6.4",
+    "failed_at": 1795000000,
+    "now": 0,
+    "timer_syncs": 0,
+    "blocked": true,
+    "why": "no clock now"
+   },
+   {
+    "candidate": "2.6.4",
+    "failed": "2.6.4",
+    "failed_at": 1795000000,
+    "now": 1000,
+    "timer_syncs": 0,
+    "blocked": true,
+    "why": "a clock that reset to 1970"
+   },
+   {
+    "candidate": "2.6.4",
+    "failed": "2.6.4",
+    "failed_at": 1795000000,
+    "now": 1000,
+    "timer_syncs": 1,
+    "blocked": false
+   },
+   {
+    "candidate": "2.6.4",
+    "failed": "2.6.4",
+    "failed_at": 1795000000,
+    "now": 1794996400,
+    "timer_syncs": 0,
+    "blocked": true,
+    "why": "the clock went backwards: count instead"
+   },
+   {
+    "candidate": "2.6.4",
+    "failed": "2.6.4",
+    "failed_at": 1795000000,
+    "now": 1794996400,
+    "timer_syncs": 2,
+    "blocked": false
+   },
+   {
+    "candidate": "2.6.5",
+    "failed": "2.6.4",
+    "failed_at": 0,
+    "now": 0,
+    "timer_syncs": 0,
+    "blocked": false,
+    "why": "newer, no clock: still at once"
+   }
+  ],
+  "clock_valid": [
+   {
+    "epoch": 1795000000,
+    "valid": true
+   },
+   {
+    "epoch": 1700000000,
+    "valid": true
+   },
+   {
+    "epoch": 1699999999,
+    "valid": false
+   },
+   {
+    "epoch": 0,
+    "valid": false
+   },
+   {
+    "epoch": 1000,
+    "valid": false
+   }
+  ]
+ }
 }

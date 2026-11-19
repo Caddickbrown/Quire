@@ -1,6 +1,8 @@
 // "Pair with the Pi": the phone's half of the pairing protocol (docs/DEVICES.md, sections 1 and 2).
-// The app shows a code, Dan approves it on the server's Devices page (or the app approves itself with
-// the main token it already holds), and the app's next poll collects a key made for this phone alone.
+// The app shows a code, Dan approves it on the server's Devices page (or, at the address the app is
+// already set up with, approves itself with the main token it holds), and the app's next poll collects a
+// key made for this phone alone. KitPairPolicy says who may get what: a server found on the Wi-Fi never
+// gets the main token, and every code pairing is confirmed on the phone before the key is kept.
 //
 // This file is the part with no UI: the client for /.well-known/pair and /api/pair/*, the Keychain
 // item, the certificate pin and the Bonjour browser. PairWithPiView.swift is the flow on screen.
@@ -108,6 +110,26 @@ nonisolated enum KitPairDevice {
         return withUnsafeBytes(of: &info.machine) { String(decoding: $0.prefix(while: { $0 != 0 }), as: UTF8.self) }
     }
 
+    /// This device's IPv4 address on the Wi-Fi (en0), for comparing with the "From" line on the
+    /// server's /pair page. nil when there isn't one.
+    static var wifiAddress: String? {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0, let first = list else { return nil }
+        defer { freeifaddrs(list) }
+        var found: String?
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let ifa = ptr.pointee
+            guard let addr = ifa.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET),
+                  String(cString: ifa.ifa_name) == "en0" else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(addr, socklen_t(addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+                found = String(cString: host)
+                break
+            }
+        }
+        return found
+    }
+
     /// "iPhone", "iPad" or "Mac".
     static var noun: String {
         #if os(iOS)
@@ -141,6 +163,88 @@ nonisolated enum KitPairAddress {
         let s = Array(hex.prefix(16))
         return stride(from: 0, to: 16, by: 4).map { String(s[$0..<$0 + 4]) }.joined(separator: " ")
     }
+}
+
+// MARK: - Who may get what (review K1, 18 Nov)
+
+/// Where the address being paired came from.
+nonisolated enum KitPairOrigin: Equatable {
+    /// Listed under "On this Wi-Fi". Anything on the Wi-Fi can advertise, so it's untrusted.
+    case discovered
+    /// Typed by the person.
+    case typed
+    /// The address the app is already set up with (KitPairConfig.defaultAddress), where it sends its token.
+    case configured
+}
+
+nonisolated enum KitPairPlan: Equatable {
+    /// Approve the code with the main token ("Pair this iPhone instead").
+    case selfApprove
+    /// Show the code; it's approved on the server's /pair page and confirmed on the phone before the key is kept.
+    case code
+    case refuse(String)
+}
+
+/// The rules that keep a rogue device on the Wi-Fi from getting the main token or a key:
+/// - a Bonjour entry never gets the main token and is never self-approved; its TXT can't set the scheme
+///   or the expected certificate;
+/// - "Pair this iPhone instead" works only at the configured address, after the token has been seen to
+///   work there;
+/// - every code pairing ends with the phone asking whether its certificate and address matched the
+///   /pair page before the key is kept.
+nonisolated enum KitPairPolicy {
+    /// A Bonjour result as a list entry, or nil when it's not this app's service. The scheme is the
+    /// app's own (the TXT `scheme` is ignored), and the TXT `cert` is not carried: the advertiser chose it.
+    static func candidate(name: String, txt: [String: String], service: String, host: String, port: UInt16,
+                          appScheme: String) -> KitPairCandidate? {
+        guard txt["service"] == service else { return nil }
+        var h = host
+        if let pct = h.firstIndex(of: "%") { h = String(h[..<pct]) }
+        if h.contains(":") { h = "[\(h)]" }
+        let scheme = appScheme.lowercased() == "http" ? "http" : "https"
+        return KitPairCandidate(name: name, address: "\(scheme)://\(h):\(port)")
+    }
+
+    /// The certificate hash a pairing session expects before it has seen one. Never from a TXT record.
+    static func expectedCert(origin: KitPairOrigin, hint: String?) -> String? {
+        origin == .discovered ? nil : hint
+    }
+
+    /// The pin a pairing session holds the server to, given the certificate this app already trusts at its
+    /// configured address (`KitPairConfig.trustedCert`, e.g. Shelf's seed pin). It applies whenever the session
+    /// is going to that server, typed, configured or found on the Wi-Fi, so pairing never accepts less than the
+    /// app's normal requests would. Another server, plain http, or no pin held: nil (review K2, 18 Nov).
+    static func expectedCert(address: URL, configured: URL?, trusted: String?) -> String? {
+        guard let trusted = trusted?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !trusted.isEmpty,
+              address.scheme?.lowercased() == "https", let configured, sameServer(address, configured) else { return nil }
+        return trusted
+    }
+
+    /// Both rules together: the app's pin at its configured server, else a QR's hint (never a TXT's).
+    static func expectedCert(origin: KitPairOrigin, hint: String?, address: URL, configured: URL?, trusted: String?) -> String? {
+        expectedCert(address: address, configured: configured, trusted: trusted) ?? expectedCert(origin: origin, hint: hint)
+    }
+
+    /// What the phone says when the server's certificate isn't the one the app already trusts.
+    static func pinMismatch(server: String) -> String {
+        "\(server) at this address showed a different certificate from the one this app trusts, so nothing was sent. If you renewed the certificate, update it in the app first; otherwise something on this Wi-Fi may be posing as \(server)."
+    }
+
+    static func sameServer(_ a: URL, _ b: URL) -> Bool {
+        KitPairFallback.server(a) == KitPairFallback.server(b)
+    }
+
+    static func plan(origin: KitPairOrigin, address: URL, configured: URL?, hasToken: Bool, selfApprove: Bool) -> KitPairPlan {
+        guard selfApprove else { return .code }
+        guard origin == .configured, let configured, sameServer(address, configured) else {
+            return .refuse("The token only goes to the address this app is set up with. Show a pairing code instead.")
+        }
+        guard hasToken else { return .refuse("There's no token saved in this app. Show a pairing code instead.") }
+        return .selfApprove
+    }
+
+    /// `GET /api/paired` with the main token: only a 200 shows the token works at that address.
+    static func tokenCheckPassed(status: Int) -> Bool { status == 200 }
 }
 
 // MARK: - The certificate pin
@@ -181,11 +285,14 @@ nonisolated enum KitCertPin {
 nonisolated final class KitPairSessionDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var _seen: String?
+    private var _refusedExpected = false
     private let expected: String?
 
     init(expected: String?) { self.expected = expected?.lowercased() }
 
     var seen: String? { lock.lock(); defer { lock.unlock() }; return _seen }
+    /// True once the handshake showed a certificate other than the expected one.
+    var refusedExpected: Bool { lock.lock(); defer { lock.unlock() }; return _refusedExpected }
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
                     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
@@ -198,8 +305,10 @@ nonisolated final class KitPairSessionDelegate: NSObject, URLSessionDelegate, @u
         let earlier = _seen
         if _seen == nil { _seen = hash }
         lock.unlock()
-        // The QR or TXT may carry only the first 16 hex characters.
-        let mismatch = (earlier.map { $0 != hash } ?? false) || (expected.map { !hash.hasPrefix($0) } ?? false)
+        // A QR may carry only the first 16 hex characters. A Bonjour TXT never sets this (KitPairPolicy).
+        let notExpected = expected.map { !hash.hasPrefix($0) } ?? false
+        let mismatch = (earlier.map { $0 != hash } ?? false) || notExpected
+        if notExpected { lock.lock(); _refusedExpected = true; lock.unlock() }
         if mismatch {
             completionHandler(.cancelAuthenticationChallenge, nil)
         } else {
@@ -217,7 +326,7 @@ nonisolated struct KitPairClient {
     let delegate: KitPairSessionDelegate
     let session: URLSession
 
-    /// `expectedCert` is a hash from the QR or the Bonjour TXT, when there is one.
+    /// `expectedCert` is a hash from a QR or an earlier pin, never from a Bonjour TXT.
     init(base: URL, service: String, name: String, expectedCert: String? = nil) {
         self.base = base
         self.expectedService = service
@@ -252,6 +361,9 @@ nonisolated struct KitPairClient {
             let (data, resp) = try await session.data(for: req)
             return ((resp as? HTTPURLResponse)?.statusCode ?? 0, data)
         } catch {
+            if (error as NSError).code == NSURLErrorCancelled, delegate.refusedExpected {
+                throw KitPairError.refused(KitPairPolicy.pinMismatch(server: serviceName))
+            }
             if (error as NSError).code == NSURLErrorCancelled, delegate.seen != nil { throw KitPairError.notTheSameServer }
             throw KitPairError.unreachable(serviceName)
         }
@@ -305,6 +417,13 @@ nonisolated struct KitPairClient {
         }
     }
 
+    /// Before "Pair this iPhone instead": the token has to work here already (a signed-in list of paired
+    /// devices), so a server that doesn't know it never gets asked to approve.
+    func tokenWorks(_ bearer: String) async throws -> Bool {
+        let (status, _) = try await send("/api/paired", bearer: bearer)
+        return KitPairPolicy.tokenCheckPassed(status: status)
+    }
+
     /// "Pair this iPhone instead": an app that already holds the main token approves its own code.
     func approve(code: String, name: String, bearer: String) async throws {
         let (status, data) = try await send("/api/pair/approve", body: ["code": code, "kind": "app", "name": name], bearer: bearer)
@@ -336,6 +455,31 @@ nonisolated struct KitPairClient {
 nonisolated enum KitPairFallback {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var noPairing: Set<String> = []
+    /// Where the "never the token" list is kept. Not secret: server addresses only.
+    nonisolated(unsafe) static var defaults: UserDefaults = .standard
+    private static let refusedKey = "kit.pair.noTokenServers"
+
+    /// A server this phone paired with from the Wi-Fi list or a typed address that isn't the one the app
+    /// is set up with: the main token never falls back to it.
+    static func refuseToken(for url: URL) {
+        lock.lock(); defer { lock.unlock() }
+        var list = Set(defaults.stringArray(forKey: refusedKey) ?? [])
+        list.insert(server(url))
+        defaults.set(list.sorted(), forKey: refusedKey)
+        noPairing.remove(server(url))
+    }
+
+    /// Paired at the configured address (where the token already goes): the fallback may use it again.
+    static func allowToken(for url: URL) {
+        lock.lock(); defer { lock.unlock() }
+        var list = Set(defaults.stringArray(forKey: refusedKey) ?? [])
+        list.remove(server(url))
+        defaults.set(list.sorted(), forKey: refusedKey)
+    }
+
+    static func tokenRefused(for url: URL) -> Bool {
+        (defaults.stringArray(forKey: refusedKey) ?? []).contains(server(url))
+    }
 
     /// host:port, the same way for a URL and a stored address.
     static func server(_ url: URL) -> String {
@@ -345,11 +489,13 @@ nonisolated enum KitPairFallback {
 
     /// True once this run has found that the server at `url` doesn't pair: send the main token there.
     static func usingToken(for url: URL) -> Bool {
+        if tokenRefused(for: url) { return false }
         lock.lock(); defer { lock.unlock() }
         return noPairing.contains(server(url))
     }
 
     static func mark(_ url: URL) {
+        if tokenRefused(for: url) { return }
         lock.lock(); noPairing.insert(server(url)); lock.unlock()
     }
 
@@ -360,6 +506,7 @@ nonisolated enum KitPairFallback {
 
     /// After a 401 to a paired key: true (and remembered) when the server doesn't pair at all.
     static func checkAfter401(base url: URL, service: String, session: URLSession = .shared) async -> Bool {
+        if tokenRefused(for: url) { return false }
         if usingToken(for: url) { return true }
         guard let probe = URL(string: server(url) + "/.well-known/pair") else { return false }
         var req = URLRequest(url: probe, timeoutInterval: 10)
@@ -420,23 +567,23 @@ nonisolated enum KitPairingStore {
 // MARK: - Finding the server
 
 /// A server found on the Wi-Fi.
+/// Untrusted: anything on the Wi-Fi can advertise. It may only start a code pairing (KitPairPolicy).
 nonisolated struct KitPairCandidate: Identifiable, Equatable {
     var id: String { address }
     let name: String
     let address: String
-    let cert: String?
 }
 
 #if canImport(Network)
 /// Browses `_dcbhome._tcp` for servers whose TXT says `service=<this app's service>`, and resolves each
-/// to an address. TXT: service, path, cert (first 16 hex of the certificate's SHA-256), scheme (http or
-/// https; https when missing). Needs NSBonjourServices and NSLocalNetworkUsageDescription in Info.plist.
+/// to an address. Only TXT `service` is read: the scheme is the app's own and a TXT `cert` is ignored,
+/// since the advertiser chooses both. Needs NSBonjourServices and NSLocalNetworkUsageDescription.
 nonisolated final class KitPairBrowser: @unchecked Sendable {
     private var browser: NWBrowser?
     private var connections: [NWConnection] = []
     private let queue = DispatchQueue(label: "kit.pair.browser")
 
-    func start(service: String, found: @escaping @Sendable (KitPairCandidate) -> Void) {
+    func start(service: String, scheme: String = "https", found: @escaping @Sendable (KitPairCandidate) -> Void) {
         let params = NWParameters()
         params.includePeerToPeer = false
         let browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_dcbhome._tcp", domain: nil), using: params)
@@ -444,23 +591,22 @@ nonisolated final class KitPairBrowser: @unchecked Sendable {
             for result in results {
                 guard case let .service(name, _, _, _) = result.endpoint,
                       case let .bonjour(txt) = result.metadata, txt["service"] == service else { continue }
-                self?.resolve(result.endpoint, name: name, scheme: txt["scheme"] ?? "https", cert: txt["cert"], found: found)
+                self?.resolve(result.endpoint, name: name, service: service, scheme: scheme, found: found)
             }
         }
         self.browser = browser
         browser.start(queue: queue)
     }
 
-    private func resolve(_ endpoint: NWEndpoint, name: String, scheme: String, cert: String?,
+    private func resolve(_ endpoint: NWEndpoint, name: String, service: String, scheme: String,
                          found: @escaping @Sendable (KitPairCandidate) -> Void) {
         let conn = NWConnection(to: endpoint, using: .tcp)
         conn.stateUpdateHandler = { [weak conn] state in
             guard case .ready = state, let conn else { return }
-            if case let .hostPort(host, port) = conn.currentPath?.remoteEndpoint {
-                var h = "\(host)"
-                if let pct = h.firstIndex(of: "%") { h = String(h[..<pct]) }
-                if h.contains(":") { h = "[\(h)]" }
-                found(KitPairCandidate(name: name, address: "\(scheme)://\(h):\(port.rawValue)", cert: cert))
+            if case let .hostPort(host, port) = conn.currentPath?.remoteEndpoint,
+               let c = KitPairPolicy.candidate(name: name, txt: ["service": service], service: service,
+                                               host: "\(host)", port: port.rawValue, appScheme: scheme) {
+                found(c)
             }
             conn.cancel()
         }

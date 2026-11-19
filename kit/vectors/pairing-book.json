@@ -39,6 +39,10 @@
     {"call": "check", "args": {"key": "$key", "ip": "10.0.0.2"}, "result": "ok"},
     {"call": "reload", "note": "a new book on the same file still knows the key"},
     {"call": "check", "args": {"key": "$key", "ip": "10.0.0.2"}, "result": "ok", "expect": {"name": "Desk iPhone"}},
+    {"call": "check", "args": {"key": "test_app_wrong", "ip": "10.0.0.9"}, "repeat": 30, "result": "bad", "note": "thirty wrong keys from one address"},
+    {"call": "check", "args": {"key": "test_app_wrong", "ip": "10.0.0.9"}, "result": "limited", "note": "that address is locked for wrong keys"},
+    {"call": "check", "args": {"key": "$key", "ip": "10.0.0.9"}, "result": "ok", "note": "but a right key from it still works: a phone behind the same address isn't locked out (review LOW 44)"},
+    {"call": "check", "args": {"key": "test_app_wrong", "ip": "10.0.0.9"}, "result": "limited", "note": "and the lock still holds for wrong ones"},
 
     {"call": "start", "args": {"data": {"kind": "app"}, "ip": "10.0.0.3"}, "status": 200, "capture": {"code": "code", "token": "token"}},
     {"call": "lookup", "args": {"data": {"code": "333333"}, "ip": "10.0.0.66"}, "status": 409},

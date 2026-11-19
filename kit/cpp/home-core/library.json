@@ -1,0 +1,5 @@
+{
+  "name": "HomeCore",
+  "description": "app-kit home-core: versions, signed OTA manifests, signature verification and the retry rule. Vendored by copy; see MANIFEST.",
+  "build": {"srcFilter": ["+<home_core.cpp>"]}
+}

@@ -501,9 +501,7 @@ impl Book {
     /// seen is written at most once a minute.
     pub fn check(&mut self, key: &str, ip: &str) -> Check {
         let t = (self.clock)();
-        if self.bad_keys.blocked(ip, t) {
-            return Check::Limited;
-        }
+        // A right key gets in even from an address locked for wrong ones (review LOW 44), as the Python book.
         let found = if key.is_empty() {
             None
         } else {
@@ -513,6 +511,9 @@ impl Book {
             })
         };
         let Some(i) = found else {
+            if self.bad_keys.blocked(ip, t) {
+                return Check::Limited;
+            }
             self.bad_keys.record(ip, t);
             return Check::Bad;
         };

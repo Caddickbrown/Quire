@@ -1195,3 +1195,20 @@ final class CommandRunTests: XCTestCase {
         XCTAssertTrue(all(s).contains("transcribe"))
     }
 }
+
+// MARK: - Re-tapping the face you're on (App Kit TabReselect, GUIDE 19 Nov)
+
+final class TabReselectTests: XCTestCase {
+    /// A tap on another face is a move, not a re-tap; on the face you're on the first
+    /// tap pops the open pages, the next moves that face's scroll signal.
+    func testRetapPopsThenScrolls() {
+        var taps = TabReselect<String>()
+        XCTAssertFalse(taps.tapped("journal", current: "inbox"))
+        XCTAssertEqual(taps.signal("journal"), 0)
+        XCTAssertEqual(TabReselect<String>.step(pushed: 2), .popToRoot)
+        XCTAssertEqual(TabReselect<String>.step(pushed: 0), .scrollToTop)
+        XCTAssertTrue(taps.tapped("journal", current: "journal"))
+        XCTAssertEqual(taps.signal("journal"), 1)
+        XCTAssertEqual(taps.signal("inbox"), 0)
+    }
+}

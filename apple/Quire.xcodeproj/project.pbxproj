@@ -19,6 +19,7 @@
 		272BD1DA757B5AFEA58051AA /* QuireCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7824C8FC787C58978657B803 /* QuireCommands.swift */; };
 		AF20AFBE01F9589EBC56A9A5 /* QuireMacros.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05007DBA995E5B0FB3FF66FB /* QuireMacros.swift */; };
 		A7E7F443465C58B69C162287 /* CommandPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CEC17AFA5F85220A194C6F5 /* CommandPalette.swift */; };
+		6B8780F496935D5687A84EA3 /* TabReselect.swift in Sources */ = {isa = PBXBuildFile; fileRef = 977D8294879857529113304F /* TabReselect.swift */; };
 		112677D9F63455519217CD08 /* EscapeChord.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47DF0150D675801B65C669B /* EscapeChord.swift */; };
 		0DBAE8D2312253439BC1DF7B /* OnThisDayYears.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118E76BF92015B29A8FA166E /* OnThisDayYears.swift */; };
 		C33255FA5CBE52908C555FA5 /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64DA39CFB5BC597A836E29E3 /* JournalStore.swift */; };
@@ -106,6 +107,7 @@
 		491E70533D825209A82D5CEF /* QuireCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7824C8FC787C58978657B803 /* QuireCommands.swift */; };
 		A1C4B358C65E5C85911E4A03 /* QuireMacros.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05007DBA995E5B0FB3FF66FB /* QuireMacros.swift */; };
 		013E4404AA195F46B0AB6FCC /* CommandPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CEC17AFA5F85220A194C6F5 /* CommandPalette.swift */; };
+		07879E9BEEC85B09BF506AB1 /* TabReselect.swift in Sources */ = {isa = PBXBuildFile; fileRef = 977D8294879857529113304F /* TabReselect.swift */; };
 		543AD8D57117599096FD35CF /* EscapeChord.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47DF0150D675801B65C669B /* EscapeChord.swift */; };
 		46A4321A9EA55866B24B0F51 /* OnThisDayYears.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118E76BF92015B29A8FA166E /* OnThisDayYears.swift */; };
 		D1E0CC202230586998DEC9EA /* JournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64DA39CFB5BC597A836E29E3 /* JournalStore.swift */; };
@@ -174,6 +176,7 @@
 		7824C8FC787C58978657B803 /* QuireCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireCommands.swift; sourceTree = "<group>"; };
 		05007DBA995E5B0FB3FF66FB /* QuireMacros.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuireMacros.swift; sourceTree = "<group>"; };
 		0CEC17AFA5F85220A194C6F5 /* CommandPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../kit/swift/CommandPalette.swift; sourceTree = "<group>"; };
+		977D8294879857529113304F /* TabReselect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../kit/swift/TabReselect.swift; sourceTree = "<group>"; };
 		C47DF0150D675801B65C669B /* EscapeChord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EscapeChord.swift; sourceTree = "<group>"; };
 		118E76BF92015B29A8FA166E /* OnThisDayYears.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnThisDayYears.swift; sourceTree = "<group>"; };
 		64DA39CFB5BC597A836E29E3 /* JournalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalStore.swift; sourceTree = "<group>"; };
@@ -339,6 +342,7 @@
 				73CB28DCB3C5538DBCC5535A /* QuireShared.swift */,
 				1C9DD5A8B4265FD780DDBFA5 /* Theme.swift */,
 				0CEC17AFA5F85220A194C6F5 /* CommandPalette.swift */,
+				977D8294879857529113304F /* TabReselect.swift */,
 				24347EB8D1EF54DBA0B13FCD /* QuireCore.swift */,
 				FDE788FC27EB52329D1E7EF8 /* Models */,
 				136E08B9542853D39F26A2E6 /* Views */,
@@ -678,6 +682,7 @@
 				272BD1DA757B5AFEA58051AA /* QuireCommands.swift in Sources */,
 				AF20AFBE01F9589EBC56A9A5 /* QuireMacros.swift in Sources */,
 				A7E7F443465C58B69C162287 /* CommandPalette.swift in Sources */,
+				6B8780F496935D5687A84EA3 /* TabReselect.swift in Sources */,
 				112677D9F63455519217CD08 /* EscapeChord.swift in Sources */,
 				0DBAE8D2312253439BC1DF7B /* OnThisDayYears.swift in Sources */,
 				C33255FA5CBE52908C555FA5 /* JournalStore.swift in Sources */,
@@ -778,6 +783,7 @@
 				491E70533D825209A82D5CEF /* QuireCommands.swift in Sources */,
 				A1C4B358C65E5C85911E4A03 /* QuireMacros.swift in Sources */,
 				013E4404AA195F46B0AB6FCC /* CommandPalette.swift in Sources */,
+				07879E9BEEC85B09BF506AB1 /* TabReselect.swift in Sources */,
 				543AD8D57117599096FD35CF /* EscapeChord.swift in Sources */,
 				46A4321A9EA55866B24B0F51 /* OnThisDayYears.swift in Sources */,
 				D1E0CC202230586998DEC9EA /* JournalStore.swift in Sources */,

@@ -13,6 +13,7 @@ import SwiftUI
 struct LookBackScreen: View {
     @EnvironmentObject private var store: JournalStore
     @Environment(\.quire) private var q
+    @Environment(\.qFaceReselect) private var faceReselect
 
     var open: (EntryRef) -> Void
     var search: () -> Void
@@ -71,12 +72,14 @@ struct LookBackScreen: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 26).padding(.top, 14).padding(.bottom, 24)
+            .id(QFaceTop.id)
         }
         .onChange(of: selected) { _, i in
             if let i, refs.indices.contains(i) {
                 withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(refs[i].entry.id, anchor: .center) }
             }
         }
+        .scrollsToTopOnReselect(proxy, signal: faceReselect, target: QFaceTop.id)
         // With nothing on this day the monitor keeps its Today page: an empty
         // list of its own said "No entries here yet" over a page that has plenty.
         .qKeyList(entries: refs.map(\.entry), index: $selected, listTitle: "On this day", autoSelect: true,

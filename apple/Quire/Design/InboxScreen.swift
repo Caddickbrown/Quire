@@ -15,6 +15,7 @@ import SwiftUI
 struct InboxScreen: View {
     @EnvironmentObject private var store: JournalStore
     @Environment(\.quire) private var q
+    @Environment(\.qFaceReselect) private var faceReselect
     @ObservedObject private var monitor = ExternalDisplayModel.shared
 
     var open: (EntryRef) -> Void
@@ -84,10 +85,12 @@ struct InboxScreen: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 26).padding(.top, 14).padding(.bottom, 24)
+            .id(QFaceTop.id)
         }
         .onChange(of: selectedID) { _, id in
             if let id { withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(id, anchor: .center) } }
         }
+        .scrollsToTopOnReselect(proxy, signal: faceReselect, target: QFaceTop.id)
         .qKeyList(entries: flat, index: $selected, listTitle: "Inbox", autoSelect: true,
                   onOpen: { openDraft($0) },
                   letter: { entry, key in

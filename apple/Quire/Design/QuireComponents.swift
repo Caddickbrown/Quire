@@ -438,6 +438,24 @@ struct QSideAction: View {
     }
 }
 
+/// Re-taps of the face you're on with no page open over it (App Kit TabReselect,
+/// GUIDE 19 Nov): each one scrolls that face back to its top, animated.
+private struct QFaceReselectKey: EnvironmentKey {
+    static let defaultValue = 0
+}
+
+extension EnvironmentValues {
+    var qFaceReselect: Int {
+        get { self[QFaceReselectKey.self] }
+        set { self[QFaceReselectKey.self] = newValue }
+    }
+}
+
+/// The head of a face's scroll content, what a re-tap scrolls back to.
+enum QFaceTop {
+    static let id = "quire.face.top"
+}
+
 /// True beside the sidebar or the rail, which hold the mark and the actions.
 private struct QBesideSidebarKey: EnvironmentKey {
     static let defaultValue = false

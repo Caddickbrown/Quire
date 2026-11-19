@@ -41,6 +41,8 @@ dl { display: grid; grid-template-columns: max-content 1fr; gap: .2rem 1rem; mar
 dt { color: var(--muted); }
 dd { margin: 0; overflow-wrap: anywhere; }
 .revoked { opacity: .6; }
+.fingerprint { font: 600 1.25rem/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .05em; margin: .35rem 0; }
+.check { border-left: 3px solid var(--accent); padding-left: .75rem; margin: .75rem 0; }
 [hidden] { display: none !important; }
 @media (prefers-reduced-motion: no-preference) { button { transition: opacity .15s; } }
 </style>
@@ -49,6 +51,12 @@ dd { margin: 0; overflow-wrap: anywhere; }
 <main>
   <h1 id="title">Devices</h1>
   <p class="muted">Approve a phone or gadget that's showing a pairing code, and see what's paired.</p>
+
+  <section id="server" class="card" aria-labelledby="server-title">
+    <strong id="server-title">This server's certificate</strong>
+    <p id="fingerprint" class="fingerprint">…</p>
+    <p id="fingerprint-say" class="muted"></p>
+  </section>
 
   <section id="signin" class="card" hidden>
     <label for="token">Main token</label>
@@ -63,6 +71,7 @@ dd { margin: 0; overflow-wrap: anywhere; }
     <button id="find" type="button">Find it</button>
     <div id="request" hidden>
       <dl id="request-facts"></dl>
+      <p class="check" id="request-check"></p>
       <label for="name">Call it</label>
       <input id="name" type="text" maxlength="40">
       <div class="scopes" id="scopes"></div>
@@ -83,6 +92,31 @@ const WORDS = { read: "Read", write: "Change", devices: "Approve other devices",
 let token = null;
 try { token = sessionStorage.getItem("pair-token"); } catch (e) { /* private mode */ }
 let found = null;
+let serverCert = null;   // SHA-256 of this server's certificate, from /.well-known/pair
+
+// The first 16 hex characters in four groups: what the phone shows under its code.
+function shortHash(hex) {
+  if (!hex || hex.length < 16) return null;
+  return [0, 4, 8, 12].map((i) => hex.slice(i, i + 4)).join(" ");
+}
+
+// What to check before pressing Pair. A device on the Wi-Fi can pass a phone's request on to this
+// server, so the phone's code alone doesn't prove which phone asked: its certificate and address do.
+function checkWords() {
+  const short = shortHash(serverCert);
+  if (short) return `Before you press Pair: the phone must show certificate ${short} and this request must be from the phone's own address (it shows it under the code). If either differs, choose "Not this one".`;
+  return `Before you press Pair: check "From" is the phone's own address (it shows it under the code). If it differs, choose "Not this one".`;
+}
+
+function showServer() {
+  const short = shortHash(serverCert);
+  $("fingerprint").textContent = short || (location.protocol === "http:" ? "none (plain http)" : "not given");
+  $("fingerprint-say").textContent = short
+    ? "A phone pairing with this server shows the same four groups under its code. If it shows anything else, something on the Wi-Fi is in between: don't pair it."
+    : location.protocol === "http:"
+      ? "This server uses plain http, so there's no certificate to compare. Check the request comes from the phone's own address instead."
+      : "This server doesn't say its certificate's fingerprint. Check the request comes from the phone's own address instead.";
+}
 
 function say(text, tone) {
   const el = $("say");
@@ -167,11 +201,12 @@ async function find() {
   found = r.data.request;
   const facts = $("request-facts"); facts.innerHTML = "";
   for (const [k, v] of [["Asking", [found.title, found.model].filter(Boolean).join(" · ")], ["Says it's", found.name || "no name"],
-                        ["From", found.ip], ["Asked", when(found.asked_at)], ["Code runs out in", Math.max(0, Math.round(found.expires_in / 60)) + " min"]]) {
+                        ["From", found.ip + " (should be the phone's own address)"], ["Asked", when(found.asked_at)], ["Code runs out in", Math.max(0, Math.round(found.expires_in / 60)) + " min"]]) {
     const dt = document.createElement("dt"); dt.textContent = k;
     const dd = document.createElement("dd"); dd.textContent = v;
     facts.append(dt, dd);
   }
+  $("request-check").textContent = checkWords();
   $("name").value = found.name || "";
   const box = $("scopes"); box.innerHTML = "";
   for (const s of found.ceiling) {
@@ -205,7 +240,9 @@ $("use-token").onclick = () => {
 };
 fetch("/.well-known/pair").then((r) => r.json()).then((w) => {
   document.title = `${w.name} · Devices`; $("title").textContent = `${w.name} · Devices`;
-}).catch(() => {});
+  serverCert = typeof w.cert_sha256 === "string" ? w.cert_sha256.toLowerCase() : null;
+  showServer();
+}).catch(() => showServer());
 const given = new URLSearchParams(location.search).get("code");
 if (given) { $("code").value = given; }
 load().then(() => { if (given && $("signin").hidden) find(); });
