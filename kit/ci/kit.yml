@@ -4,8 +4,16 @@
 name: kit
 
 on:
+  # Staged (ci-quiet-19nov): a v* tag or a manual run, not every push.
   push:
+    tags: ['v*']
   pull_request:
+    paths-ignore: ['docs/**', '**.md']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   kit:
