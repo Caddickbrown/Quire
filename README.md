@@ -71,11 +71,13 @@ work as in the terminal app, and ⌘K goes anywhere.
 One line, on Linux (x86_64, arm64) or a Mac (Apple silicon, Intel):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Caddickbrown/quire-release/main/install.sh | bash
 ```
 
-It downloads the latest release, checks it against its SHA-256 and asks before
-each step. On Linux that is the terminal app and the desktop app (the AppImage);
+It downloads the latest release from
+[Caddickbrown/quire-release](https://github.com/Caddickbrown/quire-release/releases)
+(a public repository holding only the releases and this installer), checks it
+against its SHA-256 and asks before each step. On Linux that is the terminal app and the desktop app (the AppImage);
 on a Mac the terminal app is downloaded and the desktop app, if you pick it, is
 built from source (it needs Rust and Xcode's command-line tools; add `-s --
 --tui` after `bash` to skip it). From a checkout:

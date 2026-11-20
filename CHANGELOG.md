@@ -32,6 +32,7 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 - **Apple**: the Journal's `s` shows starred entries only (again for every entry), and `[` `]` go to the journal before or after among split journals.
 
 ### Changed
+- **Releases**: releases are published to [Caddickbrown/quire-release](https://github.com/Caddickbrown/quire-release), a public repository with only the releases and the installer. The install line is now `curl -fsSL https://raw.githubusercontent.com/Caddickbrown/quire-release/main/install.sh | bash`; `quire update`, the desktop app's updater and the installer read their downloads from there, signature checks unchanged. 1.0.1 is published to both, so a 1.0.0 install updates once as before and then follows the new repository.
 - **Apple**: what a ⌘K command did, or why it failed ("Filed.", "Backed up.", a macro's result, a failed save), is said on the monitor as well as the phone; a voice note being recorded says so there with how to stop it.
 - **Apple**: "Save a copy to the Inbox…" after a failed save asks in the menu, not in a phone alert.
 - **Apple**: Settings' pages, exports, imports and folder choices stay in ⌘K on the monitor, marked "On the phone", and the monitor says to finish there.

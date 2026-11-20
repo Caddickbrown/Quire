@@ -307,7 +307,12 @@ legacy/             Nook and Wander, kept for reference: nothing builds from the
 ## Releases
 
 Quire ships tagged releases. A release lives on GitHub Releases at
-`Caddickbrown/Quire`: the tag, the CHANGELOG notes, and prebuilt files.
+`Caddickbrown/quire-release`, a public repository with no source in it (a
+README, `install.sh` and the launcher icon): the tag, the CHANGELOG notes, and
+prebuilt files. Every download and update reads it, so this repository can be
+private. Up to 1.0.0 releases lived here (`Caddickbrown/Quire`); 1.0.1 is
+published to both, so 1.0.0 installs update once from here and then follow
+quire-release (`publish-source` in release.yml, for 1.0.1 only).
 **Linux first**; the terminal app for macOS since 1.0, the Mac desktop app and Apple builds later.
 
 - **Version** is `MAJOR.MINOR.PATCH`, one number for the whole workspace:
@@ -344,10 +349,19 @@ Quire ships tagged releases. A release lives on GitHub Releases at
   release. The SHA-256 files prove a download arrived whole, not
   who made it: they sit in the same release. Asset names for the terminal app carry no
   version, so `releases/latest/download/quire-<target>.tar.gz` is stable.
+- **Publishing**: the `publish` job pushes the release to
+  `Caddickbrown/quire-release` with the `QUIRE_RELEASE_TOKEN` secret (a
+  fine-grained token: that repository only, Contents read and write), writes
+  this tag's `install.sh` and `linux/src-tauri/icons/128x128.png` to its
+  `main` first (the installer fetches the icon from there), and makes a
+  `latest.json` that names its own files (`tools/latest_json.sh`). Without the
+  secret nothing is published there. Builds from source (`--build`, the Mac
+  desktop app, `quire update` on a source build, `--main`) still clone this
+  repository, so they need access to it once it is private.
 - **Terminal updates**: `quire update --main` (also `jnl update --main`) runs
   `cargo install --git … --branch main` into the folder it runs from, for a fix
   that isn't in a release yet; terminal app only, needs cargo. Otherwise
-  `quire update` (also `jnl update`; `--check` only reports) reads the latest release from the GitHub API, compares its tag
+  `quire update` (also `jnl update`; `--check` only reports) reads the latest release of `Caddickbrown/quire-release` from the GitHub API, compares its tag
   with `CARGO_PKG_VERSION`, downloads the tarball for the target baked in as
   `QUIRE_RELEASE_TARGET` (https from GitHub's hosts only), checks the SHA-256 and,
   the `.release.sig` against the updater's public key for this tag and file name (a

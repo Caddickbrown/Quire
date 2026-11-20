@@ -10,10 +10,10 @@ One journalling app over a plain jnl folder: jnl's format, Nook's features, Wand
 
 ```sh
 ./install.sh --gui      # or --both, for the terminal app too; --dry-run shows every command first
-curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Caddickbrown/quire-release/main/install.sh | bash
 ```
 
-On x86_64 and arm64 it downloads the latest release from [GitHub Releases](https://github.com/Caddickbrown/Quire/releases), checks it against the release's SHA-256 file, and installs the desktop app as an AppImage at `~/Applications/Quire.AppImage` with a launcher entry and icon. The AppImage mounts itself with FUSE; the installer offers to install `fuse3`, and without it the launcher entry unpacks the AppImage on each start instead. `--bundle deb` or `--bundle rpm` installs the package instead; `--build` builds from source.
+On x86_64 and arm64 it downloads the latest release from [GitHub Releases](https://github.com/Caddickbrown/quire-release/releases), checks it against the release's SHA-256 file, and installs the desktop app as an AppImage at `~/Applications/Quire.AppImage` with a launcher entry and icon. The AppImage mounts itself with FUSE; the installer offers to install `fuse3`, and without it the launcher entry unpacks the AppImage on each start instead. `--bundle deb` or `--bundle rpm` installs the package instead; `--build` builds from source.
 
 **By hand.** Each release carries, per architecture:
 

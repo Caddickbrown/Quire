@@ -239,12 +239,71 @@ jobs:
           path: signatures/*.sig
           if-no-files-found: ignore
 
+  # Releases are published to Caddickbrown/quire-release, a public repository
+  # that holds only the releases, install.sh and the launcher icon, so this
+  # one (the source) can be private. Every installer and updater from 1.0.1
+  # reads that one. Pushing there needs a token this repository's own
+  # GITHUB_TOKEN can't be: the QUIRE_RELEASE_TOKEN secret, a fine-grained
+  # token with Contents read and write on quire-release only.
   publish:
     needs: [verify, terminal, desktop, sign]
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_REPO: Caddickbrown/quire-release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          path: src
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: latest.json for the AppImage updater
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          REPO: ${{ env.RELEASE_REPO }}
+        run: src/tools/latest_json.sh dist "$REPO" "$TAG" "$VERSION"
+      - name: install.sh and the icon on quire-release's main
+        # What `curl …/quire-release/main/install.sh | bash` runs, kept to
+        # this release's; written before the release, whose tag is made on
+        # main, so the tag holds them too.
+        env:
+          GH_TOKEN: ${{ secrets.QUIRE_RELEASE_TOKEN }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::no QUIRE_RELEASE_TOKEN secret: nothing can be published to $RELEASE_REPO"; exit 1; }
+          for f in install.sh linux/src-tauri/icons/128x128.png; do
+            sha=$(gh api "repos/$RELEASE_REPO/contents/$f" -q .sha 2>/dev/null || true)
+            case "$sha" in *[!0-9a-f]*|"") sha="" ;; esac   # not there yet: created
+            [ "$sha" = "$(git -C src hash-object "$f")" ] && { echo "$f is current"; continue; }
+            gh api -X PUT "repos/$RELEASE_REPO/contents/$f" -f message="$f from Quire $TAG" \
+              -f content="$(base64 -w0 "src/$f")" ${sha:+-f sha="$sha"} -q .commit.sha
+          done
+      - name: Publish to quire-release
+        env:
+          GH_TOKEN: ${{ secrets.QUIRE_RELEASE_TOKEN }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          gh release create "$TAG" dist/* --repo "$RELEASE_REPO" --target main \
+            --title "Quire $VERSION" --notes-file notes.md
+
+  # The transition: 1.0.0 and older read this repository's releases, so 1.0.1
+  # is published here too (its latest.json naming the files here). They
+  # update once, to a build that reads quire-release. Later releases are
+  # published to quire-release only.
+  publish-source:
+    needs: [verify, terminal, desktop, sign]
+    if: needs.verify.outputs.version == '1.0.1'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          path: src
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
@@ -253,26 +312,7 @@ jobs:
         env:
           VERSION: ${{ needs.verify.outputs.version }}
           REPO: ${{ github.repository }}
-        run: |
-          cd dist
-          platforms='{}'
-          # Tauri names them Quire_<version>_amd64.AppImage / _aarch64.AppImage.
-          for pair in x86_64:amd64 aarch64:aarch64; do
-            arch=${pair%%:*}
-            img=$(ls ./*_"${pair#*:}".AppImage 2>/dev/null | head -1); img=${img#./}
-            [ -n "$img" ] && [ -f "$img.sig" ] || continue
-            platforms=$(jq --arg k "linux-$arch" --arg sig "$(cat "$img.sig")" \
-              --arg url "https://github.com/$REPO/releases/download/$TAG/$img" \
-              '. + {($k): {signature: $sig, url: $url}}' <<<"$platforms")
-          done
-          if [ "$platforms" != '{}' ]; then
-            jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              --arg n "See https://github.com/$REPO/releases/tag/$TAG" --argjson p "$platforms" \
-              '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > latest.json
-            cat latest.json
-          fi
-          mv notes.md ../notes.md
-          ls -l
+        run: src/tools/latest_json.sh dist "$REPO" "$TAG" "$VERSION"
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}

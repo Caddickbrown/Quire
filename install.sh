@@ -16,7 +16,7 @@
 #   ./install.sh --both --yes    everything, taking each default
 #   ./install.sh --uninstall     remove Quire (journal and settings kept)
 #
-#   curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Caddickbrown/quire-release/main/install.sh | bash
 #
 # The order is the safety: every question first, then back up the journal,
 # install what it needs, download or build Quire, check the terminal app
@@ -78,8 +78,10 @@ Journal folders are never deleted.
   -v, --verbose    show build and package-manager output (it is always logged)
   -h, --help       this text
 
-Downloads come from the latest GitHub release of QUIRE_REPO. Builds clone
-QUIRE_REF (default main); setting QUIRE_REF builds from source.
+Downloads come from the latest GitHub release of QUIRE_RELEASE_REPO (default
+Caddickbrown/quire-release; with only QUIRE_REPO set, that repository's).
+Builds clone QUIRE_REPO at QUIRE_REF (default main); setting QUIRE_REF builds
+from source.
 EOF
 }
 
@@ -674,8 +676,16 @@ esac
 
 # ---------- the latest release ----------
 
-# owner/name of the GitHub repository releases come from.
-RELEASE_REPO=$(printf '%s' "$REPO_URL" | sed -n 's#^https://github\.com/\([^/]*/[^/]*\)$#\1#p' | sed 's/\.git$//')
+# owner/name of the GitHub repository releases come from: a public one that
+# holds only the releases (and this script), so the source can be private.
+# A fork named by QUIRE_REPO alone keeps its own releases.
+if [ -n "${QUIRE_RELEASE_REPO:-}" ]; then
+  RELEASE_REPO=$(printf '%s' "$QUIRE_RELEASE_REPO" | sed -n 's#^\(https://github\.com/\)\{0,1\}\([A-Za-z0-9_.-]*/[A-Za-z0-9_.-]*\)$#\2#p' | sed 's/\.git$//')
+elif [ -n "${QUIRE_REPO:-}" ]; then
+  RELEASE_REPO=$(printf '%s' "$REPO_URL" | sed -n 's#^https://github\.com/\([^/]*/[^/]*\)$#\1#p' | sed 's/\.git$//')
+else
+  RELEASE_REPO=Caddickbrown/quire-release
+fi
 case "$(uname -m)" in
   x86_64|amd64) ARCH=x86_64; PKG_ARCH=amd64 ;;
   aarch64|arm64) ARCH=aarch64; PKG_ARCH=arm64 ;;
@@ -701,7 +711,7 @@ choose_from() {
   elif [ -n "${QUIRE_REF:-}" ]; then WHY_BUILD="QUIRE_REF=$QUIRE_REF"
   elif [ $OS = mac ] && [ "${WANT_GUI:-0}" -eq 1 ]; then WHY_BUILD="the desktop app has no macOS release build yet"
   elif [ -z "$ARCH" ]; then WHY_BUILD="there's no release build for $(uname -m)"
-  elif [ -z "$RELEASE_REPO" ]; then WHY_BUILD="QUIRE_REPO isn't a GitHub repository"
+  elif [ -z "$RELEASE_REPO" ]; then WHY_BUILD="the release repository isn't a GitHub repository"
   elif ! have curl; then WHY_BUILD="curl is needed to download"
   elif [ $DRY -eq 1 ]; then
     # A dry run changes nothing and asks the network nothing: the release
@@ -1070,10 +1080,10 @@ install_main() {
   if [ $FROM = release ]; then
   head1 "What it needs"
   if [ $DRY -eq 1 ]; then
-    say "  The latest release, downloaded and checked against its SHA-256."
+    say "  The latest release (github.com/$RELEASE_REPO), downloaded and checked against its SHA-256."
     say "  ${D}(a dry run doesn't look it up: X.Y.Z below stands for its version)${R}"
   else
-    say "  Quire $REL_VER, the latest release, downloaded and checked against its SHA-256."
+    say "  Quire $REL_VER, the latest release (github.com/$RELEASE_REPO), downloaded and checked against its SHA-256."
   fi
   say "  ${D}(--build compiles it from source instead)${R}"
   # An existing ~/.cargo/bin/quire would shadow a new one elsewhere on PATH.

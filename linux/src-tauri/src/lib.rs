@@ -1249,7 +1249,7 @@ fn set_system_titlebar(app: AppHandle, state: State<AppState>, on: bool) -> Resu
 
 // ----- updates -----
 
-const RELEASES_URL: &str = "https://github.com/Caddickbrown/Quire/releases";
+const RELEASES_URL: &str = "https://github.com/Caddickbrown/quire-release/releases";
 
 /// The AppImage this process was started from, if it was one: `APPIMAGE`
 /// names the file and the running binary is inside `APPDIR`, where the

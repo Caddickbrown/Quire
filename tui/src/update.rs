@@ -14,8 +14,14 @@ use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const REPO: &str = "Caddickbrown/Quire";
-const INSTALL: &str = "curl -fsSL https://raw.githubusercontent.com/Caddickbrown/Quire/main/install.sh | bash -s -- --tui";
+/// Where releases are published: a public repository holding only the
+/// releases and install.sh, so the source repository can be private.
+/// (1.0.0 and older read Caddickbrown/Quire's releases; 1.0.1 was published
+/// to both, so they update once from there and then read this one.)
+pub const RELEASE_REPO: &str = "Caddickbrown/quire-release";
+/// The source, which `cargo install` builds from (a source build, `--main`).
+pub const SOURCE_REPO: &str = "Caddickbrown/Quire";
+const INSTALL: &str = "curl -fsSL https://raw.githubusercontent.com/Caddickbrown/quire-release/main/install.sh | bash -s -- --tui";
 /// The target triple of a release build; None for a source build.
 pub const RELEASE_TARGET: Option<&str> = option_env!("QUIRE_RELEASE_TARGET");
 /// The longest one request may take, start to last byte (the AppImage is
@@ -78,8 +84,13 @@ fn agent() -> ureq::Agent {
         .new_agent()
 }
 
+/// The GitHub API address of the latest release.
+pub fn latest_url() -> String {
+    format!("https://api.github.com/repos/{RELEASE_REPO}/releases/latest")
+}
+
 fn latest(agent: &ureq::Agent) -> Result<Release, String> {
-    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+    let url = latest_url();
     let mut res = agent
         .get(&url)
         .header("Accept", "application/vnd.github+json")
@@ -253,8 +264,10 @@ fn sync_dir(dir: &Path) {
     }
 }
 
-/// What every Quire terminal binary holds (the repository `update` reads
-/// releases from), and an older jnl (the Go CLI, the bash script) doesn't.
+/// What every Quire terminal binary holds (the source repository's name; it
+/// was also the release repository's up to 1.0.0), and an older jnl (the Go
+/// CLI, the bash script) doesn't. Kept as it is when releases moved, so a
+/// new binary still knows an old one as Quire's.
 const QUIRE_MARK: &[u8] = b"Caddickbrown/Quire";
 
 /// Whether the file at `path` is one of Quire's terminal binaries, judged by
@@ -480,7 +493,7 @@ pub enum Revision<'a> {
 /// The `cargo install` arguments that rebuild both binaries.
 pub fn cargo_args(revision: Revision, root: &Path) -> Vec<String> {
     let mut args: Vec<String> = ["install", "--locked", "--force", "--git"].map(String::from).to_vec();
-    args.push(format!("https://github.com/{REPO}"));
+    args.push(format!("https://github.com/{SOURCE_REPO}"));
     match revision {
         Revision::Tag(tag) => args.extend(["--tag".to_string(), tag.to_string()]),
         Revision::Main => args.extend(["--branch".to_string(), "main".to_string()]),
@@ -642,7 +655,7 @@ fn update_desktop(agent: &ureq::Agent, rel: &Release, check_only: bool, asked: b
             let how = if kind == "deb" { format!("sudo apt install ./{file}") } else { format!("sudo dnf install ./{file}") };
             println!("  Desktop app: Quire {version} is out as a .{kind}, which your package manager installs:");
             println!("    {}
-    {how}", url_of(rel, &file).unwrap_or_else(|| format!("https://github.com/{REPO}/releases/latest")));
+    {how}", url_of(rel, &file).unwrap_or_else(|| format!("https://github.com/{RELEASE_REPO}/releases/latest")));
             println!("  Or re-run the installer to switch to the AppImage, which `quire update` keeps current.");
             Ok(())
         }
@@ -738,6 +751,26 @@ mod tests {
         assert_eq!(run(&args("--help")), 0);
         assert_eq!(run(&args("--chek")), 2);
         assert_eq!(run(&args("--check --dry-run")), 2);
+    }
+
+    #[test]
+    fn releases_come_from_the_public_release_repo() {
+        assert_eq!(latest_url(), "https://api.github.com/repos/Caddickbrown/quire-release/releases/latest");
+        assert!(INSTALL.starts_with("curl -fsSL https://raw.githubusercontent.com/Caddickbrown/quire-release/main/install.sh "), "{INSTALL}");
+        // Builds from source still clone the source repository.
+        assert!(cargo_args(Revision::Main, Path::new("/r")).contains(&"https://github.com/Caddickbrown/Quire".to_string()));
+        // A new binary still carries the mark an old one is known by.
+        assert_eq!(QUIRE_MARK, SOURCE_REPO.as_bytes());
+        assert!(download_host_ok("https://github.com/Caddickbrown/quire-release/releases/download/v1.0.1/quire-x86_64-unknown-linux-gnu.tar.gz"));
+    }
+
+    #[test]
+    fn the_desktop_app_updates_from_the_release_repo() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../linux/src-tauri/tauri.conf.json")).unwrap();
+        assert_eq!(
+            conf["plugins"]["updater"]["endpoints"],
+            serde_json::json!(["https://github.com/Caddickbrown/quire-release/releases/latest/download/latest.json"])
+        );
     }
 
     #[test]

@@ -169,6 +169,19 @@ class DryRun(unittest.TestCase):
         self.assertTrue(any(c.startswith("tar -xzf ") and "quire-%s.tar.gz" % target in c for c in cmds), cmds)
         self.assertFalse(any(c.startswith("cargo build ") for c in cmds), cmds)
 
+    def test_releases_come_from_the_public_release_repo(self):
+        # The source repository may be private: downloads name quire-release.
+        out = self.run_dry("--tui")
+        self.assertIn("github.com/Caddickbrown/quire-release)", out)
+        urls = [c for c in commands(out) if "releases/download/" in c]
+        self.assertTrue(urls, out)
+        for c in urls:
+            self.assertIn("https://github.com/Caddickbrown/quire-release/releases/download/vX.Y.Z/", c)
+        # A fork named by QUIRE_REPO alone keeps its own releases; QUIRE_RELEASE_REPO wins.
+        self.assertIn("github.com/someone/fork)", self.run_dry("--tui", QUIRE_REPO="https://github.com/someone/fork.git"))
+        out = self.run_dry("--tui", QUIRE_REPO="https://github.com/someone/fork.git", QUIRE_RELEASE_REPO="other/rel")
+        self.assertIn("github.com/other/rel)", out)
+
     @unittest.skipUnless(platform.system() == "Darwin", "the Mac's desktop app")
     def test_the_desktop_app_is_built_on_a_mac(self):
         # There is no macOS desktop release: asking for it builds from source.
