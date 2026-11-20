@@ -264,7 +264,7 @@ jobs:
         env:
           VERSION: ${{ needs.verify.outputs.version }}
           REPO: ${{ env.RELEASE_REPO }}
-        run: src/tools/latest_json.sh dist "$REPO" "$TAG" "$VERSION"
+        run: bash src/tools/latest_json.sh dist "$REPO" "$TAG" "$VERSION"
       - name: install.sh and the icon on quire-release's main
         # What `curl …/quire-release/main/install.sh | bash` runs, kept to
         # this release's; written before the release, whose tag is made on
@@ -312,7 +312,7 @@ jobs:
         env:
           VERSION: ${{ needs.verify.outputs.version }}
           REPO: ${{ github.repository }}
-        run: src/tools/latest_json.sh dist "$REPO" "$TAG" "$VERSION"
+        run: bash src/tools/latest_json.sh dist "$REPO" "$TAG" "$VERSION"
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
