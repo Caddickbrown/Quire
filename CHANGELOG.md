@@ -20,6 +20,10 @@ are recorded here. The format follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-11-20
+
+Releases move to [Caddickbrown/quire-release](https://github.com/Caddickbrown/quire-release), a public repository with only the releases and the installer. Update to this one as usual (`quire update`, or Settings › About › Updates in the desktop app); from here on every update comes from the new repository. The new install line is `curl -fsSL https://raw.githubusercontent.com/Caddickbrown/quire-release/main/install.sh | bash`.
+
 ### Added
 - **Apple**: in Monitor Mode every phone action is in ⌘K. Attach from Photos, the camera, a video or a file stay listed on the monitor and say to finish on the phone; "Attach from the journal's media…" picks a file already in the journal, no phone needed.
 - **Apple**: ⌘K "Media…" lists the journal's media (in the Media Library's sort), by name, kind or date: open its entry, play it, attach it to the page being written, or delete it after a question in the menu.
